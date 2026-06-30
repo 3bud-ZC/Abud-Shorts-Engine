@@ -1,0 +1,740 @@
+{
+  "name": "Abud Shorts Engine - Generate and Optional YouTube Upload",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2700,
+        -220
+      ],
+      "id": "manual-trigger-001",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2700,
+        -80
+      ],
+      "id": "schedule-trigger-001",
+      "name": "Schedule Trigger",
+      "disabled": true,
+      "notes": "Optional trigger. Enable only if you want fully automated runs. Disabled by default to avoid accidental renders."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-server-url",
+              "name": "SERVER_URL",
+              "value": "http://host.docker.internal:3124",
+              "type": "string"
+            },
+            {
+              "id": "cfg-auto-upload",
+              "name": "AUTO_UPLOAD_TO_YOUTUBE",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "cfg-privacy",
+              "name": "YOUTUBE_PRIVACY_STATUS",
+              "value": "private",
+              "type": "string"
+            },
+            {
+              "id": "cfg-channel",
+              "name": "CHANNEL_NAME",
+              "value": "abud",
+              "type": "string"
+            },
+            {
+              "id": "cfg-category",
+              "name": "DEFAULT_CATEGORY_ID",
+              "value": "22",
+              "type": "string"
+            },
+            {
+              "id": "cfg-region",
+              "name": "REGION_CODE",
+              "value": "EG",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -2440,
+        -220
+      ],
+      "id": "configure-001",
+      "name": "Configure"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.SERVER_URL }}/api/music-tags",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2200,
+        -220
+      ],
+      "id": "get-music-tags-001",
+      "name": "Get music tags"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -1960,
+        -220
+      ],
+      "id": "group-music-tags-001",
+      "name": "Group music tags"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n    \"type\": \"object\",\n    \"properties\": {\n        \"video_title\": {\n            \"type\": \"string\",\n            \"description\": \"Short, catchy YouTube title for the video (max 60 characters)\"\n        },\n        \"video_description\": {\n            \"type\": \"string\",\n            \"description\": \"Short YouTube description with a hook and a soft call-to-action\"\n        },\n        \"tags\": {\n            \"type\": \"array\",\n            \"description\": \"YouTube tags for the video\",\n            \"items\": {\n                \"type\": \"string\"\n            }\n        },\n        \"scenes\": {\n            \"type\": \"array\",\n            \"description\": \"Video scenes\",\n            \"items\": {\n                \"type\": \"object\",\n                \"properties\": {\n                    \"text\": {\n                        \"type\": \"string\",\n                        \"description\": \"English narration text for the scene; will be converted to speech by Kokoro TTS\"\n                    },\n                    \"searchTerms\": {\n                        \"type\": \"array\",\n                        \"description\": \"2-3 one-word Pexels search terms matching the scene\",\n                        \"items\": {\n                            \"type\": \"string\"\n                        }\n                    }\n                },\n                \"required\": [\n                    \"text\",\n                    \"searchTerms\"\n                ]\n            }\n        }\n    },\n    \"required\": [\n        \"video_title\",\n        \"video_description\",\n        \"tags\",\n        \"scenes\"\n    ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        -1700,
+        -100
+      ],
+      "id": "structured-output-parser-001",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are creating content for the Abud Shorts Engine.\n\nChannel name: {{ $json.CHANNEL_NAME }}\n\nGenerate a short-form video script in English. The text-to-speech engine (Kokoro TTS) currently works best with English, so all narration must be in English.\n\nRequired output:\n- `video_title`: a catchy, short YouTube title (max 60 characters).\n- `video_description`: a short YouTube description with a hook and a soft call-to-action.\n- `tags`: an array of 5-8 relevant YouTube tags as short strings.\n- `scenes`: exactly 4 scenes. Each scene must contain:\n  - `text`: the narration that will be turned into speech (1-2 natural English sentences).\n  - `searchTerms`: 2-3 one-word Pexels video search terms that match the scene's mood.\n\nTopic: choose any surprising, curiosity-driven topic that fits YouTube Shorts and TikTok (science, history, psychology, hidden facts, or strange real-world stories). Keep the tone fast, intriguing, and unique.\n\nDo not use Arabic script or other non-English languages. Use only English for all text.",
+        "hasOutputParser": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        -1700,
+        -260
+      ],
+      "id": "generate-content-001",
+      "name": "Generate Content",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n    \"type\": \"object\",\n    \"properties\": {\n        \"musicTag\": {\n            \"type\": \"string\",\n            \"description\": \"The selected music tag that best matches the video's mood and energy\"\n        }\n    },\n    \"required\": [\n        \"musicTag\"\n    ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        -1120,
+        -60
+      ],
+      "id": "structured-output-parser-music-001",
+      "name": "Structured Output Parser Music"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=I'm generating a short video with the Abud Shorts Engine.\n\nHere are the video scenes:\n\n<VideoScenes>\n{{ $json.output.scenes.map(item => `<VideoScene>${item.text}</VideoScene>`).join('\\n') }}\n</VideoScenes>\n\nAvailable music tags:\n<MusicTags>\n{{ $('Group music tags').item.json.data.map(item => `<MusicTag>${item}</MusicTag>`).join('\\n') }}\n</MusicTags>\n\nPick the single best music tag from the list above that matches the mood and energy of the video. Return it as `musicTag`.",
+        "hasOutputParser": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        -1300,
+        -260
+      ],
+      "id": "pick-music-001",
+      "name": "Pick music tag",
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -1700,
+        60
+      ],
+      "id": "gemini-model-001",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "PLACEHOLDER_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini (reconnect in n8n)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.SERVER_URL }}/api/short-video",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"scenes\": {{ JSON.stringify($('Generate Content').item.json.output.scenes, null, 2) }},\n  \"config\": {\n    \"paddingBack\": 1500,\n    \"music\": \"{{ $('Generate Content').item.json.output.musicTag }}\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1060,
+        -260
+      ],
+      "id": "start-render-001",
+      "name": "Start render"
+    },
+    {
+      "parameters": {
+        "amount": 25
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -820,
+        -260
+      ],
+      "id": "wait-001",
+      "name": "Wait",
+      "webhookId": "wait-webhook-001",
+      "notes": "Waits 25 seconds before checking status again. The workflow loops back here if the video is not ready yet."
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.SERVER_URL }}/api/short-video/{{ $('Start render').item.json.videoId }}/status",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -580,
+        -260
+      ],
+      "id": "check-status-001",
+      "name": "Check status",
+      "alwaysOutputData": false,
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ready-true",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "ready",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -340,
+        -260
+      ],
+      "id": "if-ready-001",
+      "name": "IF ready"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "failed-true",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -340,
+        -100
+      ],
+      "id": "if-failed-001",
+      "name": "IF failed"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.SERVER_URL }}/api/videos/{{ $('Start render').item.json.videoId }}/download",
+        "options": {
+          "response": {
+            "response": {
+              "binary": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -60,
+        -360
+      ],
+      "id": "download-video-001",
+      "name": "Download final video",
+      "alwaysOutputData": true,
+      "retryOnFail": false,
+      "notes": "Downloads the rendered MP4 as a binary file. Make sure the response is set to binary in the HTTP Request options."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "auto-upload-true",
+              "leftValue": "={{ $('Configure').item.json.AUTO_UPLOAD_TO_YOUTUBE }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        -360
+      ],
+      "id": "if-auto-upload-001",
+      "name": "IF auto upload enabled"
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $('Generate Content').item.json.output.video_title }}",
+        "description": "={{ $('Generate Content').item.json.output.video_description }}",
+        "tags": "={{ $('Generate Content').item.json.output.tags.join(',') }}",
+        "privacyStatus": "={{ $('Configure').item.json.YOUTUBE_PRIVACY_STATUS }}",
+        "regionCode": "={{ $('Configure').item.json.REGION_CODE }}",
+        "categoryId": "={{ $('Configure').item.json.DEFAULT_CATEGORY_ID }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [
+        460,
+        -440
+      ],
+      "id": "youtube-upload-001",
+      "name": "YouTube upload",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "PLACEHOLDER_YOUTUBE_CREDENTIAL_ID",
+          "name": "YouTube account (reconnect in n8n)"
+        }
+      },
+      "notes": "Optional. Only runs when AUTO_UPLOAD_TO_YOUTUBE is true. Connect your own YouTube OAuth2 credentials after importing this workflow."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "success-status",
+              "name": "status",
+              "value": "success",
+              "type": "string"
+            },
+            {
+              "id": "success-message",
+              "name": "message",
+              "value": "Video rendered successfully.",
+              "type": "string"
+            },
+            {
+              "id": "success-video-id",
+              "name": "videoId",
+              "value": "={{ $('Start render').item.json.videoId }}",
+              "type": "string"
+            },
+            {
+              "id": "success-uploaded",
+              "name": "uploadedToYouTube",
+              "value": "={{ $('Configure').item.json.AUTO_UPLOAD_TO_YOUTUBE }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        460,
+        -280
+      ],
+      "id": "final-success-001",
+      "name": "Final success"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "failed-status",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "failed-message",
+              "name": "message",
+              "value": "Video render failed or timed out.",
+              "type": "string"
+            },
+            {
+              "id": "failed-video-id",
+              "name": "videoId",
+              "value": "={{ $('Start render').item.json.videoId }}",
+              "type": "string"
+            },
+            {
+              "id": "failed-reason",
+              "name": "reason",
+              "value": "={{ $json.status }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -60,
+        -100
+      ],
+      "id": "final-failed-001",
+      "name": "Final failed"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Configure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configure": {
+      "main": [
+        [
+          {
+            "node": "Get music tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get music tags": {
+      "main": [
+        [
+          {
+            "node": "Group music tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group music tags": {
+      "main": [
+        [
+          {
+            "node": "Generate Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Content": {
+      "main": [
+        [
+          {
+            "node": "Pick music tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "ai_outputParser": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Generate Content",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick music tag": {
+      "main": [
+        [
+          {
+            "node": "Start render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "ai_outputParser": [
+        [
+          {
+            "node": "Structured Output Parser Music",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser Music": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Pick music tag",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Content",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Pick music tag",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start render": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Check status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check status": {
+      "main": [
+        [
+          {
+            "node": "IF ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF ready": {
+      "main": [
+        [
+          {
+            "node": "Download final video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF failed": {
+      "main": [
+        [
+          {
+            "node": "Final failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download final video": {
+      "main": [
+        [
+          {
+            "node": "IF auto upload enabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF auto upload enabled": {
+      "main": [
+        [
+          {
+            "node": "YouTube upload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Final success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube upload": {
+      "main": [
+        [
+          {
+            "node": "Final success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "nodeGroups": [],
+  "id": "abud-shorts-engine-youtube-workflow",
+  "tags": []
+}

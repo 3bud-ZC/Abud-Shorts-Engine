@@ -204,6 +204,43 @@ Build the UI:
 pnpm build
 ```
 
+## n8n Automation + Optional YouTube Upload
+
+Abud Shorts Engine ships with an official n8n workflow template. You can use it to generate videos automatically and optionally upload them to YouTube.
+
+- YouTube upload is **optional** and **disabled by default**.
+- The workflow uses a safe default privacy status of `private`.
+- You must reconnect your own n8n credentials after importing the workflow.
+
+Workflow file:
+
+```text
+integrations/n8n/abud-shorts-youtube-workflow.json
+```
+
+Documentation:
+
+```text
+docs/n8n-youtube-automation.md
+```
+
+### How the workflow connects
+
+The workflow needs to reach the engine from n8n. Set `SERVER_URL` in the **Configure** node:
+
+| n8n setup | Recommended `SERVER_URL` |
+| --- | --- |
+| n8n local (not Docker) | `http://localhost:3124` |
+| n8n in Docker Desktop | `http://host.docker.internal:3124` |
+| n8n cloud / remote | Local engine is not reachable unless deployed or tunneled |
+
+### Important notes
+
+- The workflow file contains placeholder credential references. You must reconnect your own Gemini and YouTube OAuth2 credentials in n8n after importing.
+- Keep `AUTO_UPLOAD_TO_YOUTUBE` on `false` until you want to enable uploads.
+- Keep YouTube videos `private` or `unlisted` until you manually review them.
+- Do not commit n8n credentials, generated videos, or metadata sidecars.
+
 ## Project Structure
 
 ```text
@@ -215,6 +252,9 @@ src/
   components/   # Shared React components
   config.ts     # Environment configuration
   index.ts      # Server entry point
+
+integrations/n8n/       # n8n workflow templates
+docs/                   # Documentation
 
 docker-compose.dev.yml  # Local Docker Compose setup
 main-tiny.Dockerfile    # Docker image for local dev
