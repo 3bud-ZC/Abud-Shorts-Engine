@@ -1,0 +1,18 @@
+version: "3"
+
+services:
+  abud-shorts-engine-dev:
+    container_name: abud-shorts-engine-dev
+    build:
+      context: .
+      dockerfile: main-tiny.Dockerfile
+    image: abud-shorts-engine:dev
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - PEXELS_API_KEY=${PEXELS_API_KEY:-dummy-key}
+    ports:
+      - "3124:3123"
+    volumes:
+      - "C:/abud-shorts-engine/data-dev:/app/data"
+    entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-tiny.en.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
