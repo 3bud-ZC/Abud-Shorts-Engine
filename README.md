@@ -224,6 +224,12 @@ Documentation:
 docs/n8n-youtube-automation.md
 ```
 
+Optional n8n Docker Compose file:
+
+```text
+integrations/n8n/docker-compose.n8n.yml
+```
+
 ### How the workflow connects
 
 The workflow needs to reach the engine from n8n. Set `SERVER_URL` in the **Configure** node:

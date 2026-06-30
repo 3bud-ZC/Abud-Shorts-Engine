@@ -27,6 +27,31 @@ This integration lets you automate short-form video generation with the Abud Sho
 - A YouTube OAuth2 credential in n8n if you enable the optional upload.
 - A Pexels API key in the engine's `.env` file.
 
+## Optional local n8n Docker setup
+
+If you do not already have n8n running, you can start it with the included optional compose file:
+
+```text
+integrations/n8n/docker-compose.n8n.yml
+```
+
+```powershell
+cd "C:\Users\Abud\Desktop\GitHub\Abud Shorts Engine\source\integrations\n8n"
+docker compose -f docker-compose.n8n.yml up -d
+```
+
+This starts n8n on port `5678` and stores data in `integrations/n8n/n8n-data/` (already gitignored). Do not commit this folder.
+
+Environment variables in the compose file:
+
+- `N8N_HOST=localhost`
+- `N8N_PORT=5678`
+- `N8N_PROTOCOL=http`
+- `N8N_SECURE_COOKIE=false`
+- `GENERIC_TIMEZONE=Africa/Cairo`
+
+If port `5678` is already in use by another n8n container, either stop that container or use a different port.
+
 ## Importing the workflow
 
 1. Open n8n.
@@ -39,6 +64,37 @@ integrations/n8n/abud-shorts-youtube-workflow.json
 ```
 
 5. n8n will warn about missing credentials. That is expected.
+
+You can also import the workflow from the n8n CLI:
+
+```powershell
+docker cp integrations/n8n/abud-shorts-youtube-workflow.json <n8n-container>:/tmp/workflow.json
+docker exec <n8n-container> n8n import:workflow --input=/tmp/workflow.json
+```
+
+## Manual dry-run checklist
+
+Before running the workflow for the first time:
+
+1. Confirm the engine is running: `Invoke-RestMethod http://localhost:3124/health` should return `ok`.
+2. In the **Configure** node, set `SERVER_URL` to the correct value for your n8n setup:
+   - n8n in Docker Desktop: `http://host.docker.internal:3124`
+   - n8n local (not Docker): `http://localhost:3124`
+3. Keep `AUTO_UPLOAD_TO_YOUTUBE` as `false`.
+4. Keep `YOUTUBE_PRIVACY_STATUS` as `private`.
+5. Open the **Google Gemini Chat Model** node and connect your own Gemini credential.
+6. Do not connect the **YouTube upload** node yet.
+7. Click **Execute Workflow**.
+
+Expected dry-run flow:
+
+- **Generate Content** produces a title, description, tags, and 4 scenes.
+- **Pick music tag** selects a music tag from the engine.
+- **Start render** sends the request to the engine.
+- **Wait** and **Check status** poll until the render is ready.
+- **Download final video** downloads the MP4 as a binary.
+- **IF auto upload enabled** is false, so the workflow skips YouTube and reaches **Final success**.
+
 
 ## Setting SERVER_URL
 
