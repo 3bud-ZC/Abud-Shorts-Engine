@@ -211,6 +211,24 @@ You can also download the MP4 directly through the workflow's **Download final v
 - Try using the host IP address instead, or run n8n in `host` network mode for testing.
 - If both n8n and the engine are in the same Docker Compose network, use the engine container name as the hostname.
 
+## Runtime-tested notes
+
+The workflow was imported and dry-run tested against a local Docker setup:
+
+- n8n Docker URL: `http://localhost:5678`
+- Engine URL from n8n Docker: `http://host.docker.internal:3124`
+- The dry run works with YouTube upload disabled (`AUTO_UPLOAD_TO_YOUTUBE=false`).
+- YouTube upload is skipped when `AUTO_UPLOAD_TO_YOUTUBE=false`. This is expected and safe.
+- The workflow reaches the render and download path when the engine is healthy and the Gemini credential is connected.
+
+To test YouTube upload later:
+
+1. Connect your YouTube OAuth2 credential manually in the **YouTube upload** node.
+2. Set `AUTO_UPLOAD_TO_YOUTUBE=true` in the **Configure** node.
+3. Keep `YOUTUBE_PRIVACY_STATUS=private`.
+4. Run one test only.
+5. Review the video before changing the privacy status to `public`.
+
 ## Security notes
 
 - Never commit `.env` or any file containing real API keys.

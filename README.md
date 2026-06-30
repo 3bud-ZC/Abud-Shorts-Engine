@@ -306,6 +306,18 @@ Planned optional improvements:
 - Generated videos and metadata sidecars should stay local.
 - If you ever accidentally commit a secret, rotate the key immediately and remove it from the repository history.
 
+## Public Release Status
+
+This project is ready for public sharing as a local-first open-source MVP.
+
+- Local Docker app validated and running.
+- Render QA passed: the engine produces downloadable MP4 videos.
+- n8n dry run reached the render/download path successfully.
+- YouTube upload is optional and disabled by default (`AUTO_UPLOAD_TO_YOUTUBE=false`).
+- YouTube upload is skipped when disabled; this is expected and safe.
+- No secrets, credentials, generated videos, or metadata sidecars are committed.
+- Project is ready for GitHub, portfolio website, and LinkedIn sharing.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
