@@ -20,6 +20,8 @@ const SYSTEM_PRONUNCIATIONS: PronunciationEntry[] = [
   { written: "JavaScript", spoken: "جافا سكريبت" },
   { written: "React", spoken: "رياكت" },
   { written: "WhatsApp", spoken: "واتساب" },
+  { written: "product", spoken: "برودكت" },
+  { written: "customer", spoken: "كاستمر" },
 ];
 
 const EASTERN_DIGITS: Record<string, string> = {
@@ -251,9 +253,53 @@ function normalizeNumbers(input: string): string {
 }
 
 export type ArabicSpeechPreprocessResult = {
+  sourceText: string;
+  spokenNarration: string;
+  ttsNormalizedText: string;
+  captionText: string;
   spokenText: string;
   replacements: Array<{ from: string; to: string; kind: string }>;
 };
+
+/**
+ * Words that identify conversational Egyptian Arabic. They are deliberately
+ * never rewritten into Modern Standard Arabic: the product owner wants the
+ * narration to sound Egyptian, not formal.
+ */
+export const PRESERVED_EGYPTIAN_TOKENS = [
+  "\u0625\u0646\u062A",
+  "\u0645\u0634",
+  "\u0644\u0633\u0647",
+  "\u062F\u0644\u0648\u0642\u062A\u064A",
+  "\u0639\u0646\u062F\u0643",
+  "\u0645\u0639\u0627\u0643",
+  "\u0639\u0644\u0634\u0627\u0646",
+  "\u0628\u062A\u0633\u064A\u0628",
+  "\u064A\u0631\u0648\u062D\u0648\u0627",
+  "\u062E\u0644\u064A",
+  "\u064A\u0638\u0647\u0631",
+];
+
+/**
+ * Shared clean-up applied to every derived text form: strips markup, collapses
+ * whitespace and normalizes typographic quotes. It never rewrites Arabic
+ * letters, so conversational Egyptian spelling survives intact.
+ */
+function baseClean(input: string): string {
+  return input
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tidyPunctuation(input: string): string {
+  return input
+    .replace(/\s*([\u060C,.!?\u061F])\s*/g, "$1 ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function preprocessArabicSpeech(
   rawText: string,
@@ -264,21 +310,24 @@ export function preprocessArabicSpeech(
     systemPronunciations?: Record<string, string> | PronunciationEntry[];
   } = {},
 ): ArabicSpeechPreprocessResult {
+  const sourceText = rawText || "";
   const replacements: ArabicSpeechPreprocessResult["replacements"] = [];
-  let text = normalizeDigits(rawText || "");
-  text = text
+
+  // 1. captionText - what the viewer reads. Original wording, original spelling.
+  const captionText = baseClean(sourceText);
+
+  // 2. spokenNarration - what the narrator is asked to say. Same Egyptian
+  //    wording as the source; only tashkeel (which ElevenLabs does not need)
+  //    and Eastern Arabic digits are normalized. Punctuation spacing is left
+  //    alone here so URLs such as abud.fun stay intact for the next step.
+  const spokenNarration = normalizeDigits(captionText)
     .replace(/[\u064B-\u065F\u0670]/g, "")
-    .replace(/[إأآ]/g, "ا")
-    .replace(/ى/g, "ي")
-    .replace(/ؤ/g, "و")
-    .replace(/ئ/g, "ي")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  text = normalizeUrls(text);
+  // 3. ttsNormalizedText - spokenNarration with pronunciation dictionary and
+  //    number/date/currency expansion applied. This is the string sent to TTS.
+  let text = normalizeUrls(spokenNarration);
 
   const dictionary = sanitizeEntries(
     [
@@ -301,10 +350,15 @@ export function preprocessArabicSpeech(
   text = normalizeNumbers(text);
   text = restorePlaceholders(text, protectedResult.placeholders);
 
-  text = text
-    .replace(/\s*([،,.!?؟])\s*/g, "$1 ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const ttsNormalizedText = tidyPunctuation(text);
 
-  return { spokenText: text, replacements };
+  return {
+    sourceText,
+    spokenNarration,
+    ttsNormalizedText,
+    captionText,
+    // Backwards-compatible alias used by older call sites and historical jobs.
+    spokenText: ttsNormalizedText,
+    replacements,
+  };
 }

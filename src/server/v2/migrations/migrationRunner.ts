@@ -465,6 +465,45 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: "2.10.0",
+    name: "v2_2_provider_credentials_vault",
+    up: async (pool: Pool) => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS provider_credentials_vault (
+          provider_id TEXT NOT NULL,
+          credential_type TEXT NOT NULL,
+          ciphertext TEXT NOT NULL,
+          iv TEXT NOT NULL,
+          auth_tag TEXT NOT NULL,
+          key_version INTEGER NOT NULL DEFAULT 1,
+          masked_hint TEXT,
+          metadata JSONB NOT NULL DEFAULT '{}',
+          health TEXT NOT NULL DEFAULT 'unknown',
+          configured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          last_tested_at TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (provider_id, credential_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_provider_credentials_health
+          ON provider_credentials_vault(provider_id, health);
+
+        CREATE TABLE IF NOT EXISTS provider_oauth_states (
+          state TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          redirect_uri TEXT,
+          code_verifier_hash TEXT,
+          expires_at TIMESTAMPTZ NOT NULL,
+          used_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_provider_oauth_states_expiry
+          ON provider_oauth_states(provider_id, expires_at);
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {

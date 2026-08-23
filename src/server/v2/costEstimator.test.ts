@@ -67,4 +67,55 @@ describe("Cost Estimator Foundation", () => {
     expect(cost.breakdown.visualAssets.aiCount).toBe(2);
     expect(cost.breakdown.voice.provider).toBe("elevenlabs");
   });
+
+  it("reports ElevenLabs voice cost as usage based instead of $0 or an invented figure", () => {
+    const cost = estimateProductionCost(
+      {
+        scenes: [
+          {
+            sceneIndex: 0,
+            purpose: "hook",
+            durationSeconds: 5,
+            narration: "Arabic narration billed by ElevenLabs character usage",
+            stockSearchTerms: ["office"],
+            visualSource: "stock",
+            transition: "cut",
+          },
+        ],
+      },
+      { voiceProvider: "elevenlabs" },
+    );
+
+    // An ElevenLabs job must never present itself as a free external pipeline.
+    expect(cost.isFree).toBe(false);
+    expect(cost.usageBased).toBe(true);
+    expect(cost.costLabel).toContain("Usage Based");
+    expect(cost.breakdown.voice.estimatedCostTier).toBe("premium");
+    // No fabricated dollar amount for a provider we cannot price reliably.
+    expect(cost.breakdown.voice.cost).toBe(0);
+    expect(cost.estimatedCost).toBe(0);
+  });
+
+  it("keeps the local pipeline reported as genuinely free", () => {
+    const cost = estimateProductionCost(
+      {
+        scenes: [
+          {
+            sceneIndex: 0,
+            purpose: "hook",
+            durationSeconds: 5,
+            narration: "English narration produced locally by Kokoro",
+            stockSearchTerms: ["office"],
+            visualSource: "stock",
+            transition: "cut",
+          },
+        ],
+      },
+      { voiceProvider: "kokoro" },
+    );
+
+    expect(cost.isFree).toBe(true);
+    expect(cost.usageBased).toBe(false);
+    expect(cost.breakdown.voice.estimatedCostTier).toBe("local_free");
+  });
 });

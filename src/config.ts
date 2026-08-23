@@ -67,6 +67,7 @@ export class Config {
   public serviceRole: "app" | "render-worker";
   public databaseUrl?: string;
   public internalServiceToken: string;
+  public providerVaultMasterKey: string;
   public n8nBaseUrl: string;
   public n8nWebhookPath: string;
   public renderWorkerBaseUrl: string;
@@ -123,6 +124,7 @@ export class Config {
       process.env.SERVICE_ROLE === "render-worker" ? "render-worker" : "app";
     this.databaseUrl = process.env.DATABASE_URL;
     this.internalServiceToken = process.env.INTERNAL_SERVICE_TOKEN || "";
+    this.providerVaultMasterKey = process.env.PROVIDER_VAULT_MASTER_KEY || "";
     this.n8nBaseUrl = process.env.N8N_BASE_URL || "http://localhost:5678";
     this.n8nWebhookPath =
       process.env.N8N_WEBHOOK_PATH || "/webhook/abud-v2/jobs/start";
@@ -252,6 +254,12 @@ export class Config {
     }
     if (productionLike && /change-this|change-me|dummy|test/i.test(this.internalServiceToken)) {
       add("critical", "placeholder_internal_service_token", "INTERNAL_SERVICE_TOKEN must not use placeholder values in production.");
+    }
+    if (v2Enabled && this.serviceRole === "app" && !this.providerVaultMasterKey) {
+      add("warning", "missing_provider_vault_master_key", "PROVIDER_VAULT_MASTER_KEY is missing; provider credential vault APIs will reject credential writes.");
+    }
+    if (this.providerVaultMasterKey && this.providerVaultMasterKey.length < 32) {
+      add("warning", "weak_provider_vault_master_key", "PROVIDER_VAULT_MASTER_KEY should be at least 32 characters or base64-encoded 32 bytes.");
     }
     if (v2Enabled && this.serviceRole === "app" && !this.databaseUrl) {
       add("critical", "missing_database_url", "DATABASE_URL is required for the V2 app role.");

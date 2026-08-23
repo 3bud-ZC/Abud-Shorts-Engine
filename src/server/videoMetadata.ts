@@ -11,7 +11,7 @@ export interface VideoMetadata {
   templateName?: string;
   brandName?: string;
   watermarkText?: string;
-  captionStyle?: "none" | "clean" | "bold" | "minimal";
+  captionStyle?: string;
   captionProfileUsed?: string;
   musicTrack?: string;
   musicMood?: string;
@@ -35,6 +35,8 @@ export interface VideoMetadata {
   productionSpec?: Record<string, unknown>;
   timeline?: Record<string, unknown>;
   mediaPlan?: Record<string, unknown>;
+  sceneSourceDecisions?: Array<Record<string, unknown>>;
+  postProductionProcessors?: Array<Record<string, unknown>>;
   selectedVisuals?: Array<Record<string, unknown>>;
   sceneQa?: Array<Record<string, unknown>>;
   durableArtifacts?: Array<Record<string, unknown>>;
@@ -67,6 +69,7 @@ export interface VideoMetadata {
   downloadFilename?: string;
   containerPath?: string;
   hostPathHint?: string;
+  beatMap?: Record<string, unknown>;
   error?: string;
 }
 

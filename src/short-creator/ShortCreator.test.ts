@@ -103,7 +103,9 @@ vi.mock("@remotion/install-whisper-cpp", () => {
   };
 });
 
-test("test me", async () => {
+// The queue is drained asynchronously, so the assertion below polls for up to
+// six seconds; the test timeout has to allow for that.
+test("test me", { timeout: 30000 }, async () => {
   const kokoro = await Kokoro.init("fp16");
   vi.spyOn(kokoro, "generate").mockResolvedValue({
     audio: new ArrayBuffer(8),
@@ -225,7 +227,10 @@ test("test me", async () => {
 
   // resolve the render promise to simulate the video being processed, and check the status again
   resolveRenderPromise();
-  await new Promise((resolve) => setTimeout(resolve, 100)); // let the queue process the video
+  for (let i = 0; i < 250; i++) {
+    if (shortCreator.status(videoId) === "ready") break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   videos = shortCreator.listAllVideos();
   expect(videos.find((v) => v.id === videoId)?.status).toBe("ready");
 

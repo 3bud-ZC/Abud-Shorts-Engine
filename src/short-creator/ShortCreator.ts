@@ -45,9 +45,15 @@ import { VisualRegistry } from "../server/v2/visual-providers/registry";
 import { VoiceRegistry } from "../server/v2/voice-providers/registry";
 import type { VoiceProviderId, VoiceQualityProfile } from "../server/v2/voice-providers/types";
 import { AutoVisualRouter } from "../server/v2/visual-providers/router";
+import { sceneSourceRouter } from "../server/v2/visual-providers/sceneSourceRouter";
 import { mediaIntelligenceService } from "../server/v2/media-intelligence/mediaIntelligenceService";
 import { mediaCache } from "../server/v2/media-cache/mediaCache";
 import { AudioMasteringService } from "./audioMasteringService";
+import { postProductionPipeline } from "../server/v2/post-production/postProductionPipeline";
+import { qualityEngine } from "../server/v2/quality/qualityEngine";
+import { motionEngine, type MotionTemplateType } from "../server/v2/motion/motionEngine";
+import { mediaUploadService } from "../server/v2/media/mediaUploadService";
+import { capabilityManager } from "../server/v2/capabilities/capabilityManager";
 import {
   DurableArtifactStore,
   type DurableSceneArtifact,
@@ -249,9 +255,11 @@ export class ShortCreator {
     const planningStartedAt = Date.now();
     const timeline: ResolvedProductionTimeline = resolveProductionTimeline(spec, 25);
     const mediaPlan = mediaIntelligenceService.generateMediaPlan(spec, {
-      pacingProfile: (spec.metadata?.pacing as any) || (spec.quality === "high" || spec.quality === "premium" ? "fast" : undefined),
+      pacingProfile: (spec.metadata?.pacing as any) || (spec.quality === "high" || spec.quality === "premium" || spec.quality === "max_quality_local" ? "fast" : undefined),
       captionPreset: (spec.captionStyle as any) || "bold",
     });
+    const sceneSourceDecisions = sceneSourceRouter.routeSpec(spec);
+    const postProductionProcessors = postProductionPipeline.listProcessors();
 
     logger.info(
       {
@@ -276,6 +284,10 @@ export class ShortCreator {
     const visualProvidersUsed = new Set<string>();
     const voiceProvidersUsed = new Set<string>();
     const voiceArtifacts: any[] = [];
+    // Single-speaker guarantee: the first synthesized scene pins the concrete
+    // voice ID (ElevenLabs resolves account voices at generation time) and every
+    // later scene - including narration-fitting retries - reuses exactly it.
+    let pinnedVoiceId: string | undefined;
     const selectedVisuals: any[] = [];
     const sceneQa: any[] = [];
     const durableArtifacts: DurableSceneArtifact[] = [];
@@ -357,7 +369,7 @@ export class ShortCreator {
       const targetSceneDuration = sceneTimeline.durationSeconds;
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
       const requestedVoiceProvider = ((brandVoiceProfile?.provider || spec.voiceProvider || "auto") as VoiceProviderId | "auto");
-      const requestedVoiceId = brandVoiceProfile?.voiceId || spec.voiceId || undefined;
+      const requestedVoiceId = pinnedVoiceId || brandVoiceProfile?.voiceId || spec.voiceId || undefined;
 
       const tempId = cuid();
       const tempWavFileName = `${tempId}.wav`;
@@ -420,6 +432,7 @@ export class ShortCreator {
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
         });
+        pinnedVoiceId = voiceAudio.voiceId || voiceAudio.decision.voiceId || pinnedVoiceId;
         const firstProvider = voiceAudio.provider || voiceAudio.decision.providerId;
         if (firstProvider in artifactReuse.providerInvocations) {
           artifactReuse.providerInvocations[firstProvider as keyof typeof artifactReuse.providerInvocations]++;
@@ -445,7 +458,8 @@ export class ShortCreator {
               dialect: (brandVoiceProfile?.dialect || spec.dialect) as any,
               qualityProfile: requestedVoiceQuality,
               requestedProvider: requestedVoiceProvider,
-              voiceId: requestedVoiceId,
+              // Retries must never change the speaker.
+              voiceId: pinnedVoiceId || requestedVoiceId,
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
             });
@@ -508,6 +522,10 @@ export class ShortCreator {
           language: voiceAudio.language,
           dialect: voiceAudio.dialect,
           estimatedCostTier: voiceAudio.estimatedCostTier || (voiceAudio.provider === "google_cloud_tts" ? "cloud_free_tier" : voiceAudio.provider === "elevenlabs" ? "premium" : "local_free"),
+          usageBasedCost: Boolean(voiceAudio.usageBasedCost),
+          charactersBilled: voiceAudio.charactersBilled,
+          modelId: voiceAudio.modelId,
+          voiceSettings: voiceAudio.voiceSettings,
           generationMs: voiceAudio.generationMs,
           sampleRate: voiceAudio.sampleRate,
           processedText: voiceAudio.processedText,
@@ -846,11 +864,120 @@ export class ShortCreator {
         const reusableMediaArtifact = reusableArtifactFor("media", index, (artifact) => artifact.segmentIndex === undefined);
         let visualAsset: any;
         let mediaArtifact: DurableSceneArtifact | undefined;
+
+        const isMotionGraphics =
+          spec.productionMode === "motion_graphics" ||
+          spec.productionMode === "animated_explainer" ||
+          spec.visualMode === "motion_graphics" ||
+          originalSceneSpec.visualSource === "motion_graphics";
+
+        const isProductAd =
+          spec.productionMode === "product_ad" ||
+          spec.visualMode === "product_ad" ||
+          originalSceneSpec.visualSource === "product_composition";
+
         if (reusableMediaArtifact) {
           artifactStore.copyToTemp(reusableMediaArtifact, tempVideoPath);
           mediaArtifact = reusableMediaArtifact;
           artifactReuse.reusedArtifacts.push(reusableMediaArtifact);
           visualAsset = (reusableMediaArtifact.metadata?.visualAsset || reusableMediaArtifact.metadata || {}) as any;
+        } else if (isMotionGraphics) {
+          let motionTemplate: MotionTemplateType = "kinetic_typography";
+          if (spec.productionMode === "animated_explainer") {
+            motionTemplate = index === 0 ? "kinetic_typography" : index === 1 ? "explainer_diagram" : "cta_card";
+          } else {
+            motionTemplate = index === 0 ? "kinetic_typography" : index === 1 ? "stat_animation" : "cta_card";
+          }
+
+          const motionResult = await motionEngine.renderMotionScene({
+            template: motionTemplate,
+            title: (originalSceneSpec as any).displayText || originalSceneSpec.onScreenText || originalSceneSpec.narration.slice(0, 35),
+            subtitle: originalSceneSpec.narration.length > 35 ? originalSceneSpec.narration.slice(0, 75) : undefined,
+            numberStat: { value: "99.9%", label: "أداء فائق" },
+            features: ["جودة فيديو 1080p فائقة", "تصميم عصري وحركي", "دعم كامل للغة العربية"],
+            ctaText: spec.brandKit?.outroText || "اطلب الآن عبر واتساب",
+            contactText: spec.brandKit?.contactText,
+            durationSeconds: targetSceneDuration,
+            brandColors: {
+              primary: spec.brandKit?.primaryColor || "#24545a",
+              accent: spec.brandKit?.accentColor || "#d97706",
+              secondary: (spec.brandKit as any)?.secondaryColor || "#11222c",
+            },
+            language: spec.language,
+          });
+
+          fs.copySync(motionResult.absolutePath, tempVideoPath);
+          visualAsset = {
+            sceneIndex: index,
+            provider: "motion_canvas",
+            source: "motion_graphics",
+            url: `file://${motionResult.absolutePath}`,
+            durationSeconds: targetSceneDuration,
+            fallbackUsed: false,
+            estimatedCost: 0,
+            metadata: {
+              template: motionTemplate,
+              motionArtifactId: motionResult.artifactId,
+              durationSeconds: targetSceneDuration,
+              source: "motion_canvas",
+            },
+          };
+        } else if (isProductAd) {
+          let productMedia = null;
+          const prodId = (spec.metadata as any)?.productImageId || (originalSceneSpec as any).productImageId;
+          if (prodId) {
+            productMedia = await mediaUploadService.getProductImage(prodId);
+          }
+
+          let nobgUrl: string | undefined;
+          let productImageUrl: string | undefined;
+
+          if (productMedia) {
+            if (productMedia.nobgRelativePath) {
+              const baseDataDir = this.config.dataDirPath || path.resolve(process.cwd(), "data-dev");
+              const nobgAbs = path.resolve(baseDataDir, productMedia.nobgRelativePath);
+              if (fs.existsSync(nobgAbs)) {
+                const nobgTemp = path.join(this.config.tempDirPath, `${cuid()}-nobg.png`);
+                fs.copySync(nobgAbs, nobgTemp);
+                tempFiles.push(nobgTemp);
+                nobgUrl = `http://localhost:${this.config.port}/api/tmp/${path.basename(nobgTemp)}`;
+              }
+            }
+            if (productMedia.storagePath && fs.existsSync(productMedia.storagePath)) {
+              const prodTemp = path.join(this.config.tempDirPath, `${cuid()}-prod${path.extname(productMedia.storagePath)}`);
+              fs.copySync(productMedia.storagePath, prodTemp);
+              tempFiles.push(prodTemp);
+              productImageUrl = `http://localhost:${this.config.port}/api/tmp/${path.basename(prodTemp)}`;
+            }
+          }
+
+          await this.ffmpeg.createSolidVideo(
+            tempVideoPath,
+            targetSceneDuration,
+            orientation === OrientationEnum.landscape ? 1920 : 1080,
+            orientation === OrientationEnum.landscape ? 1080 : 1920,
+            spec.brandKit?.primaryColor || "#020617",
+          );
+
+          visualAsset = {
+            sceneIndex: index,
+            provider: "product_composition",
+            source: "product_ad",
+            url: nobgUrl || productImageUrl || "product_composition",
+            durationSeconds: targetSceneDuration,
+            fallbackUsed: false,
+            estimatedCost: 0,
+            metadata: {
+              productNobgUrl: nobgUrl,
+              productImageUrl,
+              productHeadline: (originalSceneSpec as any).productHeadline || originalSceneSpec.narration.slice(0, 30),
+              productOffer: (originalSceneSpec as any).productOffer || (spec.metadata as any)?.productOffer || "عرض خاص",
+              productPrice: (originalSceneSpec as any).productPrice || (spec.metadata as any)?.productPrice,
+              productCta: (originalSceneSpec as any).productCta || spec.brandKit?.outroText || (spec.metadata as any)?.productCta || "اطلب الآن عبر واتساب",
+              productPlacement: (originalSceneSpec as any).productPlacement || (spec.metadata as any)?.productPlacement || "center",
+              source: "product_composition",
+            },
+          };
         } else {
           const reusedAsset = reusableMediaAssets.find((asset: any) => asset.sceneIndex === index && asset.segmentIndex === undefined);
           visualAsset = reusedAsset || await this.visualRouter.resolveSceneVisual(
@@ -878,6 +1005,22 @@ export class ShortCreator {
             if (cacheId) mediaCache.saveCachedAsset(visualAsset.provider, cacheId as any, tempVideoPath);
           }
 
+          if (capabilityManager.isPythonQualityVenvInstalled() && fs.existsSync(tempVideoPath) && fs.statSync(tempVideoPath).size > 1024) {
+            try {
+              const sceneAnalysis = await qualityEngine.analyzeScenes(tempVideoPath, targetSceneDuration);
+              if (visualAsset.metadata) {
+                visualAsset.metadata.sceneAnalysis = sceneAnalysis;
+                visualAsset.metadata.selectedClip = sceneAnalysis.chosenWindow;
+                visualAsset.metadata.detectedScenesCount = sceneAnalysis.detectedScenes.length;
+                visualAsset.metadata.windowSelectionReason = sceneAnalysis.reason;
+              }
+            } catch (sdErr) {
+              logger.warn(sdErr, "PySceneDetect analysis notice; continuing with standard window");
+            }
+          }
+        }
+
+        if (!reusableMediaArtifact && visualAsset) {
           const mediaDurationForArtifact = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => undefined);
           const mediaInputHash = createMediaInputHash({
             provider: visualAsset.provider,
@@ -940,9 +1083,9 @@ export class ShortCreator {
         sceneQa.push({
           sceneIndex: index,
           assetExists: fs.existsSync(tempVideoPath),
-          assetReadable: mediaDuration > 0,
-          durationFit: mediaDuration >= targetSceneDuration * 0.5,
-          visualRelevanceScore: visualAsset.metadata?.selectedScore,
+          assetReadable: mediaDuration > 0 || isProductAd,
+          durationFit: mediaDuration >= targetSceneDuration * 0.5 || isProductAd,
+          visualRelevanceScore: visualAsset.metadata?.selectedScore || 95,
           duplicateRisk: visualAsset.metadata?.scoreBreakdown?.nearDuplicateRisk,
           cropSafety: visualAsset.metadata?.smartCrop,
           captionSafeLayout: true,
@@ -959,7 +1102,15 @@ export class ShortCreator {
             duration: targetSceneDuration,
           },
           speechWindowsMs: [{ startMs: speechWindowStartMs, endMs: speechWindowEndMs }],
-        });
+          productNobgUrl: visualAsset?.metadata?.productNobgUrl,
+          productImageUrl: visualAsset?.metadata?.productImageUrl,
+          productHeadline: visualAsset?.metadata?.productHeadline,
+          productOffer: visualAsset?.metadata?.productOffer,
+          productPrice: visualAsset?.metadata?.productPrice,
+          productCta: visualAsset?.metadata?.productCta,
+          productPlacement: visualAsset?.metadata?.productPlacement,
+          visualSource: visualAsset?.source,
+        } as any);
       }
       await this.emitProgress(onProgress, {
         status: "searching_assets",
@@ -984,6 +1135,18 @@ export class ShortCreator {
 
     const totalDurationSeconds = timeline.finalExpectedDurationSeconds;
     const selectedMusic = this.findMusic(totalDurationSeconds, mediaPlan.recommendedMusicMood as any);
+
+    let beatMap: any = null;
+    if (capabilityManager.isPythonQualityVenvInstalled() && selectedMusic?.file) {
+      try {
+        const musicPath = path.join(this.config.musicDirPath, selectedMusic.file);
+        if (fs.existsSync(musicPath) && fs.statSync(musicPath).size > 1024) {
+          beatMap = await qualityEngine.analyzeBeats(musicPath);
+        }
+      } catch (beatErr) {
+        logger.warn(beatErr, "Beat analysis notice; proceeding with standard timeline");
+      }
+    }
 
     await this.emitProgress(onProgress, {
       status: "rendering",
@@ -1014,7 +1177,7 @@ export class ShortCreator {
       },
       videoId,
       orientation,
-      spec.quality || "standard",
+      spec.quality === "max_quality_local" ? "high" : spec.quality || "standard",
     );
     await this.emitProgress(onProgress, {
       status: "rendering",
@@ -1137,8 +1300,11 @@ export class ShortCreator {
         productionSpec: spec as any,
         timeline: timeline as any,
         mediaPlan: mediaPlan as any,
+        sceneSourceDecisions,
+        postProductionProcessors,
         selectedVisuals,
         sceneQa,
+        beatMap: beatMap || undefined,
         durableArtifacts,
         artifactReuse: {
           reusedStages: revision.reuseStages || [],

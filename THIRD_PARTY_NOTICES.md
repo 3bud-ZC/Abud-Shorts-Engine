@@ -1,7 +1,8 @@
 # ABUD Shorts Engine Third-Party Notices
 
-This file records third-party notices for the ABUD Shorts Engine V2.1.0
-General Availability package.
+This file records third-party notices for ABUD Shorts Engine V2.1.0 General
+Availability plus V2.2 development-source additions. The immutable V2.1.0
+release tag, GitHub release, and client package are not rewritten by this file.
 
 ## Application Runtime Dependencies
 
@@ -16,9 +17,34 @@ General Availability package.
 | fluent-ffmpeg | ^2.1.3 | npm `fluent-ffmpeg` | MIT |
 | kokoro-js | ^1.2.0 | npm `kokoro-js` | See package/model notices; used for English local TTS in this product |
 | google-auth-library | ^11.0.2 | npm `google-auth-library` | Apache-2.0; used only for optional server-side Google Cloud Text-to-Speech authentication |
+| @fontsource/cairo | 5.3.0 | npm `@fontsource/cairo` / Fontsource Cairo package | OFL-1.1; bundled locally for offline Arabic rendering |
 | piper-tts runtime | 1.7.0 | PyPI `piper-tts` | GPL-3.0-or-later runtime license |
 | Piper Arabic voice model | ar_JO-kareem-medium | `rhasspy/piper-voices` model tree | MIT model metadata recorded in V2.1 status |
 | whisper.cpp model | ggml-small.bin | whisper.cpp/Remotion installer path | Model/runtime notices apply; multilingual caption timing model |
+
+## V2.2 Optional Capability Notices
+
+The following integrations are implemented as optional control-plane or
+capability-gated paths. They are not bundled as mandatory base-image runtimes
+unless the operator enables the corresponding pack/runtime:
+
+| Component | Version / Route | Source | License / Notice |
+| :--- | :--- | :--- | :--- |
+| edge-tts | ^7.2.8 | PyPI `edge-tts` | LGPL-3.0 per upstream LICENSE; Microsoft Edge online speech service terms apply |
+| Ollama / Qwen | optional local HTTP Content AI provider | Ollama-compatible endpoint; Qwen model selected by operator | Model license depends on the locally installed model; no model is downloaded by default |
+| Motion Canvas / Cairo Engine | 2.16.0 | Programmatic frame generation | MIT; Remotion-integrated Motion Canvas with Cairo typography |
+| PySceneDetect | 0.7.1 | PyPI `scenedetect` | BSD-3-Clause project license |
+| MediaPipe | optional Quality CPU Pack | Google MediaPipe | Apache-2.0; deterministic smart crop heuristic active as fallback |
+| rembg | 2.0.81 | PyPI `rembg` | MIT; uses ONNX runtime with u2netp lightweight model |
+| onnxruntime | 1.29.0 | PyPI `onnxruntime` | MIT; execution provider for rembg |
+| Real-ESRGAN / Lanczos | 0.3.0 | High-quality image enhancement | BSD-3-Clause / PIL Lanczos filter |
+| librosa | 0.11.0 | PyPI `librosa` | ISC; audio beat tracking and energy envelope analysis |
+| soundfile | 0.14.0 | PyPI `soundfile` | BSD-3-Clause; libsndfile Python wrapper |
+| Pillow (PIL) | 12.3.0 | PyPI `pillow` | HPND / PIL Software License |
+| faster-whisper | optional caption backend | `SYSTRAN/faster-whisper` | MIT for runtime; model license depends on selected model |
+| WhisperX | optional alignment evaluation backend | `m-bain/whisperX` | BSD-2-Clause; Arabic forced alignment remains disabled until an Arabic alignment model is verified |
+| ComfyUI | optional AI GPU Pack sidecar | `Comfy-Org/ComfyUI` | GPL-3.0; isolated sidecar, not customer UI |
+| Wan2.2 | optional AI GPU Pack workflow | Wan2.2 model/workflow source selected by operator | Hardware and model license acceptance required before enabling |
 
 ## Local Arabic Voice Notice
 

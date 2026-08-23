@@ -2,6 +2,7 @@ import { Config } from "../../../config";
 import type { ContentAIProvider, ProviderValidationResult } from "./types";
 import { LocalContentAIProvider } from "./localProvider";
 import { GeminiContentAIProvider } from "./geminiProvider";
+import { OllamaContentAIProvider } from "./ollamaProvider";
 
 export class ContentAIRegistry {
   private providers: Map<string, ContentAIProvider> = new Map();
@@ -9,6 +10,9 @@ export class ContentAIRegistry {
   constructor(config?: Config, geminiKeyOverride?: string) {
     const localProvider = new LocalContentAIProvider();
     this.providers.set(localProvider.id, localProvider);
+
+    const ollamaProvider = new OllamaContentAIProvider();
+    this.providers.set(ollamaProvider.id, ollamaProvider);
 
     const geminiKey =
       geminiKeyOverride ||
@@ -23,6 +27,10 @@ export class ContentAIRegistry {
       const p = this.providers.get(id)!;
       // If user specifically requested Gemini but Gemini is not configured, we still return it so it can validate/fallback
       return p;
+    }
+    const ollama = this.providers.get("ollama") as OllamaContentAIProvider;
+    if (ollama?.isConfigured) {
+      return ollama;
     }
     const gemini = this.providers.get("gemini") as GeminiContentAIProvider;
     if (gemini && gemini.isConfigured) {

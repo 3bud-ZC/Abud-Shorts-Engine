@@ -100,6 +100,7 @@ if (-not (Test-Path ".env")) {
     $pgPass = "abud_pg_" + (Generate-SecretHex 16)
     $n8nKey = Generate-SecretHex 16
     $sessionSecret = Generate-SecretHex 32
+    $providerVaultMasterKey = Generate-SecretHex 32
     $whSecret = "whsec_" + (Generate-SecretHex 24)
 
     $envContent = @"
@@ -123,22 +124,28 @@ DATABASE_URL=postgresql://abud_shorts:$pgPass@postgres:5432/abud_shorts
 WHISPER_MODEL=small
 KOKORO_MODEL_PRECISION=q4
 
-# Local Arabic voice path.
-PIPER_BIN=/opt/piper/bin/piper
-PIPER_AR_MODEL_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx
-PIPER_AR_MODEL_CONFIG_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx.json
-PIPER_AR_VOICE_ID=ar_JO-kareem-medium
-PIPER_AR_LENGTH_SCALE=1.50
-PIPER_AR_SENTENCE_SILENCE=0.25
-PIPER_AR_MODEL_LICENSE=MIT
-PIPER_AR_RUNTIME_LICENSE=GPL-3.0-or-later
-PIPER_AR_MODEL_COMMERCIAL_USE=allowed
+# Arabic production voice (ElevenLabs only).
+# Normal customers configure this from the app: Providers -> ElevenLabs -> Configure.
+# The key is stored encrypted in the provider vault; editing this file is not required.
+ELEVENLABS_API_KEY=
+# Optional. Leave empty to resolve the voice from your ElevenLabs account,
+# or set the voice you selected in Providers -> ElevenLabs -> Voice Lab.
+ELEVENLABS_DEFAULT_VOICE_ID=
+
+# Legacy Piper Arabic runtime. NOT required for production: Arabic narration is
+# served by ElevenLabs. These are only needed to re-open or re-render historical
+# jobs that were produced with Piper before V2.2.
+# PIPER_BIN=/opt/piper/bin/piper
+# PIPER_AR_MODEL_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx
+# PIPER_AR_MODEL_CONFIG_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx.json
+# PIPER_AR_VOICE_ID=ar_JO-kareem-medium
 
 # Cryptographic Secrets
 INTERNAL_SERVICE_TOKEN=$internalToken
 POSTGRES_PASSWORD=$pgPass
 N8N_ENCRYPTION_KEY=$n8nKey
 SESSION_SECRET=$sessionSecret
+PROVIDER_VAULT_MASTER_KEY=$providerVaultMasterKey
 WEBHOOK_SIGNING_SECRET=$whSecret
 "@
     Set-Content -Path ".env" -Value $envContent -Encoding utf8
@@ -194,7 +201,8 @@ Write-Host "  ABUD Shorts Engine V2 is Ready!" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host "  Dashboard:       http://localhost:$Port" -ForegroundColor Cyan
 Write-Host "  Setup Wizard:    http://localhost:$Port/setup" -ForegroundColor Cyan
-Write-Host "  Free Pipeline:   Ready (Local Director, Pexels, Piper Arabic, Kokoro English, Whisper, Remotion)" -ForegroundColor Green
+Write-Host "  Free Pipeline:   Ready (Local Director, Pexels, Kokoro English, Whisper, Remotion)" -ForegroundColor Green
+Write-Host "  Arabic Voice:    Requires ElevenLabs - configure it in Providers -> ElevenLabs" -ForegroundColor Yellow
 Write-Host "  Database:        PostgreSQL Connected & Migrated" -ForegroundColor Green
 Write-Host "  Orchestrator:    n8n Internal Automation Active" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green

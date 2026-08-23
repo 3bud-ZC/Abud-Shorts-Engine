@@ -6,6 +6,7 @@ import type {
   QualityProfile,
   Resolution,
   VideoLanguage,
+  ProductionMode,
   VisualMode,
   VoiceProvider,
 } from "../../../types/productionSpec";
@@ -21,6 +22,7 @@ export type GenerateSpecParams = {
   aspectRatio?: AspectRatio;
   resolution?: Resolution;
   quality?: QualityProfile;
+  productionMode?: ProductionMode;
   visualMode?: VisualMode;
   voiceProvider?: VoiceProvider;
   voiceId?: string;

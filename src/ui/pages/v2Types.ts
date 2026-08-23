@@ -51,6 +51,15 @@ export type V2HealthComponent = {
   checkedAt: string;
   latencyMs?: number;
   details?: Record<string, unknown>;
+  credentialTypes?: string[];
+  vaultConfigured?: boolean;
+  vault?: Array<{
+    credentialType: string;
+    maskedHint?: string;
+    health: string;
+    configuredAt: string;
+    lastTestedAt?: string;
+  }>;
 };
 
 export type BusinessTemplateField = {
@@ -219,6 +228,15 @@ export type ProviderItem = {
   message: string;
   checkedAt?: string;
   details?: Record<string, unknown>;
+  credentialTypes?: string[];
+  vaultConfigured?: boolean;
+  vault?: Array<{
+    credentialType: string;
+    maskedHint?: string;
+    health: string;
+    configuredAt: string;
+    lastTestedAt?: string;
+  }>;
 };
 
 export type PromptEnhanceResult = {
@@ -231,6 +249,8 @@ export type CostEstimateData = {
   estimatedCost: number;
   currency: "USD";
   isFree: boolean;
+  usageBased?: boolean;
+  costLabel?: string;
   breakdown: {
     contentAI: number;
     visualAssets: {
@@ -243,6 +263,9 @@ export type CostEstimateData = {
       provider: string;
       charCount: number;
       cost: number;
+      estimatedCostTier?: string;
+      usageBased?: boolean;
+      costLabel?: string;
     };
     rendering: number;
   };

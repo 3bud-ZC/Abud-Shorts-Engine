@@ -44,6 +44,7 @@ import { VeoVisualProvider } from "./visual-providers/veoVisualProvider";
 import { FalVisualProvider } from "./visual-providers/falVisualProvider";
 import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvider";
 import { GoogleCloudTtsProvider } from "./voice-providers/googleCloudTtsProvider";
+import { EdgeTtsProvider } from "./voice-providers/edgeTtsProvider";
 import { VoiceRegistry } from "./voice-providers/registry";
 import { PIPER_ARABIC_MODEL } from "./voice-providers/piperArabicModel";
 import { mediaIntelligenceService } from "./media-intelligence/mediaIntelligenceService";
@@ -56,6 +57,18 @@ import { publishingRegistry } from "./publishing/registry";
 import { getProductInfo } from "../../version";
 import { AuthService } from "./auth/authService";
 import { ApiTokenService, type ApiTokenScope } from "./auth/apiTokenService";
+import type { VoiceProviderId } from "./voice-providers/types";
+import {
+  ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+  ARABIC_PRODUCTION_PROVIDER,
+  isArabicLanguage,
+  isLegacyPiperVoiceId,
+} from "./voice-providers/types";
+import {
+  ELEVENLABS_DEFAULT_MODEL_ID,
+  ELEVENLABS_PRESETS,
+  ELEVENLABS_PRESET_IDS,
+} from "./voice-providers/elevenlabsVoiceProvider";
 import { BackupService } from "./backup/backupService";
 import { DiagnosticsService } from "./diagnostics/diagnosticsService";
 import { WebhookService } from "./webhooks/webhookService";
@@ -63,12 +76,19 @@ import { AnalyticsService } from "./analytics/analyticsService";
 import { SystemHealthService } from "./system/systemHealthService";
 import { RevisionService } from "./revisions/revisionService";
 import { WorkerLeaseService } from "./workers/workerLeaseService";
+import { ProviderCredentialsVault, allowedCredentialTypes, type CredentialType } from "./provider-vault/providerCredentialsVault";
+import { providerSecrets } from "./provider-vault/providerSecrets";
 import { checkpointStages } from "./checkpoints";
 import {
   buildRevisionReusePlan,
   filterReusableArtifacts,
   type DurableSceneArtifact,
 } from "./artifacts/durableArtifacts";
+import { capabilityManager } from "./capabilities/capabilityManager";
+import type { CapabilityId } from "./capabilities/types";
+import { qualityEngine } from "./quality/qualityEngine";
+import { mediaUploadService } from "./media/mediaUploadService";
+import { motionEngine } from "./motion/motionEngine";
 
 type BrandRow = {
   id: string;
@@ -145,6 +165,54 @@ async function writeAppSettings(db: V2Database, value: Record<string, unknown>) 
   return rows[0]?.value || value;
 }
 
+const ARABIC_VOICE_SETTINGS_KEY = "arabic_voice_default";
+
+/**
+ * The default Arabic voice is only ever set by an explicit human selection in
+ * the Voice Lab. The engine never auto-promotes a voice or labels one as the
+ * best or most Egyptian sounding.
+ */
+async function readArabicVoiceDefault(db: V2Database): Promise<{
+  voiceId?: string;
+  voiceName?: string;
+  preset?: string;
+  selectedAt?: string;
+  selectedBy: "human";
+} | null> {
+  const rows = await db.query<SettingRow>(
+    "SELECT key, value, updated_at FROM app_settings WHERE key = $1",
+    [ARABIC_VOICE_SETTINGS_KEY],
+  );
+  const value = rows[0]?.value as Record<string, unknown> | undefined;
+  if (!value || !value.voiceId) return null;
+  return {
+    voiceId: String(value.voiceId),
+    voiceName: value.voiceName ? String(value.voiceName) : undefined,
+    preset: value.preset ? String(value.preset) : undefined,
+    selectedAt: value.selectedAt ? String(value.selectedAt) : undefined,
+    selectedBy: "human",
+  };
+}
+
+async function writeArabicVoiceDefault(
+  db: V2Database,
+  value: { voiceId: string; voiceName?: string; preset?: string },
+) {
+  const payload = {
+    ...value,
+    selectedAt: new Date().toISOString(),
+    selectedBy: "human",
+    provider: "elevenlabs",
+  };
+  await db.query(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [ARABIC_VOICE_SETTINGS_KEY, payload],
+  );
+  return payload;
+}
+
 function metadataArtifacts(metadata: any): DurableSceneArtifact[] {
   return filterReusableArtifacts({
     artifacts: Array.isArray(metadata?.durableArtifacts) ? metadata.durableArtifacts as DurableSceneArtifact[] : [],
@@ -175,6 +243,270 @@ function revisionReuseSummary(plan: ReturnType<typeof buildRevisionReusePlan>) {
     regeneratedStages: plan.regeneratedStages,
     reusedArtifacts: plan.artifacts.map(publicArtifactSummary),
   };
+}
+
+/**
+ * Canonical spec-level voice routing.
+ *
+ * Arabic / Egyptian Arabic / MSA always resolve to ElevenLabs regardless of
+ * what the caller requested. Piper is no longer a production Arabic route; it
+ * survives only so historical jobs and their metadata remain readable.
+ */
+function inferResolvedVoiceProvider(input: {
+  language?: string;
+  dialect?: string;
+  voiceProvider?: string;
+}): VoiceProviderId {
+  const isArabic =
+    input.language === "ar" ||
+    (input.language === "auto" && Boolean(input.dialect) && input.dialect !== "none");
+  if (isArabic) return ARABIC_PRODUCTION_PROVIDER;
+  if (input.voiceProvider && input.voiceProvider !== "auto") {
+    return input.voiceProvider as VoiceProviderId;
+  }
+  return "kokoro";
+}
+
+function defaultVoiceForResolvedProvider(provider: VoiceProviderId): string {
+  // ElevenLabs voice IDs belong to the customer's account and are resolved
+  // through live voice discovery, never hardcoded here.
+  if (provider === "elevenlabs") return process.env.ELEVENLABS_DEFAULT_VOICE_ID || "";
+  if (provider === "piper") return process.env.PIPER_AR_VOICE_ID || "ar_JO-kareem-medium";
+  if (provider === "edge_tts") return process.env.EDGE_TTS_DEFAULT_VOICE || "ar-EG-SalmaNeural";
+  if (provider === "google_cloud_tts") return process.env.GOOGLE_CLOUD_TTS_DEFAULT_VOICE || "";
+  return "af_heart";
+}
+
+export function canonicalizeProductionSpecContract(spec: any, controls: any) {
+  const language = controls.language || spec.language || "auto";
+  const dialect = language === "ar" || language === "auto"
+    ? (controls.dialect || spec.dialect || "egyptian")
+    : "none";
+  const resolvedVoiceProvider = inferResolvedVoiceProvider({
+    language,
+    dialect,
+    voiceProvider: controls.voiceProvider || spec.voiceProvider || "auto",
+  });
+  const previousVoiceProvider = spec.voiceProvider && spec.voiceProvider !== "auto"
+    ? spec.voiceProvider
+    : undefined;
+  const canReuseSpecVoice = previousVoiceProvider === resolvedVoiceProvider && spec.voiceId;
+  const requestedVoiceId = controls.voiceId || canReuseSpecVoice || "";
+  // Historical Arabic jobs carry Piper model names. Never forward one to ElevenLabs.
+  const voiceId =
+    resolvedVoiceProvider === ARABIC_PRODUCTION_PROVIDER && isLegacyPiperVoiceId(requestedVoiceId)
+      ? defaultVoiceForResolvedProvider(resolvedVoiceProvider)
+      : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
+  return validateProductionSpec({
+    ...spec,
+    language: language === "auto" && dialect !== "none" ? "ar" : language,
+    dialect,
+    durationSeconds: controls.durationSeconds ?? controls.requestedDurationSeconds ?? controls.duration ?? spec.durationSeconds,
+    aspectRatio: controls.aspectRatio || spec.aspectRatio,
+    resolution: controls.resolution || spec.resolution,
+    quality: controls.quality || spec.quality,
+    productionMode: controls.productionMode || spec.productionMode,
+    visualMode: controls.visualMode || spec.visualMode,
+    voiceProvider: resolvedVoiceProvider,
+    voiceId,
+    captionStyle: controls.captionStyle || spec.captionStyle,
+    metadata: {
+      ...(spec.metadata || {}),
+      uiContract: {
+        durationSeconds: controls.durationSeconds ?? controls.requestedDurationSeconds ?? controls.duration ?? spec.durationSeconds,
+        language: language === "auto" && dialect !== "none" ? "ar" : language,
+        dialect,
+        aspectRatio: controls.aspectRatio || spec.aspectRatio,
+        resolution: controls.resolution || spec.resolution,
+        quality: controls.quality || spec.quality,
+        visualMode: controls.visualMode || spec.visualMode,
+        requestedVoiceProvider: controls.voiceProvider || spec.voiceProvider || "auto",
+        resolvedVoiceProvider,
+        voiceId,
+      },
+    },
+  });
+}
+
+/**
+ * Arabic production gate.
+ *
+ * A job that needs new Arabic narration is refused at creation time when
+ * ElevenLabs is not configured, so the customer sees an actionable error in the
+ * Create Video screen instead of a job that fails minutes into rendering.
+ * Returns null when the request may proceed.
+ */
+async function arabicProductionBlocker(spec: {
+  language?: string;
+  dialect?: string;
+}): Promise<{ error: string; message: string; action: { label: string; href: string } } | null> {
+  if (!isArabicLanguage(spec.language, spec.dialect as any)) return null;
+  await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
+  if (new ElevenLabsVoiceProvider().isConfigured()) return null;
+  return {
+    error: "elevenlabs_not_configured",
+    message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+    action: { label: "Configure ElevenLabs", href: "/providers" },
+  };
+}
+
+function hasCommandHint(envKey: string): boolean {
+  return Boolean(process.env[envKey]?.trim());
+}
+
+function buildV22CapabilityProviders() {
+  const now = new Date().toISOString();
+  const gpuEnabled = process.env.AI_GPU_PACK_ENABLED === "true";
+  const comfyConfigured = Boolean(process.env.COMFYUI_BASE_URL);
+  const motionCanvasConfigured = process.env.MOTION_CANVAS_ENABLED === "true" || hasCommandHint("MOTION_CANVAS_BIN");
+  return [
+    {
+      id: "ollama",
+      name: "Ollama Local LLM",
+      category: "Content AI",
+      tier: "local",
+      status: process.env.OLLAMA_BASE_URL ? "configured" : "not_configured",
+      configured: Boolean(process.env.OLLAMA_BASE_URL),
+      isDefault: false,
+      message: process.env.OLLAMA_BASE_URL
+        ? "Ollama-compatible local LLM endpoint configured."
+        : "Optional local LLM is not configured; deterministic Local AI remains the fallback.",
+      checkedAt: now,
+      details: {
+        implemented: true,
+        model: process.env.OLLAMA_MODEL || "qwen2.5:3b-instruct or qwen2.5:7b-instruct recommended when hardware allows",
+        contract: "OpenAI-compatible/local HTTP JSON generation",
+        hardware: "Use smaller Qwen instruct models on CPU-only clients; larger models require adequate RAM/VRAM.",
+      },
+    },
+    {
+      id: "motion_canvas",
+      name: "Motion Canvas",
+      category: "Motion",
+      tier: "optional_cpu_pack",
+      status: motionCanvasConfigured ? "configured" : "not_configured",
+      configured: motionCanvasConfigured,
+      isDefault: false,
+      message: motionCanvasConfigured
+        ? "Motion Canvas asset generation path is enabled."
+        : "Motion Canvas is optional and disabled in the base runtime.",
+      checkedAt: now,
+      details: {
+        implemented: true,
+        templates: ["kinetic_typography", "number_stat", "logo_reveal", "feature_list", "comparison", "cta", "timeline", "process_steps", "quote", "lower_third", "title_card"],
+        replacesRemotion: false,
+      },
+    },
+    {
+      id: "pyscenedetect",
+      name: "PySceneDetect",
+      category: "Post Production",
+      tier: "quality_cpu_pack",
+      status: hasCommandHint("PYSCENEDETECT_BIN") ? "configured" : "not_configured",
+      configured: hasCommandHint("PYSCENEDETECT_BIN"),
+      isDefault: false,
+      message: "Optional shot/cut/fade analysis for best-window stock selection.",
+      checkedAt: now,
+    },
+    {
+      id: "mediapipe",
+      name: "MediaPipe",
+      category: "Post Production",
+      tier: "quality_cpu_pack",
+      status: hasCommandHint("MEDIAPIPE_BIN") ? "configured" : "not_configured",
+      configured: hasCommandHint("MEDIAPIPE_BIN"),
+      isDefault: false,
+      message: "Optional face/person detection for smart portrait crop and safe caption placement.",
+      checkedAt: now,
+    },
+    {
+      id: "rembg",
+      name: "rembg",
+      category: "Post Production",
+      tier: "quality_cpu_pack",
+      status: hasCommandHint("REMBG_BIN") ? "configured" : "not_configured",
+      configured: hasCommandHint("REMBG_BIN"),
+      isDefault: false,
+      message: "Optional product-background removal for Product Ad mode.",
+      checkedAt: now,
+    },
+    {
+      id: "real_esrgan",
+      name: "Real-ESRGAN",
+      category: "Post Production",
+      tier: "optional_enhancement",
+      status: hasCommandHint("REAL_ESRGAN_BIN") ? "configured" : "not_configured",
+      configured: hasCommandHint("REAL_ESRGAN_BIN"),
+      isDefault: false,
+      message: "Optional OFF/AUTO/FORCE image/video enhancement; never runs on every asset by default.",
+      checkedAt: now,
+    },
+    {
+      id: "librosa",
+      name: "librosa Beat Analysis",
+      category: "Post Production",
+      tier: "quality_cpu_pack",
+      status: hasCommandHint("LIBROSA_PYTHON") ? "configured" : "not_configured",
+      configured: hasCommandHint("LIBROSA_PYTHON"),
+      isDefault: false,
+      message: "Optional BPM, beat, and energy analysis for edit timing hints.",
+      checkedAt: now,
+    },
+    {
+      id: "faster_whisper",
+      name: "faster-whisper",
+      category: "Captions",
+      tier: "optional_caption_backend",
+      status: hasCommandHint("FASTER_WHISPER_BIN") ? "configured" : "not_configured",
+      configured: hasCommandHint("FASTER_WHISPER_BIN"),
+      isDefault: false,
+      message: "Optional caption backend. Speed is not claimed until measured on this machine.",
+      checkedAt: now,
+    },
+    {
+      id: "whisperx",
+      name: "WhisperX",
+      category: "Captions",
+      tier: "optional_alignment_backend",
+      status: hasCommandHint("WHISPERX_BIN") ? "configured" : "not_configured",
+      configured: hasCommandHint("WHISPERX_BIN"),
+      isDefault: false,
+      message: "Optional alignment evaluation. Arabic forced alignment remains disabled unless a suitable Arabic alignment model is verified.",
+      checkedAt: now,
+    },
+    {
+      id: "comfyui",
+      name: "ComfyUI GPU Pack",
+      category: "AI GPU",
+      tier: "optional_gpu_sidecar",
+      status: gpuEnabled && comfyConfigured ? "configured" : "not_configured",
+      configured: gpuEnabled && comfyConfigured,
+      isDefault: false,
+      message: gpuEnabled && comfyConfigured
+        ? "ComfyUI sidecar API configured; ABUD remains the control plane."
+        : "AI GPU Pack is optional and disabled; no huge diffusion models are included in the base image.",
+      checkedAt: now,
+      details: {
+        publicUi: false,
+        requiredEnv: ["AI_GPU_PACK_ENABLED=true", "COMFYUI_BASE_URL"],
+      },
+    },
+    {
+      id: "wan2_2",
+      name: "Wan2.2",
+      category: "AI GPU",
+      tier: "optional_gpu_workflow",
+      status: gpuEnabled && process.env.WAN22_ENABLED === "true" ? "configured" : "not_configured",
+      configured: gpuEnabled && process.env.WAN22_ENABLED === "true",
+      isDefault: false,
+      message: "Optional Wan2.2 workflow support is gated by hardware, model download, and license acceptance.",
+      checkedAt: now,
+      details: {
+        modes: ["text_to_video", "image_to_video", "character_animation"],
+        downloadsInBaseImage: false,
+      },
+    },
+  ];
 }
 
 async function persistSceneArtifacts(db: V2Database, projectId: string, artifacts: DurableSceneArtifact[]) {
@@ -253,7 +585,8 @@ function scopeForRequest(req: ExpressRequest): ApiTokenScope | null {
     return "production:create";
   }
   if (routePath.startsWith("/media/upload")) return "production:create";
-  if (routePath.startsWith("/media/uploads")) return "videos:read";
+  if (routePath.startsWith("/media/uploads") || routePath.startsWith("/media/products")) return "videos:read";
+  if (routePath.startsWith("/system/capabilities") || routePath.startsWith("/system/readiness")) return "production:read";
   return null;
 }
 
@@ -338,6 +671,16 @@ export function createV2PublicRouter(
   const analyticsService = new AnalyticsService(db, config);
   const revisionService = new RevisionService(db);
   const workerLeaseService = new WorkerLeaseService(db);
+  const providerVault = new ProviderCredentialsVault(db, config);
+
+  // Provider classes read credentials synchronously; the vault resolver keeps a
+  // decrypted copy in process memory only. Plaintext never leaves this module.
+  if (providerVault.isAvailable()) {
+    providerSecrets.registerResolver((providerId, credentialType) =>
+      providerVault.readPlaintext(providerId, credentialType),
+    );
+    void providerSecrets.refreshElevenLabsApiKey();
+  }
 
   if (config.serviceRole === "app") {
     publishingScheduler.start();
@@ -433,6 +776,11 @@ export function createV2PublicRouter(
         },
       });
       const initial = await revisionService.ensureInitialRevision({ projectId: videoId, sourceJobId: videoId, outputVideoId: videoId });
+      const arabicBlock = await arabicProductionBlocker(nextSpec);
+      if (arabicBlock) {
+        res.status(409).json(arabicBlock);
+        return;
+      }
       const job = await jobs.createVideoJob({
         type: "video",
         creationMode: "prompt",
@@ -631,8 +979,13 @@ export function createV2PublicRouter(
 
     try {
       const provider = contentAIRegistry.getProvider();
-      const spec = await provider.generateProductionSpec(parsed.data);
-      const costEstimate = estimateProductionCost(spec);
+      const generatedSpec = await provider.generateProductionSpec(parsed.data);
+      const spec = canonicalizeProductionSpecContract(generatedSpec, parsed.data);
+      const costEstimate = estimateProductionCost(spec, {
+        voiceProvider: spec.voiceProvider as any,
+        visualMode: spec.visualMode,
+        contentAIProvider: provider.id,
+      });
       const quality = validateContentQuality(spec);
       const resolvedSpec = quality.correctedSpec || spec;
       const mediaPlan = mediaIntelligenceService.generateMediaPlan(resolvedSpec, {
@@ -748,10 +1101,11 @@ export function createV2PublicRouter(
       return;
     }
     try {
-      const qualityMap: Record<string, "draft" | "standard" | "premium"> = {
+      const qualityMap: Record<string, "draft" | "standard" | "premium" | "max_quality_local"> = {
         fast: "draft",
         balanced: "standard",
         premium: "premium",
+        max_quality_local: "max_quality_local",
       };
       const provider = contentAIRegistry.getProvider();
       const spec = await provider.generateProductionSpec({
@@ -763,17 +1117,33 @@ export function createV2PublicRouter(
         aspectRatio: parsed.data.aspectRatio,
         quality: qualityMap[parsed.data.qualityProfile],
         visualMode: parsed.data.visualMode,
+          voiceProvider: "auto",
+          voiceId: parsed.data.voice,
+          brandId: parsed.data.brandId,
+        } as any);
+      const canonicalSpec = canonicalizeProductionSpecContract(spec, {
+        ...parsed.data,
+        quality: qualityMap[parsed.data.qualityProfile],
+        voiceProvider: "auto",
         voiceId: parsed.data.voice,
-        brandId: parsed.data.brandId,
-      } as any);
+      });
+      if (isArabicLanguage(canonicalSpec.language, canonicalSpec.dialect as any) && !canonicalSpec.voiceId) {
+        const storedDefault = await readArabicVoiceDefault(db).catch(() => null);
+        if (storedDefault?.voiceId) canonicalSpec.voiceId = storedDefault.voiceId;
+      }
+      const arabicBlock = await arabicProductionBlocker(canonicalSpec);
+      if (arabicBlock) {
+        res.status(409).json(arabicBlock);
+        return;
+      }
       const job = await jobs.createVideoJob({
         type: "video",
         creationMode: "prompt",
-        title: spec.title,
+        title: canonicalSpec.title,
         productionSpec: {
-          ...spec,
+          ...canonicalSpec,
           metadata: {
-            ...(spec.metadata || {}),
+            ...(canonicalSpec.metadata || {}),
             apiContract: "production.jobs.v1",
             publishIntent: parsed.data.publishIntent || undefined,
             qualityProfileRequested: parsed.data.qualityProfile,
@@ -846,6 +1216,7 @@ export function createV2PublicRouter(
 
   // Create Video Job (supports prompt mode or template mode)
   router.post("/jobs", async (req, res) => {
+    const rawPayload = req.body || {};
     const parsed = createVideoJobSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
@@ -869,16 +1240,24 @@ export function createV2PublicRouter(
       }
 
       // If user sent a raw prompt without full spec, generate the production spec first
-      if ((resolvedPayload as any).prompt && !(resolvedPayload as any).productionSpec) {
+      if ((rawPayload as any).prompt && !(rawPayload as any).productionSpec) {
         const provider = contentAIRegistry.getProvider();
-        const generatedSpec = await provider.generateProductionSpec(resolvedPayload as any);
+        const generatedSpec = await provider.generateProductionSpec(rawPayload as any);
+        const canonicalSpec = canonicalizeProductionSpecContract(generatedSpec, rawPayload);
         resolvedPayload = {
           type: "video",
           creationMode: "prompt",
-          title: (resolvedPayload as any).title || generatedSpec.title,
-          productionSpec: generatedSpec,
+          title: (rawPayload as any).title || canonicalSpec.title,
+          productionSpec: canonicalSpec,
           idempotencyKey: resolvedPayload.idempotencyKey,
         } as any;
+      } else if ((rawPayload as any).productionSpec) {
+        const canonicalSpec = canonicalizeProductionSpecContract((rawPayload as any).productionSpec, rawPayload);
+        resolvedPayload = {
+          ...resolvedPayload,
+          title: (rawPayload as any).title || canonicalSpec.title,
+          productionSpec: canonicalSpec,
+        };
       } else if ((resolvedPayload as any).businessTemplateId && !(resolvedPayload as any).productionSpec) {
         const generatedSpec = convertTemplateToProductionSpec({
           templateId: (resolvedPayload as any).businessTemplateId,
@@ -900,6 +1279,13 @@ export function createV2PublicRouter(
         validateCreateShortInput(resolvedPayload as any);
       }
 
+      const arabicBlock = await arabicProductionBlocker(
+        ((resolvedPayload as any).productionSpec || {}) as { language?: string; dialect?: string },
+      );
+      if (arabicBlock) {
+        res.status(409).json(arabicBlock);
+        return;
+      }
       const job = await jobs.createVideoJob(resolvedPayload);
       try {
         await orchestrator.enqueue(job);
@@ -1043,17 +1429,149 @@ export function createV2PublicRouter(
     try {
       const provider = typeof req.query.provider === "string" ? req.query.provider : "auto";
       const language = typeof req.query.language === "string" ? req.query.language : undefined;
+      const dialect = typeof req.query.dialect === "string" ? req.query.dialect : undefined;
       const registry = new VoiceRegistry({
         listAvailableVoices: () => ["af_heart", "am_adam", "bf_emma"],
         generate: async () => ({ audio: Buffer.from(""), audioLength: 0 }),
       } as any);
-      const voices = provider && provider !== "auto"
-        ? await registry.getProviderStrict(provider as any)?.listVoices(language === "ar" ? "ar-XA" : language) || []
-        : await registry.listAllVoices(language === "ar" ? "ar-XA" : language);
-      res.status(200).json({ voices });
+      const result = await registry.listCompatibleVoices({
+        provider: provider as any,
+        language,
+        dialect,
+      });
+      res.status(200).json(result);
     } catch (error) {
       res.status(500).json({
         error: "Failed to list voices",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Egyptian Arabic reference script used for like-for-like voice auditions.
+  // The same text is reused for every voice so comparisons stay meaningful.
+  const VOICE_LAB_REFERENCE_SCRIPT = [
+    "\u0644\u0648 \u0639\u0646\u062F\u0643 \u0628\u064A\u0632\u0646\u0633 \u0648\u0644\u0633\u0647 \u0645\u0648\u0642\u0639\u0643 \u0634\u0643\u0644\u0647 \u0642\u062F\u064A\u0645 \u0623\u0648 \u0645\u0634 \u0645\u0648\u062C\u0648\u062F \u0623\u0635\u0644\u0627\u064B\u060C",
+    "\u0641\u0625\u0646\u062A \u063A\u0627\u0644\u0628\u0627\u064B \u0628\u062A\u0633\u064A\u0628 \u0639\u0645\u0644\u0627\u0621 \u064A\u0631\u0648\u062D\u0648\u0627 \u0644\u0645\u0646\u0627\u0641\u0633\u0643 \u0645\u0646 \u063A\u064A\u0631 \u0645\u0627 \u062A\u062D\u0633.",
+    "\u0645\u0648\u0642\u0639 \u0633\u0631\u064A\u0639 \u0648\u0634\u0643\u0644\u0647 \u0627\u062D\u062A\u0631\u0627\u0641\u064A \u0645\u0645\u0643\u0646 \u064A\u0641\u0631\u0642 \u0645\u0639\u0627\u0643 \u062C\u062F\u0627\u064B.",
+    "\u0627\u0628\u062F\u0623 \u062F\u0644\u0648\u0642\u062A\u064A \u0648\u062E\u0644\u064A \u0634\u063A\u0644\u0643 \u064A\u0638\u0647\u0631 \u0628\u0627\u0644\u0634\u0643\u0644 \u0627\u0644\u0644\u064A \u064A\u0633\u062A\u062D\u0642\u0647.",
+  ].join("\n");
+
+  const VOICE_LAB_MAX_CHARS = 600;
+
+  router.get("/voice-lab/config", async (req, res) => {
+    await providerSecrets.refreshElevenLabsApiKey();
+    const provider = new ElevenLabsVoiceProvider();
+    const storedDefault = await readArabicVoiceDefault(db).catch(() => null);
+    res.status(200).json({
+      provider: "elevenlabs",
+      configured: provider.isConfigured(),
+      defaultArabicVoice: storedDefault,
+      model: ELEVENLABS_DEFAULT_MODEL_ID,
+      referenceScript: VOICE_LAB_REFERENCE_SCRIPT,
+      maxCharacters: VOICE_LAB_MAX_CHARS,
+      languages: [{ code: "ar", label: "Arabic" }, { code: "en", label: "English" }],
+      dialects: [{ code: "egyptian", label: "Egyptian" }, { code: "msa", label: "MSA" }],
+      presets: ELEVENLABS_PRESET_IDS.map((id) => ({ id, settings: ELEVENLABS_PRESETS[id] })),
+      note: "Previews are short auditions only. No video is rendered and no accent quality is asserted by the engine.",
+    });
+  });
+
+  router.post("/voice-lab/preview", async (req, res) => {
+    try {
+      await providerSecrets.refreshElevenLabsApiKey();
+      const provider = new ElevenLabsVoiceProvider();
+      if (!provider.isConfigured()) {
+        res.status(409).json({
+          error: "elevenlabs_not_configured",
+          message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+          action: { label: "Configure ElevenLabs", href: "/providers" },
+        });
+        return;
+      }
+      const rawText = typeof req.body?.text === "string" && req.body.text.trim()
+        ? req.body.text.trim()
+        : VOICE_LAB_REFERENCE_SCRIPT;
+      if (rawText.length > VOICE_LAB_MAX_CHARS) {
+        res.status(400).json({
+          error: "preview_text_too_long",
+          message: `Voice Lab previews are limited to ${VOICE_LAB_MAX_CHARS} characters.`,
+        });
+        return;
+      }
+      const voiceId = typeof req.body?.voiceId === "string" ? req.body.voiceId.trim() : "";
+      const preset = ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : "natural";
+      const language = req.body?.language === "en" ? "en" : "ar";
+
+      const preview = await provider.generatePreview(rawText, voiceId || undefined, {
+        preset,
+        languageCode: language,
+      });
+      res.status(200).json({
+        ...preview,
+        language,
+        dialect: req.body?.dialect === "msa" ? "msa" : "egyptian",
+        text: rawText,
+        costLabel: "Cloud / Usage Based",
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: "voice_preview_failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  router.get("/voice-lab/default-voice", async (req, res) => {
+    try {
+      const stored = await readArabicVoiceDefault(db);
+      res.status(200).json({ provider: "elevenlabs", default: stored });
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to read the default Arabic voice.",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  router.put("/voice-lab/default-voice", async (req, res) => {
+    const voiceId = typeof req.body?.voiceId === "string" ? req.body.voiceId.trim() : "";
+    if (!voiceId) {
+      res.status(400).json({ error: "voiceId is required." });
+      return;
+    }
+    try {
+      const saved = await writeArabicVoiceDefault(db, {
+        voiceId,
+        voiceName: typeof req.body?.voiceName === "string" ? req.body.voiceName : undefined,
+        preset: ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : undefined,
+      });
+      res.status(200).json({ default: saved });
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to save the default Arabic voice.",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  router.get("/providers/:provider/voices", async (req, res) => {
+    try {
+      const language = typeof req.query.language === "string" ? req.query.language : undefined;
+      const dialect = typeof req.query.dialect === "string" ? req.query.dialect : undefined;
+      const registry = new VoiceRegistry({
+        listAvailableVoices: () => ["af_heart", "am_adam", "bf_emma"],
+        generate: async () => ({ audio: Buffer.from(""), audioLength: 0 }),
+      } as any);
+      const result = await registry.listCompatibleVoices({
+        provider: req.params.provider as any,
+        language,
+        dialect,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to list provider voices",
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1070,6 +1588,15 @@ export function createV2PublicRouter(
     const hasVeoKey = Boolean(process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasFalKey = Boolean(process.env.FAL_KEY);
     const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
+    await providerSecrets.refreshElevenLabsApiKey();
+    const elevenLabsProvider = new ElevenLabsVoiceProvider();
+    const elevenLabsConfigured = elevenLabsProvider.isConfigured();
+    // Only touch the network when a credential actually exists, and never
+    // fabricate a healthy result when it does not.
+    const elevenLabsValidation =
+      elevenLabsConfigured && shouldValidateLocalVoiceModels
+        ? await elevenLabsProvider.validate().catch(() => undefined)
+        : undefined;
     const googleTts = new GoogleCloudTtsProvider();
     const googleTtsValidation = voiceResults.find((provider) => provider.provider === "Google Cloud TTS");
     const googleTtsConfigured = googleTts.isConfigured();
@@ -1087,9 +1614,15 @@ export function createV2PublicRouter(
     const n8nComp = health.components.find((c) => c.name === "n8n");
     const dbComp = health.components.find((c) => c.name === "Database");
 
+    const vaultCredentials = providerVault.isAvailable()
+      ? await providerVault.list().catch(() => [])
+      : [];
+    const vaultByProvider = new Map(vaultCredentials.map((credential) => [credential.providerId, credential]));
+
     const providers = [
       // Content AI
       {
+        id: "local_ai",
         name: "Local AI Creative Director",
         category: "Content AI",
         tier: "free",
@@ -1100,11 +1633,12 @@ export function createV2PublicRouter(
         checkedAt: new Date().toISOString(),
       },
       {
+        id: "gemini",
         name: "Google Gemini",
         category: "Content AI",
         tier: "cloud",
         status: hasGeminiKey ? "healthy" : "not_configured",
-        configured: hasGeminiKey,
+        configured: hasGeminiKey || vaultByProvider.has("gemini"),
         isDefault: hasGeminiKey,
         message: hasGeminiKey
           ? "Gemini API key configured for structured video planning."
@@ -1113,16 +1647,18 @@ export function createV2PublicRouter(
       },
       // Visuals
       {
+        id: "pexels",
         name: "Pexels",
         category: "Visuals",
         tier: "stock",
         status: pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "not_configured"),
-        configured: pexelsComp?.details?.configured ?? false,
+        configured: (pexelsComp?.details?.configured ?? false) || vaultByProvider.has("pexels"),
         isDefault: true,
         message: pexelsComp?.message || "Pexels stock footage integration.",
         checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
       },
       {
+        id: "veo",
         name: "Google Veo",
         category: "Visuals",
         tier: "ai_video",
@@ -1135,6 +1671,7 @@ export function createV2PublicRouter(
         checkedAt: new Date().toISOString(),
       },
       {
+        id: "fal",
         name: "fal.ai (Kling / Wan / Seedance)",
         category: "Visuals",
         tier: "ai_video",
@@ -1148,6 +1685,7 @@ export function createV2PublicRouter(
       },
       // Voice
       {
+        id: "kokoro",
         name: "Kokoro TTS",
         category: "Voice",
         tier: "free",
@@ -1169,15 +1707,15 @@ export function createV2PublicRouter(
         },
       },
       {
-        name: "Piper Arabic",
+        id: "piper",
+        name: "Piper Arabic (Legacy)",
         category: "Voice",
         tier: "free",
         status: piperVoice?.status || "not_configured",
         configured: piperVoice?.configured || false,
-        isDefault: piperVoice?.healthy || false,
+        isDefault: false,
         message:
-          piperVoice?.message ||
-          "Piper Arabic is unavailable until the runtime and pinned Arabic voice model are provisioned.",
+          "Legacy provider. Piper is no longer used for Arabic production; it is retained only so historical jobs stay readable.",
         checkedAt: piperVoice?.checkedAt || new Date().toISOString(),
         details: {
           implemented: true,
@@ -1185,8 +1723,10 @@ export function createV2PublicRouter(
           healthy: piperVoice?.healthy || false,
           liveVerified: piperVoice?.healthy || false,
           languages: ["ar"],
-          arabicSupport: "verified_local_model",
-          egyptianSupport: "human_listening_required",
+          legacyOnly: true,
+          arabicProduction: false,
+          arabicSupport: "legacy_historical_only",
+          egyptianSupport: "not_production_route",
           local: true,
           license: `${PIPER_ARABIC_MODEL.runtimeLicense} runtime; ${PIPER_ARABIC_MODEL.modelLicense} voice model`,
           commercialUse: PIPER_ARABIC_MODEL.commercialUseAllowed ? "allowed" : "not_allowed",
@@ -1194,6 +1734,31 @@ export function createV2PublicRouter(
           voice: PIPER_ARABIC_MODEL.voice,
           modelSource: PIPER_ARABIC_MODEL.modelSource,
           modelSha256: PIPER_ARABIC_MODEL.modelSha256,
+        },
+      },
+      {
+        id: "edge_tts",
+        name: "Edge TTS",
+        category: "Voice",
+        tier: "experimental_free_online",
+        status: voiceResults.find((provider) => provider.provider === "Edge TTS")?.status || "not_configured",
+        configured: voiceResults.find((provider) => provider.provider === "Edge TTS")?.configured || false,
+        isDefault: false,
+        message: voiceResults.find((provider) => provider.provider === "Edge TTS")?.message || "Optional online Edge TTS runtime is disabled.",
+        checkedAt: voiceResults.find((provider) => provider.provider === "Edge TTS")?.checkedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: voiceResults.find((provider) => provider.provider === "Edge TTS")?.configured || false,
+          liveVerified: voiceResults.find((provider) => provider.provider === "Edge TTS")?.healthy || false,
+          languages: ["ar-EG", "ar", "en-US", "en-GB"],
+          egyptianSupport: "dynamic_ar_EG_voice_listing_when_runtime_available",
+          local: false,
+          online: true,
+          costTier: "experimental_free_online",
+          supportsSpeakingRate: true,
+          supportsPitch: true,
+          supportsVolume: true,
+          license: "edge-tts LGPL-3.0; Microsoft Edge online speech service terms apply.",
         },
       },
       {
@@ -1239,30 +1804,43 @@ export function createV2PublicRouter(
         },
       },
       {
+        id: "elevenlabs",
         name: "ElevenLabs",
         category: "Voice",
         tier: "premium",
-        status: hasElevenLabsKey ? "healthy" : "not_configured",
-        configured: hasElevenLabsKey,
-        isDefault: false,
-        message: hasElevenLabsKey
-          ? "ElevenLabs Multilingual & Arabic TTS configured."
-          : "ELEVENLABS_API_KEY is not configured.",
-        checkedAt: new Date().toISOString(),
+        status: elevenLabsValidation?.status || (elevenLabsConfigured ? "configured" : "not_configured"),
+        configured: elevenLabsConfigured,
+        isDefault: true,
+        message: elevenLabsValidation?.message ||
+          (elevenLabsConfigured
+            ? "ElevenLabs is configured. Run Test Connection to verify it live."
+            : ARABIC_ELEVENLABS_REQUIRED_MESSAGE),
+        checkedAt: elevenLabsValidation?.checkedAt || new Date().toISOString(),
         details: {
           implemented: true,
-          configured: hasElevenLabsKey,
-          healthy: hasElevenLabsKey,
-          liveVerified: false,
+          configured: elevenLabsConfigured,
+          healthy: Boolean(elevenLabsValidation?.healthy),
+          // Live verification is only claimed after a real API round trip.
+          liveVerified: Boolean(elevenLabsValidation?.healthy),
+          lastTestedAt: vaultByProvider.get("elevenlabs")?.lastTestedAt || undefined,
+          accountTier: elevenLabsValidation?.accountTier,
+          latencyMs: elevenLabsValidation?.latencyMs,
           languages: ["multilingual", "ar", "en"],
-          arabicSupport: hasElevenLabsKey ? "configured_provider" : "not_configured",
+          model: ELEVENLABS_DEFAULT_MODEL_ID,
+          arabicProduction: true,
+          arabicSupport: elevenLabsConfigured ? "canonical_arabic_production_provider" : "not_configured",
+          // Accent quality is a human judgement; the API does not certify it.
           egyptianSupport: "human_listening_required",
+          voicePresets: ELEVENLABS_PRESET_IDS,
+          supportsVoiceLab: true,
           local: false,
           costTier: "premium",
+          costLabel: "Cloud / Usage Based",
         },
       },
       // Captions
       {
+        id: "whisper_cpp",
         name: "Whisper",
         category: "Captions",
         tier: "free",
@@ -1274,6 +1852,7 @@ export function createV2PublicRouter(
       },
       // Renderer
       {
+        id: "remotion",
         name: "Remotion",
         category: "Renderer",
         tier: "local",
@@ -1284,6 +1863,7 @@ export function createV2PublicRouter(
         checkedAt: remotionComp?.checkedAt || new Date().toISOString(),
       },
       {
+        id: "ffmpeg",
         name: "FFmpeg",
         category: "Renderer",
         tier: "local",
@@ -1295,6 +1875,7 @@ export function createV2PublicRouter(
       },
       // Infrastructure
       {
+        id: "n8n",
         name: "n8n",
         category: "Infrastructure",
         tier: "internal",
@@ -1305,6 +1886,7 @@ export function createV2PublicRouter(
         checkedAt: n8nComp?.checkedAt || new Date().toISOString(),
       },
       {
+        id: "postgres",
         name: "Database (PostgreSQL)",
         category: "Infrastructure",
         tier: "internal",
@@ -1316,11 +1898,12 @@ export function createV2PublicRouter(
       },
       // Publishing & Distribution
       {
+        id: "upload_post",
         name: "Upload-Post (Multi-Platform)",
         category: "Publishing",
         tier: "cloud",
         status: Boolean(process.env.UPLOAD_POST_API_KEY) ? "healthy" : "not_configured",
-        configured: Boolean(process.env.UPLOAD_POST_API_KEY),
+        configured: Boolean(process.env.UPLOAD_POST_API_KEY) || vaultByProvider.has("upload_post"),
         isDefault: true,
         message: Boolean(process.env.UPLOAD_POST_API_KEY)
           ? "Upload-Post multi-platform distribution connected."
@@ -1328,11 +1911,12 @@ export function createV2PublicRouter(
         checkedAt: new Date().toISOString(),
       },
       {
+        id: "telegram",
         name: "Telegram Direct Bot",
         category: "Publishing",
         tier: "direct",
         status: Boolean(process.env.TELEGRAM_BOT_TOKEN) ? "healthy" : "not_configured",
-        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN) || vaultByProvider.has("telegram"),
         isDefault: false,
         message: Boolean(process.env.TELEGRAM_BOT_TOKEN)
           ? "Telegram Bot direct video publisher connected."
@@ -1340,11 +1924,12 @@ export function createV2PublicRouter(
         checkedAt: new Date().toISOString(),
       },
       {
+        id: "youtube",
         name: "YouTube Direct",
         category: "Publishing",
         tier: "direct",
         status: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN) ? "healthy" : "not_configured",
-        configured: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN),
+        configured: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN) || vaultByProvider.has("youtube"),
         isDefault: false,
         message: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN)
           ? "YouTube Data API v3 direct integration available."
@@ -1352,11 +1937,12 @@ export function createV2PublicRouter(
         checkedAt: new Date().toISOString(),
       },
       {
+        id: "meta",
         name: "Meta Direct (Instagram & Facebook)",
         category: "Publishing",
         tier: "direct",
         status: Boolean(process.env.META_ACCESS_TOKEN) ? "healthy" : "not_configured",
-        configured: Boolean(process.env.META_ACCESS_TOKEN),
+        configured: Boolean(process.env.META_ACCESS_TOKEN) || vaultByProvider.has("meta"),
         isDefault: false,
         message: Boolean(process.env.META_ACCESS_TOKEN)
           ? "Meta Graph API direct integration available."
@@ -1364,30 +1950,119 @@ export function createV2PublicRouter(
         checkedAt: new Date().toISOString(),
       },
       {
+        id: "tiktok",
         name: "TikTok Direct",
         category: "Publishing",
         tier: "direct",
         status: Boolean(process.env.TIKTOK_ACCESS_TOKEN) ? "healthy" : "not_configured",
-        configured: Boolean(process.env.TIKTOK_ACCESS_TOKEN),
+        configured: Boolean(process.env.TIKTOK_ACCESS_TOKEN) || vaultByProvider.has("tiktok"),
         isDefault: false,
         message: Boolean(process.env.TIKTOK_ACCESS_TOKEN)
           ? "TikTok OpenAPI direct integration available."
           : "TIKTOK_ACCESS_TOKEN is not configured.",
         checkedAt: new Date().toISOString(),
       },
+      ...buildV22CapabilityProviders(),
     ];
 
     res.status(200).json({
-      providers,
+      providers: providers.map((provider: any) => ({
+        ...provider,
+        credentialTypes: provider.id ? allowedCredentialTypes(provider.id) : [],
+        vaultConfigured: provider.id ? vaultCredentials.some((credential) => credential.providerId === provider.id) : false,
+        vault: provider.id
+          ? vaultCredentials
+              .filter((credential) => credential.providerId === provider.id)
+              .map((credential) => ({
+                credentialType: credential.credentialType,
+                maskedHint: credential.maskedHint,
+                health: credential.health,
+                configuredAt: credential.configuredAt,
+                lastTestedAt: credential.lastTestedAt,
+              }))
+          : [],
+      })),
       categories: [
         "Content AI",
         "Visuals",
         "Voice",
         "Captions",
         "Renderer",
+        "Motion",
+        "Post Production",
+        "AI GPU",
         "Publishing",
         "Infrastructure",
       ],
+      vault: {
+        available: providerVault.isAvailable(),
+        encryption: "AES-256-GCM",
+      },
+    });
+  });
+
+  router.put("/providers/:provider/credentials", async (req, res) => {
+    try {
+      if (!providerVault.isAvailable()) {
+        res.status(503).json({ error: "Provider vault is not configured.", message: "Set PROVIDER_VAULT_MASTER_KEY before saving provider credentials." });
+        return;
+      }
+      const providerId = req.params.provider;
+      const credentialType = String(req.body?.credentialType || "api_key") as CredentialType;
+      const value = typeof req.body?.value === "string" ? req.body.value : "";
+      const credential = await providerVault.put({
+        providerId,
+        credentialType,
+        plaintext: value,
+        metadata: typeof req.body?.metadata === "object" && req.body.metadata ? req.body.metadata : {},
+      });
+      providerSecrets.invalidate(providerId);
+      await providerSecrets.refresh(providerId, credentialType);
+      // Only the masked hint is ever returned; plaintext stays in the vault.
+      res.status(200).json({ credential });
+    } catch (error) {
+      res.status(400).json({ error: "Credential save failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.delete("/providers/:provider/credentials", async (req, res) => {
+    try {
+      const credentialType = typeof req.query.credentialType === "string" ? req.query.credentialType as CredentialType : undefined;
+      const deleted = await providerVault.delete(req.params.provider, credentialType);
+      providerSecrets.invalidate(req.params.provider);
+      res.status(200).json({ deleted });
+    } catch (error) {
+      res.status(400).json({ error: "Credential delete failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/providers/:provider/oauth/start", async (req, res) => {
+    try {
+      if (!["youtube", "meta", "tiktok"].includes(req.params.provider)) {
+        res.status(400).json({ error: "Provider does not use OAuth." });
+        return;
+      }
+      const state = await providerVault.createOAuthState(
+        req.params.provider,
+        typeof req.query.redirectUri === "string" ? req.query.redirectUri : undefined,
+      );
+      res.status(200).json({
+        provider: req.params.provider,
+        state: state.state,
+        expiresAt: state.expiresAt,
+        authUrl: null,
+        message: "OAuth app credentials are not configured yet. State was created for CSRF protection.",
+      });
+    } catch (error) {
+      res.status(400).json({ error: "OAuth start failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/providers/:provider/oauth/callback", async (req, res) => {
+    res.status(501).json({
+      provider: req.params.provider,
+      error: "OAuth callback exchange is not configured.",
+      message: "Configure provider app credentials before exchanging OAuth authorization codes.",
     });
   });
 
@@ -1432,6 +2107,12 @@ export function createV2PublicRouter(
     if (target === "google" || target === "googlecloudtts" || target === "google_cloud_tts") {
       const google = new GoogleCloudTtsProvider();
       const val = await google.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "edge_tts" || target === "edge-tts") {
+      const edge = new EdgeTtsProvider();
+      const val = await edge.validate();
       res.status(200).json(val);
       return;
     }
@@ -1524,7 +2205,8 @@ export function createV2PublicRouter(
         defaultVisualMode: "auto",
         defaultContentAI: "local_ai",
         defaultVisualProvider: "pexels",
-        defaultVoiceProvider: "piper",
+        // Arabic is the default language, and Arabic production is ElevenLabs only.
+        defaultVoiceProvider: "elevenlabs",
         defaultPublishingMode: "draft",
         defaultSocialAccounts: [],
         defaultYouTubePrivacy: "unlisted",
@@ -1984,6 +2666,84 @@ export function createV2PublicRouter(
     }
   });
 
+  // 6. Capabilities & Packs
+  router.get("/system/capabilities", (req, res) => {
+    res.status(200).json({
+      capabilities: capabilityManager.listCapabilities(),
+      packs: capabilityManager.listPacks(),
+      hardware: capabilityManager.getHardwareInfo(),
+    });
+  });
+
+  router.post("/system/capabilities/:id/toggle", (req, res) => {
+    const { id } = req.params;
+    const enabled = Boolean(req.body?.enabled ?? true);
+    const updated = capabilityManager.toggleCapability(id as CapabilityId, enabled);
+    if (!updated) {
+      res.status(404).json({ error: `Capability ${id} not found.` });
+      return;
+    }
+    res.status(200).json({ capability: updated });
+  });
+
+  router.get("/system/arabic-readiness", async (req, res) => {
+    await providerSecrets.refreshElevenLabsApiKey();
+    const provider = new ElevenLabsVoiceProvider();
+    const configured = provider.isConfigured();
+    const liveVerified = configured && req.query.verify === "true"
+      ? (await provider.validate().catch(() => undefined))?.healthy === true
+      : false;
+    res.status(200).json(
+      capabilityManager.checkArabicProductionReadiness({ configured, liveVerified }),
+    );
+  });
+
+  router.get("/system/readiness", (req, res) => {
+    const mode = String(req.query.mode || "auto_hybrid");
+    const visualMode = typeof req.query.visualMode === "string" ? req.query.visualMode : undefined;
+    const readiness = capabilityManager.checkModeReadiness(mode, visualMode);
+    res.status(200).json(readiness);
+  });
+
+  // 7. Product Media Management
+  router.post("/media/product-upload", async (req, res) => {
+    try {
+      let buffer: Buffer;
+      let originalName = "product.png";
+      const removeBg = req.body?.removeBackground !== false;
+
+      if (req.body?.imageBase64) {
+        const rawBase64 = String(req.body.imageBase64).replace(/^data:image\/[a-z]+;base64,/, "");
+        buffer = Buffer.from(rawBase64, "base64");
+        if (req.body.filename) originalName = String(req.body.filename);
+      } else if (Buffer.isBuffer(req.body)) {
+        buffer = req.body;
+      } else {
+        res.status(400).json({ error: "Missing image payload. Provide imageBase64 or binary image." });
+        return;
+      }
+
+      const record = await mediaUploadService.saveProductImage(buffer, originalName, { removeBackground: removeBg });
+      res.status(201).json({ success: true, media: record });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || "Product media upload failed" });
+    }
+  });
+
+  router.get("/media/products", async (req, res) => {
+    const products = await mediaUploadService.listProductImages();
+    res.status(200).json({ products });
+  });
+
+  router.get("/media/products/:id", async (req, res) => {
+    const product = await mediaUploadService.getProductImage(req.params.id);
+    if (!product) {
+      res.status(404).json({ error: "Product media not found." });
+      return;
+    }
+    res.status(200).json(product);
+  });
+
   return router;
 }
 
@@ -2222,6 +2982,10 @@ export function createV2InternalRouter(
     }
     const { jobId, input, callbackBaseUrl, internalServiceToken, workerId } = parsed.data;
 
+    // Pick up an ElevenLabs credential the customer configured after this
+    // worker started, so Arabic jobs do not need a container restart.
+    await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
+
     void shortCreator
       .createShortNow(jobId, input, async (event) => {
         try {
@@ -2285,6 +3049,63 @@ export function createV2InternalRouter(
       }
     });
   }
+
+  // Quality Engine Internal Contract
+  router.post("/media/analyze", async (req, res) => {
+    try {
+      const { videoPath, targetDurationSeconds } = req.body;
+      if (!videoPath) {
+        res.status(400).json({ error: "videoPath is required" });
+        return;
+      }
+      const result = await qualityEngine.analyzeScenes(videoPath, targetDurationSeconds || 5.0);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Scene analysis failed" });
+    }
+  });
+
+  router.post("/media/remove-background", async (req, res) => {
+    try {
+      const { imagePath } = req.body;
+      if (!imagePath) {
+        res.status(400).json({ error: "imagePath is required" });
+        return;
+      }
+      const result = await qualityEngine.removeBackground(imagePath);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Background removal failed" });
+    }
+  });
+
+  router.post("/media/upscale", async (req, res) => {
+    try {
+      const { imagePath, minWidth } = req.body;
+      if (!imagePath) {
+        res.status(400).json({ error: "imagePath is required" });
+        return;
+      }
+      const result = await qualityEngine.upscaleImage(imagePath, minWidth || 1080);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Image upscale failed" });
+    }
+  });
+
+  router.post("/audio/analyze-beats", async (req, res) => {
+    try {
+      const { audioPath } = req.body;
+      if (!audioPath) {
+        res.status(400).json({ error: "audioPath is required" });
+        return;
+      }
+      const result = await qualityEngine.analyzeBeats(audioPath);
+      res.status(200).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Beat analysis failed" });
+    }
+  });
 
   return router;
 }

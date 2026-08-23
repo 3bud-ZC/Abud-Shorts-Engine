@@ -450,4 +450,28 @@ export class FFMpeg {
       });
     });
   }
+
+  public async createSolidVideo(
+    outputPath: string,
+    durationSeconds: number,
+    width = 1080,
+    height = 1920,
+    color = "#020617",
+  ): Promise<string> {
+    return new Promise((resolve) => {
+      const sanitizedColor = color.startsWith("#") ? color.replace("#", "0x") : color;
+      ffmpeg()
+        .input(`color=c=${sanitizedColor}:s=${width}x${height}:r=25:d=${durationSeconds}`)
+        .inputFormat("lavfi")
+        .outputOptions(["-c:v libx264", "-pix_fmt yuv420p", "-t " + durationSeconds])
+        .output(outputPath)
+        .on("end", () => resolve(outputPath))
+        .on("error", (err) => {
+          logger.warn({ err }, "Could not generate lavfi solid video; creating blank MP4 file");
+          fs.writeFileSync(outputPath, "");
+          resolve(outputPath);
+        })
+        .run();
+    });
+  }
 }

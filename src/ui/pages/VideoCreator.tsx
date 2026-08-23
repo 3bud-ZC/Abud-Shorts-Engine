@@ -106,7 +106,9 @@ type VoiceOption = {
   id: string;
   name: string;
   provider: string;
+  tier?: string;
   language: string;
+  dialect?: string;
   gender?: string;
   voiceFamily?: string;
   sampleRate?: number;
@@ -138,6 +140,29 @@ function fieldGridSize(field: BusinessTemplateField) {
   return field.type === "textarea" ? 12 : 6;
 }
 
+/**
+ * A usage-based provider such as ElevenLabs must never be presented as a $0
+ * external cost, and the engine does not invent a dollar figure it cannot
+ * calculate reliably.
+ */
+function costLabel(costEstimate: CostEstimateData | null): string {
+  if (!costEstimate) return "External API Cost: $0";
+  const voice = costEstimate.breakdown?.voice;
+  const usageBased =
+    costEstimate.usageBased ||
+    voice?.usageBased ||
+    voice?.estimatedCostTier === "premium" ||
+    voice?.estimatedCostTier === "cloud_free_tier";
+  if (usageBased) {
+    const providerLabel = voice?.provider === "elevenlabs" ? "ElevenLabs" : voice?.provider || "Cloud provider";
+    return `External API Cost: ${providerLabel} · Cloud / Usage Based`;
+  }
+  if (costEstimate.isFree || costEstimate.estimatedCost === 0) {
+    return "External API Cost: $0";
+  }
+  return `External API Cost: ${costEstimate.estimatedCost} USD`;
+}
+
 const VideoCreator: React.FC = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -154,11 +179,15 @@ const VideoCreator: React.FC = () => {
   const [quality, setQuality] = useState("standard");
   const [resolution, setResolution] = useState("1080p");
   const [contentStyle, setContentStyle] = useState("advertisement");
+  const [productionMode, setProductionMode] = useState("auto_hybrid");
   const [visualMode, setVisualMode] = useState("auto");
   const [voiceProvider, setVoiceProvider] = useState("auto");
-  const [voiceId, setVoiceId] = useState("af_heart");
+  const [voiceId, setVoiceId] = useState("");
   const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
-  const [captionStyle, setCaptionStyle] = useState<"none" | "clean" | "bold" | "minimal">("bold");
+  const [resolvedVoiceProvider, setResolvedVoiceProvider] = useState<string>("auto");
+  const [voiceWarnings, setVoiceWarnings] = useState<string[]>([]);
+  const [arabicVoiceBlocked, setArabicVoiceBlocked] = useState(false);
+  const [captionStyle, setCaptionStyle] = useState<"none" | "cinematic" | "viral_bold" | "clean" | "minimal" | "product_ad" | "educational" | "bold" | "viral" | "brand">("viral_bold");
 
   // Enhancement & Preview states
   const [enhancing, setEnhancing] = useState(false);
@@ -187,6 +216,17 @@ const VideoCreator: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Product Media & Readiness states
+  const [selectedProductMediaId, setSelectedProductMediaId] = useState<string>("");
+  const [uploadedProducts, setUploadedProducts] = useState<any[]>([]);
+  const [productHeadline, setProductHeadline] = useState("عرض حصري لفترة محدودة");
+  const [productOffer, setProductOffer] = useState("خصم 25%");
+  const [productPrice, setProductPrice] = useState("");
+  const [productCta, setProductCta] = useState("اطلب الآن عبر واتساب");
+  const [productPlacement, setProductPlacement] = useState<"center" | "left" | "right">("center");
+  const [uploadingProduct, setUploadingProduct] = useState(false);
+  const [modeReadiness, setModeReadiness] = useState<any>(null);
 
   useEffect(() => {
     Promise.all([
@@ -232,32 +272,83 @@ const VideoCreator: React.FC = () => {
       })
       .catch(() => setError("Failed to load V2 templates or configuration."))
       .finally(() => setLoading(false));
+
+    axios.get("/api/v2/media/products").then((res) => {
+      const prods = res.data.products || [];
+      setUploadedProducts(prods);
+      if (prods.length > 0 && !selectedProductMediaId) {
+        setSelectedProductMediaId(prods[0].id);
+      }
+    }).catch(() => {});
   }, [params]);
 
   useEffect(() => {
-    const providerParam = voiceProvider === "auto" ? undefined : voiceProvider;
-    const languageParam =
-      voiceProvider === "google_cloud_tts"
-        ? "ar-XA"
-        : language === "auto"
-          ? undefined
-          : language;
+    axios
+      .get("/api/v2/system/readiness", {
+        params: { mode: productionMode, visualMode },
+      })
+      .then((res) => {
+        setModeReadiness(res.data);
+      })
+      .catch(() => {});
+  }, [productionMode, visualMode]);
+
+  async function handleProductFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingProduct(true);
+    setError(null);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = reader.result as string;
+          const res = await axios.post("/api/v2/media/product-upload", {
+            imageBase64: base64,
+            filename: file.name,
+            removeBackground: true,
+          });
+          const newMedia = res.data.media;
+          setSelectedProductMediaId(newMedia.id);
+          setUploadedProducts((prev) => [newMedia, ...prev.filter((p) => p.id !== newMedia.id)]);
+        } catch (uploadErr: any) {
+          setError(uploadErr?.response?.data?.error || "Product image upload failed.");
+        } finally {
+          setUploadingProduct(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch {
+      setUploadingProduct(false);
+    }
+  }
+
+  useEffect(() => {
     axios
       .get("/api/v2/voices", {
         params: {
-          provider: providerParam,
-          language: languageParam,
+          provider: voiceProvider,
+          language,
+          dialect: language === "ar" || language === "auto" ? dialect : "none",
         },
       })
       .then((response) => {
         const nextVoices: VoiceOption[] = response.data.voices || [];
         setVoiceOptions(nextVoices);
-        if (providerParam && nextVoices.length > 0 && !nextVoices.some((voice) => voice.id === voiceId)) {
+        setResolvedVoiceProvider(response.data.resolvedProvider || voiceProvider);
+        setVoiceWarnings(response.data.warnings || []);
+        setArabicVoiceBlocked(Boolean(response.data.blocked));
+        if (nextVoices.length > 0 && !nextVoices.some((voice) => voice.id === voiceId)) {
           setVoiceId(nextVoices[0].id);
+        } else if (nextVoices.length === 0) {
+          setVoiceId("");
         }
       })
-      .catch(() => setVoiceOptions([]));
-  }, [language, voiceProvider, voiceId]);
+      .catch(() => {
+        setVoiceOptions([]);
+        setVoiceWarnings(["Voice compatibility lookup failed."]);
+      });
+  }, [language, dialect, voiceProvider, voiceId]);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId),
@@ -316,17 +407,35 @@ const VideoCreator: React.FC = () => {
   }, [providers, voiceProvider]);
 
   const selectedProviderUnavailable = Boolean(
-    selectedVoiceProvider &&
-      selectedVoiceProvider.configured === false &&
-      (voiceProvider === "google_cloud_tts" || voiceProvider === "elevenlabs"),
+    voiceProvider !== "auto" &&
+      selectedVoiceProvider &&
+      selectedVoiceProvider.configured === false,
   );
 
+  const isArabicMode = language === "ar" || (language === "auto" && dialect !== "none");
+  const selectedVoice = voiceOptions.find((voice) => voice.id === voiceId);
+
+  const elevenLabsProvider = useMemo(
+    () => providers.find((provider) => provider.id === "elevenlabs" || provider.name === "ElevenLabs"),
+    [providers],
+  );
+  const elevenLabsConfigured = elevenLabsProvider?.configured !== false;
+
+  // Arabic / Egyptian / MSA narration is served by ElevenLabs only. Without a
+  // configured credential the job would fail during render, so the form blocks
+  // submission up front and offers the configure action instead.
+  const arabicBlocked = Boolean(isArabicMode && (arabicVoiceBlocked || !elevenLabsConfigured));
+
   function voiceProviderGuidance(): string {
-    if (voiceProvider === "piper") return "Piper is the recommended local/free Arabic path for Egyptian Arabic.";
-    if (voiceProvider === "google_cloud_tts") return "Google Cloud provides Arabic MSA cloud voices. Billing may be required and credentials must be configured.";
-    if (voiceProvider === "kokoro") return "Kokoro is the local/free English path. It is not the production Arabic voice.";
-    if (voiceProvider === "elevenlabs") return "ElevenLabs is premium and only runs when credentials are configured and explicitly selected.";
-    return "Auto selects the safest configured local provider for the chosen language.";
+    if (isArabicMode) {
+      return "Arabic, Egyptian Arabic and MSA narration is produced with ElevenLabs. Voice quality is judged by you in Providers - Voice Lab; the engine does not label any voice as Egyptian on its own.";
+    }
+    if (voiceProvider === "piper") return "Piper is legacy only. It stays available so historical videos remain readable and is not used for new production.";
+    if (voiceProvider === "edge_tts") return "Edge TTS is experimental, online, and disabled by default. It is never a production Arabic route.";
+    if (voiceProvider === "google_cloud_tts") return "Google Cloud TTS remains integrated for manual use. It is not part of the standard Arabic production path.";
+    if (voiceProvider === "kokoro") return "Kokoro is the local/free English path and remains the default for English production.";
+    if (voiceProvider === "elevenlabs") return "ElevenLabs runs when credentials are configured. Cost is usage based on your ElevenLabs plan.";
+    return `Auto resolves to ${resolvedVoiceProvider === "kokoro" ? "Kokoro English" : resolvedVoiceProvider} for the chosen language.`;
   }
 
   async function handleEnhancePrompt() {
@@ -373,6 +482,8 @@ const VideoCreator: React.FC = () => {
         visualMode,
         voiceProvider,
         voiceId,
+        captionStyle,
+        productionMode,
         brandId: selectedBrandId || undefined,
         brandName: config.brandKit?.brandName,
       });
@@ -413,6 +524,10 @@ const VideoCreator: React.FC = () => {
       setError("Please write a video prompt.");
       return;
     }
+    if (arabicBlocked) {
+      setError("ElevenLabs is required for Arabic narration. Configure ElevenLabs in Providers before creating an Arabic video.");
+      return;
+    }
     if (selectedProviderUnavailable) {
       setError("The selected voice provider is not configured. Choose a local provider or configure it in Providers first.");
       return;
@@ -432,12 +547,22 @@ const VideoCreator: React.FC = () => {
           quality,
           resolution,
           contentStyle,
+          productionMode,
           visualMode,
           voiceProvider,
           voiceId,
+          captionStyle,
           brandId: selectedBrandId || undefined,
           brandName: config.brandKit?.brandName,
           productionSpec: previewSpec || undefined,
+          metadata: {
+            productImageId: selectedProductMediaId || undefined,
+            productHeadline,
+            productOffer,
+            productPrice,
+            productCta,
+            productPlacement,
+          },
         },
         {
           headers: {
@@ -677,6 +802,24 @@ const VideoCreator: React.FC = () => {
                   </FormControl>
                 </Grid>
 
+                {/* Production Mode */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="production-mode-select-label">Production Mode</InputLabel>
+                    <Select labelId="production-mode-select-label" id="production-mode-select" label="Production Mode" value={productionMode} onChange={(e) => setProductionMode(e.target.value)}>
+                      <MenuItem value="auto_hybrid">AUTO HYBRID - smart mixed source</MenuItem>
+                      <MenuItem value="stock_cinematic">STOCK CINEMATIC - polished stock edit</MenuItem>
+                      <MenuItem value="product_ad">PRODUCT AD - product composition</MenuItem>
+                      <MenuItem value="motion_graphics">MOTION GRAPHICS - animated graphics</MenuItem>
+                      <MenuItem value="animated_explainer">ANIMATED EXPLAINER - Motion Canvas</MenuItem>
+                      <MenuItem value="ai_generated">AI GENERATED - optional GPU/cloud only</MenuItem>
+                      <MenuItem value="social_viral">SOCIAL VIRAL - fast hooks and pacing</MenuItem>
+                      <MenuItem value="educational">EDUCATIONAL - clear teaching flow</MenuItem>
+                      <MenuItem value="custom_media">CUSTOM MEDIA - uploaded-media first</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
                 {/* Quality Profile */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
@@ -685,6 +828,7 @@ const VideoCreator: React.FC = () => {
                       <MenuItem value="draft">FAST - quick local production</MenuItem>
                       <MenuItem value="standard">BALANCED - recommended quality/time balance</MenuItem>
                       <MenuItem value="high">BALANCED+ - richer visual pacing</MenuItem>
+                      <MenuItem value="max_quality_local">MAX QUALITY LOCAL - strongest free/local route</MenuItem>
                       <MenuItem value="premium">PREMIUM - configured premium services only</MenuItem>
                     </Select>
                   </FormControl>
@@ -723,10 +867,15 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="visual-mode-select-label">Visual Mode</InputLabel>
                     <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
-                      <MenuItem value="auto">Auto (Smart Stock / AI)</MenuItem>
-                      <MenuItem value="stock">Stock Only (Pexels - Free)</MenuItem>
-                      <MenuItem value="ai">AI Video (Veo / Fal)</MenuItem>
-                      <MenuItem value="hybrid">Hybrid (Mixed Stock + AI)</MenuItem>
+                      <MenuItem value="auto">Auto source router</MenuItem>
+                      <MenuItem value="stock">Stock cinematic (Pexels)</MenuItem>
+                      <MenuItem value="uploaded_media">Uploaded media first</MenuItem>
+                      <MenuItem value="motion_graphics">Motion graphics</MenuItem>
+                      <MenuItem value="animated_explainer">Animated explainer</MenuItem>
+                      <MenuItem value="product_ad">Product composition</MenuItem>
+                      <MenuItem value="image_animation">Image animation</MenuItem>
+                      <MenuItem value="hybrid">Mixed source</MenuItem>
+                      <MenuItem value="ai">AI video (configured optional providers only)</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -743,17 +892,17 @@ const VideoCreator: React.FC = () => {
                       onChange={(e) => {
                         const nextProvider = e.target.value;
                         setVoiceProvider(nextProvider);
-                        if (nextProvider === "google_cloud_tts") setVoiceId("");
-                        if (nextProvider === "piper") setVoiceId("ar_JO-kareem-medium");
-                        if (nextProvider === "kokoro") setVoiceId("af_heart");
-                        if (nextProvider === "auto") setVoiceId("");
+                        setVoiceId("");
                       }}
                     >
-                      <MenuItem value="auto">Auto - safest local provider</MenuItem>
-                      <MenuItem value="piper">Piper - Arabic local / free / recommended</MenuItem>
-                      <MenuItem value="google_cloud_tts">Google Cloud - Arabic MSA / free tier available</MenuItem>
-                      <MenuItem value="kokoro">Kokoro - English local / free</MenuItem>
-                      <MenuItem value="elevenlabs">ElevenLabs - premium / requires configuration</MenuItem>
+                      <MenuItem value="auto">
+                        {isArabicMode ? "Auto - ElevenLabs (Arabic production)" : "Auto - safest local provider"}
+                      </MenuItem>
+                      <MenuItem value="elevenlabs">ElevenLabs - Arabic production / multilingual</MenuItem>
+                      <MenuItem value="kokoro" disabled={isArabicMode}>Kokoro - English local / free</MenuItem>
+                      <MenuItem value="piper" disabled>Piper - legacy, historical jobs only</MenuItem>
+                      <MenuItem value="edge_tts" disabled={isArabicMode}>Edge TTS - experimental, not for Arabic</MenuItem>
+                      <MenuItem value="google_cloud_tts" disabled={isArabicMode}>Google Cloud TTS - manual use, not the Arabic route</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -771,7 +920,9 @@ const VideoCreator: React.FC = () => {
                       {voiceOptions.map((voice) => (
                         <MenuItem key={`${voice.provider}-${voice.id}`} value={voice.id}>
                           {voice.name}
+                          {voice.provider ? ` · ${voice.provider}` : ""}
                           {voice.voiceFamily ? ` · ${voice.voiceFamily}` : ""}
+                          {voice.dialect ? ` · ${voice.dialect}` : ""}
                           {voice.gender ? ` · ${voice.gender}` : ""}
                         </MenuItem>
                       ))}
@@ -784,11 +935,12 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="captions-style-select-label">Captions Style</InputLabel>
                     <Select labelId="captions-style-select-label" id="captions-style-select" label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
-                      <MenuItem value="bold">Bold (Cyan Pop · Active Scale)</MenuItem>
-                      <MenuItem value="viral">Viral (Kinetic Yellow Glow)</MenuItem>
-                      <MenuItem value="clean">Clean (Dark Box / Subtitle)</MenuItem>
-                      <MenuItem value="minimal">Minimal (Clean Text)</MenuItem>
-                      <MenuItem value="brand">Brand Palette (Dynamic)</MenuItem>
+                      <MenuItem value="cinematic">Cinematic</MenuItem>
+                      <MenuItem value="viral_bold">Viral Bold</MenuItem>
+                      <MenuItem value="clean">Clean</MenuItem>
+                      <MenuItem value="minimal">Minimal</MenuItem>
+                      <MenuItem value="product_ad">Product Ad</MenuItem>
+                      <MenuItem value="educational">Educational</MenuItem>
                       <MenuItem value="none">None</MenuItem>
                     </Select>
                   </FormControl>
@@ -818,12 +970,155 @@ const VideoCreator: React.FC = () => {
                   </FormControl>
                 </Grid>
               </Grid>
+
+              {modeReadiness && (
+                <Box sx={{ mt: 2, p: 1.5, bgcolor: modeReadiness.ready ? "rgba(36,84,90,0.06)" : "rgba(220,38,38,0.08)", borderRadius: 2, border: "1px solid", borderColor: modeReadiness.ready ? "rgba(36,84,90,0.2)" : "rgba(220,38,38,0.3)" }}>
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                    <Typography variant="caption" fontWeight={800} color={modeReadiness.ready ? "primary.main" : "error.main"}>
+                      {modeReadiness.ready ? "Capability Readiness: READY" : "Capability Requirements Check:"}
+                    </Typography>
+                    {modeReadiness.capabilities?.map((cap: any) => (
+                      <Chip
+                        key={cap.id}
+                        size="small"
+                        label={`${cap.ready ? "✓" : "✗"} ${cap.name}`}
+                        color={cap.ready ? "success" : cap.required ? "error" : "default"}
+                        variant={cap.ready ? "filled" : "outlined"}
+                        sx={{ fontSize: 11, height: 22 }}
+                      />
+                    ))}
+                  </Stack>
+                  {!modeReadiness.ready && modeReadiness.missingRequirements?.length > 0 && (
+                    <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5, fontWeight: 600 }}>
+                      {modeReadiness.missingRequirements.join(" • ")}
+                    </Typography>
+                  )}
+                </Box>
+              )}
             </AccordionDetails>
           </Accordion>
 
-          <Alert severity={selectedProviderUnavailable ? "warning" : "info"}>
-            {voiceProviderGuidance()} {selectedProviderUnavailable ? "Configure it in Providers or choose Piper/Kokoro before creating a video." : ""}
+          {productionMode === "product_ad" && (
+            <SectionCard
+              title="Product Media & Presentation"
+              description="Upload your product image or select an existing asset. Background removal is automatically applied."
+              actions={
+                <Button
+                  variant="contained"
+                  component="label"
+                  size="small"
+                  disabled={uploadingProduct}
+                >
+                  {uploadingProduct ? "Uploading & Removing Background..." : "Upload Product Image"}
+                  <input type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleProductFileUpload} />
+                </Button>
+              }
+            >
+              <Stack spacing={2}>
+                {uploadedProducts.length > 0 && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="product-media-select-label">Select Product Asset</InputLabel>
+                    <Select
+                      labelId="product-media-select-label"
+                      label="Select Product Asset"
+                      value={selectedProductMediaId}
+                      onChange={(e) => setSelectedProductMediaId(e.target.value)}
+                    >
+                      {uploadedProducts.map((prod) => (
+                        <MenuItem key={prod.id} value={prod.id}>
+                          {prod.originalName} ({prod.width}x{prod.height}) · {prod.nobgArtifactId ? "Background Removed ✓" : "Original"}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      label="Headline Banner"
+                      value={productHeadline}
+                      onChange={(e) => setProductHeadline(e.target.value)}
+                      fullWidth
+                      size="small"
+                      placeholder="عرض حصري لفترة محدودة"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={3}>
+                    <TextField
+                      label="Offer Badge"
+                      value={productOffer}
+                      onChange={(e) => setProductOffer(e.target.value)}
+                      fullWidth
+                      size="small"
+                      placeholder="خصم 25%"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={3}>
+                    <TextField
+                      label="Price Tag (Optional)"
+                      value={productPrice}
+                      onChange={(e) => setProductPrice(e.target.value)}
+                      fullWidth
+                      size="small"
+                      placeholder="199 ج.م"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={8}>
+                    <TextField
+                      label="CTA Button Text"
+                      value={productCta}
+                      onChange={(e) => setProductCta(e.target.value)}
+                      fullWidth
+                      size="small"
+                      placeholder="اطلب الآن عبر واتساب"
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={4}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="placement-label">Product Placement</InputLabel>
+                      <Select
+                        labelId="placement-label"
+                        label="Product Placement"
+                        value={productPlacement}
+                        onChange={(e) => setProductPlacement(e.target.value as any)}
+                      >
+                        <MenuItem value="center">Center</MenuItem>
+                        <MenuItem value="left">Left</MenuItem>
+                        <MenuItem value="right">Right</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                </Grid>
+              </Stack>
+            </SectionCard>
+          )}
+
+          {arabicBlocked && (
+            <Alert
+              severity="error"
+              action={
+                <Button size="small" variant="contained" onClick={() => navigate("/providers")}>
+                  Configure ElevenLabs
+                </Button>
+              }
+            >
+              ElevenLabs is required for Arabic narration. Arabic production is blocked until an ElevenLabs API key is configured in Providers.
+            </Alert>
+          )}
+          <Alert severity={selectedProviderUnavailable && !arabicBlocked ? "warning" : "info"}>
+            {voiceProviderGuidance()} {selectedProviderUnavailable && !arabicBlocked ? "Configure it in Providers before creating a video." : ""}
           </Alert>
+          {selectedVoice && (
+            <Alert severity="success">
+              Resolved voice: {selectedVoice.provider} / {selectedVoice.id}
+            </Alert>
+          )}
+          {voiceWarnings.length > 0 && (
+            <Alert severity="warning">
+              {voiceWarnings.join(" ")}
+            </Alert>
+          )}
 
           <SectionCard
             title="Voice Preview"
@@ -832,7 +1127,7 @@ const VideoCreator: React.FC = () => {
               <Button
                 variant="outlined"
                 startIcon={<PlayArrowIcon />}
-                disabled={voicePreviewing || !prompt.trim() || selectedProviderUnavailable}
+                disabled={voicePreviewing || !prompt.trim() || selectedProviderUnavailable || arabicBlocked}
                 onClick={handleVoicePreview}
               >
                 {voicePreviewing ? "Generating..." : "Preview Voice"}
@@ -929,9 +1224,7 @@ const VideoCreator: React.FC = () => {
                   <Chip
                     color={costEstimate?.isFree ? "success" : "warning"}
                     label={
-                      costEstimate?.isFree
-                        ? "Estimated External API Cost: $0 (Free Local Pipeline)"
-                        : `Estimated External Cost: $${costEstimate?.estimatedCost} USD`
+                      costLabel(costEstimate)
                     }
                   />
                 </Stack>
@@ -979,7 +1272,7 @@ const VideoCreator: React.FC = () => {
               variant="contained"
               size="large"
               startIcon={<SendIcon />}
-              disabled={submitting || !prompt.trim()}
+              disabled={submitting || !prompt.trim() || arabicBlocked || Boolean(modeReadiness && !modeReadiness.ready)}
               onClick={submitPromptJob}
             >
               {submitting ? "Creating..." : "Create Video"}

@@ -10,6 +10,10 @@ export function getSessionToken(): string {
   }
 }
 
+export function isAuthenticated(): boolean {
+  return Boolean(getSessionToken());
+}
+
 export function shouldRedirectToLogin(status?: number, url = ""): boolean {
   if (status !== 401) return false;
   const target = String(url || "");

@@ -35,6 +35,7 @@ export const qualityProfileEnum = z.enum([
   "standard",
   "high",
   "premium",
+  "max_quality_local",
 ]);
 export type QualityProfile = z.infer<typeof qualityProfileEnum>;
 
@@ -44,13 +45,36 @@ export type Resolution = z.infer<typeof resolutionEnum>;
 export const aspectRatioEnum = z.enum(["9:16", "16:9", "1:1"]);
 export type AspectRatio = z.infer<typeof aspectRatioEnum>;
 
-export const visualModeEnum = z.enum(["auto", "stock", "ai", "hybrid"]);
+export const productionModeEnum = z.enum([
+  "auto_hybrid",
+  "stock_cinematic",
+  "product_ad",
+  "motion_graphics",
+  "animated_explainer",
+  "ai_generated",
+  "social_viral",
+  "educational",
+  "custom_media",
+]);
+export type ProductionMode = z.infer<typeof productionModeEnum>;
+
+export const visualModeEnum = z.enum([
+  "auto",
+  "stock",
+  "ai",
+  "hybrid",
+  "motion_graphics",
+  "animated_explainer",
+  "product_ad",
+  "uploaded_media",
+  "image_animation",
+]);
 export type VisualMode = z.infer<typeof visualModeEnum>;
 
-export const voiceProviderEnum = z.enum(["auto", "kokoro", "piper", "google_cloud_tts", "elevenlabs"]);
+export const voiceProviderEnum = z.enum(["auto", "kokoro", "piper", "edge_tts", "google_cloud_tts", "elevenlabs"]);
 export type VoiceProvider = z.infer<typeof voiceProviderEnum>;
 
-export const captionStyleEnum = z.enum(["none", "clean", "bold", "minimal"]);
+export const captionStyleEnum = z.enum(["none", "cinematic", "viral_bold", "clean", "minimal", "product_ad", "educational", "bold", "viral", "brand"]);
 export type CaptionStyle = z.infer<typeof captionStyleEnum>;
 
 export const scenePurposeEnum = z.enum([
@@ -65,7 +89,7 @@ export const scenePurposeEnum = z.enum([
 ]);
 export type ScenePurpose = z.infer<typeof scenePurposeEnum>;
 
-export const visualSourceEnum = z.enum(["stock", "ai"]);
+export const visualSourceEnum = z.enum(["stock", "uploaded_media", "motion_graphics", "product_composition", "ai_generated_video", "image_animation", "ai"]);
 export type VisualSource = z.infer<typeof visualSourceEnum>;
 
 export const transitionEnum = z.enum(["cut", "fade", "slide", "zoom"]);
@@ -117,7 +141,10 @@ export const costEstimateBreakdownSchema = z.object({
     provider: z.string().default("kokoro"),
     charCount: z.number().int().min(0).default(0),
     cost: z.number().min(0).default(0),
-    estimatedCostTier: z.enum(["local_free", "cloud_free_tier", "premium"]).optional(),
+    estimatedCostTier: z.enum(["local_free", "experimental_free_online", "cloud_free_tier", "premium"]).optional(),
+    // Provider bills by usage; the engine does not invent a dollar amount.
+    usageBased: z.boolean().optional(),
+    costLabel: z.string().optional(),
   }),
   rendering: z.number().min(0).default(0),
 });
@@ -127,6 +154,8 @@ export const costEstimateSchema = z.object({
   estimatedCost: z.number().min(0).default(0),
   currency: z.literal("USD").default("USD"),
   isFree: z.boolean().default(true),
+  usageBased: z.boolean().optional(),
+  costLabel: z.string().optional(),
   breakdown: costEstimateBreakdownSchema,
 });
 export type CostEstimate = z.infer<typeof costEstimateSchema>;
@@ -145,9 +174,10 @@ export const productionSpecSchema = z.object({
   resolution: resolutionEnum.default("1080p"),
   quality: qualityProfileEnum.default("standard"),
   sceneCount: z.number().int().min(1).max(12).default(4),
+  productionMode: productionModeEnum.default("auto_hybrid"),
   visualMode: visualModeEnum.default("auto"),
   voiceProvider: voiceProviderEnum.default("auto"),
-  voiceId: z.string().trim().max(80).default("af_heart"),
+  voiceId: z.string().trim().max(120).default(""),
   captionStyle: captionStyleEnum.default("bold"),
   brandId: z.string().trim().max(140).optional(),
   templateId: z.string().trim().max(80).optional(),

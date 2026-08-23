@@ -15,6 +15,8 @@ import {
   Tabs,
   Typography,
   Box,
+  Switch,
+  FormControlLabel,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -53,6 +55,10 @@ export const SystemPage: React.FC = () => {
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [storage, setStorage] = useState<any>(null);
   const [observability, setObservability] = useState<SystemObservability | null>(null);
+  const [capabilities, setCapabilities] = useState<any[]>([]);
+  const [packs, setPacks] = useState<any[]>([]);
+  const [hardware, setHardware] = useState<any>(null);
+  const [arabicReadiness, setArabicReadiness] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [downloadingBundle, setDownloadingBundle] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,21 +66,38 @@ export const SystemPage: React.FC = () => {
   const load = async () => {
     setLoading(true);
     try {
-      const [healthRes, diagRes, storRes] = await Promise.all([
+      const [healthRes, diagRes, storRes, capRes, arabicRes] = await Promise.all([
         axios.get("/api/v2/system/health"),
         axios.get("/api/v2/system/diagnostics"),
         axios.get("/api/v2/system/storage"),
+        axios.get("/api/v2/system/capabilities").catch(() => ({ data: { capabilities: [], packs: [], hardware: null } })),
+        axios.get("/api/v2/system/arabic-readiness").catch(() => ({ data: null })),
       ]);
       const obsRes = await axios.get("/api/v2/system/observability").catch(() => ({ data: null }));
       setHealth(healthRes.data);
       setDiagnostics(diagRes.data);
       setStorage(storRes.data);
       setObservability(obsRes.data);
+      setCapabilities(capRes.data.capabilities || []);
+      setPacks(capRes.data.packs || []);
+      setHardware(capRes.data.hardware || null);
+      setArabicReadiness(arabicRes.data);
       setError(null);
     } catch {
       setError("Failed to load system metrics.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleCapability = async (id: string, enabled: boolean) => {
+    try {
+      await axios.post(`/api/v2/system/capabilities/${id}/toggle`, { enabled });
+      setCapabilities((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, enabled } : c)),
+      );
+    } catch (err: any) {
+      setError(err?.response?.data?.error || `Failed to toggle ${id}`);
     }
   };
 
@@ -129,6 +152,24 @@ export const SystemPage: React.FC = () => {
 
       {error && <Alert severity="error">{error}</Alert>}
 
+      {arabicReadiness && (
+        <Alert
+          severity={arabicReadiness.ready ? "success" : "warning"}
+          action={
+            arabicReadiness.ready ? undefined : (
+              <Button size="small" variant="contained" href="/providers">
+                Configure ElevenLabs
+              </Button>
+            )
+          }
+        >
+          <strong>Arabic Production Readiness: {arabicReadiness.statusText}</strong>
+          <br />
+          {arabicReadiness.message}
+          {!arabicReadiness.ready && " English and local production remain available."}
+        </Alert>
+      )}
+
       {/* Top Overview Cards */}
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={3}>
@@ -163,6 +204,7 @@ export const SystemPage: React.FC = () => {
       {/* Navigation Tabs */}
       <Tabs value={tab} onChange={(_, val) => setTab(val)} sx={{ borderBottom: 1, borderColor: "divider" }}>
         <Tab label="Health" />
+        <Tab label="Capability Packs" />
         <Tab label="Storage Breakdown" />
         <Tab label="Logs" />
         <Tab label="Support Bundle" />
@@ -194,8 +236,107 @@ export const SystemPage: React.FC = () => {
         </Grid>
       )}
 
-      {/* Tab 1: Storage Breakdown */}
+      {/* Tab 1: Capability Packs & Intelligence */}
       {tab === 1 && (
+        <Stack spacing={3}>
+          {/* Hardware Detection Banner */}
+          <SectionCard
+            title="Host Hardware Profile"
+            description="Automatic hardware detection for local AI acceleration and resource allocation."
+          >
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="caption" color="text.secondary">Platform / OS</Typography>
+                <Typography variant="body1" fontWeight={700}>{hardware?.platform || "Windows"} ({hardware?.arch || "x64"})</Typography>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="caption" color="text.secondary">CPU Cores / Memory</Typography>
+                <Typography variant="body1" fontWeight={700}>{hardware?.cpuCores || 8} Cores · {hardware?.totalMemoryGb || 16} GB RAM</Typography>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="caption" color="text.secondary">GPU Acceleration</Typography>
+                <Typography variant="body1" fontWeight={700} color={hardware?.hasNvidiaGpu ? "success.main" : "text.primary"}>
+                  {hardware?.gpuName || (hardware?.hasNvidiaGpu ? "NVIDIA GPU Detected" : "No Dedicated GPU (CPU Mode)")}
+                  {hardware?.vramGb ? ` (${hardware.vramGb} GB VRAM)` : ""}
+                </Typography>
+              </Grid>
+            </Grid>
+          </SectionCard>
+
+          {/* Capability Packs */}
+          <Typography variant="h6" fontWeight={800}>Capability Packs</Typography>
+          <Grid container spacing={2}>
+            {packs.map((pack) => (
+              <Grid item xs={12} md={6} key={pack.id}>
+                <Card variant="outlined" sx={{ p: 2, height: "100%", bgcolor: "background.paper" }}>
+                  <Stack spacing={1.5}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="subtitle1" fontWeight={800}>{pack.name}</Typography>
+                      <Chip
+                        size="small"
+                        label={pack.status.toUpperCase()}
+                        color={pack.status === "installed" ? "success" : pack.status === "available" ? "info" : "default"}
+                      />
+                    </Stack>
+                    <Typography variant="body2" color="text.secondary">{pack.description}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Hardware: {pack.hardwareRequired} · Space: {pack.diskRequirement}
+                    </Typography>
+                  </Stack>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+
+          {/* Detailed Capabilities Table / Toggles */}
+          <Typography variant="h6" fontWeight={800}>Installed Runtime Modules</Typography>
+          <Grid container spacing={2}>
+            {capabilities.map((cap) => (
+              <Grid item xs={12} sm={6} md={4} key={cap.id}>
+                <Card variant="outlined" sx={{ p: 2, height: "100%" }}>
+                  <Stack spacing={1}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography variant="subtitle2" fontWeight={800}>{cap.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">ID: {cap.id}</Typography>
+                      </Box>
+                      <Chip
+                        size="small"
+                        label={cap.installed ? (cap.healthy ? "Healthy" : "Degraded") : "Not Installed"}
+                        color={cap.installed && cap.healthy ? "success" : "default"}
+                        sx={{ fontSize: 10 }}
+                      />
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary">
+                      Runtime: {cap.runtime} · License: {cap.license}
+                    </Typography>
+                    {cap.failureReason && (
+                      <Typography variant="caption" color="text.secondary" sx={{ fontStyle: "italic" }}>
+                        Note: {cap.failureReason}
+                      </Typography>
+                    )}
+                    {cap.installed && (
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            size="small"
+                            checked={cap.enabled}
+                            onChange={(e) => toggleCapability(cap.id, e.target.checked)}
+                          />
+                        }
+                        label={<Typography variant="caption">{cap.enabled ? "Enabled" : "Disabled"}</Typography>}
+                      />
+                    )}
+                  </Stack>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+        </Stack>
+      )}
+
+      {/* Tab 2: Storage Breakdown */}
+      {tab === 2 && (
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <SectionCard title="Storage usage">
@@ -250,8 +391,8 @@ export const SystemPage: React.FC = () => {
         </Grid>
       )}
 
-      {/* Tab 2: Sanitized Logs */}
-      {tab === 2 && (
+      {/* Tab 3: Sanitized Logs */}
+      {tab === 3 && (
         <SectionCard title="Recent logs">
           <Paper
             sx={{
@@ -274,8 +415,8 @@ export const SystemPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {/* Tab 3: Support Bundle */}
-      {tab === 3 && (
+      {/* Tab 4: Support Bundle */}
+      {tab === 4 && (
         <SectionCard title="Download diagnostics">
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
@@ -298,7 +439,8 @@ export const SystemPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {tab === 4 && (
+      {/* Tab 5: Observability */}
+      {tab === 5 && (
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <SectionCard title="Queue & Workers">

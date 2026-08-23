@@ -99,9 +99,12 @@ export function convertTemplateToProductionSpec(
     resolution: "1080p",
     quality: "standard",
     sceneCount: scenes.length,
+    productionMode: "auto_hybrid",
     visualMode: "stock",
-    voiceProvider: "kokoro",
-    voiceId: params.config?.voice || "af_heart",
+    // Arabic templates route to ElevenLabs; the voice ID is resolved from the
+    // customer's own ElevenLabs account, never hardcoded.
+    voiceProvider: isArabic ? "elevenlabs" : "kokoro",
+    voiceId: isArabic ? "" : params.config?.voice || "af_heart",
     captionStyle: brandKit?.captionStyle || "bold",
     brandId: params.brandId,
     templateId: params.templateId,
@@ -126,9 +129,12 @@ export function convertTemplateToProductionSpec(
           provider: "pexels",
         },
         voice: {
-          provider: "kokoro",
+          provider: isArabic ? "elevenlabs" : "kokoro",
           charCount: scenes.reduce((acc, s) => acc + s.narration.length, 0),
           cost: 0,
+          estimatedCostTier: isArabic ? "premium" : "local_free",
+          usageBased: isArabic,
+          costLabel: isArabic ? "ElevenLabs · Cloud / Usage Based" : "Local / Free",
         },
         rendering: 0,
       },

@@ -10,6 +10,24 @@ import {
   normalizeGoogleVoice,
   parseGoogleVoiceFamily,
 } from "./voice-providers/googleCloudTtsProvider";
+import { EdgeTtsProvider } from "./voice-providers/edgeTtsProvider";
+import { normalizeElevenLabsVoice, ELEVENLABS_PRESETS, ELEVENLABS_DEFAULT_MODEL_ID } from "./voice-providers/elevenlabsVoiceProvider";
+import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
+
+const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
+
+const EGYPTIAN_TEST_SCRIPT =
+  "لو عندك بيزنس ولسه موقعك شكله قديم أو مش موجود أصلاً، " +
+  "فإنت غالباً بتسيب عملاء يروحوا لمنافسك من غير ما تحس. " +
+  "موقع سريع وشكله احترافي ممكن يفرق معاك جداً. " +
+  "ابدأ دلوقتي وخلي شغلك يظهر بالشكل اللي يستحقه.";
+
+function stubPiperConfigured() {
+  vi.stubEnv("PIPER_BIN", process.execPath);
+  vi.stubEnv("PIPER_AR_MODEL_PATH", __filename);
+  vi.stubEnv("PIPER_AR_MODEL_CONFIG_PATH", __filename);
+  vi.stubEnv("PIPER_AR_VOICE_ID", "ar_JO-kareem-medium");
+}
 
 describe("Voice Providers & Registry", () => {
   afterEach(() => {
@@ -48,30 +66,188 @@ describe("Voice Providers & Registry", () => {
   });
 
   it("VoiceRegistry keeps English on Kokoro if ElevenLabs is not configured", async () => {
-    const registry = new VoiceRegistry(dummyKokoro);
+    delete process.env.ELEVENLABS_API_KEY;
+    const registry = new VoiceRegistry(dummyKokoro, "");
     const provider = registry.getProvider("elevenlabs");
     expect(provider.id).toBe("kokoro");
 
     const voices = await registry.listAllVoices();
     expect(voices.some((v) => v.provider === "kokoro")).toBe(true);
-    expect(voices.some((v) => v.provider === "elevenlabs")).toBe(true);
+    // Voice discovery is live-only: an unconfigured ElevenLabs contributes no
+    // placeholder voices rather than a hardcoded catalogue.
+    expect(voices.some((v) => v.provider === "elevenlabs")).toBe(false);
   });
 
-  it("routes Arabic production narration to Piper instead of Kokoro", () => {
-    delete process.env.PIPER_BIN;
-    delete process.env.PIPER_AR_MODEL_PATH;
+  it("routes Arabic, Egyptian and MSA narration to ElevenLabs", () => {
+    // Piper is fully installed here to prove it is never chosen for production.
+    stubPiperConfigured();
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    for (const dialect of ["egyptian", "msa", "none"] as const) {
+      const decision = registry.route({
+        text: EGYPTIAN_TEST_SCRIPT,
+        language: "ar",
+        dialect,
+        qualityProfile: "balanced",
+        requestedProvider: "auto",
+      });
+      expect(decision.providerId).toBe("elevenlabs");
+      expect(decision.reason).toBe("arabic_production_elevenlabs");
+    }
+  });
+
+  it("blocks Arabic production with an actionable error when ElevenLabs is not configured", () => {
+    stubPiperConfigured();
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "test-project");
+    vi.stubEnv("EDGE_TTS_ENABLED", "true");
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
 
+    expect(registry.isArabicProductionConfigured()).toBe(false);
+    expect(() =>
+      registry.route({
+        text: EGYPTIAN_TEST_SCRIPT,
+        language: "ar",
+        dialect: "egyptian",
+        requestedProvider: "auto",
+        fallbackPolicy: "local",
+      }),
+    ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+  });
+
+  it("never falls back to a local or cloud provider for Arabic", () => {
+    stubPiperConfigured();
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "test-project");
+    vi.stubEnv("GOOGLE_CLOUD_TTS_DEFAULT_VOICE", "ar-XA-Standard-A");
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    for (const provider of ["piper", "kokoro", "edge_tts", "google_cloud_tts"] as const) {
+      expect(() =>
+        registry.route({
+          text: EGYPTIAN_TEST_SCRIPT,
+          language: "ar",
+          dialect: "egyptian",
+          requestedProvider: provider,
+          fallbackPolicy: "local",
+        }),
+      ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+    }
+  });
+
+  it("keeps a historical Piper voice ID readable without sending it to ElevenLabs", () => {
+    // Old jobs persisted ar_JO-kareem-medium. Metadata must stay parseable, but
+    // a Piper model name must never be forwarded as an ElevenLabs voice.
+    expect(isLegacyPiperVoiceId("ar_JO-kareem-medium")).toBe(true);
+    vi.stubEnv("ELEVENLABS_DEFAULT_VOICE_ID", "acct_voice_1");
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
     const decision = registry.route({
-      text: "اعمل اعلان 20 ثانية عن تصميم مواقع",
+      text: EGYPTIAN_TEST_SCRIPT,
       language: "ar",
       dialect: "egyptian",
-      qualityProfile: "balanced",
       requestedProvider: "auto",
+      voiceId: "ar_JO-kareem-medium",
     });
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.voiceId).toBe("acct_voice_1");
+  });
 
-    expect(decision.providerId).toBe("piper");
+  it("sends language_code ar and the multilingual model for Arabic narration", async () => {
+    let capturedBody: any = null;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/.*/, (body) => {
+        capturedBody = body;
+        return true;
+      })
+      .query(true)
+      .reply(200, Buffer.from("mp3-bytes"));
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc");
+
+    expect(capturedBody.language_code).toBe("ar");
+    expect(capturedBody.model_id).toBe(ELEVENLABS_DEFAULT_MODEL_ID);
+    expect(result.voiceId).toBe("voice_abc");
+    expect(result.estimatedCostTier).toBe("premium");
+    // Cost is usage based; the engine must not invent a dollar amount.
+    expect(result.usageBasedCost).toBe(true);
+    expect(result.estimatedCost).toBeUndefined();
+  });
+
+  it("keeps the same voice and model across every scene of one video", async () => {
+    const bodies: any[] = [];
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/.*/, (body) => {
+        bodies.push(body);
+        return true;
+      })
+      .query(true)
+      .times(3)
+      .reply(200, Buffer.from("mp3-bytes"));
+
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+    const results = [];
+    for (const sceneText of ["المشهد الاول", "المشهد التاني", "المشهد التالت"]) {
+      results.push(
+        await registry.synthesize({
+          text: sceneText,
+          language: "ar",
+          dialect: "egyptian",
+          requestedProvider: "auto",
+          voiceId: "voice_abc",
+        }),
+      );
+    }
+
+    expect(new Set(results.map((result) => result.voiceId)).size).toBe(1);
+    expect(new Set(bodies.map((body) => body.model_id)).size).toBe(1);
+    expect(new Set(bodies.map((body) => JSON.stringify(body.voice_settings))).size).toBe(1);
+  });
+
+  it("normalizes discovered ElevenLabs voices without inventing metadata", () => {
+    const arabicVoice = normalizeElevenLabsVoice({
+      voice_id: "abc123",
+      name: "Nour",
+      category: "premade",
+      labels: { accent: "egyptian", gender: "female" },
+      preview_url: "https://example.com/preview.mp3",
+    });
+    expect(arabicVoice?.id).toBe("abc123");
+    expect(arabicVoice?.provider).toBe("elevenlabs");
+    expect(arabicVoice?.language).toBe("ar");
+    expect(arabicVoice?.dialect).toBe("egyptian");
+    expect(arabicVoice?.gender).toBe("female");
+    expect(arabicVoice?.previewUrl).toBe("https://example.com/preview.mp3");
+
+    // Without Arabic metadata the voice stays "multilingual" and no dialect or
+    // gender is asserted.
+    const genericVoice = normalizeElevenLabsVoice({ voice_id: "xyz789", name: "Sam" });
+    expect(genericVoice?.language).toBe("multilingual");
+    expect(genericVoice?.dialect).toBeUndefined();
+    expect(genericVoice?.gender).toBeUndefined();
+
+    expect(normalizeElevenLabsVoice({ name: "no id" })).toBeNull();
+  });
+
+  it("returns no voices and never a hardcoded catalogue when ElevenLabs is unconfigured", async () => {
+    const provider = new ElevenLabsVoiceProvider("");
+    expect(await provider.listVoices("ar")).toEqual([]);
+  });
+
+  it("maps voice presets only onto documented ElevenLabs settings", () => {
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const allowedKeys = ["stability", "similarity_boost", "style", "use_speaker_boost"];
+
+    for (const preset of ["natural", "energetic_ad", "professional", "storytelling", "calm"] as const) {
+      const settings = provider.resolveVoiceSettings(preset);
+      expect(Object.keys(settings).sort()).toEqual([...allowedKeys].sort());
+      expect(settings.stability).toBeGreaterThanOrEqual(0);
+      expect(settings.stability).toBeLessThanOrEqual(1);
+      expect(settings).toEqual(expect.objectContaining(ELEVENLABS_PRESETS[preset]));
+    }
+
+    // Custom overrides are clamped rather than passed through blindly.
+    expect(provider.resolveVoiceSettings("natural", { stability: 5 }).stability).toBe(1);
   });
 
   it("reports Google Cloud TTS as not configured without server credentials", async () => {
@@ -138,29 +314,61 @@ describe("Voice Providers & Registry", () => {
     expect(result.wordTimings).toBeUndefined();
   });
 
-  it("routes MSA balanced Arabic to Google only when configured", () => {
-    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "test-project");
-    vi.stubEnv("GOOGLE_CLOUD_TTS_DEFAULT_VOICE", "ar-XA-Standard-A");
+  it("resolves Arabic voice listing to ElevenLabs and English Auto to Kokoro", async () => {
+    stubPiperConfigured();
+    nock("https://api.elevenlabs.io")
+      .get("/v1/voices")
+      .reply(200, {
+        voices: [
+          { voice_id: "v1", name: "Nour", category: "premade", labels: { accent: "egyptian" } },
+          { voice_id: "v2", name: "Sam", category: "premade", labels: {} },
+        ],
+      });
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const arabic = await registry.listCompatibleVoices({
+      provider: "auto",
+      language: "ar",
+      dialect: "egyptian",
+    });
+    expect(arabic.resolvedProvider).toBe("elevenlabs");
+    expect(arabic.blocked).toBeFalsy();
+    expect(arabic.voices.length).toBe(2);
+    expect(arabic.voices.every((voice) => voice.provider === "elevenlabs")).toBe(true);
+    // Arabic-verified voices are listed first, but multilingual ones remain usable.
+    expect(arabic.voices[0].id).toBe("v1");
+
+    const english = await registry.listCompatibleVoices({
+      provider: "auto",
+      language: "en",
+      dialect: "none",
+    });
+    expect(english.resolvedProvider).toBe("kokoro");
+    expect(english.voices.every((voice) => voice.provider === "kokoro")).toBe(true);
+  });
+
+  it("reports Arabic voice listing as blocked when ElevenLabs is missing", async () => {
+    stubPiperConfigured();
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
 
-    const msa = registry.route({
-      text: "مرحبا بكم في خدمة تصميم المواقع",
-      language: "ar",
-      dialect: "msa",
-      qualityProfile: "balanced",
-      requestedProvider: "auto",
-    });
-    expect(msa.providerId).toBe("google_cloud_tts");
-
-    const egyptian = registry.route({
-      text: "اعمل اعلان 20 ثانية عن تصميم مواقع",
+    const arabic = await registry.listCompatibleVoices({
+      provider: "auto",
       language: "ar",
       dialect: "egyptian",
-      qualityProfile: "balanced",
-      requestedProvider: "auto",
     });
-    expect(egyptian.providerId).toBe("piper");
+    expect(arabic.resolvedProvider).toBe("elevenlabs");
+    expect(arabic.blocked).toBe(true);
+    expect(arabic.voices).toEqual([]);
+    expect(arabic.warnings.join(" ")).toContain("ElevenLabs");
+  });
+
+  it("reports Edge TTS as optional when disabled", async () => {
+    vi.stubEnv("EDGE_TTS_ENABLED", "false");
+    const provider = new EdgeTtsProvider();
+    const validation = await provider.validate();
+    expect(validation.status).toBe("not_configured");
+    expect(provider.getCapabilities().costTier).toBe("experimental_free_online");
   });
 
   it("does not silently fallback when explicit paid or cloud providers are unavailable", () => {
@@ -172,6 +380,7 @@ describe("Voice Providers & Registry", () => {
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
 
+    // Arabic is refused with the ElevenLabs policy message, not a provider message.
     expect(() =>
       registry.route({
         text: "مرحبا",
@@ -180,7 +389,7 @@ describe("Voice Providers & Registry", () => {
         requestedProvider: "google_cloud_tts",
         fallbackPolicy: "local",
       }),
-    ).toThrow(/google_cloud_tts/);
+    ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
 
     expect(() =>
       registry.route({
@@ -190,6 +399,65 @@ describe("Voice Providers & Registry", () => {
         fallbackPolicy: "local",
       }),
     ).toThrow(/elevenlabs/);
+  });
+
+  it("preserves conversational Egyptian wording instead of formalizing it", () => {
+    const result = preprocessArabicSpeech(EGYPTIAN_TEST_SCRIPT, { dialect: "egyptian" });
+
+    // The product owner wants Egyptian narration, so these words must survive
+    // verbatim in every derived text form.
+    for (const token of ["إنت", "مش", "لسه", "دلوقتي", "عندك", "معاك"]) {
+      expect(result.captionText).toContain(token);
+      expect(result.spokenNarration).toContain(token);
+      expect(result.ttsNormalizedText).toContain(token);
+    }
+    // No MSA rewrite of the Egyptian negation / present-tense markers.
+    expect(result.spokenNarration).not.toContain("ليس");
+    expect(result.spokenNarration).not.toContain("الآن");
+  });
+
+  it("separates source, spoken, TTS and caption text", () => {
+    const result = preprocessArabicSpeech("السعر 1500 جنيه بخصم 30%", { dialect: "egyptian" });
+
+    expect(result.sourceText).toBe("السعر 1500 جنيه بخصم 30%");
+    // Captions keep the digits a viewer expects to read.
+    expect(result.captionText).toContain("1500");
+    expect(result.captionText).toContain("30%");
+    // Only the TTS form expands numbers into spoken words.
+    expect(result.ttsNormalizedText).not.toContain("1500");
+    expect(result.ttsNormalizedText).toContain("الف وخمسمية جنيه");
+    expect(result.ttsNormalizedText).toContain("تلاتين في المية");
+  });
+
+  it("normalizes numbers without changing their meaning", () => {
+    const year = preprocessArabicSpeech("في 2026", { dialect: "egyptian" });
+    expect(year.ttsNormalizedText).toContain("سنة الفين ستة وعشرين");
+
+    const time = preprocessArabicSpeech("الساعة 10:30", { dialect: "egyptian" });
+    expect(time.ttsNormalizedText).toContain("عشرة ونص");
+
+    const price = preprocessArabicSpeech("1500 جنيه", { dialect: "egyptian" });
+    expect(price.ttsNormalizedText).toContain("الف وخمسمية جنيه");
+
+    const percent = preprocessArabicSpeech("خصم 30%", { dialect: "egyptian" });
+    expect(percent.ttsNormalizedText).toContain("تلاتين في المية");
+  });
+
+  it("keeps recognizable English business terms readable in mixed Arabic text", () => {
+    const result = preprocessArabicSpeech(
+      "الـ AI والـ API والـ SaaS مع ChatGPT و WhatsApp للـ product والـ customer",
+      { dialect: "egyptian" },
+    );
+
+    // Acronyms are spelled out so they are pronounced, not read as one word.
+    expect(result.ttsNormalizedText).toContain("إيه آي");
+    expect(result.ttsNormalizedText).toContain("ايه بي آي");
+    expect(result.ttsNormalizedText).toContain("شات جي بي تي");
+    expect(result.ttsNormalizedText).toContain("واتساب");
+    // The caption keeps the original Latin spelling for the reader.
+    expect(result.captionText).toContain("ChatGPT");
+    expect(result.captionText).toContain("WhatsApp");
+    expect(result.captionText).toContain("SaaS");
   });
 
   it("normalizes Arabic speech numbers and pronunciation overrides", () => {
