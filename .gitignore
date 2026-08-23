@@ -18,6 +18,7 @@ test-results/
 *.metadata.json
 *.zip
 *.tar.gz
+release/
 whisper-bin-x64.zip
 ABUD_SHORTS_ENGINE_STATUS*.md
 

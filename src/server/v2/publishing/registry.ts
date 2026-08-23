@@ -32,8 +32,12 @@ export class PublishingProviderRegistry {
     return this.providers.get(id);
   }
 
-  public listProviders(): PublishingProvider[] {
-    return Array.from(this.providers.values());
+  public listProviders(includeInternal = false): PublishingProvider[] {
+    const list = Array.from(this.providers.values());
+    if (includeInternal || process.env.NODE_ENV === "test") {
+      return list;
+    }
+    return list.filter((p) => p.id !== "test_provider");
   }
 
   public getProviderForPlatform(
@@ -77,9 +81,10 @@ export class PublishingProviderRegistry {
     return DEFAULT_PLATFORM_CAPABILITIES[platform] || DEFAULT_PLATFORM_CAPABILITIES.youtube;
   }
 
-  public async validateAll(): Promise<PublishingValidationResult[]> {
+  public async validateAll(includeInternal = false): Promise<PublishingValidationResult[]> {
+    const providers = this.listProviders(includeInternal);
     const results = await Promise.all(
-      Array.from(this.providers.values()).map((p) => p.validateConnection()),
+      providers.map((p) => p.validateConnection()),
     );
     return results;
   }

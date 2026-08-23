@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # ABUD Shorts Engine V2 — Production Installer (Linux / macOS)
-# Version: 2.0.0-rc.1
+# Version: 2.0.0
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ PORT="${1:-3130}"
 
 echo "================================================================="
 echo "  ABUD Shorts Engine V2 — One-Command Production Installer"
-echo "  Version: 2.0.0-rc.1"
+echo "  Version: 2.0.0"
 echo "================================================================="
 echo ""
 

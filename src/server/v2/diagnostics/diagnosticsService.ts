@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { Config } from "../../../config";
 import { logger } from "../../../logger";
-import { PRODUCT_NAME, PRODUCT_VERSION, DATABASE_SCHEMA_VERSION } from "../../../version";
+import { PRODUCT_NAME, PRODUCT_VERSION, PRODUCT_STAGE, DATABASE_SCHEMA_VERSION } from "../../../version";
 import { V2Database } from "../db";
 import { publishingRegistry } from "../publishing/registry";
 
@@ -129,7 +129,7 @@ export class DiagnosticsService {
       product: {
         name: PRODUCT_NAME,
         version: PRODUCT_VERSION,
-        stage: "Release Candidate",
+        stage: PRODUCT_STAGE,
         schemaVersion: DATABASE_SCHEMA_VERSION,
         nodeVersion: process.version,
         platform: process.platform,

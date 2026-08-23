@@ -153,7 +153,7 @@ export const SetupWizard: React.FC = () => {
             ABUD Shorts Engine V2
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Production First-Run Setup Wizard · Version 2.0.0-rc.1
+            Production First-Run Setup Wizard · Version 2.0.0
           </Typography>
         </Box>
 

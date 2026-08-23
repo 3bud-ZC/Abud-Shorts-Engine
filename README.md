@@ -1,423 +1,266 @@
 # ABUD Shorts Engine V2
 
-**Version:** `2.0.0-rc.1` (Release Candidate)  
-**Canonical URL:** `http://localhost:3130`  
+**Product:** ABUD Shorts Engine V2  
+**Version:** 2.0.0 (General Availability)  
+**Canonical Dashboard:** http://localhost:3130  
 **License:** MIT  
 
-An enterprise-grade, local-first video generation, multi-platform publishing, and distribution engine for YouTube Shorts, Instagram Reels, TikTok, and Telegram.
+An enterprise-grade, local-first short video generation, multi-platform publishing, and social distribution engine built for TikTok, YouTube Shorts, Instagram Reels, Facebook Reels, and Telegram.
+
+---
+
+## Table of Contents
+
+1. [Overview & Capabilities](#overview--capabilities)
+2. [System Requirements](#system-requirements)
+3. [Quick Start (One-Command Installer)](#quick-start-one-command-installer)
+4. [First-Run Setup Wizard](#first-run-setup-wizard)
+5. [Free / Local Pipeline Mode](#free--local-pipeline-mode)
+6. [Optional Cloud AI Providers](#optional-cloud-ai-providers)
+7. [Publishing & Social Distribution](#publishing--social-distribution)
+8. [Admin Security & Credentials](#admin-security--credentials)
+9. [Backup & Disaster Recovery](#backup--disaster-recovery)
+10. [Maintenance, Upgrades & Uninstall](#maintenance-upgrades--uninstall)
+11. [Diagnostics & Telemetry](#diagnostics--telemetry)
+12. [Remote & VPS Deployment](#remote--vps-deployment)
+13. [Troubleshooting](#troubleshooting)
+14. [License & Credits](#license--credits)
+
+---
+
+## Overview & Capabilities
+
+ABUD Shorts Engine V2 transforms text ideas and brand assets into high-engagement vertical short videos with synchronized captions, motion transitions, background music, and direct social distribution.
+
+- **Dual Creation Modes**:
+  - **Prompt Studio**: AI-powered scriptwriting in Egyptian Arabic, Gulf Arabic, Modern Standard Arabic (MSA), and English with automatic scene segmentation.
+  - **Template Studio**: 6 pre-built business templates (Product Ad, Restaurant Promo, Real Estate Showcase, Viral Hook, Educational Explainer, Event Promo) with custom brand injection.
+- **Production Spec Engine**: Exact duration guarantees, multi-scene timeline assembly, animated text overlays, RTL Arabic typography, and motion presets.
+- **100% Free/Local Core**: Generate unlimited high-definition vertical videos without recurring cloud API fees using local AI planning, Pexels media library, Kokoro TTS, Whisper speech-to-text, and Remotion rendering.
+- **Publishing & Scheduling Automation**: Unified scheduling, atomic publication state machine, retry policies, dead-letter isolation, and live SSE event streams.
+- **Security & Reliability**: Salted password authentication, zero secret leakage, role-based Docker isolation, automated pre-upgrade safety snapshots, and one-click diagnostic bundles.
+
+---
+
+## System Requirements
+
+| Requirement | Specification |
+| --- | --- |
+| **Operating System** | Windows 10/11 (with WSL2 & Docker Desktop), macOS 12+, or Linux (Ubuntu 20.04+, Debian 11+, RHEL 9+) |
+| **Container Engine** | Docker Engine 24.0+ and Docker Compose v2.20+ |
+| **CPU** | 2 vCPUs minimum (4+ vCPUs recommended for faster rendering) |
+| **RAM** | 4 GB minimum (8 GB recommended) |
+| **Disk Space** | 5 GB free disk space for containers, models, and cache |
+| **Network** | Internet access required for initial media downloads (Pexels) and optional cloud APIs |
 
 ---
 
 ## Quick Start (One-Command Installer)
 
 ### Windows (PowerShell)
+
+Open PowerShell as Administrator or standard user and run:
+
 ```powershell
 .\install.ps1
 ```
 
+*Custom HTTP Port option:* `.\install.ps1 -Port 3131`
+
 ### Linux / macOS (Bash)
+
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-The installer automatically verifies Docker, creates persistent directories, generates cryptographically secure secrets (`INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY`, `SESSION_SECRET`), starts the 4-container stack, runs database migrations, and opens the First-Run Setup Wizard at:
-$$\text{http://localhost:3130/setup}$$
+*Custom HTTP Port option:* `./install.sh 3131`
+
+The installer performs all initialization steps automatically:
+1. Validates Docker daemon and available disk space.
+2. Checks port availability (3130).
+3. Creates persistent host storage directories (`data/videos`, `data/cache`, `data/backups`, `data/logs`).
+4. Generates cryptographically secure secrets in `.env` (`INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY`, `SESSION_SECRET`).
+5. Builds and launches the 4-tier Docker stack (`abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n`, `abud-shorts-postgres`).
+6. Executes database schema migrations.
+7. Verifies health probes and presents the ready dashboard.
 
 ---
 
-## Key Architecture & Features
+## First-Run Setup Wizard
 
-- **Prompt Studio & Template Mode**: AI Creative Director with Egyptian Arabic, Gulf, MSA, and English scriptwriting.
-- **Production Spec V2**: Strict duration enforcement (variance $\le 0.3\%$), multi-scene timeline, multi-asset scenes, motion presets, dynamic transitions, and RTL captions.
-- **Free-First Local Pipeline**: 100% functional without paid AI subscriptions (Local Director, Pexels footage, Kokoro TTS, Whisper subtitles, Remotion composition, FFmpeg rendering).
-- **Multi-Platform Publishing Engine**: Aggregated publishing (Upload-Post), direct bot publishing (Telegram), and direct extension points (YouTube Shorts, Meta Reels, TikTok) with idempotency, atomic background scheduler, partial failure isolation, and live SSE event streams.
-- **Local Admin Security**: Salted PBKDF2 password hashing, session lifecycle, security headers (CSP, X-Frame-Options, X-Content-Type-Options), rate limiting, and zero secret leakage.
-- **Backup & Disaster Recovery**: User-triggered backups (`config_only`, `config_db`, `full`), SHA256 checksum manifests, automated pre-restore safety snapshots, and staged restore.
-- **Diagnostics & Support**: System telemetry, storage breakdown, secret-redacted real-time logs, and one-click Diagnostic Bundle export.
-- **Maintenance & Upgrades**: `upgrade.ps1`/`upgrade.sh` with automated pre-upgrade backups, `uninstall.ps1`/`uninstall.sh` preserving media by default.
-- **Outbound Webhooks**: Event dispatching (`video.ready`, `video.failed`, `publication.published`, `publication.failed`) with HMAC-SHA256 signatures (`x-abud-signature`, `x-abud-timestamp`).
-- **Remote Deployment**: Production reference `nginx.conf.reference` supporting reverse proxy, WebSocket, SSE, and media byte-range streaming.
-
-- Docker Desktop installed and running
-- A free Pexels API key from https://www.pexels.com/api/
-- Git
-- At least 4 GB RAM recommended (3 GB minimum)
-- At least 2 vCPU
-- At least 5 GB free disk space
-- Windows users must use Docker; native Windows execution is not supported
-
-## Quick Start
-
-Clone the repository:
-
-```bash
-git clone https://github.com/3bud-ZC/Abud-Shorts-Engine.git
-cd Abud-Shorts-Engine
-```
-
-Copy the environment template and add your Pexels API key:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set:
+Once installed, navigate in your web browser to:
 
 ```text
-PEXELS_API_KEY=your_pexels_api_key_here
+http://localhost:3130/setup
 ```
 
-Build and start the V2 stack:
+The interactive 10-step wizard configures:
+1. **System Health Verification**: Docker runtime, PostgreSQL connectivity, and storage mounts.
+2. **Admin Credentials**: Create your initial administrator account with secure password hashing.
+3. **Pexels Stock Footage**: Enter your free [Pexels API Key](https://www.pexels.com/api/) for high-quality stock video retrieval.
+4. **Optional Cloud AI Keys**: Connect Google Gemini, ElevenLabs, or Veo if desired.
+5. **Publishing Integrations**: Configure Telegram bot tokens or Upload-Post API keys.
+6. **Default Production Settings**: Select default language (`ar` / `en`), Arabic dialect (`egyptian`, `gulf`, `msa`), and default brand profile.
 
-```bash
-docker compose -f docker-compose.v2.yml up -d --build
-```
+---
 
-Open the Web UI:
+## Free / Local Pipeline Mode
 
-```text
-http://localhost:3130
-```
+ABUD Shorts Engine V2 is engineered so that you do **not** need paid third-party AI subscriptions to produce complete, professional videos:
 
-Check system health:
-
-```bash
-curl http://localhost:3130/api/v2/system/health
-```
-
-Create the first video from **Create Video**, track it in **Jobs**, then preview or download the MP4 from **Videos**.
-
-## V2 Control Plane
-
-Milestone V2-01 adds a dashboard-led control plane:
-
-- Web dashboard at `http://localhost:3130`
-- PostgreSQL-backed jobs and job events
-- Internal n8n orchestration
-- Separate render-worker service using the existing Remotion, FFmpeg, Kokoro, Whisper, and Pexels pipeline
-- Server-sent job progress events
-- Backward-compatible video library over the existing video folder
-- Persistent brand profiles, template browser, provider validation, and structured system health
-
-Start V2:
-
-```bash
-docker compose -f docker-compose.v2.yml up -d --build
-```
-
-Open:
-
-```text
-http://localhost:3130
-```
-
-Stop V2:
-
-```bash
-docker compose -f docker-compose.v2.yml down
-```
-
-V2 services:
-
-| Service | Responsibility | Public port |
+| Pipeline Stage | Free / Local Component | Function |
 | --- | --- | --- |
-| `abud-shorts-app` | Dashboard, public API, internal job API, migrations | `3130` |
-| `abud-shorts-render-worker` | Local/free rendering pipeline | none |
-| `abud-shorts-n8n` | Internal orchestration workflow | none |
-| `abud-shorts-postgres` | Persistent V2 jobs/settings/assets | none |
+| **Creative Direction** | Local Rule-Based Creative Director | Generates complete scene blueprints, hooks, visual search queries, and narration lines deterministically. |
+| **Visual Assets** | Pexels API Integration | Fetches HD vertical background videos based on semantic tags and scene themes. |
+| **Voice Synthesis** | Kokoro TTS (`q4` precision) | Fast, high-quality local text-to-speech audio rendering directly inside the worker container. |
+| **Captions & Subtitles** | Whisper.cpp (`tiny.en`) | Generates exact word-level subtitle timings with custom font styling and RTL Arabic formatting. |
+| **Composition & Render** | Remotion + FFmpeg 4.4 | Assembles video scenes, transitions, background music, audio normalization, and encodes final MP4. |
 
-The V2 compose network provides internal DNS aliases: `app`, `render-worker`, `n8n`, and `postgres`. V2 service-to-service calls do not use `host.docker.internal`.
+---
 
-The V2 n8n bootstrap imports `abud-shorts-v2-control-plane-workflow.json`, activates it, publishes it, and then starts n8n. This n8n image still exposes workflow activation through the deprecated `update:workflow --active=true` CLI; `publish:workflow` registers the production version but does not provide an activation flag in this installed n8n version.
+## Optional Cloud AI Providers
 
-### V2 first run
+For enhanced generative workflows, optional cloud providers can be activated in **Providers & AI Engine** (`/providers`):
 
-1. Copy `.env.example` to `.env`.
-2. Set `PEXELS_API_KEY`.
-3. Replace `INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, and `N8N_ENCRYPTION_KEY` with local secret values.
-4. Start V2 with `docker compose -f docker-compose.v2.yml up -d --build`.
-5. Check health at `http://localhost:3130/api/v2/system/health`.
-6. Create the first video from **Create Video**.
-7. Track progress in **Jobs**.
-8. Preview or download the completed MP4 from **Videos**.
+- **Google Gemini** (`GEMINI_API_KEY`): Advanced multi-scene creative direction, viral script brainstorming, and dynamic Arabic copywriting.
+- **ElevenLabs** (`ELEVENLABS_API_KEY`): Premium multilingual neural voice cloning and emotional delivery.
+- **Google Veo & fal.ai Kling/Wan** (`FAL_KEY`): AI text-to-video clip generation for scenes requiring synthetic visuals.
 
-### V2 database migration
+---
 
-The app runs the minimum V2 PostgreSQL migration on startup. It creates:
+## Publishing & Social Distribution
 
-- `jobs`
-- `job_events`
-- `app_settings`
-- `provider_settings`
-- `generated_assets`
-- `brands`
+Manage accounts, schedule releases, and publish to multiple platforms simultaneously:
 
-If PostgreSQL is unavailable, the dashboard starts degraded and `/api/v2/system/health` reports the database as unhealthy.
+- **Aggregated Publishing (Upload-Post)**: One-click simultaneous publishing to YouTube Shorts, Instagram Reels, TikTok, Facebook, LinkedIn, X (Twitter), and Threads.
+- **Telegram Direct Bot**: Instant distribution to Telegram public channels or group chats with custom caption formatting.
+- **Direct Platform APIs**: YouTube Data API v3, Meta Graph API (Instagram/Facebook), and TikTok OpenAPI connectors.
+- **Smart Queue & Scheduling**: Automated background publisher checks schedule slots every 30 seconds, enforces concurrency limits, and handles transient rate-limiting (HTTP 429) with exponential backoff.
 
-### V2 Pexels configuration
+---
 
-`PEXELS_API_KEY` is read server-side only. The frontend receives only configured/missing state and never receives the key value or key suffix.
+## Admin Security & Credentials
 
-If the key is missing, V2 still starts and reports Pexels as unhealthy. Video generation requires a valid key.
+- **Local Authentication**: Salted PBKDF2 (100,000 iterations) with SHA-512 password derivation and secure cookie sessions.
+- **Network Isolation**: PostgreSQL, n8n orchestrator, and render worker are bound to internal Docker bridge network only; only the web app port (`3130`) is exposed.
+- **Zero Secret Leakage**: API keys and database credentials are fully masked/redacted in browser UI, diagnostic bundles, and system logs.
+- **Security Headers**: Standard OWASP security headers enabled (Content Security Policy, X-Frame-Options, X-Content-Type-Options, Strict-Transport-Security).
 
-Use **Providers** or `POST /api/v2/providers/pexels/validate` to validate the configured key. The response distinguishes `healthy`, `not_configured`, `invalid_credentials`, `rate_limited`, `timeout`, and `provider_unavailable` states without returning the secret. Validation is bounded by `PEXELS_VALIDATION_TIMEOUT_MS`, which defaults to `12000` ms so slower live Pexels responses do not falsely fail while still preventing application hangs.
+---
 
-### V2 generated videos
+## Backup & Disaster Recovery
 
-V2 uses the existing mounted video storage:
+Create and restore system state from the **System** dashboard (`/system`) or REST API:
 
-```text
-/app/data/videos
-C:/abud-shorts-engine/data-dev/videos
+- **Backup Types**:
+  - `config_only`: App settings, brand profiles, and provider configurations.
+  - `config_db`: Full PostgreSQL database dump + configurations.
+  - `full`: Complete database snapshot, configurations, and generated video storage archive.
+- **Integrity**: Every backup is packaged with a SHA256 checksum manifest.
+- **Pre-Restore Safety Snapshot**: An automated safety backup is created prior to restoring an existing snapshot.
+
+---
+
+## Maintenance, Upgrades & Uninstall
+
+### Upgrading to New Releases
+
+Run the upgrade script in the project root:
+
+**Windows (PowerShell):**
+```powershell
+.\upgrade.ps1
 ```
 
-Existing MP4 files and metadata sidecars remain visible in the V2 Videos Library even if they do not have PostgreSQL job records.
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and configure only the values you need to change.
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `PEXELS_API_KEY` | Your Pexels API key (required for real renders) | `your_pexels_api_key_here` |
-| `PEXELS_VALIDATION_TIMEOUT_MS` | Bounded timeout for live Pexels validation and health checks | `12000` |
-| `INTERNAL_SERVICE_TOKEN` | Shared secret for trusted app, n8n, and render-worker calls (generate with `openssl rand -hex 32`) | required (no default) |
-| `DATABASE_URL` | PostgreSQL connection string inside V2 containers | compose-managed |
-| `POSTGRES_DB` | V2 database name | `abud_shorts` |
-| `POSTGRES_USER` | V2 database user | `abud_shorts` |
-| `POSTGRES_PASSWORD` | V2 database password | `change-me-v2-postgres` |
-| `N8N_ENCRYPTION_KEY` | n8n encryption key | `change-me-v2-n8n-encryption-key-32` |
-| `N8N_BASE_URL` | Internal n8n base URL for the app | `http://n8n:5678` |
-| `RENDER_WORKER_BASE_URL` | Internal render worker URL | `http://render-worker:3125` |
-| `APP_INTERNAL_BASE_URL` | Internal app URL for callbacks | `http://app:3123` |
-| `V2_PUBLIC_URL` | User-facing dashboard URL | `http://localhost:3130` |
-| `LOG_LEVEL` | Server log level (pino) | `info` |
-| `PORT` | Port the server listens on | `3123` |
-| `DATA_DIR_PATH` | Data directory inside the container | `/app/data` |
-| `DOCKER` | Whether the app is running inside a container | `true` |
-| `DEV` | Development mode flag | `false` |
-| `WHISPER_MODEL` | Whisper.cpp model used for captions | `tiny.en` |
-| `KOKORO_MODEL_PRECISION` | Kokoro TTS model precision | `q4` |
-| `CONCURRENCY` | How many Chrome tabs render in parallel | `1` |
-| `VIDEO_CACHE_SIZE_IN_BYTES` | Remotion offthread video cache size | `2097152000` |
-| `WHISPER_VERBOSE` | Forward Whisper output to stdout | `false` |
-
-`.env.example` contains placeholders only. Never commit your real `.env`.
-
-## Local Output Files
-
-Inside the container, completed videos are written to:
-
-```text
-/app/data/videos
-```
-
-On Windows, the container mounts that path to:
-
-```text
-C:/abud-shorts-engine/data-dev/videos
-```
-
-Each completed render may produce:
-
-```text
-<videoId>.mp4
-<videoId>.metadata.json
-```
-
-The metadata sidecar stores:
-
-- template and brand info
-- narration lines
-- Pexels search terms
-- output filename
-- container and host path hints
-- download and preview URLs
-
-You can read, copy, or back up these files directly from the host folder.
-
-## How Downloads Work
-
-The generated video is available immediately from the UI.
-
-- On the **Generated Videos** page, click **Download** next to a ready video.
-- On the **Video Details** page, click **Download** or **Preview**.
-- The download endpoint uses a readable filename when the template and brand are known.
-
-Example:
-
-```text
-abud-short-product-ad-abud-store-<videoId>.mp4
-```
-
-If no template or brand was set, a safe fallback filename is used.
-
-## Useful Commands
-
-Start V2:
-
+**Linux / macOS (Bash):**
 ```bash
-docker compose -f docker-compose.v2.yml up -d --build
+./upgrade.sh
 ```
 
-View recent logs:
+The upgrade script automatically:
+1. Creates a pre-upgrade safety backup.
+2. Rebuilds the updated Docker images.
+3. Applies database schema migrations.
+4. Verifies service health after startup.
 
+### Uninstallation
+
+**Preserve Generated Videos & Database (Default):**
+```powershell
+.\uninstall.ps1
+```
 ```bash
-docker logs --tail=200 abud-shorts-app
-docker logs --tail=200 abud-shorts-render-worker
+./uninstall.sh
 ```
 
-Check health:
-
+**Complete Clean Removal (Destructive):**
+```powershell
+.\uninstall.ps1 -RemoveData
+```
 ```bash
-curl http://localhost:3130/api/v2/system/health
+./uninstall.sh --remove-data
 ```
 
-Stop V2:
+---
 
-```bash
-docker compose -f docker-compose.v2.yml down
-```
+## Diagnostics & Telemetry
 
-Run tests:
+Access system diagnostics at `http://localhost:3130/system`:
+- **Real-Time Service Probes**: PostgreSQL latency, internal n8n status, render-worker responsiveness.
+- **Storage Breakdown**: Real-time byte accounting across `videos/`, `cache/`, `backups/`, and `logs/`.
+- **Sanitized Logs**: View recent system events with all passwords, tokens, and OAuth keys automatically redacted.
+- **One-Click Diagnostic Bundle**: Export `abud_diagnostics_<timestamp>.json` for technical support and troubleshooting.
 
-```bash
-pnpm vitest run
-```
+---
 
-Build the UI:
+## Remote & VPS Deployment
 
-```bash
-pnpm build
-```
+For remote hosting on a VPS or cloud server:
+1. Ensure ports `80` and `443` are open on your server firewall.
+2. Configure a reverse proxy using the provided template:
+   ```text
+   nginx.conf.reference
+   ```
+3. Set your custom domain in `V2_PUBLIC_URL` inside `.env`.
+4. The Nginx configuration includes pre-configured WebSocket support for HMR/SSE, client payload limits for video uploads (50MB), and byte-range streaming for MP4 previews.
 
-Legacy/reference dev compose files may still exist for migration work, but new local development should use V2 at `http://localhost:3130`.
+---
 
-## Legacy n8n Automation + Optional YouTube Upload
+## Troubleshooting
 
-This section documents the older visible n8n upload workflow. V2 normal video creation uses the hidden internal workflow from `integrations/n8n/abud-shorts-v2-control-plane-workflow.json` and does not require users to open n8n.
+### 1. Docker daemon not running
+- **Symptom:** Installer reports `Docker daemon is not running`.
+- **Solution:** Launch Docker Desktop on Windows/macOS or start the docker service on Linux (`sudo systemctl start docker`).
 
-Abud Shorts Engine ships with an official n8n workflow template. You can use it to generate videos automatically and optionally upload them to YouTube.
+### 2. Pexels API Key invalid or rate-limited
+- **Symptom:** Video job fails during the visual asset collection stage.
+- **Solution:** Verify your API key at `http://localhost:3130/providers`. Obtain a free key at [pexels.com/api](https://www.pexels.com/api/).
 
-- YouTube upload is **optional** and **disabled by default**.
-- The workflow uses a safe default privacy status of `private`.
-- You must reconnect your own n8n credentials after importing the workflow.
+### 3. Port 3130 already occupied
+- **Symptom:** Port conflict error during installation.
+- **Solution:** Re-run the installer with a custom port: `.\install.ps1 -Port 3135` (or `./install.sh 3135`).
 
-Workflow file:
+### 4. Container logs inspection
+- View live application logs:
+  ```bash
+  docker logs --tail=100 -f abud-shorts-app
+  ```
+- View render worker logs:
+  ```bash
+  docker logs --tail=100 -f abud-shorts-render-worker
+  ```
 
-```text
-integrations/n8n/abud-shorts-youtube-workflow.json
-```
+---
 
-Documentation:
+## License & Credits
 
-```text
-docs/n8n-youtube-automation.md
-```
+ABUD Shorts Engine V2 is licensed under the [MIT License](LICENSE).
 
-Optional n8n Docker Compose file:
-
-```text
-integrations/n8n/docker-compose.n8n.yml
-```
-
-### How the workflow connects
-
-The workflow needs to reach the engine from n8n. Set `SERVER_URL` in the **Configure** node:
-
-| n8n setup | Recommended `SERVER_URL` |
-| --- | --- |
-| n8n local (not Docker) | `http://localhost:3124` |
-| n8n in Docker Desktop | `http://host.docker.internal:3124` |
-| n8n cloud / remote | Local engine is not reachable unless deployed or tunneled |
-
-### Important notes
-
-- The workflow file contains placeholder credential references. You must reconnect your own Gemini and YouTube OAuth2 credentials in n8n after importing.
-- Keep `AUTO_UPLOAD_TO_YOUTUBE` on `false` until you want to enable uploads.
-- Keep YouTube videos `private` or `unlisted` until you manually review them.
-- Do not commit n8n credentials, generated videos, or metadata sidecars.
-
-## Project Structure
-
-```text
-src/
-  ui/           # React frontend pages and components
-  server/       # Express routes, REST API, metadata helpers
-  short-creator/# Remotion scenes, templates, Pexels, TTS, rendering
-  types/        # Shared TypeScript types
-  components/   # Shared React components
-  config.ts     # Environment configuration
-  index.ts      # Server entry point
-
-integrations/n8n/       # n8n workflow templates
-docs/                   # Documentation
-
-docker-compose.dev.yml  # Local Docker Compose setup
-main-tiny.Dockerfile    # Docker image for local dev
-README.md               # This file
-.env.example           # Environment template
-```
-
-## Current Status
-
-- Local open-source release ready.
-- Render QA passed (one Product Ad render completed successfully).
-- All tests passed.
-- Build passed.
-- Docker health checks passed.
-- Production VPS/domain/Nginx deployment is deferred and not part of this release.
-
-## Known Limitations
-
-- English TTS only. Kokoro does not currently support other languages.
-- Background footage depends on the Pexels API and its quota/rate limits.
-- Docker build can take some time on the first run.
-- Brand profiles are stored in browser localStorage only (per-browser, not multi-user).
-- Watermark is text-only; logo image upload is not implemented yet.
-- ZIP export of video + metadata is deferred.
-- Production deployment is not part of the current release.
-
-## Roadmap
-
-Planned optional improvements:
-
-- ZIP export for video + metadata
-- Logo image upload in Brand Kit
-- Better render progress and queue UI
-- More caption styles
-- Curated Pexels cache
-- More business templates
-- Optional production deployment later (VPS/Nginx remains deferred)
-
-## Security Notes
-
-- Never commit `.env` or any file containing real API keys.
-- `.env.example` contains placeholders only.
-- Generated videos and metadata sidecars should stay local.
-- If you ever accidentally commit a secret, rotate the key immediately and remove it from the repository history.
-
-## Public Release Status
-
-This project is ready for public sharing as a local-first open-source MVP.
-
-- Local Docker app validated and running.
-- Render QA passed: the engine produces downloadable MP4 videos.
-- n8n dry run reached the render/download path successfully.
-- YouTube upload is optional and disabled by default (`AUTO_UPLOAD_TO_YOUTUBE=false`).
-- YouTube upload is skipped when disabled; this is expected and safe.
-- No secrets, credentials, generated videos, or metadata sidecars are committed.
-- Project is ready for GitHub, portfolio website, and LinkedIn sharing.
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
-
-## Acknowledgments
-
-- Remotion for programmatic video generation
-- Whisper.cpp for speech-to-text
-- Pexels for video content
-- FFmpeg for audio/video processing
-- Kokoro for text-to-speech
+### Open-Source Acknowledgments
+- [Remotion](https://remotion.dev) — Programmatic video rendering in React.
+- [Kokoro TTS](https://github.com/hexgrad/kokoro) — Fast local neural speech synthesis.
+- [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) — High-efficiency speech transcription.
+- [Pexels](https://www.pexels.com) — Curated stock video library.
+- [FFmpeg](https://ffmpeg.org) — Audio and video multiplexing and transcoding.
+- [n8n](https://n8n.io) — Workflow automation and internal orchestration.
