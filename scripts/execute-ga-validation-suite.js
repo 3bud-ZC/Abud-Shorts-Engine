@@ -290,31 +290,24 @@ async function runGAValidation() {
   const statusAfterWorkerLoss = (await safeGet(`${BASE_URL}/api/v2/jobs/${intJobId}`)).data.job.status;
   console.log(`Status immediately after worker restart: ${statusAfterWorkerLoss}`);
 
-  // Wait up to 15s for worker disconnection or transition to failed/cancelled
-  let currentJobStatus = statusAfterWorkerLoss;
-  if (currentJobStatus !== 'failed' && currentJobStatus !== 'cancelled') {
-    for (let w = 0; w < 10; w++) {
-      await sleep(1500);
-      const cur = (await safeGet(`${BASE_URL}/api/v2/jobs/${intJobId}`)).data.job;
-      currentJobStatus = cur.status;
-      if (currentJobStatus === 'failed' || currentJobStatus === 'cancelled') break;
-    }
-  }
-  if (currentJobStatus !== 'failed' && currentJobStatus !== 'cancelled') {
+  // Cancel the interrupted job to transition to canceled state
+  if (statusAfterWorkerLoss !== 'failed' && statusAfterWorkerLoss !== 'canceled') {
     try {
-      await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/cancel`, {});
-    } catch {}
-    await sleep(1000);
+      const cancelRes = await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/cancel`, {});
+      console.log('Interrupted job cancelled successfully:', cancelRes.data?.job?.status);
+    } catch (e) {
+      console.log('Cancel note:', e.response?.data || e.message);
+    }
+    await sleep(2000);
   }
 
   // Trigger retry
   console.log(`Triggering retry on interrupted job ${intJobId}...`);
   let retryJobId = intJobId;
-  try {
-    const retryRes = await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/retry`, {});
-    if (retryRes.data?.job?.id) retryJobId = retryRes.data.job.id;
-  } catch (e) {
-    console.log('Retry response note:', e.response?.data || e.message);
+  const retryRes = await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/retry`, {});
+  if (retryRes.data?.job?.id) {
+    retryJobId = retryRes.data.job.id;
+    console.log(`Retry job spawned with ID: ${retryJobId}`);
   }
   const recoveredJob = await waitForJob(retryJobId, 450);
 
