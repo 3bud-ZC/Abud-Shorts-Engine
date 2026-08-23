@@ -2,11 +2,12 @@
 import { getOrientationConfig } from "../../components/utils";
 import { logger } from "../../logger";
 import { OrientationEnum, type Video } from "../../types/shorts";
+import { selectBestCandidate } from "../../server/v2/media-intelligence/assetScorer";
 
 const jokerTerms: string[] = ["nature", "globe", "space", "ocean"];
 const durationBufferSeconds = 3;
-const defaultTimeoutMs = 5000;
-const perTermTimeoutRetries = 1;
+const defaultTimeoutMs = 15000;
+const perTermTimeoutRetries = 2;
 const maxSearchAttempts = 8;
 
 type FindVideoOptions = {
@@ -97,54 +98,78 @@ export class PexelsAPI {
       throw new Error("No videos found");
     }
 
-    // find all the videos that fits the criteria, then select one randomly
-    const filteredVideos = videos
-      .map((video) => {
-        if (excludeIds.includes(video.id)) {
-          return;
-        }
-        if (!video.video_files.length) {
-          return;
-        }
+    // Rank candidates using intelligent asset scoring
+    const candidates = videos.flatMap((video) => {
+      if (excludeIds.includes(video.id) || !video.video_files?.length) {
+        return [];
+      }
+      const matchingFile =
+        video.video_files.find(
+          (f) =>
+            f.quality === "hd" &&
+            f.width === requiredVideoWidth &&
+            f.height === requiredVideoHeight,
+        ) ||
+        video.video_files.find(
+          (f) =>
+            (orientation === OrientationEnum.landscape && f.width >= f.height) ||
+            (orientation === OrientationEnum.portrait && f.height >= f.width),
+        ) ||
+        video.video_files[0];
 
-        // calculate the real duration of the video by converting the FPS to 25
-        const fps = video.video_files[0].fps;
-        const duration =
-          fps < 25 ? video.duration * (fps / 25) : video.duration;
+      if (!matchingFile) return [];
 
-        if (duration >= minDurationSeconds + durationBufferSeconds) {
-          for (const file of video.video_files) {
-            if (
-              file.quality === "hd" &&
-              file.width === requiredVideoWidth &&
-              file.height === requiredVideoHeight
-            ) {
-              return {
-                id: video.id,
-                url: file.link,
-                width: file.width,
-                height: file.height,
-              };
-            }
-          }
-        }
-      })
-      .filter(Boolean);
-    if (!filteredVideos.length) {
-      logger.error({ searchTerm }, "No acceptable videos found in Pexels API");
-      throw new Error("No acceptable videos found");
+      return [
+        {
+          id: video.id,
+          url: matchingFile.link,
+          width: matchingFile.width,
+          height: matchingFile.height,
+          duration: video.duration,
+          tags: [searchTerm],
+        },
+      ];
+    });
+
+    // Score and select the best candidate clip
+    const scoredSelection = selectBestCandidate(candidates, {
+      queryTerms: [searchTerm],
+      orientation: orientation === OrientationEnum.landscape ? "landscape" : "portrait",
+      targetDurationSeconds: minDurationSeconds,
+      previouslyUsedIds: excludeIds,
+    });
+
+    if (scoredSelection.best) {
+      logger.debug(
+        {
+          searchTerm,
+          videoId: scoredSelection.best.id,
+          score: scoredSelection.scoreResult?.score,
+          reasons: scoredSelection.scoreResult?.reasons,
+        },
+        "Selected best scored Pexels candidate clip",
+      );
+      return {
+        id: String(scoredSelection.best.id),
+        url: scoredSelection.best.url,
+        width: scoredSelection.best.width,
+        height: scoredSelection.best.height,
+      };
     }
 
-    const video = filteredVideos[
-      Math.floor(Math.random() * filteredVideos.length)
-    ] as Video;
+    // Fallback: select first acceptable file if scoring produced no match
+    const fallbackFile = videos[0]?.video_files?.[0];
+    if (fallbackFile) {
+      return {
+        id: String(videos[0].id),
+        url: fallbackFile.link,
+        width: fallbackFile.width,
+        height: fallbackFile.height,
+      };
+    }
 
-    logger.debug(
-      { searchTerm, video: video, minDurationSeconds, orientation },
-      "Found video from Pexels API",
-    );
-
-    return video;
+    logger.error({ searchTerm }, "No acceptable videos found in Pexels API");
+    throw new Error("No acceptable videos found");
   }
 
   async findVideo(

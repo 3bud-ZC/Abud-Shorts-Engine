@@ -387,6 +387,33 @@ export class APIRouter {
       },
     );
 
+    // Delivery API — thumbnail cover image
+    this.router.get(
+      ["/videos/:videoId/thumbnail", "/short-video/:videoId/thumbnail"],
+      (req: ExpressRequest, res: ExpressResponse) => {
+        try {
+          const { videoId } = req.params;
+          if (!videoId || !isSafeVideoId(videoId)) {
+            res.status(400).json({ error: "Invalid videoId" });
+            return;
+          }
+
+          const thumbPath = path.join(this.config.videosDirPath, `${videoId}.thumb.jpg`);
+          if (fs.existsSync(thumbPath)) {
+            res.setHeader("Content-Type", "image/jpeg");
+            res.setHeader("Cache-Control", "public, max-age=86400");
+            fs.createReadStream(thumbPath).pipe(res);
+            return;
+          }
+
+          res.status(404).json({ error: "Thumbnail not found" });
+        } catch (error: unknown) {
+          logger.error(error, "Error loading thumbnail");
+          res.status(500).json({ error: "Failed to load thumbnail" });
+        }
+      },
+    );
+
     // Delivery API — download video with safe filename
     this.router.get(
       "/videos/:videoId/download",

@@ -9,6 +9,13 @@ import {
 } from "../types/shorts";
 import { AvailableComponentsEnum, type OrientationConfig } from "./types";
 
+export const sceneSegmentSchema = z.object({
+  video: z.string(),
+  duration: z.number(),
+  motion: z.string().optional(),
+});
+export type SceneSegment = z.infer<typeof sceneSegmentSchema>;
+
 export const shortVideoSchema = z.object({
   scenes: z.array(
     z.object({
@@ -18,12 +25,17 @@ export const shortVideoSchema = z.object({
         duration: z.number(),
       }),
       video: z.string(),
+      motion: z.string().optional(),
+      transition: z.string().optional(),
+      segments: z.array(sceneSegmentSchema).optional(),
     }),
   ),
   config: z.object({
     paddingBack: z.number().optional(),
     captionPosition: z.enum(["top", "center", "bottom"]).optional(),
     captionBackgroundColor: z.string().optional(),
+    captionPreset: z.string().optional(),
+    ctaLayout: z.string().optional(),
     durationMs: z.number(),
     musicVolume: z.nativeEnum(MusicVolumeEnum).optional(),
     brandKit: z
@@ -157,13 +169,13 @@ export function calculateVolume(
     case "muted":
       return [0, true];
     case "low":
-      return [0.2, false];
+      return [0.15, false];
     case "medium":
-      return [0.45, false];
+      return [0.25, false];
     case "high":
-      return [0.7, false];
+      return [0.35, false];
     default:
-      return [0.7, false];
+      return [0.25, false];
   }
 }
 

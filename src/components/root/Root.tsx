@@ -8,9 +8,7 @@ import { AvailableComponentsEnum } from "../types";
 
 const FPS = 25;
 
-export const calculateMetadata: CalculateMetadataFunction<
-  z.infer<typeof shortVideoSchema>
-> = async ({ props }) => {
+export const calculateMetadata: CalculateMetadataFunction<any> = async ({ props }) => {
   const durationInFrames = Math.floor((props.config.durationMs / 1000) * FPS);
   return {
     ...props,

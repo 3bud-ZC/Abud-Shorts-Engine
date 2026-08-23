@@ -36,6 +36,7 @@ export class Remotion {
     data: z.infer<typeof shortVideoSchema>,
     id: string,
     orientation: OrientationEnum,
+    quality: "draft" | "standard" | "high" | "premium" = "standard",
   ) {
     const { component } = getOrientationConfig(orientation);
 
@@ -43,9 +44,17 @@ export class Remotion {
       serveUrl: this.bundled,
       id: component,
       inputProps: data,
+      timeoutInMilliseconds: 120000,
+      chromiumOptions: {
+        enableMultiProcessOnLinux: true,
+        disableWebSecurity: true,
+      },
     });
 
-    logger.debug({ component, videoID: id }, "Rendering video with Remotion");
+    const isDraft = quality === "draft";
+    const isHigh = quality === "high";
+
+    logger.debug({ component, videoID: id, quality, isDraft, isHigh }, "Rendering video with Remotion");
 
     const outputLocation = path.join(this.config.videosDirPath, `${id}.mp4`);
 
@@ -55,6 +64,14 @@ export class Remotion {
       serveUrl: this.bundled,
       outputLocation,
       inputProps: data,
+      imageFormat: "jpeg",
+      jpegQuality: isDraft ? 70 : (isHigh ? 92 : 85),
+      scale: isDraft ? 0.75 : 1.0,
+      timeoutInMilliseconds: 180000,
+      chromiumOptions: {
+        enableMultiProcessOnLinux: true,
+        disableWebSecurity: true,
+      },
       onProgress: ({ progress }) => {
         logger.debug(`Rendering ${id} ${Math.floor(progress * 100)}% complete`);
       },

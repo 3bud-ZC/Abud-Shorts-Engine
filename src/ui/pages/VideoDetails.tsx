@@ -1,476 +1,546 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import React, { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import axios from "axios";
 import {
-  Box,
-  Typography,
-  Paper,
-  Button,
-  CircularProgress,
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
-  Grid,
-  IconButton,
-  Tooltip,
+  Box,
+  Button,
   Chip,
-  Stack
-} from '@mui/material';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import DownloadIcon from '@mui/icons-material/Download';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { VideoStatus } from '../../types/shorts';
+  Divider,
+  Grid,
+  Stack,
+  Typography,
+} from "@mui/material";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import SendIcon from "@mui/icons-material/Send";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import YouTubeIcon from "@mui/icons-material/YouTube";
+import InstagramIcon from "@mui/icons-material/Instagram";
+import FacebookIcon from "@mui/icons-material/Facebook";
+import TelegramIcon from "@mui/icons-material/Telegram";
+import TwitterIcon from "@mui/icons-material/Twitter";
+import {
+  ConfirmDialog,
+  LoadingState,
+  PageHeader,
+  SectionCard,
+  StatusBadge,
+} from "../components/v2";
+import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal";
+import type { V2Job, VideoItem, VideoPublishingStatus } from "./v2Types";
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes) return "Unknown";
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatDuration(seconds?: number): string {
+  if (!seconds) return "Unknown";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+}
 
 const VideoDetails: React.FC = () => {
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
+  const [video, setVideo] = useState<VideoItem | null>(null);
+  const [job, setJob] = useState<V2Job | null>(null);
+  const [pubStatus, setPubStatus] = useState<VideoPublishingStatus | null>(null);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<VideoStatus>('processing');
-  const [metadata, setMetadata] = useState<{
-    sizeBytes?: number;
-    createdAt?: string;
-    templateId?: string;
-    templateName?: string;
-    brandName?: string;
-    watermarkText?: string;
-    captionStyle?: string;
-    durationSeconds?: number;
-    pexelsTerms?: string[];
-    narrationLines?: string[];
-    downloadFilename?: string;
-    downloadUrl?: string;
-    previewUrl?: string;
-    containerPath?: string;
-    hostPathHint?: string;
-    error?: string;
-  } | null>(null);
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isMounted = useRef(true);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const checkVideoStatus = async () => {
-    try {
-      const response = await axios.get(`/api/short-video/${videoId}/status`);
-      const videoStatus = response.data.status;
-
-      if (isMounted.current) {
-        setStatus(videoStatus || 'unknown');
-
-        if (videoStatus === 'ready' && !metadata) {
-          try {
-            const meta = await axios.get(`/api/videos/${videoId}`);
-            if (isMounted.current) {
-              setMetadata({
-                sizeBytes: meta.data.sizeBytes,
-                createdAt: meta.data.createdAt,
-                templateId: meta.data.templateId,
-                templateName: meta.data.templateName,
-                brandName: meta.data.brandName,
-                watermarkText: meta.data.watermarkText,
-                captionStyle: meta.data.captionStyle,
-                durationSeconds: meta.data.durationSeconds,
-                pexelsTerms: meta.data.pexelsTerms,
-                narrationLines: meta.data.narrationLines,
-                downloadFilename: meta.data.downloadFilename,
-                downloadUrl: meta.data.downloadUrl,
-                previewUrl: meta.data.previewUrl,
-                containerPath: meta.data.containerPath,
-                hostPathHint: meta.data.hostPathHint,
-                error: meta.data.error,
-              });
-            }
-          } catch (metaErr) {
-            console.error('Error fetching video metadata:', metaErr);
-          }
-        }
-
-        if (videoStatus !== 'processing') {
-          if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-          }
-        }
-
-        setLoading(false);
+  const fetchDetails = () => {
+    if (!videoId) return;
+    Promise.allSettled([
+      axios.get(`/api/videos/${videoId}`),
+      axios.get(`/api/v2/jobs/${videoId}`),
+      axios.get(`/api/v2/videos/${videoId}/publishing`),
+    ]).then(([videoResult, jobResult, pubResult]) => {
+      if (videoResult.status === "fulfilled") {
+        setVideo(videoResult.value.data);
+      } else {
+        setError("Video metadata could not be loaded.");
       }
-    } catch (error) {
-      if (isMounted.current) {
-        setError('Failed to fetch video status');
-        setStatus('failed');
-        setLoading(false);
-        console.error('Error fetching video status:', error);
-
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
-        }
-      }
-    }
+      if (jobResult.status === "fulfilled") setJob(jobResult.value.data.job);
+      if (pubResult.status === "fulfilled") setPubStatus(pubResult.value.data);
+      setLoading(false);
+    });
   };
 
   useEffect(() => {
-    checkVideoStatus();
-
-    intervalRef.current = setInterval(() => {
-      checkVideoStatus();
-    }, 5000);
-
-    return () => {
-      isMounted.current = false;
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
+    fetchDetails();
   }, [videoId]);
 
-  const handleBack = () => {
-    navigate('/');
+  const copy = (path: string, label: string) => {
+    navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
+      setFeedback(`${label} copied to clipboard.`);
+      setTimeout(() => setFeedback(null), 2200);
+    });
   };
 
-  const renderContent = () => {
-    if (loading) {
-      return (
-        <Box display="flex" justifyContent="center" alignItems="center" minHeight="30vh">
-          <CircularProgress />
-        </Box>
-      );
+  const deleteVideo = async () => {
+    if (!videoId) return;
+    setConfirmDelete(false);
+    try {
+      await axios.delete(`/api/short-video/${videoId}`);
+      navigate("/videos");
+    } catch {
+      setError("Failed to delete video.");
     }
+  };
 
-    if (error) {
-      return <Alert severity="error">{error}</Alert>;
-    }
+  if (loading) return <LoadingState label="Loading video details..." />;
 
-    if (status === 'processing') {
-      return (
-        <Box textAlign="center" py={4}>
-          <CircularProgress size={60} sx={{ mb: 2 }} />
-          <Typography variant="h6">Your video is being created...</Typography>
-          <Typography variant="body1" color="text.secondary">
-            This may take a few minutes. Please wait.
-          </Typography>
-        </Box>
-      );
-    }
+  const title =
+    video?.templateName ||
+    video?.templateId ||
+    (video?.creationMode === "prompt" ? "AI Prompt Video" : video?.filename) ||
+    "Video details";
 
-    if (status === 'ready') {
-      const outputName = metadata?.downloadFilename || `${videoId}.mp4`;
-      const containerPath = metadata?.containerPath;
-      const hostPath = metadata?.hostPathHint && outputName ? `${metadata.hostPathHint}/${outputName}` : undefined;
-      const downloadHref = metadata?.downloadUrl || `/api/videos/${videoId}/download`;
-      const previewHref = metadata?.previewUrl || `/api/short-video/${videoId}`;
+  const previewUrl = video?.previewUrl || `/api/short-video/${videoId}`;
+  const downloadUrl = video?.downloadUrl || `/api/videos/${videoId}/download`;
+  const cost = video?.costEstimate;
 
-      return (
-        <Box>
-          <Box mb={3} textAlign="center">
-            <Typography variant="h6" color="success.main" gutterBottom>
-              Your video is ready!
-            </Typography>
-            {metadata && (
-              <Typography variant="body2" color="text.secondary">
-                {metadata.sizeBytes ? `${(metadata.sizeBytes / (1024 * 1024)).toFixed(2)} MB` : ''}
-                {metadata.durationSeconds ? ` • ${Math.round(metadata.durationSeconds)}s` : ''}
-                {metadata.createdAt ? ` • ${new Date(metadata.createdAt).toLocaleString()}` : ''}
-              </Typography>
-            )}
-          </Box>
-
-          <Box sx={{
-            position: 'relative',
-            paddingTop: '56.25%',
-            mb: 3,
-            backgroundColor: '#000'
-          }}>
-            <video
-              controls
-              autoPlay
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-              }}
-              src={previewHref}
-            />
-          </Box>
-
-          <Box textAlign="center" display="flex" justifyContent="center" gap={2} flexWrap="wrap" mb={3}>
+  return (
+    <>
+      <PageHeader
+        title={title}
+        eyebrow={video?.creationMode === "prompt" ? "Prompt Studio" : "Template Production"}
+        description={
+          video?.brandName
+            ? `Brand: ${video.brandName}`
+            : "Generated MP4 details and delivery links."
+        }
+        actions={
+          <>
+            <Button onClick={() => navigate("/videos")}>Back to Videos</Button>
+            {job && <Button onClick={() => navigate(`/jobs/${job.id}`)}>View Job</Button>}
             <Button
-              component="a"
-              href={downloadHref}
               variant="contained"
               color="primary"
+              startIcon={<SendIcon />}
+              onClick={() => setReviewModalOpen(true)}
+            >
+              Publish / Schedule
+            </Button>
+            <Button
+              component="a"
+              href={downloadUrl}
+              variant="outlined"
               startIcon={<DownloadIcon />}
-              sx={{ textDecoration: 'none' }}
             >
               Download MP4
             </Button>
             <Button
-              component="a"
-              href={previewHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              variant="outlined"
-              color="primary"
-              startIcon={<OpenInNewIcon />}
-              sx={{ textDecoration: 'none' }}
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={() => setConfirmDelete(true)}
             >
-              Preview Link
+              Delete
             </Button>
-            <Tooltip title="Copy preview link">
-              <IconButton
-                color="secondary"
-                onClick={() => {
-                  const fullUrl = `${window.location.origin}${previewHref}`;
-                  navigator.clipboard.writeText(fullUrl).then(() => {
-                    setCopyFeedback('Preview link copied!');
-                    setTimeout(() => setCopyFeedback(null), 2000);
-                  }).catch(() => {
-                    setCopyFeedback(fullUrl);
-                    setTimeout(() => setCopyFeedback(null), 4000);
-                  });
+          </>
+        }
+      />
+
+      {feedback && <Alert severity="info" sx={{ mb: 2 }}>{feedback}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      {video && (
+        <Grid container spacing={2}>
+          <Grid item xs={12} lg={8}>
+            <SectionCard title="Video Preview">
+              <video
+                controls
+                src={previewUrl}
+                style={{
+                  width: "100%",
+                  aspectRatio: video.aspectRatio === "16:9" ? "16 / 9" : "9 / 16",
+                  maxHeight: "75vh",
+                  objectFit: "contain",
+                  background: "#0f172a",
+                  borderRadius: 8,
                 }}
-              >
-                <ContentCopyIcon />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Copy download link">
-              <IconButton
-                color="secondary"
-                onClick={() => {
-                  const fullUrl = `${window.location.origin}${downloadHref}`;
-                  navigator.clipboard.writeText(fullUrl).then(() => {
-                    setCopyFeedback('Download link copied!');
-                    setTimeout(() => setCopyFeedback(null), 2000);
-                  }).catch(() => {
-                    setCopyFeedback(fullUrl);
-                    setTimeout(() => setCopyFeedback(null), 4000);
-                  });
-                }}
-              >
-                <ContentCopyIcon />
-              </IconButton>
-            </Tooltip>
-            {containerPath && (
-              <Tooltip title="Copy container path (/app/data/videos)">
-                <IconButton
-                  color="secondary"
-                  onClick={() => {
-                    navigator.clipboard.writeText(containerPath).then(() => {
-                      setCopyFeedback('Container path copied');
-                      setTimeout(() => setCopyFeedback(null), 2000);
-                    }).catch(() => {
-                      setCopyFeedback(containerPath);
-                      setTimeout(() => setCopyFeedback(null), 4000);
-                    });
-                  }}
+              />
+              <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 2 }}>
+                <Button
+                  startIcon={<ContentCopyIcon />}
+                  onClick={() => copy(previewUrl, "Preview link")}
                 >
-                  <ContentCopyIcon />
-                </IconButton>
-              </Tooltip>
-            )}
-            {hostPath && (
-              <Tooltip title="Copy Windows host path (cannot auto-open from browser)">
-                <IconButton
-                  color="secondary"
-                  onClick={() => {
-                    navigator.clipboard.writeText(hostPath).then(() => {
-                      setCopyFeedback('Host path copied');
-                      setTimeout(() => setCopyFeedback(null), 2000);
-                    }).catch(() => {
-                      setCopyFeedback(hostPath);
-                      setTimeout(() => setCopyFeedback(null), 4000);
-                    });
-                  }}
+                  Copy Preview Link
+                </Button>
+                <Button
+                  startIcon={<ContentCopyIcon />}
+                  onClick={() => copy(downloadUrl, "Download link")}
                 >
-                  <ContentCopyIcon />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Box>
-          {copyFeedback && (
-            <Box textAlign="center" mt={1}>
-              <Typography variant="caption" color="text.secondary">
-                {copyFeedback}
-              </Typography>
-            </Box>
-          )}
+                  Copy Download Link
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<SendIcon />}
+                  onClick={() => setReviewModalOpen(true)}
+                  sx={{ ml: "auto" }}
+                >
+                  Publish / Distribute
+                </Button>
+              </Stack>
+            </SectionCard>
 
-          {metadata && (
-            <Stack spacing={2} mt={2}>
-              <Paper sx={{ p: 2 }}>
-                <Typography variant="subtitle2" gutterBottom>
-                  Output & Paths
-                </Typography>
-                <Grid container spacing={2}>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body2" color="text.secondary">Video ID</Typography>
-                    <Typography variant="body1">{videoId}</Typography>
-                  </Grid>
-                  <Grid item xs={12} sm={6}>
-                    <Typography variant="body2" color="text.secondary">Filename</Typography>
-                    <Typography variant="body1">{outputName}</Typography>
-                  </Grid>
-                  {containerPath && (
-                    <Grid item xs={12}>
-                      <Typography variant="body2" color="text.secondary">Container path (/app/data/videos)</Typography>
-                      <Typography variant="body1" sx={{ wordBreak: 'break-all' }}>{containerPath}</Typography>
-                    </Grid>
-                  )}
-                  {hostPath && (
-                    <Grid item xs={12}>
-                      <Typography variant="body2" color="text.secondary">Windows host path (copy/paste manually)</Typography>
-                      <Typography variant="body1" sx={{ wordBreak: 'break-all' }}>{hostPath}</Typography>
-                    </Grid>
-                  )}
-                  <Grid item xs={12}>
-                    <Typography variant="body2" color="text.secondary">Links</Typography>
-                    <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
-                      <Chip label="Preview" component="a" href={previewHref} clickable size="small" />
-                      <Chip label="Download" component="a" href={downloadHref} clickable size="small" />
-                    </Stack>
-                  </Grid>
-                </Grid>
-              </Paper>
-
-              <Paper sx={{ p: 2 }}>
-                <Typography variant="subtitle2" gutterBottom>
-                  Render Metadata
-                </Typography>
-                <Grid container spacing={2}>
-                  {metadata.templateId && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Template</Typography>
-                      <Typography variant="body1">{metadata.templateName || metadata.templateId}</Typography>
-                    </Grid>
-                  )}
-                  {metadata.brandName && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Brand</Typography>
-                      <Typography variant="body1">{metadata.brandName}</Typography>
-                    </Grid>
-                  )}
-                  {metadata.captionStyle && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Caption Style</Typography>
-                      <Typography variant="body1" sx={{ textTransform: 'capitalize' }}>{metadata.captionStyle}</Typography>
-                    </Grid>
-                  )}
-                  {metadata.watermarkText && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Watermark</Typography>
-                      <Typography variant="body1">{metadata.watermarkText}</Typography>
-                    </Grid>
-                  )}
-                  {metadata.durationSeconds && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Duration</Typography>
-                      <Typography variant="body1">{Math.round(metadata.durationSeconds)}s</Typography>
-                    </Grid>
-                  )}
-                  {metadata.sizeBytes && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Size</Typography>
-                      <Typography variant="body1">{(metadata.sizeBytes / (1024 * 1024)).toFixed(2)} MB</Typography>
-                    </Grid>
-                  )}
-                  {metadata.createdAt && (
-                    <Grid item xs={12} sm={6}>
-                      <Typography variant="body2" color="text.secondary">Created</Typography>
-                      <Typography variant="body1">{new Date(metadata.createdAt).toLocaleString()}</Typography>
-                    </Grid>
-                  )}
-                </Grid>
-              </Paper>
-
-              {metadata.pexelsTerms && metadata.pexelsTerms.length > 0 && (
-                <Paper sx={{ p: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>Pexels Terms</Typography>
-                  <Typography variant="body2" color="text.secondary">{metadata.pexelsTerms.join(', ')}</Typography>
-                </Paper>
-              )}
-
-              {metadata.narrationLines && metadata.narrationLines.length > 0 && (
-                <Paper sx={{ p: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>Narration</Typography>
-                  {metadata.narrationLines.map((line, i) => (
-                    <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>• {line}</Typography>
-                  ))}
-                </Paper>
-              )}
-            </Stack>
-          )}
-        </Box>
-      );
-    }
-
-    if (status === 'failed') {
-      return (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          Video processing failed. Please try again with different settings.
-        </Alert>
-      );
-    }
-
-    return (
-      <Alert severity="info" sx={{ mb: 3 }}>
-        Unknown video status. Please try refreshing the page.
-      </Alert>
-    );
-  };
-
-  const capitalizeFirstLetter = (str: string) => {
-    if (!str || typeof str !== 'string') return 'Unknown';
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  };
-
-  return (
-    <Box maxWidth="md" mx="auto" py={4}>
-      <Box display="flex" alignItems="center" mb={3}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={handleBack}
-          sx={{ mr: 2 }}
-        >
-          Back to videos
-        </Button>
-        <Typography variant="h4" component="h1">
-          Video Details
-        </Typography>
-      </Box>
-
-      <Paper sx={{ p: 3 }}>
-        <Grid container spacing={2} mb={3}>
-          <Grid item xs={12} sm={6}>
-            <Typography variant="body2" color="text.secondary">
-              Video ID
-            </Typography>
-            <Typography variant="body1">
-              {videoId || 'Unknown'}
-            </Typography>
-          </Grid>
-          <Grid item xs={12} sm={6}>
-            <Typography variant="body2" color="text.secondary">
-              Status
-            </Typography>
-            <Typography
-              variant="body1"
-              color={
-                status === 'ready' ? 'success.main' :
-                  status === 'processing' ? 'info.main' :
-                    status === 'failed' ? 'error.main' : 'text.primary'
+            {/* Publishing & Distribution Section */}
+            <SectionCard
+              title="Social Publishing & Distribution"
+              description="Multi-platform distribution state, live URLs, and scheduling."
+              actions={
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <StatusBadge
+                    status={
+                      pubStatus?.status === "published"
+                        ? "ready"
+                        : pubStatus?.status === "partially_published"
+                          ? "ready"
+                          : pubStatus?.status === "publishing"
+                            ? "rendering"
+                            : pubStatus?.status === "scheduled"
+                              ? "queued"
+                              : pubStatus?.status === "failed"
+                                ? "failed"
+                                : "unknown"
+                    }
+                    label={
+                      pubStatus?.status === "published"
+                        ? "Published"
+                        : pubStatus?.status === "partially_published"
+                          ? "Partially Published"
+                          : pubStatus?.status === "publishing"
+                            ? "Publishing Now"
+                            : pubStatus?.status === "scheduled"
+                              ? "Scheduled"
+                              : pubStatus?.status === "failed"
+                                ? "Failed"
+                                : "Not Published"
+                    }
+                  />
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<SendIcon />}
+                    onClick={() => setReviewModalOpen(true)}
+                  >
+                    Publish / Schedule
+                  </Button>
+                </Stack>
               }
             >
-              {capitalizeFirstLetter(status)}
-            </Typography>
+              {pubStatus?.publications && pubStatus.publications.length > 0 ? (
+                <Stack spacing={1.5}>
+                  {pubStatus.publications.map((pub) => (
+                    <Card key={pub.id} variant="outlined" sx={{ p: 1.5 }}>
+                      <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap">
+                        <Stack direction="row" spacing={1.5} alignItems="center">
+                          {pub.platform === "youtube" && <YouTubeIcon sx={{ color: "#ff0000" }} />}
+                          {pub.platform === "tiktok" && <span style={{ fontWeight: 900 }}>TT</span>}
+                          {pub.platform === "instagram" && <InstagramIcon sx={{ color: "#e1306c" }} />}
+                          {pub.platform === "facebook" && <FacebookIcon sx={{ color: "#1877f2" }} />}
+                          {pub.platform === "telegram" && <TelegramIcon sx={{ color: "#229ed9" }} />}
+                          {pub.platform === "twitter" && <TwitterIcon sx={{ color: "#1da1f2" }} />}
+                          <Box>
+                            <Typography variant="body2" fontWeight={800} sx={{ textTransform: "capitalize" }}>
+                              {pub.platform}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {pub.publishedAt
+                                ? `Published: ${new Date(pub.publishedAt).toLocaleString()}`
+                                : pub.scheduledAt
+                                  ? `Scheduled for: ${new Date(pub.scheduledAt).toLocaleString()} (${pub.sourceTimezone})`
+                                  : `Status: ${pub.status}`}
+                            </Typography>
+                          </Box>
+                        </Stack>
+
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <StatusBadge status={pub.status} />
+                          {pub.providerUrl && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              component="a"
+                              href={pub.providerUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              startIcon={<OpenInNewIcon />}
+                            >
+                              View Post
+                            </Button>
+                          )}
+                          {pub.status === "failed" && (
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="warning"
+                              onClick={async () => {
+                                await axios.post(`/api/v2/publishing/publications/${pub.id}/retry`);
+                                fetchDetails();
+                              }}
+                            >
+                              Retry
+                            </Button>
+                          )}
+                        </Stack>
+                      </Stack>
+                    </Card>
+                  ))}
+                </Stack>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  This video has not been distributed to any social platforms yet. Click "Publish / Schedule" to distribute it to YouTube, TikTok, Instagram, Facebook, or Telegram.
+                </Typography>
+              )}
+            </SectionCard>
+
+            {/* Original Prompt */}
+            {video.originalPrompt && (
+              <SectionCard title="Creative Prompt">
+                <Typography variant="body1" sx={{ fontStyle: "italic", whiteSpace: "pre-wrap" }}>
+                  "{video.originalPrompt}"
+                </Typography>
+              </SectionCard>
+            )}
+
+            {/* Narration Lines */}
+            {video.narrationLines && video.narrationLines.length > 0 && (
+              <SectionCard title="Narration Script">
+                <Stack spacing={1}>
+                  {video.narrationLines.map((line, index) => (
+                    <Typography key={`${line}-${index}`}>
+                      <strong>Scene {index + 1}:</strong> {line}
+                    </Typography>
+                  ))}
+                </Stack>
+              </SectionCard>
+            )}
+          </Grid>
+
+          <Grid item xs={12} lg={4}>
+            <Stack spacing={2}>
+              {/* Metadata */}
+              <SectionCard title="Video Metadata" actions={<StatusBadge status={video.status} />}>
+                <Stack spacing={1.25}>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Mode</Typography>
+                    <Typography fontWeight={700}>
+                      {video.creationMode === "prompt" ? "Prompt Studio" : "Template"}
+                    </Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Language / Dialect</Typography>
+                    <Typography fontWeight={700}>
+                      {video.language?.toUpperCase() || "AUTO"}{" "}
+                      {video.dialect && video.dialect !== "none" ? `(${video.dialect})` : ""}
+                    </Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Quality & Resolution</Typography>
+                    <Typography fontWeight={700}>
+                      {video.quality || "Standard"} · {video.resolution || "1080p"}
+                    </Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Technical Score</Typography>
+                    <Chip
+                      size="small"
+                      color={
+                        (video.technicalScore ?? video.qualityScore ?? 100) >= 90
+                          ? "success"
+                          : (video.technicalScore ?? video.qualityScore ?? 100) >= 70
+                            ? "warning"
+                            : "error"
+                      }
+                      label={`${video.technicalScore ?? video.qualityScore ?? 100} / 100`}
+                    />
+                  </Stack>
+                  {video.mediaPlanScore !== undefined && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Media Plan Score</Typography>
+                      <Chip
+                        size="small"
+                        color={video.mediaPlanScore >= 90 ? "success" : "info"}
+                        label={`${video.mediaPlanScore} / 100`}
+                      />
+                    </Stack>
+                  )}
+                  {video.overallProductionScore !== undefined && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Overall Score</Typography>
+                      <Typography fontWeight={800} color="primary.main">
+                        {video.overallProductionScore} / 100
+                      </Typography>
+                    </Stack>
+                  )}
+                  <Divider />
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Final Duration</Typography>
+                    <Typography fontWeight={700}>{formatDuration(video.durationSeconds)}</Typography>
+                  </Stack>
+                  {video.requestedDurationSeconds && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Requested Duration</Typography>
+                      <Typography fontWeight={700}>{video.requestedDurationSeconds}s</Typography>
+                    </Stack>
+                  )}
+                  {video.durationVarianceSeconds !== undefined && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Duration Variance</Typography>
+                      <Typography
+                        fontWeight={700}
+                        color={video.durationVarianceSeconds <= 1.0 ? "success.main" : "warning.main"}
+                      >
+                        ±{video.durationVarianceSeconds}s
+                        {video.durationVariancePercent !== undefined
+                          ? ` (${video.durationVariancePercent}%)`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">File Size</Typography>
+                    <Typography fontWeight={700}>{formatFileSize(video.sizeBytes)}</Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Voice Provider</Typography>
+                    <Typography fontWeight={700}>{video.voiceProvider || "Kokoro TTS"}</Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Visual Provider</Typography>
+                    <Typography fontWeight={700}>
+                      {video.visualProvidersUsed?.join(", ") || "Pexels"}
+                    </Typography>
+                  </Stack>
+                  <Divider />
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography color="text.secondary">Estimated Cost</Typography>
+                    <Chip
+                      size="small"
+                      color={cost?.isFree || cost?.estimatedCost === 0 ? "success" : "warning"}
+                      label={
+                        cost?.isFree || cost?.estimatedCost === 0
+                          ? "Free ($0)"
+                          : `$${cost?.estimatedCost} USD`
+                      }
+                    />
+                  </Stack>
+                </Stack>
+              </SectionCard>
+
+              {/* Production Details */}
+              <SectionCard title="Production Details">
+                <Stack spacing={1.25}>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Caption Preset</Typography>
+                    <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                      {video.captionProfileUsed || video.captionStyle || "Bold"}
+                    </Typography>
+                  </Stack>
+                  {video.musicTrack && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Music Track</Typography>
+                      <Typography fontWeight={600} noWrap sx={{ maxWidth: "60%" }} title={video.musicTrack}>
+                        {video.musicTrack.replace(".mp3", "")} {video.musicMood ? `(${video.musicMood})` : ""}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {video.motionPresetsUsed && video.motionPresetsUsed.length > 0 && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Motion Presets</Typography>
+                      <Typography fontWeight={700}>
+                        {video.motionPresetsUsed.join(", ")}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {video.transitionPresetsUsed && video.transitionPresetsUsed.length > 0 && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Transitions</Typography>
+                      <Typography fontWeight={700}>
+                        {video.transitionPresetsUsed.join(", ")}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {video.mediaSegmentCount !== undefined && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Media Segments</Typography>
+                      <Typography fontWeight={700}>
+                        {video.mediaSegmentCount} clips
+                      </Typography>
+                    </Stack>
+                  )}
+                </Stack>
+              </SectionCard>
+
+              {/* Brand Kit */}
+              <SectionCard title="Brand Profile">
+                <Stack spacing={1}>
+                  <Typography>Brand Name: {video.brandName || "None"}</Typography>
+                  <Typography>Watermark: {video.watermarkText || "None"}</Typography>
+                  <Typography>Caption Style: {video.captionStyle || "Bold"}</Typography>
+                </Stack>
+              </SectionCard>
+
+              {/* Pexels terms */}
+              <SectionCard title="Stock Search Terms">
+                <Typography color={video.pexelsTerms?.length ? "text.primary" : "text.secondary"}>
+                  {video.pexelsTerms?.length
+                    ? video.pexelsTerms.join(", ")
+                    : "No stock search terms recorded."}
+                </Typography>
+              </SectionCard>
+
+              {/* Collapsible Production Spec */}
+              {video.productionSpec && (
+                <Accordion>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Typography fontWeight={800}>Production Spec JSON</Typography>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, background: "#0f172a", color: "#38bdf8", padding: 10, borderRadius: 6 }}>
+                      {JSON.stringify(video.productionSpec, null, 2)}
+                    </pre>
+                  </AccordionDetails>
+                </Accordion>
+              )}
+            </Stack>
           </Grid>
         </Grid>
+      )}
 
-        {renderContent()}
-      </Paper>
-    </Box>
+      {video && (
+        <ReviewPublishModal
+          open={reviewModalOpen}
+          video={video}
+          onClose={() => setReviewModalOpen(false)}
+          onSuccess={fetchDetails}
+        />
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete video?"
+        description="This will remove the generated MP4 file and its metadata sidecar. The V2 job record in PostgreSQL is preserved."
+        confirmLabel="Delete"
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={deleteVideo}
+      />
+    </>
   );
 };
 
-export default VideoDetails; 
+export default VideoDetails;

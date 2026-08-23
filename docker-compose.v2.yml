@@ -1,0 +1,169 @@
+services:
+  abud-shorts-postgres:
+    image: postgres:16-alpine
+    container_name: abud-shorts-postgres
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-abud_shorts}
+      POSTGRES_USER: ${POSTGRES_USER:-abud_shorts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-v2-postgres}
+    volumes:
+      - abud-shorts-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - postgres
+
+  abud-shorts-n8n:
+    image: n8nio/n8n:latest
+    container_name: abud-shorts-n8n
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      N8N_HOST: n8n
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me-v2-n8n-encryption-key-32}
+      N8N_USER_MANAGEMENT_DISABLED: "true"
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Africa/Cairo}
+    volumes:
+      - abud-shorts-n8n-data:/home/node/.n8n
+      - ./integrations/n8n:/workflows:ro
+    entrypoint: ["/bin/sh", "-c"]
+    # n8n 2.23 exposes workflow activation only through update:workflow.
+    # publish:workflow registers the production version, but did not reliably activate
+    # the imported webhook during first-run Golden Path verification without this step.
+    command: >
+      "n8n import:workflow --input=/workflows/abud-shorts-v2-control-plane-workflow.json || true;
+      n8n import:workflow --input=/workflows/abud-shorts-v2-publishing-workflow.json || true;
+      n8n update:workflow --id=abud-shorts-v2-control-plane --active=true || true;
+      n8n update:workflow --id=abud-shorts-v2-publishing --active=true || true;
+      n8n publish:workflow --id=abud-shorts-v2-control-plane || true;
+      n8n publish:workflow --id=abud-shorts-v2-publishing || true;
+      n8n start"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - n8n
+
+  abud-shorts-render-worker:
+    container_name: abud-shorts-render-worker
+    build:
+      context: .
+      dockerfile: v2.Dockerfile
+    image: abud-shorts-engine:v2
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      SERVICE_ROLE: render-worker
+      V2_ENABLED: "true"
+      PORT: 3125
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PEXELS_VALIDATION_TIMEOUT_MS: ${PEXELS_VALIDATION_TIMEOUT_MS:-12000}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      DATA_DIR_PATH: /app/data
+      DOCKER: "true"
+      DEV: "false"
+      WHISPER_MODEL: ${WHISPER_MODEL:-tiny.en}
+      KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
+      CONCURRENCY: ${CONCURRENCY:-1}
+      VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
+      WHISPER_VERBOSE: ${WHISPER_VERBOSE:-false}
+    volumes:
+      - C:/abud-shorts-engine/data-dev:/app/data
+    entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-tiny.en.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3125/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - render-worker
+
+  abud-shorts-app:
+    container_name: abud-shorts-app
+    image: abud-shorts-engine:v2
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    depends_on:
+      abud-shorts-postgres:
+        condition: service_healthy
+      abud-shorts-n8n:
+        condition: service_started
+      abud-shorts-render-worker:
+        condition: service_started
+    environment:
+      SERVICE_ROLE: app
+      V2_ENABLED: "true"
+      PORT: 3123
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      PEXELS_VALIDATION_TIMEOUT_MS: ${PEXELS_VALIDATION_TIMEOUT_MS:-12000}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      DATABASE_URL: postgres://${POSTGRES_USER:-abud_shorts}:${POSTGRES_PASSWORD:-change-me-v2-postgres}@postgres:5432/${POSTGRES_DB:-abud_shorts}
+      N8N_BASE_URL: http://n8n:5678
+      N8N_WEBHOOK_PATH: /webhook/abud-v2/jobs/start
+      RENDER_WORKER_BASE_URL: http://render-worker:3125
+      APP_INTERNAL_BASE_URL: http://app:3123
+      V2_PUBLIC_URL: http://localhost:3130
+      DATA_DIR_PATH: /app/data
+      DOCKER: "true"
+      DEV: "false"
+      WHISPER_MODEL: ${WHISPER_MODEL:-tiny.en}
+      KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
+      CONCURRENCY: ${CONCURRENCY:-1}
+      VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
+      WHISPER_VERBOSE: ${WHISPER_VERBOSE:-false}
+    ports:
+      - "3130:3123"
+    volumes:
+      - C:/abud-shorts-engine/data-dev:/app/data
+    entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-tiny.en.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3123/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - app
+
+volumes:
+  abud-shorts-postgres-data:
+  abud-shorts-n8n-data:
+
+networks:
+  abud-shorts-v2:
+    driver: bridge

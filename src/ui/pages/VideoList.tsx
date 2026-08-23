@@ -1,83 +1,54 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import {
-  Box,
-  Typography,
-  Paper,
-  Button,
-  CircularProgress,
   Alert,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemSecondaryAction,
-  IconButton,
-  Divider,
-  Tooltip,
-  Chip,
-  TextField,
+  Box,
+  Button,
   Checkbox,
-  FormControlLabel,
-  Stack
-} from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import DeleteIcon from '@mui/icons-material/Delete';
-import DownloadIcon from '@mui/icons-material/Download';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-
-interface VideoItem {
-  videoId: string;
-  filename: string;
-  status: string;
-  sizeBytes: number;
-  createdAt: string;
-  downloadUrl: string;
-  previewUrl: string;
-  templateId?: string;
-  templateName?: string;
-  brandName?: string;
-  watermarkText?: string;
-  captionStyle?: string;
-  durationSeconds?: number;
-  pexelsTerms?: string[];
-  narrationLines?: string[];
-  downloadFilename?: string;
-  containerPath?: string;
-  hostPathHint?: string;
-  error?: string;
-}
+  Grid,
+  Stack,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
+import GridViewIcon from "@mui/icons-material/GridView";
+import ListIcon from "@mui/icons-material/List";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import SendIcon from "@mui/icons-material/Send";
+import {
+  ActionMenu,
+  ConfirmDialog,
+  EmptyState,
+  LoadingState,
+  PageHeader,
+  SearchInput,
+  SectionCard,
+  StatusBadge,
+} from "../components/v2";
+import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal";
+import { BatchPublishModal } from "../components/publishing/BatchPublishModal";
+import type { VideoItem } from "./v2Types";
 
 function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-function formatDate(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 function formatDuration(seconds?: number): string {
-  if (!seconds || seconds <= 0) return '';
+  if (!seconds || seconds <= 0) return "Unknown";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 }
 
-function getStatusColor(status: string) {
-  switch (status) {
-    case 'ready': return 'success';
-    case 'processing': return 'info';
-    case 'failed': return 'error';
-    default: return 'default';
-  }
+function videoTitle(video: VideoItem) {
+  return video.templateName || video.templateId || video.downloadFilename || video.filename || `Video ${video.videoId.slice(0, 8)}`;
 }
 
 const VideoList: React.FC = () => {
@@ -85,20 +56,23 @@ const VideoList: React.FC = () => {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectAll, setSelectAll] = useState(false);
+  const [view, setView] = useState<"grid" | "list">("grid");
+  const [deleteTarget, setDeleteTarget] = useState<VideoItem | null>(null);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [reviewVideo, setReviewVideo] = useState<VideoItem | null>(null);
 
   const fetchVideos = async () => {
     try {
-      const response = await axios.get('/api/videos');
+      const response = await axios.get("/api/videos");
       setVideos(response.data.videos || []);
+      setError(null);
+    } catch {
+      setError("Failed to fetch videos.");
+    } finally {
       setLoading(false);
-    } catch (err) {
-      setError('Failed to fetch videos');
-      setLoading(false);
-      console.error('Error fetching videos:', err);
     }
   };
 
@@ -106,368 +80,210 @@ const VideoList: React.FC = () => {
     fetchVideos();
   }, []);
 
-  const filteredVideos = videos.filter((v) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      v.videoId.toLowerCase().includes(q) ||
-      (v.templateId && v.templateId.toLowerCase().includes(q)) ||
-      (v.templateName && v.templateName.toLowerCase().includes(q)) ||
-      (v.brandName && v.brandName.toLowerCase().includes(q)) ||
-      (v.watermarkText && v.watermarkText.toLowerCase().includes(q))
-    );
-  });
+  const filteredVideos = useMemo(() => {
+    const query = searchQuery.toLowerCase();
+    return videos.filter((video) => {
+      const haystack = `${videoTitle(video)} ${video.brandName} ${video.watermarkText} ${video.status}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [videos, searchQuery]);
 
-  const handleToggleSelect = (id: string) => {
+  const toggleSelected = (id: string) => {
     const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
-    setSelectAll(next.size === filteredVideos.length && filteredVideos.length > 0);
   };
 
-  const handleToggleSelectAll = () => {
-    if (selectAll) {
-      setSelected(new Set());
-      setSelectAll(false);
-    } else {
-      setSelected(new Set(filteredVideos.map((v) => v.videoId)));
-      setSelectAll(true);
-    }
+  const copyLinks = (type: "preview" | "download") => {
+    const lines = videos
+      .filter((video) => selected.has(video.videoId))
+      .map((video) => `${window.location.origin}${type === "preview" ? video.previewUrl : video.downloadUrl}`);
+    navigator.clipboard.writeText(lines.join("\n")).then(() => setFeedback(`Copied ${lines.length} ${type} link(s).`));
   };
 
-  const handleCopySelectedLinks = (type: 'preview' | 'download') => {
-    const selectedVideos = videos.filter((v) => selected.has(v.videoId));
-    if (selectedVideos.length === 0) return;
-    const lines = selectedVideos.map((v) => {
-      const url = type === 'preview' ? v.previewUrl : v.downloadUrl;
-      return `${window.location.origin}${url}`;
-    });
-    navigator.clipboard.writeText(lines.join('\n')).then(() => {
-      setCopyFeedback(`Copied ${selectedVideos.length} ${type} link(s)`);
-      setTimeout(() => setCopyFeedback(null), 2000);
-    }).catch(() => {
-      setCopyFeedback(lines.join('\n'));
-      setTimeout(() => setCopyFeedback(null), 4000);
-    });
-  };
-
-  const handleCreateNew = () => {
-    navigate('/create');
-  };
-
-  const handleVideoClick = (id: string) => {
-    navigate(`/video/${id}`);
-  };
-
-  const handleDeleteVideo = async (id: string, event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-
+  const deleteVideo = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleteTarget(null);
     try {
-      await axios.delete(`/api/short-video/${id}`);
-      fetchVideos();
-    } catch (err) {
-      setError('Failed to delete video');
-      console.error('Error deleting video:', err);
+      await axios.delete(`/api/short-video/${target.videoId}`);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(target.videoId);
+        return next;
+      });
+      await fetchVideos();
+    } catch {
+      setError("Failed to delete video.");
     }
   };
 
-  const handleCopyLink = (url: string, event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    const fullUrl = `${window.location.origin}${url}`;
-    navigator.clipboard.writeText(fullUrl).then(() => {
-      setCopyFeedback('Link copied!');
-      setTimeout(() => setCopyFeedback(null), 2000);
-    }).catch(() => {
-      setCopyFeedback(fullUrl);
-      setTimeout(() => setCopyFeedback(null), 4000);
-    });
-  };
-
-  const handleCopyText = (text: string, message: string, event?: React.MouseEvent) => {
-    if (event) event.stopPropagation();
-    navigator.clipboard.writeText(text).then(() => {
-      setCopyFeedback(message);
-      setTimeout(() => setCopyFeedback(null), 2000);
-    }).catch(() => {
-      setCopyFeedback(text);
-      setTimeout(() => setCopyFeedback(null), 4000);
-    });
-  };
+  if (loading) return <LoadingState label="Loading videos..." />;
 
   const selectedCount = selected.size;
 
-  const capitalizeFirstLetter = (str: string) => {
-    if (!str || typeof str !== 'string') return 'Unknown';
-    return str.charAt(0).toUpperCase() + str.slice(1);
-  };
-
-  if (loading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" height="80vh">
-        <CircularProgress />
-      </Box>
-    );
-  }
-
   return (
-    <Box maxWidth="md" mx="auto" py={4}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
-        <Typography variant="h4" component="h1">
-          Your Videos
-        </Typography>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<AddIcon />}
-          onClick={handleCreateNew}
-        >
-          Create New Video
-        </Button>
-      </Box>
-
-      {copyFeedback && (
-        <Alert severity="info" sx={{ mb: 3 }}>{copyFeedback}</Alert>
-      )}
-
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>
-      )}
+    <>
+      <PageHeader
+        title="Videos"
+        description="Preview, download, search, distribute, and manage generated MP4s."
+        actions={<Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate("/create")}>Create Video</Button>}
+      />
+      {feedback && <Alert severity="info" sx={{ mb: 2 }} onClose={() => setFeedback(null)}>{feedback}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
       {videos.length === 0 ? (
-        <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <Typography variant="body1" color="text.secondary" gutterBottom>
-            You haven't created any videos yet.
-          </Typography>
-          <Button
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={handleCreateNew}
-            sx={{ mt: 2 }}
-          >
-            Create Your First Video
-          </Button>
-        </Paper>
+        <EmptyState title="No generated videos" description="Create the first V2 video to populate the library." action={<Button onClick={() => navigate("/create")}>Create Video</Button>} />
       ) : (
-        <>
-          <Box mb={2}>
-            <TextField
-              fullWidth
-              variant="outlined"
-              size="small"
-              placeholder="Search by video ID, template, or brand..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setSelected(new Set());
-                setSelectAll(false);
-              }}
-            />
-          </Box>
+        <Stack spacing={2}>
+          <SectionCard>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
+              <SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="Search videos by title, brand, template, or status" />
+              <ToggleButtonGroup exclusive size="small" value={view} onChange={(_, next) => next && setView(next)}>
+                <ToggleButton value="grid" aria-label="Grid view"><GridViewIcon /></ToggleButton>
+                <ToggleButton value="list" aria-label="List view"><ListIcon /></ToggleButton>
+              </ToggleButtonGroup>
+            </Stack>
+          </SectionCard>
 
           {selectedCount > 0 && (
-            <Paper sx={{ p: 2, mb: 2, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Typography variant="body2" sx={{ mr: 1 }}>
-                {selectedCount} selected
-              </Typography>
-              <Button size="small" variant="outlined" onClick={() => handleCopySelectedLinks('preview')}>
-                Copy Preview Links
-              </Button>
-              <Button size="small" variant="outlined" onClick={() => handleCopySelectedLinks('download')}>
-                Copy Download Links
-              </Button>
-              <Button size="small" color="error" variant="outlined" onClick={() => setSelected(new Set())}>
-                Clear
-              </Button>
-            </Paper>
+            <SectionCard>
+              <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                <Typography variant="body2" fontWeight={800}>{selectedCount} selected</Typography>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<SendIcon />}
+                  onClick={() => setBatchModalOpen(true)}
+                >
+                  Distribute {selectedCount} Videos
+                </Button>
+                <Button size="small" onClick={() => copyLinks("preview")}>Copy Preview Links</Button>
+                <Button size="small" onClick={() => copyLinks("download")}>Copy Download Links</Button>
+                <Button size="small" onClick={() => setSelected(new Set())}>Clear</Button>
+              </Stack>
+            </SectionCard>
           )}
 
-          <Paper>
-            <Box sx={{ px: 2, py: 1, display: 'flex', alignItems: 'center', gap: 1, borderBottom: '1px solid rgba(0,0,0,0.12)' }}>
-              <Checkbox
-                checked={selectAll}
-                onChange={handleToggleSelectAll}
-                size="small"
-              />
-              <Typography variant="caption" color="text.secondary">
-                Select all
-              </Typography>
-            </Box>
-            <List>
-              {filteredVideos.map((video, index) => {
-                const videoId = video?.videoId || '';
-                const videoStatus = video?.status || 'unknown';
-                const isReady = videoStatus === 'ready';
-                const isSelected = selected.has(videoId);
-                const downloadName = video.downloadFilename || video.filename;
-                const hostPath = video.hostPathHint ? `${video.hostPathHint}/${downloadName}` : undefined;
-                const containerPath = video.containerPath;
-
-                return (
-                  <div key={videoId}>
-                    {index > 0 && <Divider />}
-                    <ListItem
-                      button
-                      onClick={() => handleVideoClick(videoId)}
+          <Grid container spacing={2}>
+            {filteredVideos.map((video) => {
+              const isReady = video.status === "ready";
+              const checked = selected.has(video.videoId);
+              const card = (
+                <SectionCard>
+                  <Stack spacing={1.25}>
+                    <Box
                       sx={{
-                        py: 2,
-                        '&:hover': {
-                          backgroundColor: 'rgba(0, 0, 0, 0.04)'
-                        }
+                        aspectRatio: video.aspectRatio === "16:9" ? "16 / 9" : "9 / 16",
+                        bgcolor: "#0f172a",
+                        borderRadius: 1,
+                        overflow: "hidden",
+                        maxHeight: view === "list" ? 180 : 360,
+                        position: "relative",
                       }}
                     >
-                      <Box sx={{ mr: 1, display: 'flex', alignItems: 'center' }} onClick={(e) => { e.stopPropagation(); handleToggleSelect(videoId); }}>
-                        <Checkbox checked={isSelected} size="small" />
-                      </Box>
-                      <ListItemText
-                        primary={
-                          <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
-                            <Typography variant="body1" component="span" fontWeight={600}>
-                              {video.templateName || video.templateId
-                                ? (video.templateName || video.templateId)
-                                : `Video ${videoId.substring(0, 12)}...`}
-                            </Typography>
-                            {video.brandName && (
-                              <Chip label={video.brandName} size="small" variant="outlined" />
-                            )}
-                            <Chip
-                              label={capitalizeFirstLetter(videoStatus)}
-                              size="small"
-                              color={getStatusColor(videoStatus) as any}
-                            />
-                          </Stack>
-                        }
-                        secondary={
-                          <Box>
-                            <Typography component="span" variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                              ID: {videoId}
-                            </Typography>
-                            <Typography component="span" variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                              {downloadName}
-                            </Typography>
-                            {isReady && (
-                              <Typography component="span" variant="caption" color="text.secondary">
-                                {formatFileSize(video.sizeBytes)}
-                                {video.durationSeconds ? ` • ${formatDuration(video.durationSeconds)}` : ''}
-                                {' • '}
-                                {formatDate(video.createdAt)}
-                              </Typography>
-                            )}
-                            {hostPath && (
-                              <Typography component="span" variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                                Host path: {hostPath}
-                              </Typography>
-                            )}
-                            {video.error && (
-                              <Typography component="span" variant="caption" color="error.main" sx={{ display: 'block' }}>
-                                {video.error}
-                              </Typography>
-                            )}
-                          </Box>
-                        }
+                      {isReady ? (
+                        <img
+                          src={video.thumbnailUrl || `/api/videos/${video.videoId}/thumbnail`}
+                          alt={videoTitle(video)}
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = "none";
+                          }}
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                            display: "block",
+                          }}
+                        />
+                      ) : (
+                        <Stack alignItems="center" justifyContent="center" sx={{ height: "100%", color: "white" }}>
+                          <Typography>{video.status}</Typography>
+                        </Stack>
+                      )}
+                    </Box>
+                    <Stack direction="row" justifyContent="space-between" spacing={1}>
+                      <Stack minWidth={0}>
+                        <Typography variant="h6" noWrap>{videoTitle(video)}</Typography>
+                        <Typography variant="body2" color="text.secondary" noWrap>
+                          {video.brandName || "No brand"} · {formatDuration(video.durationSeconds)}
+                        </Typography>
+                      </Stack>
+                      <Checkbox checked={checked} onChange={() => toggleSelected(video.videoId)} inputProps={{ "aria-label": `Select ${videoTitle(video)}` }} />
+                    </Stack>
+                    <Stack direction="row" spacing={1} flexWrap="wrap">
+                      <StatusBadge status={video.status} />
+                      {video.qualityScore !== undefined && (
+                        <StatusBadge
+                          status="success"
+                          label={`Quality: ${video.qualityScore}/100`}
+                        />
+                      )}
+                      {video.aspectRatio && (
+                        <StatusBadge status="default" label={video.aspectRatio} />
+                      )}
+                      <StatusBadge status="default" label={formatFileSize(video.sizeBytes)} />
+                      <StatusBadge status="default" label={new Date(video.createdAt).toLocaleDateString()} />
+                    </Stack>
+                    {video.error && <Alert severity="error">{video.error}</Alert>}
+                    <Stack direction="row" spacing={1} justifyContent="space-between">
+                      <Stack direction="row" spacing={1}>
+                        <Button size="small" startIcon={<OpenInNewIcon />} disabled={!isReady} onClick={() => navigate(`/video/${video.videoId}`)}>Preview</Button>
+                        <Button size="small" startIcon={<SendIcon />} disabled={!isReady} onClick={() => setReviewVideo(video)}>Publish</Button>
+                        <Button size="small" startIcon={<DownloadIcon />} component="a" href={video.downloadUrl} disabled={!isReady}>Download</Button>
+                      </Stack>
+                      <ActionMenu
+                        items={[
+                          { label: "Publish / Schedule", disabled: !isReady, onClick: () => setReviewVideo(video) },
+                          { label: "Copy preview link", disabled: !isReady, onClick: () => navigator.clipboard.writeText(`${window.location.origin}${video.previewUrl}`) },
+                          { label: "Copy download link", disabled: !isReady, onClick: () => navigator.clipboard.writeText(`${window.location.origin}${video.downloadUrl}`) },
+                          { label: "Delete", onClick: () => setDeleteTarget(video) },
+                        ]}
                       />
-                      <ListItemSecondaryAction>
-                        {isReady && (
-                          <>
-                            <Stack direction="row" spacing={1} alignItems="center">
-                              <Tooltip title="Preview video">
-                                <Button
-                                  size="small"
-                                  variant="outlined"
-                                  startIcon={<OpenInNewIcon />}
-                                  onClick={() => handleVideoClick(videoId)}
-                                >
-                                  Preview
-                                </Button>
-                              </Tooltip>
-                              <Tooltip title="Download MP4">
-                                <Button
-                                  size="small"
-                                  variant="contained"
-                                  startIcon={<DownloadIcon />}
-                                  href={video.downloadUrl}
-                                  component="a"
-                                >
-                                  Download
-                                </Button>
-                              </Tooltip>
-                              <Tooltip title="Copy preview link">
-                                <IconButton
-                                  edge="end"
-                                  aria-label="copy preview"
-                                  onClick={(e) => handleCopyLink(video.previewUrl, e)}
-                                  color="secondary"
-                                >
-                                  <ContentCopyIcon />
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Copy download link">
-                                <IconButton
-                                  edge="end"
-                                  aria-label="copy download"
-                                  onClick={(e) => handleCopyLink(video.downloadUrl, e)}
-                                  color="secondary"
-                                >
-                                  <ContentCopyIcon />
-                                </IconButton>
-                              </Tooltip>
-                              {hostPath && (
-                                <Tooltip title="Copy host file path">
-                                  <IconButton
-                                    edge="end"
-                                    aria-label="copy path"
-                                    onClick={(e) => handleCopyText(hostPath, 'Host path copied', e)}
-                                    color="secondary"
-                                  >
-                                    <ContentCopyIcon />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                              {containerPath && (
-                                <Tooltip title="Copy container path">
-                                  <IconButton
-                                    edge="end"
-                                    aria-label="copy container path"
-                                    onClick={(e) => handleCopyText(containerPath, 'Container path copied', e)}
-                                    color="secondary"
-                                  >
-                                    <ContentCopyIcon />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                              <Tooltip title="Copy metadata JSON">
-                                <IconButton
-                                  edge="end"
-                                  aria-label="copy metadata"
-                                  onClick={(e) => handleCopyText(JSON.stringify(video, null, 2), 'Metadata copied', e)}
-                                  color="secondary"
-                                >
-                                  <ContentCopyIcon />
-                                </IconButton>
-                              </Tooltip>
-                            </Stack>
-                          </>
-                        )}
-                        <IconButton
-                          edge="end"
-                          aria-label="delete"
-                          onClick={(e) => handleDeleteVideo(videoId, e)}
-                          color="error"
-                          sx={{ ml: 0.5 }}
-                        >
-                          <DeleteIcon />
-                        </IconButton>
-                      </ListItemSecondaryAction>
-                    </ListItem>
-                  </div>
-                );
-              })}
-            </List>
-          </Paper>
-        </>
+                    </Stack>
+                  </Stack>
+                </SectionCard>
+              );
+              return (
+                <Grid item xs={12} md={view === "list" ? 12 : 6} xl={view === "list" ? 12 : 4} key={video.videoId}>
+                  {card}
+                </Grid>
+              );
+            })}
+          </Grid>
+          {filteredVideos.length === 0 && <EmptyState title="No videos match your search" />}
+        </Stack>
       )}
-    </Box>
+
+      {reviewVideo && (
+        <ReviewPublishModal
+          open={Boolean(reviewVideo)}
+          video={reviewVideo}
+          onClose={() => setReviewVideo(null)}
+          onSuccess={fetchVideos}
+        />
+      )}
+
+      <BatchPublishModal
+        open={batchModalOpen}
+        videoIds={Array.from(selected)}
+        onClose={() => setBatchModalOpen(false)}
+        onSuccess={() => {
+          setSelected(new Set());
+          fetchVideos();
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="Delete video?"
+        description="This removes the generated MP4 and its metadata sidecar from the video library. Existing data outside this video is untouched."
+        confirmLabel="Delete"
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={deleteVideo}
+      />
+    </>
   );
 };
 
-export default VideoList; 
+export default VideoList;

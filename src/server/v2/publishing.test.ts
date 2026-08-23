@@ -1,0 +1,888 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import nock from "nock";
+import fs from "fs";
+import path from "path";
+import supertest from "supertest";
+import express from "express";
+import { V2Database } from "./db";
+import { Config } from "../../../config";
+import { JobService } from "./jobs";
+import { TestPublishingProvider } from "./publishing/providers/testPublishingProvider";
+import { createV2InternalRouter, createV2PublicRouter } from "./routes";
+import { PublishingService } from "./publishing/publishingService";
+import { PublishingScheduler } from "./publishing/scheduler";
+import { PublishingProviderRegistry, publishingRegistry } from "./publishing/registry";
+import { UploadPostProvider } from "./publishing/providers/uploadPostProvider";
+import { TelegramPublishingProvider } from "./publishing/providers/telegramProvider";
+import { aiMetadataGenerator } from "./publishing/aiMetadataGenerator";
+import { DEFAULT_PLATFORM_CAPABILITIES } from "./publishing/publishingProvider";
+
+class FakePublishingDb {
+  public enabled = true;
+  public accounts = new Map<string, any>();
+  public publications = new Map<string, any>();
+  public scheduled = new Map<string, any>();
+  public attempts: any[] = [];
+  public events: any[] = [];
+  public settings = new Map<string, any>();
+  public jobs = new Map<string, any>();
+
+  async query(text: string, values: any[] = []): Promise<any[]> {
+    // 1. Social Accounts
+    if (text.includes("INSERT INTO social_accounts")) {
+      const row = {
+        id: values[0],
+        platform: values[1],
+        account_name: values[2],
+        account_id: values[3],
+        provider: values[4],
+        connection_status: values[5],
+        capabilities: typeof values[6] === "string" ? JSON.parse(values[6]) : values[6] || {},
+        encrypted_credentials: values[7],
+        masked_token: values[8],
+        last_checked_at: new Date(),
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
+      this.accounts.set(row.id, row);
+      return [row];
+    }
+
+    if (text.includes("FROM social_accounts WHERE id =") || (text.includes("FROM social_accounts") && text.includes("WHERE id = $1"))) {
+      const row = this.accounts.get(values[0]);
+      return row ? [row] : [];
+    }
+
+    if (text.includes("SELECT id, platform, account_name, account_id, provider, connection_status, capabilities, masked_token, last_checked_at, created_at, updated_at FROM social_accounts") || text.includes("FROM social_accounts")) {
+      if (text.includes("WHERE id =")) {
+        const row = this.accounts.get(values[0]);
+        return row ? [row] : [];
+      }
+      return Array.from(this.accounts.values());
+    }
+
+    if (text.includes("SELECT id FROM social_accounts WHERE platform =")) {
+      for (const row of this.accounts.values()) {
+        if (row.platform === values[0] && row.connection_status === "connected") {
+          return [{ id: row.id }];
+        }
+      }
+      return [];
+    }
+
+    if (text.includes("UPDATE social_accounts")) {
+      const id = values[values.length - 1];
+      const row = this.accounts.get(id);
+      if (!row) return [];
+      if (text.includes("connection_status = $1") || text.includes("connection_status = $2")) {
+        row.connection_status = values[0] === id ? values[1] : values[0];
+      }
+      row.last_checked_at = new Date();
+      row.updated_at = new Date();
+      return [row];
+    }
+
+    if (text.includes("DELETE FROM social_accounts")) {
+      const row = this.accounts.get(values[0]);
+      if (row) this.accounts.delete(values[0]);
+      return row ? [row] : [];
+    }
+
+    // 2. Publications - check idempotency key first
+    if (text.includes("idempotency_key = $1")) {
+      for (const row of this.publications.values()) {
+        if (row.idempotency_key === values[0]) {
+          const acc = row.account_id ? this.accounts.get(row.account_id) : null;
+          return [{ ...row, account_name: acc?.account_name || null }];
+        }
+      }
+      return [];
+    }
+
+    if (text.includes("INSERT INTO publications")) {
+      const row = {
+        id: values[0],
+        video_id: values[1],
+        platform: values[2],
+        account_id: values[3],
+        status: values[4],
+        title: values[5],
+        caption: values[6],
+        description: values[7],
+        hashtags: typeof values[8] === "string" ? JSON.parse(values[8]) : values[8] || [],
+        metadata: typeof values[9] === "string" ? JSON.parse(values[9]) : values[9] || {},
+        scheduled_at: values[10] ? new Date(values[10]) : null,
+        source_timezone: values[11] || "UTC",
+        provider: values[12],
+        idempotency_key: values[13],
+        attempt_count: 0,
+        published_at: null,
+        provider_post_id: null,
+        provider_url: null,
+        last_error: null,
+        technical_error: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
+      this.publications.set(row.id, row);
+      return [row];
+    }
+
+    if (text.includes("FROM publications")) {
+      if (text.includes("WHERE p.video_id = $1") || text.includes("WHERE video_id = $1") || text.includes("video_id = $")) {
+        const rows: any[] = [];
+        for (const row of this.publications.values()) {
+          if (row.video_id === values[0]) {
+            const acc = row.account_id ? this.accounts.get(row.account_id) : null;
+            rows.push({ ...row, account_name: acc?.account_name || null });
+          }
+        }
+        return rows;
+      }
+      if (text.includes("WHERE p.id = $1") || text.includes("WHERE id = $1")) {
+        const row = this.publications.get(values[0]);
+        if (!row) return [];
+        const acc = row.account_id ? this.accounts.get(row.account_id) : null;
+        return [{ ...row, account_name: acc?.account_name || null }];
+      }
+      return Array.from(this.publications.values()).map((row) => {
+        const acc = row.account_id ? this.accounts.get(row.account_id) : null;
+        return { ...row, account_name: acc?.account_name || null };
+      });
+    }
+
+    if (text.includes("UPDATE publications")) {
+      const id = text.includes("WHERE id = $2") ? values[1] : values[0];
+      const row = this.publications.get(id);
+      if (!row) return [];
+
+      if (text.includes("status = 'failed'")) {
+        row.status = "failed";
+        row.last_error = values[1];
+        row.technical_error = values[2];
+      } else if (text.includes("published_at = now()")) {
+        row.status = values[1];
+        row.provider_post_id = values[2];
+        row.provider_url = values[3];
+        row.published_at = new Date();
+        row.last_error = null;
+        row.technical_error = null;
+      } else if (text.includes("attempt_count = COALESCE") || text.includes("last_error = CASE")) {
+        row.status = values[1];
+        if (values[2] !== null && values[2] !== undefined) row.attempt_count = values[2];
+        if (values[3] !== null && values[3] !== undefined) row.last_error = values[3];
+        if (values[4] !== null && values[4] !== undefined) row.technical_error = values[4];
+        if (values[5] !== null && values[5] !== undefined) row.provider_post_id = values[5];
+        if (values[6] !== null && values[6] !== undefined) row.provider_url = values[6];
+      } else if (text.includes("status = $1 WHERE id = $2")) {
+        row.status = values[0];
+      }
+
+      row.updated_at = new Date();
+      const acc = row.account_id ? this.accounts.get(row.account_id) : null;
+      return [{ ...row, account_name: acc?.account_name || null }];
+    }
+
+    // 3. Scheduled Publications
+    if (text.includes("INSERT INTO scheduled_publications")) {
+      const row = {
+        id: values[0],
+        publication_id: values[1],
+        video_id: values[2],
+        scheduled_at: new Date(values[3]),
+        timezone: values[4] || "UTC",
+        status: values[5] || "pending",
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
+      this.scheduled.set(row.id, row);
+      return [row];
+    }
+
+    if (text.includes("FROM scheduled_publications") && text.includes("WHERE status = 'pending'")) {
+      const dueRows: any[] = [];
+      const now = new Date();
+      for (const s of this.scheduled.values()) {
+        if (s.status === "pending" && s.scheduled_at <= now) {
+          dueRows.push(s);
+        }
+      }
+      return dueRows;
+    }
+
+    if (text.includes("UPDATE scheduled_publications")) {
+      if (text.includes("status = 'claimed'")) {
+        const id = values[0];
+        const s = this.scheduled.get(id);
+        if (s && s.status === "pending") {
+          s.status = "claimed";
+          s.locked_by = values[1];
+          s.locked_at = new Date();
+          s.updated_at = new Date();
+          return [s];
+        }
+        return [];
+      }
+      if (text.includes("WHERE publication_id = $1")) {
+        const pubId = values[0];
+        for (const s of this.scheduled.values()) {
+          if (s.publication_id === pubId) {
+            if (text.includes("status = 'executed'")) s.status = "executed";
+            else if (text.includes("status = 'failed'")) s.status = "failed";
+            else if (text.includes("status = 'canceled'")) s.status = "canceled";
+            s.updated_at = new Date();
+            return [s];
+          }
+        }
+        return [];
+      }
+    }
+
+    // 4. Publishing Attempts & Events
+    if (text.includes("INSERT INTO publishing_attempts")) {
+      const row = { id: this.attempts.length + 1 };
+      this.attempts.push(row);
+      return [row];
+    }
+
+    if (text.includes("INSERT INTO publishing_events")) {
+      this.events.push(values);
+      return [];
+    }
+
+    // 5. App Settings
+    if (text.includes("SELECT key, value, updated_at FROM app_settings")) {
+      const val = this.settings.get(values[0]);
+      return val ? [{ key: values[0], value: val, updated_at: new Date() }] : [];
+    }
+
+    if (text.includes("INSERT INTO app_settings")) {
+      this.settings.set(values[0], values[1]);
+      return [{ key: values[0], value: values[1], updated_at: new Date() }];
+    }
+
+    if (text.includes("SELECT * FROM jobs WHERE id = $1")) {
+      const j = this.jobs.get(values[0]);
+      return j ? [j] : [];
+    }
+
+    return [];
+  }
+}
+
+describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => {
+  let fakeDb: FakePublishingDb;
+  let config: Config;
+  let jobs: JobService;
+  let app: express.Express;
+  let publishingService: PublishingService;
+  let testVideoPath: string;
+
+  beforeEach(async () => {
+    nock.cleanAll();
+    nock.disableNetConnect();
+    nock.enableNetConnect("127.0.0.1");
+
+    config = {
+      videosDirPath: path.resolve(__dirname, "../../../tmp/test-publishing-videos"),
+      pexelsApiKey: "test-pexels-key",
+      n8nWebhookUrl: "http://127.0.0.1:5678/webhook/test",
+      serviceRole: "test",
+      v2PublicUrl: "http://127.0.0.1:3123",
+    } as any;
+
+    if (!fs.existsSync(config.videosDirPath)) {
+      fs.mkdirSync(config.videosDirPath, { recursive: true });
+    }
+
+    testVideoPath = path.join(config.videosDirPath, "test_v2_video.mp4");
+    fs.writeFileSync(testVideoPath, "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "v_multi.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "v_retry.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "v_sched.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "v_sched_test.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "v_idem.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "v_validate.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "vid_123.mp4"), "fake mp4 video binary content");
+    fs.writeFileSync(path.join(config.videosDirPath, "vid_tg.mp4"), "fake mp4 video binary content");
+
+    config.n8nBaseUrl = "";
+    config.internalServiceToken = "test-internal-token-1234";
+
+    process.env.UPLOAD_POST_API_KEY = "mock-upload-post-key";
+    process.env.TELEGRAM_BOT_TOKEN = "123456:ABC-DEF";
+
+    publishingRegistry.register(new UploadPostProvider({ apiKey: "mock-upload-post-key" }));
+    publishingRegistry.register(new TelegramPublishingProvider({ botToken: "123456:ABC-DEF" }));
+
+    fakeDb = new FakePublishingDb();
+    jobs = new JobService(fakeDb as any);
+    publishingService = new PublishingService(fakeDb as any, config, publishingRegistry);
+
+    app = express();
+    app.use("/api/v2", createV2PublicRouter(config, fakeDb as any, jobs));
+  });
+
+  afterEach(async () => {
+    nock.cleanAll();
+    nock.enableNetConnect();
+    if (fs.existsSync(config.videosDirPath)) {
+      fs.rmSync(config.videosDirPath, { recursive: true, force: true });
+    }
+  });
+
+  describe("1. Platform Capabilities & Registry", () => {
+    it("provides capabilities for all 8 supported platforms", () => {
+      const platforms = ["youtube", "tiktok", "instagram", "facebook", "telegram", "linkedin", "twitter", "threads"] as const;
+      for (const p of platforms) {
+        const caps = DEFAULT_PLATFORM_CAPABILITIES[p];
+        expect(caps).toBeDefined();
+        expect(caps.platform).toBe(p);
+        expect(caps.maxDurationSeconds).toBeGreaterThan(0);
+        expect(caps.supportedAspectRatios.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("registry registers and retrieves default providers", () => {
+      const uploadPost = publishingRegistry.getProvider("upload_post");
+      const telegram = publishingRegistry.getProvider("telegram_bot");
+      expect(uploadPost).toBeDefined();
+      expect(telegram).toBeDefined();
+      expect(uploadPost?.displayName).toContain("Upload-Post");
+      expect(telegram?.displayName).toContain("Telegram");
+    });
+  });
+
+  describe("2. UploadPostProvider Multi-Platform Publisher", () => {
+    it("publishes video successfully on 200 response", async () => {
+      const provider = new UploadPostProvider({ apiKey: "test-api-key" });
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(200, {
+          id: "post_12345",
+          status: "published",
+          url: "https://youtube.com/shorts/sample123",
+          message: "Video published to YouTube",
+        });
+
+      const result = await provider.publishVideo({
+        videoId: "vid_123",
+        videoFilePath: testVideoPath,
+        platform: "youtube",
+        title: "Awesome Short",
+        caption: "Check this out #viral",
+        idempotencyKey: "idem_key_1",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe("published");
+      expect(result.providerPostId).toBe("post_12345");
+      expect(result.providerUrl).toBe("https://youtube.com/shorts/sample123");
+    });
+
+    it("classifies 429 and 500 errors as retryable", async () => {
+      const provider = new UploadPostProvider({ apiKey: "test-api-key" });
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(429, { error: "Rate limit exceeded. Try again in 60s." });
+
+      const result = await provider.publishVideo({
+        videoId: "vid_123",
+        videoFilePath: testVideoPath,
+        platform: "tiktok",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe("failed");
+      expect(result.retryable).toBe(true);
+      expect(result.error).toContain("Rate limit exceeded");
+    });
+
+    it("classifies 401 and 400 errors as non-retryable", async () => {
+      const provider = new UploadPostProvider({ apiKey: "test-api-key" });
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(401, { error: "Invalid or expired API token" });
+
+      const result = await provider.publishVideo({
+        videoId: "vid_123",
+        videoFilePath: testVideoPath,
+        platform: "instagram",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe("failed");
+      expect(result.retryable).toBe(false);
+    });
+  });
+
+  describe("3. TelegramPublishingProvider Direct Bot Publisher", () => {
+    it("validates connection via getMe", async () => {
+      const provider = new TelegramPublishingProvider({ botToken: "123456:ABC-DEF" });
+
+      nock("https://api.telegram.org")
+        .get("/bot123456:ABC-DEF/getMe")
+        .reply(200, {
+          ok: true,
+          result: { id: 123456, is_bot: true, first_name: "Abud Shorts Bot", username: "AbudShortsBot" },
+        });
+
+      const result = await provider.validateConnection();
+      expect(result.healthy).toBe(true);
+      expect(result.status).toBe("healthy");
+      expect(result.message).toContain("@AbudShortsBot");
+    });
+
+    it("publishes video directly to chat via sendVideo", async () => {
+      const provider = new TelegramPublishingProvider({ botToken: "123456:ABC-DEF" });
+
+      nock("https://api.telegram.org")
+        .post("/bot123456:ABC-DEF/sendVideo")
+        .reply(200, {
+          ok: true,
+          result: {
+            message_id: 789,
+            chat: { id: -100123456789, title: "Official Shorts Channel", username: "officialshorts" },
+          },
+        });
+
+      const result = await provider.publishVideo({
+        videoId: "vid_tg",
+        videoFilePath: testVideoPath,
+        platform: "telegram",
+        caption: "<b>Viral Short</b>\nWatch now!",
+        metadata: { telegramChatId: "@officialshorts" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe("published");
+      expect(result.providerPostId).toBe("789");
+      expect(result.providerUrl).toBe("https://t.me/officialshorts/789");
+    });
+  });
+
+  describe("4. AI Platform Metadata Generator", () => {
+    it("generates platform-specific titles, captions, and tags", () => {
+      const meta = aiMetadataGenerator.generateMetadata({
+        prompt: "5 Mindblowing Facts About Ancient Egypt",
+        platform: "youtube",
+        brandName: "EgyptHistory",
+        language: "ar",
+      });
+
+      expect(meta.title).toBeDefined();
+      expect(meta.title!.length).toBeLessThanOrEqual(100);
+      expect(meta.description).toBeDefined();
+      expect(meta.hashtags).toBeInstanceOf(Array);
+      expect(meta.hashtags!.length).toBeGreaterThan(0);
+      expect(meta.privacy).toBe("unlisted");
+    });
+
+    it("optimizes format for TikTok with punchy hashtags", () => {
+      const meta = aiMetadataGenerator.generateMetadata({
+        prompt: "Top 3 productivity hacks for busy entrepreneurs",
+        platform: "tiktok",
+        language: "en",
+      });
+
+      expect(meta.caption).toContain("#");
+      expect(meta.hashtags).toContain("fyp");
+    });
+  });
+
+  describe("5. PublishingService & Canonical PostgreSQL Store", () => {
+    it("creates social account with masked secret and tests connection", async () => {
+      nock("https://api.telegram.org")
+        .get("/bot123456:TOKEN/getMe")
+        .reply(200, {
+          ok: true,
+          result: { id: 123456, is_bot: true, first_name: "TestBot", username: "TestBot" },
+        });
+
+      const account = await publishingService.createAccount({
+        platform: "telegram",
+        provider: "telegram_bot",
+        accountName: "My Telegram Channel",
+        accountId: "@mychannel",
+        token: "123456:TOKEN",
+      });
+
+      expect(account.id).toBeDefined();
+      expect(account.platform).toBe("telegram");
+      expect(account.maskedToken).toBe("1234****OKEN");
+
+      const testResult = await publishingService.testAccountConnection(account.id);
+      expect(testResult.healthy).toBe(true);
+    });
+
+    it("enforces idempotency key deduplication on publications", async () => {
+      const p1 = await publishingService.createPublication({
+        videoId: "v_idem",
+        platform: "youtube",
+        idempotencyKey: "unique_pub_key_1",
+        title: "Test Idempotent Video",
+      });
+
+      const p2 = await publishingService.createPublication({
+        videoId: "v_idem",
+        platform: "youtube",
+        idempotencyKey: "unique_pub_key_1",
+        title: "Should Return Same Record",
+      });
+
+      expect(p1.id).toBe(p2.id);
+      expect(p1.title).toBe("Test Idempotent Video");
+    });
+
+    it("isolates partial failures when publishing across multiple platforms", async () => {
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(200, {
+          id: "yt_100",
+          status: "published",
+          url: "https://youtube.com/shorts/yt100",
+        });
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(401, {
+          error: "TikTok authorization expired",
+        });
+
+      const pubYT = await publishingService.createPublication({
+        videoId: "v_multi",
+        platform: "youtube",
+      });
+
+      const pubTT = await publishingService.createPublication({
+        videoId: "v_multi",
+        platform: "tiktok",
+      });
+
+      await publishingService.publishPublication(pubYT.id);
+      await publishingService.publishPublication(pubTT.id);
+
+      const overall = await publishingService.getOverallVideoStatus("v_multi");
+      expect(overall.status).toBe("partially_published");
+      expect(overall.platforms.youtube.status).toBe("published");
+      expect(overall.platforms.youtube.url).toBe("https://youtube.com/shorts/yt100");
+      expect(overall.platforms.tiktok.status).toBe("failed");
+      expect(overall.platforms.tiktok.error).toContain("TikTok authorization expired");
+    });
+
+    it("tracks retry attempts and resets error on successful retry", async () => {
+      const pub = await publishingService.createPublication({
+        videoId: "v_retry",
+        platform: "youtube",
+      });
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(401, { error: "Temporary server error" });
+
+      await publishingService.publishPublication(pub.id);
+
+      const failedPub = await publishingService.getPublication(pub.id);
+      expect(failedPub?.status).toBe("failed");
+      expect(failedPub?.attemptCount).toBe(1);
+      expect(failedPub?.lastError).toContain("Temporary server error");
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(200, {
+          id: "yt_retry_ok",
+          status: "published",
+          url: "https://youtube.com/shorts/yt_retry_ok",
+        });
+
+      const retryResult = await publishingService.retryPublication(pub.id);
+      expect(retryResult.status).toBe("published");
+      expect(retryResult.attemptCount).toBe(2);
+      expect(retryResult.lastError).toBeFalsy();
+    });
+
+    it("performs pre-flight video format validation", async () => {
+      const result = await publishingService.validateVideoForPlatform("v_validate", "youtube");
+      expect(result).toBeDefined();
+      expect(result.valid).toBe(true);
+      expect(result.capabilities.platform).toBe("youtube");
+    });
+  });
+
+  describe("6. PublishingScheduler & Background Claim", () => {
+    it("atomically claims and publishes due scheduled publications", async () => {
+      const scheduler = new PublishingScheduler(fakeDb as any, publishingService, {
+        pollIntervalMs: 100,
+        workerId: "test_worker_1",
+      });
+
+      const pastTime = new Date(Date.now() - 10000).toISOString();
+      const pub = await publishingService.createPublication({
+        videoId: "v_sched",
+        platform: "youtube",
+        scheduledAt: pastTime,
+      });
+
+      expect(pub.status).toBe("scheduled");
+
+      nock("https://api.upload-post.com")
+        .post("/v1/publish")
+        .reply(200, {
+          id: "yt_sched_done",
+          status: "published",
+          url: "https://youtube.com/shorts/yt_sched_done",
+        });
+
+      const executedCount = await scheduler.tick();
+      expect(executedCount).toBe(1);
+
+      const updated = await publishingService.getPublication(pub.id);
+      expect(updated?.status).toBe("published");
+      expect(updated?.providerPostId).toBe("yt_sched_done");
+    });
+  });
+
+  describe("7. REST API Endpoints", () => {
+    it("GET /api/v2/publishing/summary returns summary stats", async () => {
+      const res = await supertest(app).get("/api/v2/publishing/summary");
+      expect(res.status).toBe(200);
+      expect(res.body.totalPublications).toBeDefined();
+      expect(res.body.scheduledCount).toBeDefined();
+    });
+
+    it("POST /api/v2/publishing/metadata/generate returns AI metadata", async () => {
+      const res = await supertest(app)
+        .post("/api/v2/publishing/metadata/generate")
+        .send({
+          prompt: "How to stay focused all day",
+          platform: "youtube",
+          language: "en",
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.metadata.title).toBeDefined();
+      expect(res.body.metadata.description).toBeDefined();
+      expect(res.body.metadata.hashtags).toBeInstanceOf(Array);
+    });
+
+    it("POST /api/v2/publishing/batch creates publications across multiple videos", async () => {
+      const res = await supertest(app)
+        .post("/api/v2/publishing/batch")
+        .send({
+          videoIds: ["vid_batch_1", "vid_batch_2"],
+          platforms: ["youtube", "tiktok"],
+          privacy: "unlisted",
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.count).toBe(4);
+      expect(res.body.publications.length).toBe(4);
+    });
+
+    it("GET /api/v2/videos/:videoId/publishing returns overall video distribution status", async () => {
+      const res = await supertest(app).get("/api/v2/videos/v_check/publishing");
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("not_published");
+      expect(res.body.platforms).toBeDefined();
+    });
+  });
+
+  describe("8. TestPublishingProvider & Controlled Modes", () => {
+    it("executes successful publication and returns mock providerPostId and publishedUrl", async () => {
+      const testProvider = new TestPublishingProvider("success");
+      const result = await testProvider.publishVideo({
+        publicationId: "pub_test_1",
+        videoId: "vid_1",
+        platform: "youtube",
+        title: "Test Video",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe("published");
+      expect(result.providerPostId).toBe("test_post_pub_test_1");
+      expect(result.providerUrl).toContain("pub_test_1");
+      expect(testProvider.invocationCount).toBe(1);
+    });
+
+    it("classifies controlled 429, 500, and timeout errors as retryable", async () => {
+      const testProvider = new TestPublishingProvider("429");
+      const r429 = await testProvider.publishVideo({
+        publicationId: "pub_429",
+        videoId: "vid_1",
+        platform: "tiktok",
+      });
+      expect(r429.success).toBe(false);
+      expect(r429.retryable).toBe(true);
+
+      testProvider.setMode("500");
+      const r500 = await testProvider.publishVideo({
+        publicationId: "pub_500",
+        videoId: "vid_1",
+        platform: "instagram",
+      });
+      expect(r500.success).toBe(false);
+      expect(r500.retryable).toBe(true);
+
+      testProvider.setMode("timeout");
+      const rTimeout = await testProvider.publishVideo({
+        publicationId: "pub_timeout",
+        videoId: "vid_1",
+        platform: "facebook",
+      });
+      expect(rTimeout.success).toBe(false);
+      expect(rTimeout.retryable).toBe(true);
+    });
+
+    it("classifies controlled 401 error as non-retryable", async () => {
+      const testProvider = new TestPublishingProvider("401");
+      const r401 = await testProvider.publishVideo({
+        publicationId: "pub_401",
+        videoId: "vid_1",
+        platform: "twitter",
+      });
+      expect(r401.success).toBe(false);
+      expect(r401.retryable).toBe(false);
+    });
+
+    it("supports independent per-platform failure modes", async () => {
+      const testProvider = new TestPublishingProvider("success");
+      testProvider.setPlatformMode("tiktok", "500");
+
+      const rYT = await testProvider.publishVideo({
+        publicationId: "pub_yt",
+        videoId: "vid_1",
+        platform: "youtube",
+      });
+      const rTT = await testProvider.publishVideo({
+        publicationId: "pub_tt",
+        videoId: "vid_1",
+        platform: "tiktok",
+      });
+
+      expect(rYT.success).toBe(true);
+      expect(rTT.success).toBe(false);
+      expect(rTT.retryable).toBe(true);
+      expect(testProvider.invocationCount).toBe(2);
+    });
+  });
+
+  describe("9. Internal Service Token Security & Protected Routes", () => {
+    it("rejects internal request when token header is missing (fail-closed)", async () => {
+      const internalRouter = createV2InternalRouter(config, {} as any, {} as any, fakeDb as any);
+      const testApp = express();
+      testApp.use("/internal/v1", internalRouter);
+
+      const res = await supertest(testApp)
+        .post("/internal/v1/publishing/publications/pub_123/execute")
+        .send({});
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("Unauthorized internal request.");
+    });
+
+    it("rejects internal request when token header is incorrect", async () => {
+      const internalRouter = createV2InternalRouter(config, {} as any, {} as any, fakeDb as any);
+      const testApp = express();
+      testApp.use("/internal/v1", internalRouter);
+
+      const res = await supertest(testApp)
+        .post("/internal/v1/publishing/publications/pub_123/execute")
+        .set("x-internal-token", "wrong-secret-token")
+        .send({});
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe("Unauthorized internal request.");
+    });
+  });
+
+  describe("10. Full Scheduler Terminal State & Pipeline Execution", () => {
+    it("scheduler claims due schedule and reaches terminal status published with test provider", async () => {
+      const testProvider = new TestPublishingProvider("success");
+      publishingRegistry.register(testProvider);
+      const testScheduler = new PublishingScheduler(fakeDb as any, publishingService, { pollIntervalMs: 5000 });
+
+      const pub = await publishingService.createPublication({
+        videoId: "v_sched_test",
+        platform: "youtube",
+        title: "Scheduled Test Video",
+        scheduledAt: new Date(Date.now() - 1000).toISOString(),
+        provider: "test_provider",
+      });
+
+      expect(pub.status).toBe("scheduled");
+
+      const executedCount = await testScheduler.tick();
+      expect(executedCount).toBe(1);
+
+      const terminalPub = await publishingService.getPublication(pub.id);
+      expect(terminalPub?.status).toBe("published");
+      expect(terminalPub?.providerPostId).toBe(`test_post_${pub.id}`);
+      expect(testProvider.invocationCount).toBe(1);
+    });
+  });
+
+  describe("11. Idempotency & Partial Retry Pipeline", () => {
+    it("enforces single provider execution on repeated idempotent requests", async () => {
+      const testProvider = new TestPublishingProvider("success");
+      publishingRegistry.register(testProvider);
+
+      const key = "idem_strict_test_123";
+      const p1 = await publishingService.createPublication({
+        videoId: "v_idem",
+        platform: "youtube",
+        idempotencyKey: key,
+        provider: "test_provider",
+      });
+      const p2 = await publishingService.createPublication({
+        videoId: "v_idem",
+        platform: "youtube",
+        idempotencyKey: key,
+        provider: "test_provider",
+      });
+
+      expect(p1.id).toBe(p2.id);
+
+      await publishingService.publishPublication(p1.id);
+      await publishingService.publishPublication(p2.id);
+
+      expect(testProvider.invocationCount).toBe(1);
+    });
+
+    it("isolates partial failures and allows targeted retry without duplicate execution", async () => {
+      const testProvider = new TestPublishingProvider("success");
+      testProvider.setPlatformMode("tiktok", "failure");
+      publishingRegistry.register(testProvider);
+
+      const pubYT = await publishingService.createPublication({
+        videoId: "v_multi",
+        platform: "youtube",
+        provider: "test_provider",
+      });
+      const pubTT = await publishingService.createPublication({
+        videoId: "v_multi",
+        platform: "tiktok",
+        provider: "test_provider",
+      });
+
+      await publishingService.publishPublication(pubYT.id);
+      await publishingService.publishPublication(pubTT.id);
+
+      const resYT = await publishingService.getPublication(pubYT.id);
+      const resTT = await publishingService.getPublication(pubTT.id);
+
+      expect(resYT?.status).toBe("published");
+      expect(resTT?.status).toBe("failed");
+      expect(testProvider.invocationCount).toBe(2);
+
+      // Targeted retry on failed TikTok only
+      testProvider.setPlatformMode("tiktok", "success");
+      const retryPub = await publishingService.retryPublication(pubTT.id);
+      expect(retryPub.status).toBe("published");
+      expect(retryPub.lastError).toBeNull();
+      expect(testProvider.invocationCount).toBe(3); // 1 YT + 1 TT failed + 1 TT retried = 3
+    });
+  });
+});

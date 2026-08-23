@@ -1,59 +1,43 @@
-﻿# Abud Shorts Engine
+# ABUD Shorts Engine V2
 
-A local-first, open-source Docker tool for generating branded short videos. Use templates, text-to-speech, automatic captions, Pexels background footage, and background music to produce downloadable MP4s ready for TikTok, Reels, and YouTube Shorts.
+**Version:** `2.0.0-rc.1` (Release Candidate)  
+**Canonical URL:** `http://localhost:3130`  
+**License:** MIT  
 
-## What is Abud Shorts Engine?
+An enterprise-grade, local-first video generation, multi-platform publishing, and distribution engine for YouTube Shorts, Instagram Reels, TikTok, and Telegram.
 
-Abud Shorts Engine is a self-contained short-video generator that runs on your own machine with Docker.
+---
 
-It is built for creators, marketers, and developers who want to automate short-form content without relying on cloud APIs or paid services. It is **local-first** and **Docker-based**, so your data stays on your machine.
+## Quick Start (One-Command Installer)
 
-What it does:
+### Windows (PowerShell)
+```powershell
+.\install.ps1
+```
 
-- Lets you choose a business template (Product Ad, Restaurant Offer, Real Estate Listing, Educational Tip, Viral Curiosity).
-- Generates a branded script, narration, and captions.
-- Synthesizes speech with Kokoro TTS.
-- Finds background footage from Pexels.
-- Composes scenes, captions, watermark, music, and outro with Remotion.
-- Renders a downloadable MP4 video.
-- Stores a metadata sidecar JSON file next to every video.
+### Linux / macOS (Bash)
+```bash
+chmod +x install.sh
+./install.sh
+```
 
-The project is intentionally simple to run: clone, copy the environment file, add a Pexels API key, and start the container.
+The installer automatically verifies Docker, creates persistent directories, generates cryptographically secure secrets (`INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY`, `SESSION_SECRET`), starts the 4-container stack, runs database migrations, and opens the First-Run Setup Wizard at:
+$$\text{http://localhost:3130/setup}$$
 
-## Features
+---
 
-- Business templates:
-  - Product Ad
-  - Restaurant Offer
-  - Real Estate Listing
-  - Educational Tip
-  - Viral Curiosity
-- Brand Kit with brand name, watermark, colors, caption style, outro text, and contact text.
-- Browser-local Brand profiles.
-- Template field persistence and Brand Kit saved in browser localStorage.
-- Generated video list with status, size, duration, and output path hints.
-- Video preview and detail pages with narration, Pexels terms, and metadata.
-- Readable download filenames, e.g. `abud-short-product-ad-abud-store-<videoId>.mp4`.
-- Metadata sidecar JSON with template, brand, narration, Pexels terms, and delivery info.
-- Local output folder for direct access to all generated files.
-- Docker-only workflow for Windows users.
+## Key Architecture & Features
 
-## Tech Stack
-
-- React + TypeScript + Vite
-- MUI (Material UI)
-- Node.js + Express
-- Zod validation
-- Remotion (video composition)
-- FFmpeg (audio/video processing)
-- Kokoro TTS (text-to-speech)
-- Whisper.cpp (caption generation)
-- Pexels API (background footage)
-- Docker + Docker Compose
-- pnpm (package management)
-- Vitest (testing)
-
-## Requirements
+- **Prompt Studio & Template Mode**: AI Creative Director with Egyptian Arabic, Gulf, MSA, and English scriptwriting.
+- **Production Spec V2**: Strict duration enforcement (variance $\le 0.3\%$), multi-scene timeline, multi-asset scenes, motion presets, dynamic transitions, and RTL captions.
+- **Free-First Local Pipeline**: 100% functional without paid AI subscriptions (Local Director, Pexels footage, Kokoro TTS, Whisper subtitles, Remotion composition, FFmpeg rendering).
+- **Multi-Platform Publishing Engine**: Aggregated publishing (Upload-Post), direct bot publishing (Telegram), and direct extension points (YouTube Shorts, Meta Reels, TikTok) with idempotency, atomic background scheduler, partial failure isolation, and live SSE event streams.
+- **Local Admin Security**: Salted PBKDF2 password hashing, session lifecycle, security headers (CSP, X-Frame-Options, X-Content-Type-Options), rate limiting, and zero secret leakage.
+- **Backup & Disaster Recovery**: User-triggered backups (`config_only`, `config_db`, `full`), SHA256 checksum manifests, automated pre-restore safety snapshots, and staged restore.
+- **Diagnostics & Support**: System telemetry, storage breakdown, secret-redacted real-time logs, and one-click Diagnostic Bundle export.
+- **Maintenance & Upgrades**: `upgrade.ps1`/`upgrade.sh` with automated pre-upgrade backups, `uninstall.ps1`/`uninstall.sh` preserving media by default.
+- **Outbound Webhooks**: Event dispatching (`video.ready`, `video.failed`, `publication.published`, `publication.failed`) with HMAC-SHA256 signatures (`x-abud-signature`, `x-abud-timestamp`).
+- **Remote Deployment**: Production reference `nginx.conf.reference` supporting reverse proxy, WebSocket, SSE, and media byte-range streaming.
 
 - Docker Desktop installed and running
 - A free Pexels API key from https://www.pexels.com/api/
@@ -84,19 +68,111 @@ Edit `.env` and set:
 PEXELS_API_KEY=your_pexels_api_key_here
 ```
 
-Build and start the dev container:
+Build and start the V2 stack:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.v2.yml up -d --build
 ```
 
 Open the Web UI:
 
 ```text
-http://localhost:3124
+http://localhost:3130
 ```
 
-The original/reference app, if running, remains on `http://localhost:3123` and is untouched.
+Check system health:
+
+```bash
+curl http://localhost:3130/api/v2/system/health
+```
+
+Create the first video from **Create Video**, track it in **Jobs**, then preview or download the MP4 from **Videos**.
+
+## V2 Control Plane
+
+Milestone V2-01 adds a dashboard-led control plane:
+
+- Web dashboard at `http://localhost:3130`
+- PostgreSQL-backed jobs and job events
+- Internal n8n orchestration
+- Separate render-worker service using the existing Remotion, FFmpeg, Kokoro, Whisper, and Pexels pipeline
+- Server-sent job progress events
+- Backward-compatible video library over the existing video folder
+- Persistent brand profiles, template browser, provider validation, and structured system health
+
+Start V2:
+
+```bash
+docker compose -f docker-compose.v2.yml up -d --build
+```
+
+Open:
+
+```text
+http://localhost:3130
+```
+
+Stop V2:
+
+```bash
+docker compose -f docker-compose.v2.yml down
+```
+
+V2 services:
+
+| Service | Responsibility | Public port |
+| --- | --- | --- |
+| `abud-shorts-app` | Dashboard, public API, internal job API, migrations | `3130` |
+| `abud-shorts-render-worker` | Local/free rendering pipeline | none |
+| `abud-shorts-n8n` | Internal orchestration workflow | none |
+| `abud-shorts-postgres` | Persistent V2 jobs/settings/assets | none |
+
+The V2 compose network provides internal DNS aliases: `app`, `render-worker`, `n8n`, and `postgres`. V2 service-to-service calls do not use `host.docker.internal`.
+
+The V2 n8n bootstrap imports `abud-shorts-v2-control-plane-workflow.json`, activates it, publishes it, and then starts n8n. This n8n image still exposes workflow activation through the deprecated `update:workflow --active=true` CLI; `publish:workflow` registers the production version but does not provide an activation flag in this installed n8n version.
+
+### V2 first run
+
+1. Copy `.env.example` to `.env`.
+2. Set `PEXELS_API_KEY`.
+3. Replace `INTERNAL_SERVICE_TOKEN`, `POSTGRES_PASSWORD`, and `N8N_ENCRYPTION_KEY` with local secret values.
+4. Start V2 with `docker compose -f docker-compose.v2.yml up -d --build`.
+5. Check health at `http://localhost:3130/api/v2/system/health`.
+6. Create the first video from **Create Video**.
+7. Track progress in **Jobs**.
+8. Preview or download the completed MP4 from **Videos**.
+
+### V2 database migration
+
+The app runs the minimum V2 PostgreSQL migration on startup. It creates:
+
+- `jobs`
+- `job_events`
+- `app_settings`
+- `provider_settings`
+- `generated_assets`
+- `brands`
+
+If PostgreSQL is unavailable, the dashboard starts degraded and `/api/v2/system/health` reports the database as unhealthy.
+
+### V2 Pexels configuration
+
+`PEXELS_API_KEY` is read server-side only. The frontend receives only configured/missing state and never receives the key value or key suffix.
+
+If the key is missing, V2 still starts and reports Pexels as unhealthy. Video generation requires a valid key.
+
+Use **Providers** or `POST /api/v2/providers/pexels/validate` to validate the configured key. The response distinguishes `healthy`, `not_configured`, `invalid_credentials`, `rate_limited`, `timeout`, and `provider_unavailable` states without returning the secret. Validation is bounded by `PEXELS_VALIDATION_TIMEOUT_MS`, which defaults to `12000` ms so slower live Pexels responses do not falsely fail while still preventing application hangs.
+
+### V2 generated videos
+
+V2 uses the existing mounted video storage:
+
+```text
+/app/data/videos
+C:/abud-shorts-engine/data-dev/videos
+```
+
+Existing MP4 files and metadata sidecars remain visible in the V2 Videos Library even if they do not have PostgreSQL job records.
 
 ## Environment Variables
 
@@ -105,6 +181,17 @@ Copy `.env.example` to `.env` and configure only the values you need to change.
 | Variable | Description | Default |
 | --- | --- | --- |
 | `PEXELS_API_KEY` | Your Pexels API key (required for real renders) | `your_pexels_api_key_here` |
+| `PEXELS_VALIDATION_TIMEOUT_MS` | Bounded timeout for live Pexels validation and health checks | `12000` |
+| `INTERNAL_SERVICE_TOKEN` | Shared secret for trusted app, n8n, and render-worker calls (generate with `openssl rand -hex 32`) | required (no default) |
+| `DATABASE_URL` | PostgreSQL connection string inside V2 containers | compose-managed |
+| `POSTGRES_DB` | V2 database name | `abud_shorts` |
+| `POSTGRES_USER` | V2 database user | `abud_shorts` |
+| `POSTGRES_PASSWORD` | V2 database password | `change-me-v2-postgres` |
+| `N8N_ENCRYPTION_KEY` | n8n encryption key | `change-me-v2-n8n-encryption-key-32` |
+| `N8N_BASE_URL` | Internal n8n base URL for the app | `http://n8n:5678` |
+| `RENDER_WORKER_BASE_URL` | Internal render worker URL | `http://render-worker:3125` |
+| `APP_INTERNAL_BASE_URL` | Internal app URL for callbacks | `http://app:3123` |
+| `V2_PUBLIC_URL` | User-facing dashboard URL | `http://localhost:3130` |
 | `LOG_LEVEL` | Server log level (pino) | `info` |
 | `PORT` | Port the server listens on | `3123` |
 | `DATA_DIR_PATH` | Data directory inside the container | `/app/data` |
@@ -168,28 +255,29 @@ If no template or brand was set, a safe fallback filename is used.
 
 ## Useful Commands
 
-Start the dev container:
+Start V2:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d --build
+docker compose -f docker-compose.v2.yml up -d --build
 ```
 
 View recent logs:
 
 ```bash
-docker logs --tail=200 abud-shorts-engine-dev
+docker logs --tail=200 abud-shorts-app
+docker logs --tail=200 abud-shorts-render-worker
 ```
 
 Check health:
 
 ```bash
-curl http://localhost:3124/health
+curl http://localhost:3130/api/v2/system/health
 ```
 
-Stop the container:
+Stop V2:
 
 ```bash
-docker compose -f docker-compose.dev.yml down
+docker compose -f docker-compose.v2.yml down
 ```
 
 Run tests:
@@ -204,7 +292,11 @@ Build the UI:
 pnpm build
 ```
 
-## n8n Automation + Optional YouTube Upload
+Legacy/reference dev compose files may still exist for migration work, but new local development should use V2 at `http://localhost:3130`.
+
+## Legacy n8n Automation + Optional YouTube Upload
+
+This section documents the older visible n8n upload workflow. V2 normal video creation uses the hidden internal workflow from `integrations/n8n/abud-shorts-v2-control-plane-workflow.json` and does not require users to open n8n.
 
 Abud Shorts Engine ships with an official n8n workflow template. You can use it to generate videos automatically and optionally upload them to YouTube.
 

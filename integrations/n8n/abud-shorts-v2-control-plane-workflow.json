@@ -1,0 +1,94 @@
+{
+  "name": "ABUD Shorts V2 - Internal Job Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "abud-v2/jobs/start",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-620, 0],
+      "id": "v2-internal-webhook",
+      "name": "Internal Job Webhook",
+      "webhookId": "abud-v2-jobs-start"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.appBaseUrl }}/internal/v1/jobs/{{ $json.body.jobId }}/start",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-token",
+              "value": "={{ $json.headers['x-internal-token'] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"jobId\":\"{{ $json.body.jobId }}\"}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, 0],
+      "id": "v2-dispatch-render",
+      "name": "Dispatch render through app"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, jobId: $('Internal Job Webhook').item.json.body.jobId, dispatch: $json } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [20, 0],
+      "id": "v2-response",
+      "name": "Accepted"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Internal Job Webhook": {
+      "main": [
+        [
+          {
+            "node": "Dispatch render through app",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch render through app": {
+      "main": [
+        [
+          {
+            "node": "Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "v2-01",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "abud-shorts-v2-control-plane",
+  "tags": []
+}

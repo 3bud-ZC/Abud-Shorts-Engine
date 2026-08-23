@@ -1,0 +1,94 @@
+{
+  "name": "ABUD Shorts V2 - Internal Publishing Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "abud-v2/publishing/publish",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-620, 0],
+      "id": "v2-publishing-webhook",
+      "name": "Internal Publishing Webhook",
+      "webhookId": "abud-v2-publishing-publish"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.appBaseUrl || 'http://app:3123' }}/internal/v1/publishing/publications/{{ $json.body.publicationId }}/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-internal-token",
+              "value": "={{ $json.headers['x-internal-token'] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"publicationId\":\"{{ $json.body.publicationId }}\",\"videoId\":\"{{ $json.body.videoId }}\",\"platform\":\"{{ $json.body.platform }}\"}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-300, 0],
+      "id": "v2-dispatch-publishing",
+      "name": "Dispatch publishing through app"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { accepted: true, publicationId: $('Internal Publishing Webhook').item.json.body.publicationId, result: $json } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [20, 0],
+      "id": "v2-publishing-response",
+      "name": "Accepted"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Internal Publishing Webhook": {
+      "main": [
+        [
+          {
+            "node": "Dispatch publishing through app",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch publishing through app": {
+      "main": [
+        [
+          {
+            "node": "Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "v2-04",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "id": "abud-shorts-v2-publishing",
+  "tags": []
+}

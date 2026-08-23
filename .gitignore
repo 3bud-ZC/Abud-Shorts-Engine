@@ -12,6 +12,8 @@ C:/abud-shorts-engine/data-dev
 tmp/
 temp/
 cache/
+output/
+test-results/
 *.mp4
 *.metadata.json
 *.zip
@@ -23,3 +25,11 @@ ABUD_SHORTS_ENGINE_STATUS*.md
 .n8n/
 n8n-data/
 *n8n-credentials*.json
+
+# Test & validation artifacts
+*.reltest*
+test_data_dir/
+data-test/
+post-rc-02-results.json
+release-validation-evidence.json
+responsive-qa-results.json

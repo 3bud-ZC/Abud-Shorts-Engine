@@ -12,6 +12,8 @@ import { ShortCreator } from "./short-creator/ShortCreator";
 import { logger } from "./logger";
 import { Server } from "./server/server";
 import { MusicManager } from "./short-creator/music";
+import { V2Database } from "./server/v2/db";
+import { JobService } from "./server/v2/jobs";
 
 async function main() {
   const config = new Config();
@@ -52,6 +54,19 @@ async function main() {
     musicManager,
   );
 
+  let v2Database: V2Database | undefined;
+  let jobService: JobService | undefined;
+  if (process.env.V2_ENABLED === "true" && config.serviceRole === "app") {
+    logger.debug("initializing V2 database");
+    v2Database = new V2Database(config);
+    try {
+      await v2Database.migrate();
+    } catch (error) {
+      logger.error(error, "V2 database migration failed; API will start degraded");
+    }
+    jobService = new JobService(v2Database);
+  }
+
   if (!config.runningInDocker) {
     // the project is running with npm - we need to check if the installation is correct
     if (fs.existsSync(config.installationSuccessfulPath)) {
@@ -82,7 +97,7 @@ async function main() {
   }
 
   logger.debug("initializing the server");
-  const server = new Server(config, shortCreator);
+  const server = new Server(config, shortCreator, v2Database, jobService);
   const app = server.start();
 
   // todo add shutdown handler

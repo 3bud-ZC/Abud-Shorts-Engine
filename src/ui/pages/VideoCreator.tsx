@@ -1,1075 +1,1085 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
   Box,
   Button,
-  TextField,
-  Typography,
-  Paper,
-  Grid,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  CircularProgress,
-  Alert,
-  IconButton,
-  Divider,
-  InputAdornment,
-  FormControlLabel,
+  ButtonGroup,
+  Card,
+  CardActionArea,
+  CardContent,
   Checkbox,
   Chip,
-  Tooltip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControl,
+  FormControlLabel,
+  Grid,
+  InputAdornment,
+  InputLabel,
+  MenuItem,
+  Select,
   Stack,
+  Step,
+  StepLabel,
+  Stepper,
+  TextField,
+  Typography,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import DeleteIcon from "@mui/icons-material/Delete";
-import SaveIcon from "@mui/icons-material/Save";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import ClearIcon from "@mui/icons-material/Clear";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import SendIcon from "@mui/icons-material/Send";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import {
-  readBrandKit,
-  writeBrandKit,
-  resetBrandKit,
-  readBrandProfiles,
-  saveProfile,
-  deleteProfile,
-  createProfile,
-  readLastTemplateId,
-  writeLastTemplateId,
-  readTemplateFields,
-  writeTemplateFields,
-  clearTemplateFields,
-  type BrandProfile,
-} from "../utils/persistence";
-import {
-  SceneInput,
-  RenderConfig,
-  MusicMoodEnum,
   CaptionPositionEnum,
-  VoiceEnum,
-  OrientationEnum,
+  MusicMoodEnum,
   MusicVolumeEnum,
-  BrandKit,
+  OrientationEnum,
+  RenderConfig,
+  SceneInput,
+  VoiceEnum,
 } from "../../types/shorts";
 import type { BusinessTemplateId } from "../../short-creator/business-templates";
 import { generateScenesForTemplate } from "../../short-creator/templateSceneFactory";
+import {
+  EmptyState,
+  FormSection,
+  LoadingState,
+  PageHeader,
+  SectionCard,
+  StatusBadge,
+} from "../components/v2";
+import type {
+  BusinessTemplateField,
+  BusinessTemplateOption,
+  CostEstimateData,
+  PromptEnhanceResult,
+  V2Brand,
+} from "./v2Types";
 
-interface SceneFormData {
-  text: string;
-  searchTerms: string; // Changed to string
-}
+const EXAMPLE_PROMPTS = [
+  {
+    title: "Egyptian Streetwear Ad (ملابس شبابي)",
+    tag: "Arabic · Egyptian",
+    prompt:
+      "اعمل إعلان 20 ثانية باللهجة المصرية لبراند ملابس شبابي، البداية تكون Hook قوي، ركز على الخامة القطنية والشكل والراحة، وفي النهاية CTA للطلب على واتساب مع خصم خاص.",
+  },
+  {
+    title: "Cairo Modern Café (كافيه قهوة)",
+    tag: "Arabic · Egyptian",
+    prompt:
+      "اعمل فيديو 20 ثانية لكافيه عصري في القاهرة، ركز على ريحة وتحضير القهوة الإسبريسو والقعدة الرايقة وعرض الفطار، والختام دعوة للزيارة.",
+  },
+  {
+    title: "Cairo Burger Restaurant (مطعم برجر)",
+    tag: "Arabic · Egyptian",
+    prompt:
+      "اعمل فيديو 15 ثانية لمطعم برجر في القاهرة، سريع وحماسي، ركز على الجبنة والجرل والعرض الحالي، واختم بـ CTA للطلب دليفري دلوقتي.",
+  },
+  {
+    title: "Tech Educational Short (Backups)",
+    tag: "English · Educational",
+    prompt:
+      "Create a 30-second English educational short explaining why automated backups protect small businesses from data loss, with modern technology visuals and a strong hook.",
+  },
+  {
+    title: "Real Estate Listing (عقارات التجمع)",
+    tag: "Arabic · Egyptian",
+    prompt:
+      "اعمل فيديو إعلان 30 ثانية لشقة مودرن في التجمع الخامس، ركز على المساحة والتشطيب الراقي وأنظمة السداد المرنة، والختام حجز معاينة على واتساب.",
+  },
+];
 
-type BusinessTemplateField = {
-  key: string;
-  label: string;
-  type: "text" | "textarea" | "number" | "select";
-  required: boolean;
-  placeholder?: string;
-  helperText?: string;
-  options?: string[];
+type SceneFormData = { text: string; searchTerms: string };
+
+const defaultConfig: RenderConfig = {
+  paddingBack: 1500,
+  music: MusicMoodEnum.chill,
+  captionPosition: CaptionPositionEnum.bottom,
+  captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
+  voice: VoiceEnum.af_heart,
+  orientation: OrientationEnum.portrait,
+  musicVolume: MusicVolumeEnum.high,
+  brandKit: {
+    brandName: "ABUD Demo",
+    watermarkText: "ABUD",
+    primaryColor: "#24545a",
+    accentColor: "#d28b4c",
+    captionStyle: "bold",
+    includeOutro: true,
+    outroText: "Message us to start",
+    contactText: "WhatsApp / Instagram",
+  },
 };
 
-interface BusinessTemplateOption {
-  id: string;
-  displayName: string;
-  description: string;
-  targetUseCase: string;
-  hookStyle: string;
-  ctaStyle: string;
-  examplePrompt: string;
-  pexelsSearchHints: string[];
-  fields: BusinessTemplateField[];
+const templateSteps = ["Template", "Content", "Brand", "Settings", "Review"];
+
+function fieldGridSize(field: BusinessTemplateField) {
+  return field.type === "textarea" ? 12 : 6;
 }
 
 const VideoCreator: React.FC = () => {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+
+  // Mode Selection: "prompt" vs "template"
+  const [mode, setMode] = useState<"prompt" | "template">("prompt");
+
+  // Prompt Mode States
+  const [prompt, setPrompt] = useState("");
+  const [language, setLanguage] = useState("auto");
+  const [dialect, setDialect] = useState("egyptian");
+  const [duration, setDuration] = useState(30);
+  const [aspectRatio, setAspectRatio] = useState("9:16");
+  const [quality, setQuality] = useState("standard");
+  const [resolution, setResolution] = useState("1080p");
+  const [contentStyle, setContentStyle] = useState("advertisement");
+  const [visualMode, setVisualMode] = useState("auto");
+  const [voiceProvider, setVoiceProvider] = useState("auto");
+  const [voiceId, setVoiceId] = useState("af_heart");
+  const [captionStyle, setCaptionStyle] = useState<"none" | "clean" | "bold" | "minimal">("bold");
+
+  // Enhancement & Preview states
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceDialog, setEnhanceDialog] = useState(false);
+  const [enhanceResult, setEnhanceResult] = useState<PromptEnhanceResult | null>(null);
+
+  const [previewing, setPreviewing] = useState(false);
+  const [previewSpec, setPreviewSpec] = useState<any>(null);
+  const [costEstimate, setCostEstimate] = useState<CostEstimateData | null>(null);
+
+  // Template Mode States
+  const [templateStep, setTemplateStep] = useState(0);
+  const [templates, setTemplates] = useState<BusinessTemplateOption[]>([]);
+  const [brands, setBrands] = useState<V2Brand[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedBrandId, setSelectedBrandId] = useState("");
+  const [templateData, setTemplateData] = useState<Record<string, string>>({});
   const [scenes, setScenes] = useState<SceneFormData[]>([
-    { text: "", searchTerms: "" },
+    { text: "A concise video narration for a local business.", searchTerms: "business, retail, customer" },
   ]);
-  const [config, setConfig] = useState<RenderConfig>({
-    paddingBack: 1500,
-    music: MusicMoodEnum.chill,
-    captionPosition: CaptionPositionEnum.bottom,
-    captionBackgroundColor: "blue",
-    voice: VoiceEnum.af_heart,
-    orientation: OrientationEnum.portrait,
-    musicVolume: MusicVolumeEnum.high,
-    brandKit: readBrandKit(),
-  });
+  const [config, setConfig] = useState<RenderConfig>(defaultConfig);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [voices, setVoices] = useState<VoiceEnum[]>([]);
-  const [musicTags, setMusicTags] = useState<MusicMoodEnum[]>([]);
-  const [businessTemplates, setBusinessTemplates] = useState<
-    BusinessTemplateOption[]
-  >([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
-  const [loadingOptions, setLoadingOptions] = useState(true);
-  const [templateFieldValues, setTemplateFieldValues] = useState<Record<string, string>>({});
-
-  const [profiles, setProfiles] = useState<BrandProfile[]>([]);
-  const [profileNameInput, setProfileNameInput] = useState("");
-  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
-  const [saveStatus, setSaveStatus] = useState<string>("");
 
   useEffect(() => {
-    const fetchOptions = async () => {
-      try {
-        const [voicesResponse, musicResponse, templatesResponse] =
-          await Promise.all([
-            axios.get("/api/voices"),
-            axios.get("/api/music-tags"),
-            axios.get("/api/business-templates"),
-          ]);
+    Promise.all([
+      axios.get("/api/v2/templates"),
+      axios.get("/api/v2/brands"),
+      axios.get("/api/v2/settings"),
+    ])
+      .then(([templateResponse, brandResponse, settingsResponse]) => {
+        const nextTemplates = templateResponse.data.templates || [];
+        const nextBrands = brandResponse.data.brands || [];
+        const appSettings = settingsResponse.data.settings || {};
 
-        setVoices(voicesResponse.data);
-        setMusicTags(musicResponse.data);
-        setBusinessTemplates(templatesResponse.data);
-      } catch (err) {
-        console.error("Failed to fetch options:", err);
-        setError(
-          "Failed to load voices, music tags, or templates. Please refresh the page.",
-        );
-      } finally {
-        setLoadingOptions(false);
-      }
-    };
+        setTemplates(nextTemplates);
+        setBrands(nextBrands);
 
-    fetchOptions();
-  }, []);
+        // Apply settings defaults if present
+        if (appSettings.defaultCreationMode === "template") {
+          setMode("template");
+        }
+        if (appSettings.defaultLanguage) setLanguage(appSettings.defaultLanguage);
+        if (appSettings.defaultArabicDialect) setDialect(appSettings.defaultArabicDialect);
+        if (appSettings.defaultDuration) setDuration(appSettings.defaultDuration);
+        if (appSettings.defaultAspectRatio) setAspectRatio(appSettings.defaultAspectRatio);
+        if (appSettings.defaultQuality) setQuality(appSettings.defaultQuality);
+        if (appSettings.defaultVisualMode) setVisualMode(appSettings.defaultVisualMode);
 
-  useEffect(() => {
-    setProfiles(readBrandProfiles());
-  }, []);
+        const queryTemplate = params.get("template");
+        if (queryTemplate) {
+          setMode("template");
+          setSelectedTemplateId(queryTemplate);
+        } else {
+          setSelectedTemplateId(appSettings.defaultTemplateId || nextTemplates[0]?.id || "");
+        }
 
-  useEffect(() => {
-    if (businessTemplates.length === 0) return;
-    const savedTemplateId = readLastTemplateId();
-    if (savedTemplateId && businessTemplates.some((t) => t.id === savedTemplateId)) {
-      setSelectedTemplateId(savedTemplateId);
-    }
-  }, [businessTemplates]);
+        const defaultBrand =
+          nextBrands.find((b: V2Brand) => b.id === appSettings.defaultBrandId) ||
+          nextBrands.find((b: V2Brand) => b.isDefault) ||
+          nextBrands[0];
 
-  useEffect(() => {
-    if (!selectedTemplateId) {
-      setTemplateFieldValues({});
-      return;
-    }
-    const template = businessTemplates.find(
-      (tpl) => tpl.id === selectedTemplateId,
-    );
-    if (!template) {
-      setTemplateFieldValues({});
-      return;
-    }
-
-    const savedFields = readTemplateFields()[selectedTemplateId] || {};
-    setTemplateFieldValues((prev) => {
-      const next: Record<string, string> = {};
-      template.fields.forEach((field) => {
-        next[field.key] = savedFields[field.key] ?? prev[field.key] ?? "";
-      });
-      return next;
-    });
-  }, [selectedTemplateId, businessTemplates]);
-
-  useEffect(() => {
-    writeBrandKit(config.brandKit);
-    setSaveStatus("Saved locally");
-    const timer = setTimeout(() => setSaveStatus(""), 2000);
-    return () => clearTimeout(timer);
-  }, [config.brandKit]);
-
-  useEffect(() => {
-    if (!selectedTemplateId) return;
-    const allFields = readTemplateFields();
-    writeTemplateFields({
-      ...allFields,
-      [selectedTemplateId]: templateFieldValues,
-    });
-  }, [templateFieldValues, selectedTemplateId]);
-
-  useEffect(() => {
-    writeLastTemplateId(selectedTemplateId);
-  }, [selectedTemplateId]);
+        if (defaultBrand) applyBrand(defaultBrand);
+      })
+      .catch(() => setError("Failed to load V2 templates or configuration."))
+      .finally(() => setLoading(false));
+  }, [params]);
 
   const selectedTemplate = useMemo(
-    () => businessTemplates.find((tpl) => tpl.id === selectedTemplateId),
-    [businessTemplates, selectedTemplateId],
+    () => templates.find((template) => template.id === selectedTemplateId),
+    [templates, selectedTemplateId],
   );
 
-  const templateFieldList = useMemo(
-    () => selectedTemplate?.fields ?? [],
-    [selectedTemplate],
-  );
-
-  const generatedTemplateScenes = useMemo(() => {
-    if (!selectedTemplate) {
-      return [];
-    }
-    return generateScenesForTemplate(
-      selectedTemplate.id as BusinessTemplateId,
-      templateFieldValues,
-    );
-  }, [selectedTemplate, templateFieldValues]);
+  const generatedScenes = useMemo(() => {
+    if (!selectedTemplate) return [];
+    return generateScenesForTemplate(selectedTemplate.id as BusinessTemplateId, templateData);
+  }, [selectedTemplate, templateData]);
 
   useEffect(() => {
-    if (!selectedTemplate) {
-      return;
-    }
-
-    const fallbackSearchLine = selectedTemplate.pexelsSearchHints.join(", ");
-    const derivedScenes = (generatedTemplateScenes.length
-      ? generatedTemplateScenes
-      : [
-        {
-          text: "Template narration pending. Please complete the required fields.",
-          searchTerms: selectedTemplate.pexelsSearchHints,
-        },
-      ]
+    if (!selectedTemplate) return;
+    const searchHints = selectedTemplate.pexelsSearchHints.join(", ");
+    const nextScenes = (generatedScenes.length
+      ? generatedScenes
+      : [{ text: "Complete the required fields to generate template narration.", searchTerms: selectedTemplate.pexelsSearchHints }]
     ).map((scene) => ({
       text: scene.text,
-      searchTerms: (scene.searchTerms?.length
-        ? scene.searchTerms
-        : selectedTemplate.pexelsSearchHints
-      ).join(", ") || fallbackSearchLine,
+      searchTerms: (scene.searchTerms?.length ? scene.searchTerms : selectedTemplate.pexelsSearchHints).join(", ") || searchHints,
     }));
+    setScenes(nextScenes);
+  }, [selectedTemplate, generatedScenes]);
 
-    setScenes(derivedScenes);
-  }, [selectedTemplate, generatedTemplateScenes]);
-
-  const isTemplateMode = Boolean(selectedTemplate);
-  const templateSearchHintLine = selectedTemplate
-    ? selectedTemplate.pexelsSearchHints.join(", ")
-    : "";
-
-  const filledFieldSummaries = templateFieldList
-    .map((field) => {
-      const value = templateFieldValues[field.key];
-      if (!value?.trim()) {
-        return null;
-      }
-      return `${field.label}: ${value}`;
-    })
-    .filter((line): line is string => Boolean(line));
-
-  const handleAddScene = () => {
-    if (isTemplateMode) {
-      return;
-    }
-    setScenes([...scenes, { text: "", searchTerms: "" }]);
-  };
-
-  const handleRemoveScene = (index: number) => {
-    if (isTemplateMode) {
-      return;
-    }
-    if (scenes.length > 1) {
-      const newScenes = [...scenes];
-      newScenes.splice(index, 1);
-      setScenes(newScenes);
-    }
-  };
-
-  const handleSceneChange = (
-    index: number,
-    field: keyof SceneFormData,
-    value: string,
-  ) => {
-    if (isTemplateMode) {
-      return;
-    }
-    const newScenes = [...scenes];
-    newScenes[index] = { ...newScenes[index], [field]: value };
-    setScenes(newScenes);
-  };
-
-  const handleConfigChange = (field: keyof RenderConfig, value: any) => {
-    setConfig({ ...config, [field]: value });
-  };
-
-  const handleBrandKitChange = (field: keyof BrandKit, value: any) => {
-    setConfig({
-      ...config,
+  function applyBrand(brand: V2Brand) {
+    setSelectedBrandId(brand.id);
+    setConfig((prev) => ({
+      ...prev,
       brandKit: {
-        ...config.brandKit,
-        [field]: value,
+        brandName: brand.name,
+        watermarkText: brand.watermarkText || brand.name,
+        primaryColor: brand.primaryColor || "#24545a",
+        accentColor: brand.accentColor || "#d28b4c",
+        captionStyle: brand.captionStyle || "bold",
+        includeOutro: brand.includeOutro ?? true,
+        outroText: brand.outroText || "",
+        contactText: brand.contactText || "",
       },
-    });
-  };
+    }));
+  }
 
-  const handleTemplateFieldChange = (key: string, value: string) => {
-    setTemplateFieldValues((prev) => ({ ...prev, [key]: value }));
-  };
+  function updateBrandKit(field: keyof NonNullable<RenderConfig["brandKit"]>, value: string | boolean) {
+    setConfig((prev) => ({
+      ...prev,
+      brandKit: { ...prev.brandKit, [field]: value },
+    }));
+  }
 
-  const handleResetBrandKit = () => {
-    const defaults = resetBrandKit();
-    setConfig((prev) => ({ ...prev, brandKit: defaults }));
-  };
-
-  const handleSaveProfile = () => {
-    const profile = createProfile(profileNameInput, config.brandKit || {});
-    const updated = saveProfile(profile);
-    setProfiles(updated);
-    setProfileNameInput("");
-    setSelectedProfileId(profile.id);
-  };
-
-  const handleLoadProfile = (profileId: string) => {
-    const profile = profiles.find((p) => p.id === profileId);
-    if (!profile) return;
-    setConfig((prev) => ({ ...prev, brandKit: profile.brandKit }));
-    setSelectedProfileId(profileId);
-  };
-
-  const handleDeleteProfile = (profileId: string) => {
-    const updated = deleteProfile(profileId);
-    setProfiles(updated);
-    if (selectedProfileId === profileId) {
-      setSelectedProfileId("");
-    }
-  };
-
-  const handleClearTemplateFields = () => {
-    if (!selectedTemplateId) return;
-    clearTemplateFields(selectedTemplateId);
-    setTemplateFieldValues({});
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+  async function handleEnhancePrompt() {
+    if (!prompt.trim()) return;
+    setEnhancing(true);
     setError(null);
-
     try {
-      // Convert scenes to the expected API format
+      const response = await axios.post("/api/v2/prompt/enhance", {
+        prompt,
+        language: language !== "auto" ? language : undefined,
+        dialect: dialect !== "none" ? dialect : undefined,
+        contentStyle,
+      });
+      setEnhanceResult(response.data);
+      setEnhanceDialog(true);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "Prompt enhancement failed.");
+    } finally {
+      setEnhancing(false);
+    }
+  }
+
+  function acceptEnhancedPrompt() {
+    if (enhanceResult?.enhancedPrompt) {
+      setPrompt(enhanceResult.enhancedPrompt);
+    }
+    setEnhanceDialog(false);
+  }
+
+  async function handlePreviewSpec() {
+    if (!prompt.trim()) return;
+    setPreviewing(true);
+    setError(null);
+    try {
+      const response = await axios.post("/api/v2/production-spec/preview", {
+        prompt,
+        language,
+        dialect: language === "ar" || language === "auto" ? dialect : "none",
+        durationSeconds: duration,
+        aspectRatio,
+        quality,
+        resolution,
+        contentStyle,
+        visualMode,
+        voiceProvider,
+        voiceId,
+        brandId: selectedBrandId || undefined,
+        brandName: config.brandKit?.brandName,
+      });
+      setPreviewSpec(response.data.spec);
+      setCostEstimate(response.data.costEstimate);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "Production spec preview failed.");
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  async function submitPromptJob() {
+    if (!prompt.trim()) {
+      setError("Please write a video prompt.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const response = await axios.post("/api/v2/jobs", {
+        creationMode: "prompt",
+        prompt,
+        language,
+        dialect: language === "ar" || language === "auto" ? dialect : "none",
+        durationSeconds: duration,
+        aspectRatio,
+        quality,
+        resolution,
+        contentStyle,
+        visualMode,
+        voiceProvider,
+        voiceId,
+        brandId: selectedBrandId || undefined,
+        brandName: config.brandKit?.brandName,
+        productionSpec: previewSpec || undefined,
+      });
+      navigate(`/jobs/${response.data.job.id}`);
+    } catch (err: any) {
+      setError(
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          "Failed to create Prompt Mode video job.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitTemplateJob() {
+    setSubmitting(true);
+    setError(null);
+    try {
       const apiScenes: SceneInput[] = scenes.map((scene) => ({
         text: scene.text,
         searchTerms: scene.searchTerms
           .split(",")
           .map((term) => term.trim())
-          .filter((term) => term.length > 0),
+          .filter(Boolean),
       }));
-
-      const payload: {
-        scenes: SceneInput[];
-        config: RenderConfig;
-        businessTemplateId?: string;
-        businessTemplateData?: Record<string, string>;
-      } = {
+      const businessTemplateData = Object.fromEntries(
+        Object.entries(templateData).filter(([, value]) => value.trim().length > 0),
+      );
+      const title = `${config.brandKit?.brandName || "Video"} · ${selectedTemplate?.displayName || "Manual"}`;
+      const response = await axios.post("/api/v2/jobs", {
+        type: "video",
+        creationMode: "template",
+        title,
         scenes: apiScenes,
         config,
-      };
-
-      if (selectedTemplateId) {
-        payload.businessTemplateId = selectedTemplateId;
-        payload.businessTemplateData = Object.fromEntries(
-          Object.entries(templateFieldValues).filter(
-            ([, value]) => value && value.trim().length > 0,
-          ),
-        );
-      }
-
-      const response = await axios.post("/api/short-video", payload);
-
-      navigate(`/video/${response.data.videoId}`);
-    } catch (err) {
-      setError("Failed to create video. Please try again.");
-      console.error(err);
+        businessTemplateId: selectedTemplateId || undefined,
+        businessTemplateData: selectedTemplateId ? businessTemplateData : undefined,
+      });
+      navigate(`/jobs/${response.data.job.id}`);
+    } catch (err: any) {
+      setError(
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          "Video job could not be created.",
+      );
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
-  };
-
-  if (loadingOptions) {
-    return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="80vh"
-      >
-        <CircularProgress />
-      </Box>
-    );
   }
 
+  if (loading) return <LoadingState label="Loading Video Studio..." />;
+
   return (
-    <Box maxWidth="md" mx="auto" py={4}>
-      <Stack spacing={1} mb={3}>
-        <Typography variant="h4" component="h1">
-          Create New Video
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Local-first workflow — your videos save to /app/data/videos (host: C:/abud-shorts-engine/data-dev/videos) and Brand Kit profiles stay in this browser.
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          After rendering, find downloads and metadata in the Generated Videos page. Required fields are marked, and outputs land at C:/abud-shorts-engine/data-dev/videos on Windows.
-        </Typography>
-      </Stack>
-
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
-
-      <form onSubmit={handleSubmit}>
-        <Typography variant="h6" component="h2" gutterBottom>
-          Step 1: Template (اختياري)
-        </Typography>
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          اختر قالبًا لتعبئة البرومبت وكلمات البحث تلقائيًا، أو اتركه فارغًا للتأليف الحر.
-        </Typography>
-
-        <Paper sx={{ p: 3, mb: 4 }}>
-          <Grid container spacing={3}>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Business Template</InputLabel>
-                <Select
-                  value={selectedTemplateId}
-                  label="Business Template"
-                  onChange={(event) =>
-                    setSelectedTemplateId(event.target.value as string)
-                  }
-                >
-                  <MenuItem value="">Generic / No template</MenuItem>
-                  {businessTemplates.map((template) => (
-                    <MenuItem key={template.id} value={template.id}>
-                      {template.displayName}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              {selectedTemplate ? (
-                <Box>
-                  <Typography variant="subtitle1" fontWeight={600}>
-                    {selectedTemplate.displayName}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {selectedTemplate.description}
-                  </Typography>
-                  <Typography variant="body2" mt={1} color="text.secondary">
-                    Hook: {selectedTemplate.hookStyle}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    CTA: {selectedTemplate.ctaStyle}
-                  </Typography>
-                  <Typography variant="body2" mt={1} color="text.secondary">
-                    إدخال الحقول التالية يجعل البرومبت أكثر دقة واختيار اللقطات أذكى.
-                  </Typography>
-                </Box>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  Select a template to auto-fill prompts and search hints for
-                  Egyptian business use cases.
-                </Typography>
-              )}
-            </Grid>
-          </Grid>
-        </Paper>
-
-        {selectedTemplate && (
-          <Paper sx={{ p: 3, mb: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              Step 2: Content — Template Fields
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mb={2}>
-              أدخل تفاصيل النشاط التجاري لتحسين جودة النص واللقطات المقترحة.
-            </Typography>
-            <Grid container spacing={3}>
-              {templateFieldList.map((field) => (
-                <Grid item xs={12} sm={field.type === "textarea" ? 12 : 6} key={field.key}>
-                  {field.type === "select" ? (
-                    <FormControl fullWidth>
-                      <InputLabel>{field.label}</InputLabel>
-                      <Select
-                        value={templateFieldValues[field.key] ?? ""}
-                        label={field.label}
-                        onChange={(event) =>
-                          handleTemplateFieldChange(field.key, event.target.value)
-                        }
-                        required={field.required}
-                      >
-                        <MenuItem value="">
-                          اختر قيمة
-                        </MenuItem>
-                        {(field.options || []).map((option) => (
-                          <MenuItem value={option} key={option}>
-                            {option}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                      {field.helperText && (
-                        <Typography variant="caption" color="text.secondary">
-                          {field.helperText}
-                        </Typography>
-                      )}
-                    </FormControl>
-                  ) : (
-                    <TextField
-                      fullWidth
-                      label={field.label}
-                      type={field.type === "number" ? "number" : "text"}
-                      multiline={field.type === "textarea"}
-                      rows={field.type === "textarea" ? 3 : undefined}
-                      value={templateFieldValues[field.key] ?? ""}
-                      onChange={(event) =>
-                        handleTemplateFieldChange(field.key, event.target.value)
-                      }
-                      placeholder={field.placeholder}
-                      helperText={field.helperText}
-                      required={field.required}
-                    />
-                  )}
-                </Grid>
-              ))}
-            </Grid>
-            <Box mt={2} display="flex" gap={2}>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={handleClearTemplateFields}
-              >
-                Clear Template Fields
-              </Button>
-            </Box>
-            <Box mt={3} p={2} bgcolor="grey.50" borderRadius={2}>
-              <Typography variant="subtitle2" gutterBottom>
-                Preview Direction
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {selectedTemplate.hookStyle} → {selectedTemplate.ctaStyle}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Focus on: {templateFieldList.map((field) => field.label).join(", ")}
-              </Typography>
-              {filledFieldSummaries.length > 0 && (
-                <Box mt={1}>
-                  {filledFieldSummaries.map((line) => (
-                    <Typography key={line} variant="caption" display="block">
-                      {line}
-                    </Typography>
-                  ))}
-                </Box>
-              )}
-            </Box>
-          </Paper>
-        )}
-
-        {selectedTemplate && (
-          <Paper sx={{ p: 3, mb: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              Generated Narration Preview
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mb={2}>
-              سيتم إرسال النصوص التالية تلقائيًا عند استخدام القالب.
-            </Typography>
-            {generatedTemplateScenes.map((scene, index) => (
-              <Box key={scene.text + index} mb={1.5}>
-                <Typography variant="subtitle2">Scene {index + 1}</Typography>
-                <Typography variant="body2" color="text.primary">
-                  {scene.text}
-                </Typography>
-              </Box>
-            ))}
-            <Typography variant="body2" color="text.secondary">
-              Search hints: {templateSearchHintLine}
-            </Typography>
-          </Paper>
-        )}
-
-        <Typography variant="h5" component="h2" gutterBottom>
-          Step 2: Content — Scenes
-        </Typography>
-
-        {isTemplateMode && (
-          <Alert severity="info" sx={{ mb: 3 }}>
-            سيتم توليد النصوص و كلمات البحث تلقائيًا من القالب. عدّل الحقول أعلاه
-            إذا أردت تغيير المحتوى.
-          </Alert>
-        )}
-
-        {scenes.map((scene, index) => (
-          <Paper key={index} sx={{ p: 3, mb: 3 }}>
-            <Box
-              display="flex"
-              justifyContent="space-between"
-              alignItems="center"
-              mb={2}
+    <>
+      <PageHeader
+        title="Create Video"
+        eyebrow="AI Production Studio"
+        description="Write a natural-language creative prompt or choose a business template. Both modes resolve into one canonical Production Spec."
+        actions={
+          <ButtonGroup variant="contained">
+            <Button
+              color={mode === "prompt" ? "primary" : "inherit"}
+              variant={mode === "prompt" ? "contained" : "outlined"}
+              onClick={() => setMode("prompt")}
             >
-              <Typography variant="h6">Scene {index + 1}</Typography>
-              {scenes.length > 1 && (
-                <IconButton
-                  onClick={() => handleRemoveScene(index)}
-                  color="error"
-                  size="small"
-                  disabled={isTemplateMode}
-                >
-                  <DeleteIcon />
-                </IconButton>
-              )}
-            </Box>
+              Prompt Mode
+            </Button>
+            <Button
+              color={mode === "template" ? "primary" : "inherit"}
+              variant={mode === "template" ? "contained" : "outlined"}
+              onClick={() => setMode("template")}
+            >
+              Template Mode
+            </Button>
+          </ButtonGroup>
+        }
+      />
 
-            <Grid container spacing={3}>
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Text"
-                  multiline
-                  rows={4}
-                  value={scene.text}
-                  onChange={(e) =>
-                    handleSceneChange(index, "text", e.target.value)
-                  }
-                  required
-                  disabled={isTemplateMode}
-                />
-              </Grid>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-              <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Search Terms (comma-separated)"
-                  value={scene.searchTerms}
-                  onChange={(e) =>
-                    handleSceneChange(index, "searchTerms", e.target.value)
-                  }
-                  helperText={
-                    isTemplateMode
-                      ? "يتم إرسال كلمات البحث الخاصة بالقالب تلقائيًا"
-                      : "Enter keywords for background video, separated by commas"
-                  }
-                  required
-                  disabled={isTemplateMode}
-                />
-              </Grid>
-            </Grid>
-          </Paper>
-        ))}
-
-        <Box display="flex" justifyContent="center" mb={4}>
-          <Button
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={handleAddScene}
-            disabled={isTemplateMode}
-          >
-            Add Scene
-          </Button>
-        </Box>
-
-        <Divider sx={{ mb: 4 }} />
-
-        <Typography variant="h6" component="h2" gutterBottom>
-          Step 3: Brand Kit (اختياري)
-        </Typography>
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          اضبط ألوان وهوية البراند. يحفظ تلقائيًا في هذا المتصفح فقط (localStorage) ويمكن حفظ ملفات تعريف متعددة.
-        </Typography>
-
-        <Paper sx={{ p: 3, mb: 3 }}>
-          <Box mb={2} display="flex" alignItems="center" gap={1} flexWrap="wrap">
-            <Chip
-              size="small"
-              color={saveStatus ? "success" : "default"}
-              label={saveStatus || "Using default Brand Kit"}
-            />
-            <Typography variant="caption" color="text.secondary">
-              Saved on this browser only (لا يُرفع للسيرفر)
-            </Typography>
-          </Box>
-
-          <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              Preview
-            </Typography>
-            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1,
-                  borderRadius: 1,
-                  bgcolor: config.brandKit?.primaryColor || "#1976d2",
-                  color: "#fff",
-                  minWidth: 120,
-                }}
-              >
-                <Typography variant="body2" fontWeight={600}>
-                  {config.brandKit?.brandName || "Brand Name"}
-                </Typography>
-                <Typography variant="caption">
-                  {config.brandKit?.watermarkText || "Watermark"}
-                </Typography>
-              </Box>
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1,
-                  borderRadius: 1,
-                  border: `1px dashed ${config.brandKit?.accentColor || "#ccc"}`,
-                }}
-              >
-                <Typography variant="caption" color="text.secondary">
-                  Outro: {config.brandKit?.outroText || "Call to action"}
-                </Typography>
-              </Box>
-            </Stack>
-          </Paper>
-
-          {profiles.length > 0 && (
-            <Box mb={2}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Saved Brand Profile</InputLabel>
-                <Select
-                  value={selectedProfileId}
-                  label="Saved Brand Profile"
-                  onChange={(e) => handleLoadProfile(e.target.value as string)}
-                >
-                  <MenuItem value="">— None —</MenuItem>
-                  {profiles.map((p) => (
-                    <MenuItem key={p.id} value={p.id}>
-                      {p.name}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              {selectedProfileId && (
-                <Box mt={1} display="flex" gap={1}>
+      {/* ========================================================================= */}
+      {/* PROMPT MODE (DEFAULT & FIRST-CLASS EXPERIENCE)                           */}
+      {/* ========================================================================= */}
+      {mode === "prompt" && (
+        <Stack spacing={3}>
+          <SectionCard
+            title="AI Creative Director Prompt"
+            description="Describe the video you want to produce. Include audience, style, goal, offer, language, and any key details."
+            actions={
+              <Stack direction="row" spacing={1}>
+                {prompt.length > 0 && (
                   <Button
                     size="small"
-                    color="error"
-                    onClick={() => handleDeleteProfile(selectedProfileId)}
+                    startIcon={<ClearIcon />}
+                    onClick={() => setPrompt("")}
                   >
-                    Delete Profile
+                    Clear
                   </Button>
-                </Box>
-              )}
-            </Box>
-          )}
-
-          <Grid container spacing={3}>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Brand Name"
-                value={config.brandKit?.brandName ?? ""}
-                onChange={(e) =>
-                  handleBrandKitChange("brandName", e.target.value)
-                }
-                helperText="Shown in outro"
-              />
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Watermark Text"
-                value={config.brandKit?.watermarkText ?? ""}
-                onChange={(e) =>
-                  handleBrandKitChange("watermarkText", e.target.value)
-                }
-                helperText="Text overlay on the video"
-              />
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Primary Color"
-                value={config.brandKit?.primaryColor ?? ""}
-                onChange={(e) =>
-                  handleBrandKitChange("primaryColor", e.target.value)
-                }
-                helperText="CSS color for watermark/outro"
-              />
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Accent Color"
-                value={config.brandKit?.accentColor ?? ""}
-                onChange={(e) =>
-                  handleBrandKitChange("accentColor", e.target.value)
-                }
-                helperText="Secondary CSS color"
-              />
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Caption Style</InputLabel>
-                <Select
-                  value={config.brandKit?.captionStyle ?? "bold"}
-                  onChange={(e) =>
-                    handleBrandKitChange("captionStyle", e.target.value)
-                  }
-                  label="Caption Style"
+                )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<AutoAwesomeIcon />}
+                  disabled={enhancing || !prompt.trim()}
+                  onClick={handleEnhancePrompt}
                 >
-                  <MenuItem value="clean">clean</MenuItem>
-                  <MenuItem value="bold">bold</MenuItem>
-                  <MenuItem value="minimal">minimal</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
+                  {enhancing ? "Enhancing..." : "Improve Prompt"}
+                </Button>
+              </Stack>
+            }
+          >
+            <Stack spacing={1.5}>
               <TextField
                 fullWidth
-                label="Outro Text"
-                value={config.brandKit?.outroText ?? ""}
-                onChange={(e) =>
-                  handleBrandKitChange("outroText", e.target.value)
-                }
-                helperText="CTA shown at the end"
+                multiline
+                minRows={4}
+                maxRows={8}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Describe the video you want to create. Include the subject, audience, style, goal, offer, language, and anything important."
+                helperText={`${prompt.length} / 4000 characters`}
               />
-            </Grid>
 
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Contact Text"
-                value={config.brandKit?.contactText ?? ""}
-                onChange={(e) =>
-                  handleBrandKitChange("contactText", e.target.value)
-                }
-                helperText="Contact line in outro"
-              />
-            </Grid>
+              {/* Example Prompts */}
+              <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                Example Ideas (click to populate):
+              </Typography>
+              <Grid container spacing={1.5}>
+                {EXAMPLE_PROMPTS.map((ex, idx) => (
+                  <Grid item xs={12} sm={6} md={4} key={idx}>
+                    <Card
+                      variant="outlined"
+                      sx={{
+                        height: "100%",
+                        bgcolor: "background.paper",
+                        "&:hover": { borderColor: "primary.main" },
+                      }}
+                    >
+                      <CardActionArea
+                        sx={{ p: 1.5, height: "100%", alignItems: "flex-start" }}
+                        onClick={() => setPrompt(ex.prompt)}
+                      >
+                        <Stack spacing={0.5}>
+                          <Stack direction="row" justifyContent="space-between" alignItems="center">
+                            <Typography variant="subtitle2" fontWeight={800} noWrap>
+                              {ex.title}
+                            </Typography>
+                            <Chip size="small" label={ex.tag} sx={{ fontSize: 10 }} />
+                          </Stack>
+                          <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            sx={{
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                              fontSize: 12,
+                            }}
+                          >
+                            {ex.prompt}
+                          </Typography>
+                        </Stack>
+                      </CardActionArea>
+                    </Card>
+                  </Grid>
+                ))}
+              </Grid>
+            </Stack>
+          </SectionCard>
 
-            <Grid item xs={12} sm={6}>
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={config.brandKit?.includeOutro === true}
-                    onChange={(event) =>
-                      handleBrandKitChange("includeOutro", event.target.checked)
+          {/* Progressive Disclosure: Production Options */}
+          <Accordion defaultExpanded>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Typography variant="h6" fontWeight={800}>
+                Production Options & Settings
+              </Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Grid container spacing={2}>
+                {/* Language */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Language</InputLabel>
+                    <Select label="Language" value={language} onChange={(e) => setLanguage(e.target.value)}>
+                      <MenuItem value="auto">Auto Detect</MenuItem>
+                      <MenuItem value="ar">Arabic (العربية)</MenuItem>
+                      <MenuItem value="en">English</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Arabic Dialect */}
+                {(language === "ar" || language === "auto") && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel>Arabic Dialect</InputLabel>
+                      <Select label="Arabic Dialect" value={dialect} onChange={(e) => setDialect(e.target.value)}>
+                        <MenuItem value="egyptian">Egyptian Arabic (المصرية)</MenuItem>
+                        <MenuItem value="msa">Modern Standard Arabic (الفصحى)</MenuItem>
+                        <MenuItem value="saudi">Saudi Arabic (السعودية)</MenuItem>
+                        <MenuItem value="gulf">Gulf Arabic (الخليجية)</MenuItem>
+                        <MenuItem value="levantine">Levantine Arabic (الشامية)</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
+                {/* Duration */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Duration</InputLabel>
+                    <Select label="Duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
+                      <MenuItem value={15}>15 Seconds</MenuItem>
+                      <MenuItem value={20}>20 Seconds</MenuItem>
+                      <MenuItem value={30}>30 Seconds (Default)</MenuItem>
+                      <MenuItem value={45}>45 Seconds</MenuItem>
+                      <MenuItem value={60}>60 Seconds</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Aspect Ratio */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Aspect Ratio</InputLabel>
+                    <Select label="Aspect Ratio" value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)}>
+                      <MenuItem value="9:16">9:16 (Vertical Short · Canonical)</MenuItem>
+                      <MenuItem value="16:9">16:9 (Landscape · YouTube/Desktop)</MenuItem>
+                      <MenuItem value="1:1">1:1 (Square · Instagram/Feed)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Quality Profile */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Quality Profile</InputLabel>
+                    <Select label="Quality Profile" value={quality} onChange={(e) => setQuality(e.target.value)}>
+                      <MenuItem value="draft">Draft (Fastest / Local)</MenuItem>
+                      <MenuItem value="standard">Standard (1080p Balanced)</MenuItem>
+                      <MenuItem value="high">High (Multi-Asset / Fast Paced)</MenuItem>
+                      <MenuItem value="premium">Premium (AI Video + Voice)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Resolution */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Resolution</InputLabel>
+                    <Select label="Resolution" value={resolution} onChange={(e) => setResolution(e.target.value)}>
+                      <MenuItem value="1080p">1080p (Full HD)</MenuItem>
+                      <MenuItem value="720p">720p (HD)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Content Style */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Content Style</InputLabel>
+                    <Select label="Content Style" value={contentStyle} onChange={(e) => setContentStyle(e.target.value)}>
+                      <MenuItem value="advertisement">Advertisement</MenuItem>
+                      <MenuItem value="ugc">UGC (User Generated)</MenuItem>
+                      <MenuItem value="cinematic">Cinematic</MenuItem>
+                      <MenuItem value="educational">Educational</MenuItem>
+                      <MenuItem value="explainer">Explainer</MenuItem>
+                      <MenuItem value="viral_curiosity">Viral / Curiosity</MenuItem>
+                      <MenuItem value="product_showcase">Product Showcase</MenuItem>
+                      <MenuItem value="social_short">Social Short</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Visual Mode */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Visual Mode</InputLabel>
+                    <Select label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
+                      <MenuItem value="auto">Auto (Smart Stock / AI)</MenuItem>
+                      <MenuItem value="stock">Stock Only (Pexels - Free)</MenuItem>
+                      <MenuItem value="ai">AI Video (Veo / Fal)</MenuItem>
+                      <MenuItem value="hybrid">Hybrid (Mixed Stock + AI)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Voice Provider */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Voice Provider</InputLabel>
+                    <Select label="Voice Provider" value={voiceProvider} onChange={(e) => setVoiceProvider(e.target.value)}>
+                      <MenuItem value="auto">Auto (Local / Free)</MenuItem>
+                      <MenuItem value="kokoro">Kokoro TTS (Local / Free)</MenuItem>
+                      <MenuItem value="elevenlabs">ElevenLabs (Premium Multilingual)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Captions Style */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Captions Style</InputLabel>
+                    <Select label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
+                      <MenuItem value="bold">Bold (Cyan Pop · Active Scale)</MenuItem>
+                      <MenuItem value="viral">Viral (Kinetic Yellow Glow)</MenuItem>
+                      <MenuItem value="clean">Clean (Dark Box / Subtitle)</MenuItem>
+                      <MenuItem value="minimal">Minimal (Clean Text)</MenuItem>
+                      <MenuItem value="brand">Brand Palette (Dynamic)</MenuItem>
+                      <MenuItem value="none">None</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Saved Brand */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Brand Profile</InputLabel>
+                    <Select
+                      label="Brand Profile"
+                      value={selectedBrandId}
+                      onChange={(e) => {
+                        const b = brands.find((item) => item.id === e.target.value);
+                        if (b) applyBrand(b);
+                      }}
+                    >
+                      <MenuItem value="">Custom / None</MenuItem>
+                      {brands.map((b) => (
+                        <MenuItem key={b.id} value={b.id}>
+                          {b.name} {b.isDefault ? "(Default)" : ""}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              </Grid>
+            </AccordionDetails>
+          </Accordion>
+
+          {/* Cost Estimate & Live Spec Preview */}
+          <SectionCard
+            title="Production Spec & Cost Breakdown"
+            description="Review the planned scenes and external API cost estimate before launching generation."
+            actions={
+              <Button
+                variant="outlined"
+                startIcon={<VisibilityIcon />}
+                disabled={previewing || !prompt.trim()}
+                onClick={handlePreviewSpec}
+              >
+                {previewing ? "Planning..." : "Preview Production Spec"}
+              </Button>
+            }
+          >
+            {previewSpec ? (
+              <Stack spacing={2}>
+                {/* Duration Diagnostics Breakdown */}
+                <Card variant="outlined" sx={{ p: 2, bgcolor: "background.paper" }}>
+                  <Typography variant="subtitle2" fontWeight={800} gutterBottom>
+                    Timeline & Duration Breakdown
+                  </Typography>
+                  <Grid container spacing={2}>
+                    <Grid item xs={6} sm={3}>
+                      <Typography variant="caption" color="text.secondary">Requested Duration</Typography>
+                      <Typography variant="body1" fontWeight={700}>{previewSpec.durationSeconds}s</Typography>
+                    </Grid>
+                    <Grid item xs={6} sm={3}>
+                      <Typography variant="caption" color="text.secondary">Scene Count</Typography>
+                      <Typography variant="body1" fontWeight={700}>{previewSpec.scenes?.length || 0}</Typography>
+                    </Grid>
+                    <Grid item xs={6} sm={3}>
+                      <Typography variant="caption" color="text.secondary">Scenes Total</Typography>
+                      <Typography variant="body1" fontWeight={700}>
+                        {Math.round((previewSpec.scenes?.reduce((acc: number, s: any) => acc + (s.durationSeconds || 0), 0) || 0) * 10) / 10}s
+                      </Typography>
+                    </Grid>
+                    <Grid item xs={6} sm={3}>
+                      <Typography variant="caption" color="text.secondary">Branded Outro</Typography>
+                      <Typography variant="body1" fontWeight={700}>
+                        {config.brandKit?.includeOutro ? "2.0s (Budgeted)" : "None (0s)"}
+                      </Typography>
+                    </Grid>
+                  </Grid>
+                </Card>
+
+                <Stack direction="row" spacing={2} flexWrap="wrap" alignItems="center">
+                  <StatusBadge status="ready" label={`Target: ${previewSpec.durationSeconds}s`} />
+                  <StatusBadge status="ready" label={`Dialect: ${previewSpec.dialect || "none"}`} />
+                  <Chip
+                    color={costEstimate?.isFree ? "success" : "warning"}
+                    label={
+                      costEstimate?.isFree
+                        ? "Estimated External API Cost: $0 (Free Local Pipeline)"
+                        : `Estimated External Cost: $${costEstimate?.estimatedCost} USD`
                     }
                   />
-                }
-                label="Include Outro"
-              />
-            </Grid>
-          </Grid>
+                </Stack>
 
-          <Box mt={3} display="flex" gap={2} flexWrap="wrap" alignItems="center">
-            <TextField
-              size="small"
-              label="Profile Name"
-              placeholder="My Brand"
-              value={profileNameInput}
-              onChange={(e) => setProfileNameInput(e.target.value)}
-              helperText="Save current Brand Kit as a profile"
-            />
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<SaveIcon />}
-              onClick={handleSaveProfile}
-              disabled={!profileNameInput.trim()}
-            >
-              Save Profile
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              color="secondary"
-              onClick={handleResetBrandKit}
-            >
-              Reset Brand Kit
-            </Button>
-          </Box>
-        </Paper>
-
-        <Divider sx={{ mb: 4 }} />
-
-        <Typography variant="h6" component="h2" gutterBottom>
-          Step 4: Video Settings
-        </Typography>
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          عدّل إعدادات الفيديو والصوت والنصوص. هذه الخيارات تطبَّق على كل المشاهد.
-        </Typography>
-
-        <Paper sx={{ p: 3, mb: 3 }}>
-          <Grid container spacing={3}>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                type="number"
-                label="End Screen Padding (ms)"
-                value={config.paddingBack}
-                onChange={(e) =>
-                  handleConfigChange("paddingBack", parseInt(e.target.value))
-                }
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">ms</InputAdornment>
-                  ),
-                }}
-                helperText="Duration to keep playing after narration ends"
-                required
-              />
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Music Mood</InputLabel>
-                <Select
-                  value={config.music}
-                  onChange={(e) => handleConfigChange("music", e.target.value)}
-                  label="Music Mood"
-                  required
-                >
-                  {Object.values(MusicMoodEnum).map((tag) => (
-                    <MenuItem key={tag} value={tag}>
-                      {tag}
-                    </MenuItem>
+                <Grid container spacing={1.5}>
+                  {previewSpec.scenes?.map((scene: any, idx: number) => (
+                    <Grid item xs={12} md={6} key={idx}>
+                      <Card variant="outlined" sx={{ p: 1.5 }}>
+                        <Stack spacing={0.5}>
+                          <Stack direction="row" justifyContent="space-between">
+                            <Typography variant="subtitle2" fontWeight={800}>
+                              Scene {idx + 1} ({scene.purpose?.toUpperCase()})
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {scene.durationSeconds}s
+                            </Typography>
+                          </Stack>
+                          <Typography variant="body2" sx={{ fontStyle: "italic" }}>
+                            "{scene.narration}"
+                          </Typography>
+                          {scene.onScreenText && (
+                            <Typography variant="caption" color="primary">
+                              On Screen: {scene.onScreenText}
+                            </Typography>
+                          )}
+                          <Typography variant="caption" color="text.secondary">
+                            Footage: {scene.stockSearchTerms?.join(", ")}
+                          </Typography>
+                        </Stack>
+                      </Card>
+                    </Grid>
                   ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Caption Position</InputLabel>
-                <Select
-                  value={config.captionPosition}
-                  onChange={(e) =>
-                    handleConfigChange("captionPosition", e.target.value)
-                  }
-                  label="Caption Position"
-                  required
-                >
-                  {Object.values(CaptionPositionEnum).map((position) => (
-                    <MenuItem key={position} value={position}>
-                      {position}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Caption Background Color"
-                value={config.captionBackgroundColor}
-                onChange={(e) =>
-                  handleConfigChange("captionBackgroundColor", e.target.value)
-                }
-                helperText="Any valid CSS color (name, hex, rgba)"
-                required
-              />
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Default Voice</InputLabel>
-                <Select
-                  value={config.voice}
-                  onChange={(e) => handleConfigChange("voice", e.target.value)}
-                  label="Default Voice"
-                  required
-                >
-                  {Object.values(VoiceEnum).map((voice) => (
-                    <MenuItem key={voice} value={voice}>
-                      {voice}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Orientation</InputLabel>
-                <Select
-                  value={config.orientation}
-                  onChange={(e) =>
-                    handleConfigChange("orientation", e.target.value)
-                  }
-                  label="Orientation"
-                  required
-                >
-                  {Object.values(OrientationEnum).map((orientation) => (
-                    <MenuItem key={orientation} value={orientation}>
-                      {orientation}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Volume of the background audio</InputLabel>
-                <Select
-                  value={config.musicVolume}
-                  onChange={(e) =>
-                    handleConfigChange("musicVolume", e.target.value)
-                  }
-                  label="Volume of the background audio"
-                  required
-                >
-                  {Object.values(MusicVolumeEnum).map((voice) => (
-                    <MenuItem key={voice} value={voice}>
-                      {voice}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-          </Grid>
-        </Paper>
-
-        <Divider sx={{ mb: 4 }} />
-
-        <Typography variant="h6" component="h2" gutterBottom>
-          Step 5: Review & Create
-        </Typography>
-        <Typography variant="body2" color="text.secondary" mb={2}>
-          يرسل الطلب إلى الخادم المحلي على http://localhost:3124. الملفات تحفظ في /app/data/videos (Windows: C:/abud-shorts-engine/data-dev/videos). ستجد الفيديو في صفحة Generated Videos بعد الاكتمال.
-        </Typography>
-
-        <Paper sx={{ p: 3, mb: 3 }}>
-          <Stack spacing={1.5}>
-            <Typography variant="subtitle2" color="text.secondary">
-              Quick review
-            </Typography>
-            <Typography variant="body2">Template: {selectedTemplate?.displayName || "None (manual)"}</Typography>
-            <Typography variant="body2">Brand: {config.brandKit?.brandName || "Not set"}</Typography>
-            <Typography variant="body2">Caption Style: {config.brandKit?.captionStyle || "bold"}</Typography>
-            <Typography variant="body2">Orientation: {config.orientation}</Typography>
-            <Typography variant="body2">Voice: {config.voice}</Typography>
-            <Typography variant="body2">Output path: /app/data/videos (Windows: C:/abud-shorts-engine/data-dev/videos)</Typography>
-            <Typography variant="body2">Preview & download from: Generated Videos page</Typography>
-          </Stack>
-        </Paper>
-
-        <Box display="flex" justifyContent="center" mt={1}>
-          <Button
-            type="submit"
-            variant="contained"
-            color="primary"
-            size="large"
-            disabled={loading}
-            sx={{ minWidth: 200 }}
-          >
-            {loading ? (
-              <CircularProgress size={24} color="inherit" />
+                </Grid>
+              </Stack>
             ) : (
-              "Create Video"
+              <Typography variant="body2" color="text.secondary">
+                Click "Preview Production Spec" to inspect the scene breakdown and narration before generating, or click "Create Video Job" to submit directly.
+              </Typography>
             )}
+          </SectionCard>
+
+          {/* Submit Action */}
+          <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<SendIcon />}
+              disabled={submitting || !prompt.trim()}
+              onClick={submitPromptJob}
+            >
+              {submitting ? "Starting Production..." : "Create Video Job"}
+            </Button>
+          </Stack>
+        </Stack>
+      )}
+
+      {/* ========================================================================= */}
+      {/* PROMPT ENHANCEMENT COMPARISON DIALOG                                      */}
+      {/* ========================================================================= */}
+      <Dialog open={enhanceDialog} onClose={() => setEnhanceDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle>AI Prompt Enhancement</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            {enhanceResult?.changesSummary && (
+              <Alert severity="info">{enhanceResult.changesSummary}</Alert>
+            )}
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={6}>
+                <Typography variant="subtitle2" fontWeight={800} color="text.secondary">
+                  Original Prompt
+                </Typography>
+                <Card variant="outlined" sx={{ p: 1.5, mt: 1, minHeight: 120, bgcolor: "action.hover" }}>
+                  <Typography variant="body2">{enhanceResult?.originalPrompt}</Typography>
+                </Card>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="subtitle2" fontWeight={800} color="primary">
+                  Enhanced Prompt
+                </Typography>
+                <Card variant="outlined" sx={{ p: 1.5, mt: 1, minHeight: 120, borderColor: "primary.main" }}>
+                  <Typography variant="body2">{enhanceResult?.enhancedPrompt}</Typography>
+                </Card>
+              </Grid>
+            </Grid>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEnhanceDialog(false)}>Keep Original</Button>
+          <Button variant="contained" onClick={acceptEnhancedPrompt}>
+            Use Enhanced Prompt
           </Button>
-        </Box>
-      </form>
-    </Box>
+        </DialogActions>
+      </Dialog>
+
+      {/* ========================================================================= */}
+      {/* TEMPLATE MODE (PRESERVED BUSINESS TEMPLATES)                              */}
+      {/* ========================================================================= */}
+      {mode === "template" && (
+        <Stack spacing={2.25}>
+          <SectionCard>
+            <Stepper activeStep={templateStep} alternativeLabel sx={{ mb: 3 }}>
+              {templateSteps.map((label) => (
+                <Step key={label}>
+                  <StepLabel>{label}</StepLabel>
+                </Step>
+              ))}
+            </Stepper>
+            <Stack direction="row" spacing={1} flexWrap="wrap">
+              {templateSteps.map((step, index) => (
+                <Button
+                  key={step}
+                  size="small"
+                  variant={templateStep === index ? "contained" : "outlined"}
+                  onClick={() => setTemplateStep(index)}
+                >
+                  {step}
+                </Button>
+              ))}
+            </Stack>
+          </SectionCard>
+
+          {templateStep === 0 && (
+            <FormSection title="Template Selection" description="Choose a validated business template.">
+              <Grid container spacing={2}>
+                {templates.map((template) => (
+                  <Grid item xs={12} md={6} xl={4} key={template.id}>
+                    <SectionCard>
+                      <Stack spacing={1.25}>
+                        <Stack direction="row" justifyContent="space-between" spacing={1}>
+                          <Typography variant="h6">{template.displayName}</Typography>
+                          {selectedTemplateId === template.id && <StatusBadge status="ready" label="Selected" />}
+                        </Stack>
+                        <Typography variant="body2" color="text.secondary">{template.description}</Typography>
+                        <Typography variant="caption" color="text.secondary">{template.targetUseCase}</Typography>
+                        <Button
+                          variant={selectedTemplateId === template.id ? "contained" : "outlined"}
+                          onClick={() => setSelectedTemplateId(template.id)}
+                        >
+                          Use Template
+                        </Button>
+                      </Stack>
+                    </SectionCard>
+                  </Grid>
+                ))}
+              </Grid>
+            </FormSection>
+          )}
+
+          {templateStep === 1 && (
+            <FormSection title="Content" description="Required fields drive generated narration and Pexels search terms.">
+              {selectedTemplate && (
+                <Grid container spacing={2}>
+                  {selectedTemplate.fields.map((field) => (
+                    <Grid item xs={12} md={fieldGridSize(field)} key={field.key}>
+                      {field.type === "select" ? (
+                        <FormControl fullWidth>
+                          <InputLabel>{field.label}</InputLabel>
+                          <Select
+                            label={field.label}
+                            required={field.required}
+                            value={templateData[field.key] || ""}
+                            onChange={(e) => setTemplateData({ ...templateData, [field.key]: e.target.value })}
+                          >
+                            <MenuItem value="">Select</MenuItem>
+                            {(field.options || []).map((opt) => (
+                              <MenuItem value={opt} key={opt}>{opt}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      ) : (
+                        <TextField
+                          fullWidth
+                          required={field.required}
+                          type={field.type === "number" ? "number" : "text"}
+                          multiline={field.type === "textarea"}
+                          minRows={field.type === "textarea" ? 3 : undefined}
+                          label={field.label}
+                          placeholder={field.placeholder}
+                          helperText={field.helperText}
+                          value={templateData[field.key] || ""}
+                          onChange={(e) => setTemplateData({ ...templateData, [field.key]: e.target.value })}
+                        />
+                      )}
+                    </Grid>
+                  ))}
+                </Grid>
+              )}
+              <SectionCard title="Narration Preview" description="Generated from the selected template and field values.">
+                <Stack spacing={1.5}>
+                  {scenes.map((scene, index) => (
+                    <TextField
+                      key={index}
+                      label={`Scene ${index + 1}`}
+                      value={scene.text}
+                      multiline
+                      minRows={2}
+                      fullWidth
+                      onChange={(event) => {
+                        const next = [...scenes];
+                        next[index] = { ...next[index], text: event.target.value };
+                        setScenes(next);
+                      }}
+                    />
+                  ))}
+                </Stack>
+              </SectionCard>
+            </FormSection>
+          )}
+
+          {templateStep === 2 && (
+            <FormSection title="Brand Kit" description="Select a saved brand or customize Brand Kit for this video.">
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={4}>
+                  <FormControl fullWidth>
+                    <InputLabel>Saved Brand</InputLabel>
+                    <Select
+                      label="Saved Brand"
+                      value={selectedBrandId}
+                      onChange={(event) => {
+                        const brand = brands.find((item) => item.id === event.target.value);
+                        if (brand) applyBrand(brand);
+                      }}
+                    >
+                      <MenuItem value="">Custom</MenuItem>
+                      {brands.map((brand) => (
+                        <MenuItem key={brand.id} value={brand.id}>{brand.name}{brand.isDefault ? " (default)" : ""}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <TextField fullWidth label="Brand Name" value={config.brandKit?.brandName || ""} onChange={(e) => updateBrandKit("brandName", e.target.value)} />
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <TextField fullWidth label="Watermark" value={config.brandKit?.watermarkText || ""} onChange={(e) => updateBrandKit("watermarkText", e.target.value)} />
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <TextField fullWidth type="color" label="Primary Color" value={config.brandKit?.primaryColor || "#24545a"} onChange={(e) => updateBrandKit("primaryColor", e.target.value)} />
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <TextField fullWidth type="color" label="Accent Color" value={config.brandKit?.accentColor || "#d28b4c"} onChange={(e) => updateBrandKit("accentColor", e.target.value)} />
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel>Caption Style</InputLabel>
+                    <Select label="Caption Style" value={config.brandKit?.captionStyle || "bold"} onChange={(e) => updateBrandKit("captionStyle", e.target.value)}>
+                      <MenuItem value="clean">Clean</MenuItem>
+                      <MenuItem value="bold">Bold</MenuItem>
+                      <MenuItem value="minimal">Minimal</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <FormControlLabel
+                    control={<Checkbox checked={config.brandKit?.includeOutro === true} onChange={(event) => updateBrandKit("includeOutro", event.target.checked)} />}
+                    label="Outro"
+                  />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth label="Outro Text" value={config.brandKit?.outroText || ""} onChange={(e) => updateBrandKit("outroText", e.target.value)} />
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField fullWidth label="Contact" value={config.brandKit?.contactText || ""} onChange={(e) => updateBrandKit("contactText", e.target.value)} />
+                </Grid>
+              </Grid>
+            </FormSection>
+          )}
+
+          {templateStep === 3 && (
+            <FormSection title="Video Settings" description="Render settings for template mode.">
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={4}>
+                  <FormControl fullWidth>
+                    <InputLabel>Voice</InputLabel>
+                    <Select label="Voice" value={config.voice} onChange={(e) => setConfig({ ...config, voice: e.target.value as any })}>
+                      {Object.values(VoiceEnum).map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <FormControl fullWidth>
+                    <InputLabel>Music</InputLabel>
+                    <Select label="Music" value={config.music} onChange={(e) => setConfig({ ...config, music: e.target.value as any })}>
+                      {Object.values(MusicMoodEnum).map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <FormControl fullWidth>
+                    <InputLabel>Orientation</InputLabel>
+                    <Select label="Orientation" value={config.orientation} onChange={(e) => setConfig({ ...config, orientation: e.target.value as any })}>
+                      {Object.values(OrientationEnum).map((o) => <MenuItem key={o} value={o}>{o}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              </Grid>
+            </FormSection>
+          )}
+
+          {templateStep === 4 && (
+            <FormSection title="Review & Submit" description="Submitting creates a Production Spec job persisted in PostgreSQL.">
+              <Grid container spacing={2}>
+                <Grid item xs={12} md={6}>
+                  <SectionCard title="Request Overview">
+                    <Stack spacing={1}>
+                      <Typography>Template: {selectedTemplate?.displayName}</Typography>
+                      <Typography>Brand: {config.brandKit?.brandName || "Custom"}</Typography>
+                      <Typography>Scenes: {scenes.length}</Typography>
+                    </Stack>
+                  </SectionCard>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <SectionCard title="Pipeline Components">
+                    <Stack spacing={1}>
+                      {["Pexels Stock", "Kokoro TTS", "Whisper Captions", "Remotion / FFmpeg"].map((item) => (
+                        <Stack key={item} direction="row" justifyContent="space-between">
+                          <Typography>{item}</Typography>
+                          <StatusBadge status="ready" label="Included" />
+                        </Stack>
+                      ))}
+                    </Stack>
+                  </SectionCard>
+                </Grid>
+              </Grid>
+              <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
+                <Button variant="contained" size="large" startIcon={<SendIcon />} disabled={submitting} onClick={submitTemplateJob}>
+                  {submitting ? "Creating..." : "Create Video Job"}
+                </Button>
+              </Stack>
+            </FormSection>
+          )}
+
+          <Stack direction="row" justifyContent="space-between">
+            <Button disabled={templateStep === 0} onClick={() => setTemplateStep((s) => Math.max(s - 1, 0))}>
+              Back
+            </Button>
+            <Button disabled={templateStep === templateSteps.length - 1} variant="outlined" onClick={() => setTemplateStep((s) => Math.min(s + 1, templateSteps.length - 1))}>
+              Next
+            </Button>
+          </Stack>
+        </Stack>
+      )}
+    </>
   );
 };
 

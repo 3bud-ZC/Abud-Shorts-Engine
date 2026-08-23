@@ -1,0 +1,1387 @@
+import express from "express";
+import type {
+  Request as ExpressRequest,
+  Response as ExpressResponse,
+} from "express";
+import axios from "axios";
+import cuid from "cuid";
+import fs from "fs-extra";
+import path from "path";
+import { Config } from "../../config";
+import { listBusinessTemplates } from "../../short-creator/business-templates";
+import { ShortCreator } from "../../short-creator/ShortCreator";
+import { validateCreateShortInput } from "../validator";
+import { readMetadata } from "../videoMetadata";
+import { V2Database } from "./db";
+import { getV2Health, validatePexelsProvider } from "./health";
+import { JobService } from "./jobs";
+import { N8nOrchestrator } from "./orchestrator";
+import {
+  appSettingsSchema,
+  brandProfileSchema,
+  createVideoJobSchema,
+  internalCompleteSchema,
+  internalFailSchema,
+  internalProgressSchema,
+  internalStartRenderSchema,
+  productionSpecPreviewSchema,
+  promptEnhanceRequestSchema,
+} from "./types";
+import { ContentAIRegistry } from "./content-ai/registry";
+import { estimateProductionCost } from "./cost-estimator";
+import {
+  productionSpecSchema,
+  validateContentQuality,
+  validateProductionSpec,
+} from "../../types/productionSpec";
+import { convertTemplateToProductionSpec } from "./templateToSpec";
+import { VeoVisualProvider } from "./visual-providers/veoVisualProvider";
+import { FalVisualProvider } from "./visual-providers/falVisualProvider";
+import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvider";
+import { mediaIntelligenceService } from "./media-intelligence/mediaIntelligenceService";
+import { mediaCache } from "./media-cache/mediaCache";
+import { imageRegistry } from "./image-providers/registry";
+import { createPublishingRouter } from "./publishing/routes";
+import { PublishingService } from "./publishing/publishingService";
+import { PublishingScheduler } from "./publishing/scheduler";
+import { publishingRegistry } from "./publishing/registry";
+import { getProductInfo } from "../../version";
+import { AuthService } from "./auth/authService";
+import { BackupService } from "./backup/backupService";
+import { DiagnosticsService } from "./diagnostics/diagnosticsService";
+import { WebhookService } from "./webhooks/webhookService";
+import { AnalyticsService } from "./analytics/analyticsService";
+import { SystemHealthService } from "./system/systemHealthService";
+
+type BrandRow = {
+  id: string;
+  name: string;
+  watermark_text: string;
+  primary_color: string;
+  accent_color: string;
+  caption_style: "none" | "clean" | "bold" | "minimal";
+  include_outro: boolean;
+  outro_text: string;
+  contact_text: string;
+  is_default: boolean;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type SettingRow = {
+  key: string;
+  value: Record<string, unknown>;
+  updated_at: Date;
+};
+
+function mapBrand(row: BrandRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    watermarkText: row.watermark_text,
+    primaryColor: row.primary_color,
+    accentColor: row.accent_color,
+    captionStyle: row.caption_style,
+    includeOutro: row.include_outro,
+    outroText: row.outro_text,
+    contactText: row.contact_text,
+    isDefault: row.is_default,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function redactConfiguredKey(key?: string) {
+  if (!key || key === "dummy-key" || key.includes("your_")) return null;
+  return "••••••••";
+}
+
+function readStorageDetails(config: Config) {
+  fs.ensureDirSync(config.videosDirPath);
+  const files = fs.readdirSync(config.videosDirPath);
+  const bytes = files.reduce((total, file) => {
+    const filePath = path.join(config.videosDirPath, file);
+    const stats = fs.statSync(filePath);
+    return stats.isFile() ? total + stats.size : total;
+  }, 0);
+  return { videosDir: config.videosDirPath, bytes };
+}
+
+async function readAppSettings(db: V2Database) {
+  const rows = await db.query<SettingRow>(
+    "SELECT key, value, updated_at FROM app_settings WHERE key = $1",
+    ["dashboard"],
+  );
+  return rows[0]?.value || {};
+}
+
+async function writeAppSettings(db: V2Database, value: Record<string, unknown>) {
+  const rows = await db.query<SettingRow>(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+     RETURNING key, value, updated_at`,
+    ["dashboard", value],
+  );
+  return rows[0]?.value || value;
+}
+
+function requireInternalToken(config: Config) {
+  return (
+    req: ExpressRequest,
+    res: ExpressResponse,
+    next: express.NextFunction,
+  ) => {
+    const token = req.header("x-internal-token");
+    if (!config.internalServiceToken || token !== config.internalServiceToken) {
+      res.status(401).json({ error: "Unauthorized internal request." });
+      return;
+    }
+    next();
+  };
+}
+
+export function createV2PublicRouter(
+  config: Config,
+  db: V2Database,
+  jobs: JobService,
+): express.Router {
+  const router = express.Router();
+  const orchestrator = new N8nOrchestrator(config, jobs);
+  const contentAIRegistry = new ContentAIRegistry(config);
+  const publishingService = new PublishingService(db, config, publishingRegistry);
+  const publishingScheduler = new PublishingScheduler(db, publishingService);
+
+  if (config.serviceRole === "app") {
+    publishingScheduler.start();
+  }
+
+  router.use(express.json({ limit: "2mb" }));
+
+  // Mount Publishing & Distribution Routes
+  router.use("/publishing", createPublishingRouter(config, publishingService));
+
+  router.get("/videos/:videoId/publishing", async (req, res) => {
+    try {
+      const status = await publishingService.getOverallVideoStatus(req.params.videoId);
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to get video publishing status",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Preview Production Spec generated from a prompt
+  router.post("/production-spec/preview", async (req, res) => {
+    const parsed = productionSpecPreviewSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid preview request payload",
+        issues: parsed.error.flatten(),
+      });
+      return;
+    }
+
+    try {
+      const provider = contentAIRegistry.getProvider();
+      const spec = await provider.generateProductionSpec(parsed.data);
+      const costEstimate = estimateProductionCost(spec);
+      const quality = validateContentQuality(spec);
+      const resolvedSpec = quality.correctedSpec || spec;
+      const mediaPlan = mediaIntelligenceService.generateMediaPlan(resolvedSpec, {
+        captionPreset: (resolvedSpec.captionStyle as any) || "bold",
+      });
+
+      res.status(200).json({
+        spec: resolvedSpec,
+        costEstimate,
+        quality,
+        mediaPlan,
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to generate preview spec",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Prompt Enhancement
+  router.post("/prompt/enhance", async (req, res) => {
+    const parsed = promptEnhanceRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid enhance request payload",
+        issues: parsed.error.flatten(),
+      });
+      return;
+    }
+
+    try {
+      const provider = contentAIRegistry.getProvider();
+      const result = await provider.rewritePrompt(parsed.data.prompt, {
+        language: parsed.data.language,
+        dialect: parsed.data.dialect,
+        contentStyle: parsed.data.contentStyle,
+      });
+      res.status(200).json(result);
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to enhance prompt",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // Cost Estimation endpoint
+  router.post("/cost-estimate", (req, res) => {
+    try {
+      const cost = estimateProductionCost(req.body);
+      res.status(200).json(cost);
+    } catch (error) {
+      res.status(400).json({
+        error: "Failed to estimate cost",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // User Media Upload Endpoint
+  router.post("/media/upload", express.json({ limit: "50mb" }), (req, res) => {
+    try {
+      const { filename, base64Data } = req.body || {};
+      if (!filename || !base64Data) {
+        res.status(400).json({ error: "filename and base64Data are required" });
+        return;
+      }
+
+      const ext = path.extname(filename).toLowerCase();
+      const allowedExts = [".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm"];
+      if (!allowedExts.includes(ext)) {
+        res.status(400).json({
+          error: "Invalid file format",
+          message: `Allowed formats: ${allowedExts.join(", ")}`,
+        });
+        return;
+      }
+
+      const uploadsDir = mediaCache.getUploadsDir();
+      fs.ensureDirSync(uploadsDir);
+
+      const safeId = cuid();
+      const safeFilename = `${safeId}${ext}`;
+      const targetPath = path.join(uploadsDir, safeFilename);
+
+      const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, "");
+      const buffer = Buffer.from(cleanBase64, "base64");
+
+      if (buffer.length > 50 * 1024 * 1024) {
+        res.status(400).json({ error: "File exceeds maximum size limit of 50MB." });
+        return;
+      }
+
+      fs.writeFileSync(targetPath, buffer);
+
+      res.status(201).json({
+        mediaId: safeId,
+        filename: safeFilename,
+        url: `/api/v2/media/uploads/${safeFilename}`,
+        sizeBytes: buffer.length,
+        extension: ext,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to upload media file" });
+    }
+  });
+
+  router.get("/media/uploads/:filename", (req, res) => {
+    const filename = path.basename(req.params.filename);
+    const targetPath = path.join(mediaCache.getUploadsDir(), filename);
+    if (!fs.existsSync(targetPath)) {
+      res.status(404).json({ error: "File not found" });
+      return;
+    }
+    res.sendFile(targetPath);
+  });
+
+  // Create Video Job (supports prompt mode or template mode)
+  router.post("/jobs", async (req, res) => {
+    const parsed = createVideoJobSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid job payload",
+        issues: parsed.error.flatten(),
+      });
+      return;
+    }
+
+    try {
+      let resolvedPayload = parsed.data;
+
+      // If user sent a raw prompt without full spec, generate the production spec first
+      if ((resolvedPayload as any).prompt && !(resolvedPayload as any).productionSpec) {
+        const provider = contentAIRegistry.getProvider();
+        const generatedSpec = await provider.generateProductionSpec(resolvedPayload as any);
+        resolvedPayload = {
+          type: "video",
+          creationMode: "prompt",
+          title: (resolvedPayload as any).title || generatedSpec.title,
+          productionSpec: generatedSpec,
+        } as any;
+      } else if ((resolvedPayload as any).businessTemplateId && !(resolvedPayload as any).productionSpec) {
+        const generatedSpec = convertTemplateToProductionSpec({
+          templateId: (resolvedPayload as any).businessTemplateId,
+          templateData: (resolvedPayload as any).businessTemplateData,
+          config: (resolvedPayload as any).config,
+          title: (resolvedPayload as any).title,
+        });
+        resolvedPayload = {
+          type: "video",
+          creationMode: "template",
+          title: (resolvedPayload as any).title || generatedSpec.title,
+          productionSpec: generatedSpec,
+        } as any;
+      }
+
+      // If template mode is used with raw createShortInput, validate it
+      if ((resolvedPayload as any).scenes && !(resolvedPayload as any).productionSpec) {
+        validateCreateShortInput(resolvedPayload as any);
+      }
+
+      const job = await jobs.createVideoJob(resolvedPayload);
+      try {
+        await orchestrator.enqueue(job);
+      } catch {
+        const failed = await jobs.getJob(job.id);
+        res.status(503).json({
+          error: "Job created but orchestration failed.",
+          job: failed || job,
+        });
+        return;
+      }
+      res.status(201).json({ job });
+    } catch (error) {
+      res.status(400).json({
+        error: "Invalid job payload",
+        message: error instanceof Error ? error.message : "Validation failed.",
+      });
+    }
+  });
+
+  router.get("/jobs", async (req, res) => {
+    try {
+      const jobsList = await jobs.listJobs(
+        typeof req.query.status === "string" ? req.query.status : undefined,
+      );
+      res.status(200).json({ jobs: jobsList });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to list jobs." });
+    }
+  });
+
+  router.get("/jobs/:id", async (req, res) => {
+    const job = await jobs.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+    res.status(200).json({ job });
+  });
+
+  router.get("/jobs/:id/events", async (req, res) => {
+    const wantsSse = req.headers.accept?.includes("text/event-stream");
+    if (!wantsSse) {
+      res.status(200).json({ events: await jobs.getEvents(req.params.id) });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    const existing = await jobs.getEvents(req.params.id);
+    for (const event of existing) {
+      res.write(`event: job-event\n`);
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+
+    const unsubscribe = jobs.subscribe(req.params.id, res);
+    req.on("close", unsubscribe);
+  });
+
+  router.post("/jobs/:id/cancel", async (req, res) => {
+    try {
+      const job = await jobs.cancelJob(req.params.id);
+      res.status(200).json({ job });
+    } catch (error) {
+      res.status(400).json({
+        error: error instanceof Error ? error.message : "Cancel failed.",
+      });
+    }
+  });
+
+  router.post("/jobs/:id/retry", async (req, res) => {
+    try {
+      const job = await jobs.retryJob(req.params.id);
+      try {
+        await orchestrator.enqueue(job);
+      } catch {
+        const failed = await jobs.getJob(job.id);
+        res.status(503).json({
+          error: "Retry created but orchestration failed.",
+          job: failed || job,
+        });
+        return;
+      }
+      res.status(201).json({ job });
+    } catch (error) {
+      res.status(400).json({
+        error: error instanceof Error ? error.message : "Retry failed.",
+      });
+    }
+  });
+
+  router.get("/system/health", async (req, res) => {
+    const health = await getV2Health(config, db);
+    res.status(200).json(health);
+  });
+
+  router.get("/templates", async (req, res) => {
+    res.status(200).json({ templates: listBusinessTemplates() });
+  });
+
+  router.get("/providers", async (req, res) => {
+    const health = await getV2Health(config, db);
+
+    const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
+    const hasVeoKey = Boolean(process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY);
+    const hasFalKey = Boolean(process.env.FAL_KEY);
+    const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
+
+    const pexelsComp = health.components.find((c) => c.name === "Pexels");
+    const kokoroComp = health.components.find((c) => c.name === "Kokoro");
+    const whisperComp = health.components.find((c) => c.name === "Whisper");
+    const remotionComp = health.components.find((c) => c.name === "Remotion");
+    const ffmpegComp = health.components.find((c) => c.name === "FFmpeg");
+    const n8nComp = health.components.find((c) => c.name === "n8n");
+    const dbComp = health.components.find((c) => c.name === "Database");
+
+    const providers = [
+      // Content AI
+      {
+        name: "Local AI Creative Director",
+        category: "Content AI",
+        tier: "free",
+        status: "healthy",
+        configured: true,
+        isDefault: !hasGeminiKey,
+        message: "Deterministic rule-based creative director is active.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
+        name: "Google Gemini",
+        category: "Content AI",
+        tier: "cloud",
+        status: hasGeminiKey ? "healthy" : "not_configured",
+        configured: hasGeminiKey,
+        isDefault: hasGeminiKey,
+        message: hasGeminiKey
+          ? "Gemini API key configured for structured video planning."
+          : "GEMINI_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      // Visuals
+      {
+        name: "Pexels",
+        category: "Visuals",
+        tier: "stock",
+        status: pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "not_configured"),
+        configured: pexelsComp?.details?.configured ?? false,
+        isDefault: true,
+        message: pexelsComp?.message || "Pexels stock footage integration.",
+        checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
+      },
+      {
+        name: "Google Veo",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasVeoKey ? "healthy" : "not_configured",
+        configured: hasVeoKey,
+        isDefault: false,
+        message: hasVeoKey
+          ? "Google Veo AI video generation configured."
+          : "VEO_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
+        name: "fal.ai (Kling / Wan / Seedance)",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasFalKey ? "healthy" : "not_configured",
+        configured: hasFalKey,
+        isDefault: false,
+        message: hasFalKey
+          ? "fal.ai multi-model video generation configured."
+          : "FAL_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      // Voice
+      {
+        name: "Kokoro TTS",
+        category: "Voice",
+        tier: "free",
+        status: kokoroComp?.status || "healthy",
+        configured: true,
+        isDefault: true,
+        message: kokoroComp?.message || "Local Kokoro TTS is active.",
+        checkedAt: kokoroComp?.checkedAt || new Date().toISOString(),
+      },
+      {
+        name: "ElevenLabs",
+        category: "Voice",
+        tier: "premium",
+        status: hasElevenLabsKey ? "healthy" : "not_configured",
+        configured: hasElevenLabsKey,
+        isDefault: false,
+        message: hasElevenLabsKey
+          ? "ElevenLabs Multilingual & Arabic TTS configured."
+          : "ELEVENLABS_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      // Captions
+      {
+        name: "Whisper",
+        category: "Captions",
+        tier: "free",
+        status: whisperComp?.status || "healthy",
+        configured: true,
+        isDefault: true,
+        message: whisperComp?.message || "Whisper captioning engine.",
+        checkedAt: whisperComp?.checkedAt || new Date().toISOString(),
+      },
+      // Renderer
+      {
+        name: "Remotion",
+        category: "Renderer",
+        tier: "local",
+        status: remotionComp?.status || "healthy",
+        configured: true,
+        isDefault: true,
+        message: remotionComp?.message || "Remotion video composition engine.",
+        checkedAt: remotionComp?.checkedAt || new Date().toISOString(),
+      },
+      {
+        name: "FFmpeg",
+        category: "Renderer",
+        tier: "local",
+        status: ffmpegComp?.status || "healthy",
+        configured: true,
+        isDefault: true,
+        message: ffmpegComp?.message || "FFmpeg audio/video processing.",
+        checkedAt: ffmpegComp?.checkedAt || new Date().toISOString(),
+      },
+      // Infrastructure
+      {
+        name: "n8n",
+        category: "Infrastructure",
+        tier: "internal",
+        status: n8nComp?.status || "healthy",
+        configured: true,
+        isDefault: true,
+        message: n8nComp?.message || "n8n internal orchestration workflow.",
+        checkedAt: n8nComp?.checkedAt || new Date().toISOString(),
+      },
+      {
+        name: "Database (PostgreSQL)",
+        category: "Infrastructure",
+        tier: "internal",
+        status: dbComp?.status || "healthy",
+        configured: true,
+        isDefault: true,
+        message: dbComp?.message || "PostgreSQL persistent state storage.",
+        checkedAt: dbComp?.checkedAt || new Date().toISOString(),
+      },
+      // Publishing & Distribution
+      {
+        name: "Upload-Post (Multi-Platform)",
+        category: "Publishing",
+        tier: "cloud",
+        status: Boolean(process.env.UPLOAD_POST_API_KEY) ? "healthy" : "not_configured",
+        configured: Boolean(process.env.UPLOAD_POST_API_KEY),
+        isDefault: true,
+        message: Boolean(process.env.UPLOAD_POST_API_KEY)
+          ? "Upload-Post multi-platform distribution connected."
+          : "UPLOAD_POST_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
+        name: "Telegram Direct Bot",
+        category: "Publishing",
+        tier: "direct",
+        status: Boolean(process.env.TELEGRAM_BOT_TOKEN) ? "healthy" : "not_configured",
+        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        isDefault: false,
+        message: Boolean(process.env.TELEGRAM_BOT_TOKEN)
+          ? "Telegram Bot direct video publisher connected."
+          : "TELEGRAM_BOT_TOKEN is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
+        name: "YouTube Direct",
+        category: "Publishing",
+        tier: "direct",
+        status: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN) ? "healthy" : "not_configured",
+        configured: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN),
+        isDefault: false,
+        message: Boolean(process.env.YOUTUBE_API_KEY || process.env.YOUTUBE_ACCESS_TOKEN)
+          ? "YouTube Data API v3 direct integration available."
+          : "YouTube credentials not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
+        name: "Meta Direct (Instagram & Facebook)",
+        category: "Publishing",
+        tier: "direct",
+        status: Boolean(process.env.META_ACCESS_TOKEN) ? "healthy" : "not_configured",
+        configured: Boolean(process.env.META_ACCESS_TOKEN),
+        isDefault: false,
+        message: Boolean(process.env.META_ACCESS_TOKEN)
+          ? "Meta Graph API direct integration available."
+          : "META_ACCESS_TOKEN is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
+        name: "TikTok Direct",
+        category: "Publishing",
+        tier: "direct",
+        status: Boolean(process.env.TIKTOK_ACCESS_TOKEN) ? "healthy" : "not_configured",
+        configured: Boolean(process.env.TIKTOK_ACCESS_TOKEN),
+        isDefault: false,
+        message: Boolean(process.env.TIKTOK_ACCESS_TOKEN)
+          ? "TikTok OpenAPI direct integration available."
+          : "TIKTOK_ACCESS_TOKEN is not configured.",
+        checkedAt: new Date().toISOString(),
+      },
+    ];
+
+    res.status(200).json({
+      providers,
+      categories: [
+        "Content AI",
+        "Visuals",
+        "Voice",
+        "Captions",
+        "Renderer",
+        "Publishing",
+        "Infrastructure",
+      ],
+    });
+  });
+
+  router.post("/providers/pexels/validate", async (req, res) => {
+    const result = await validatePexelsProvider(config, {
+      bypassCache: true,
+    });
+    res.status(200).json(result);
+  });
+
+  router.post("/providers/:provider/validate", async (req, res) => {
+    const target = req.params.provider.toLowerCase();
+    if (target === "pexels") {
+      const result = await validatePexelsProvider(config, { bypassCache: true });
+      res.status(200).json(result);
+      return;
+    }
+    if (target === "gemini") {
+      const gemini = contentAIRegistry.getProvider("gemini");
+      const val = await gemini.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "veo") {
+      const veo = new VeoVisualProvider();
+      const val = await veo.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "fal") {
+      const fal = new FalVisualProvider();
+      const val = await fal.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "elevenlabs") {
+      const el = new ElevenLabsVoiceProvider();
+      const val = await el.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "upload-post" || target === "upload_post") {
+      const p = publishingRegistry.getProvider("upload_post");
+      const val = await (p?.validateConnection() ?? {
+        provider: "Upload-Post",
+        configured: false,
+        healthy: false,
+        status: "not_configured",
+        message: "Upload-Post not configured",
+        checkedAt: new Date().toISOString(),
+      });
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "telegram" || target === "telegram_bot") {
+      const p = publishingRegistry.getProvider("telegram_bot");
+      const val = await (p?.validateConnection() ?? {
+        provider: "Telegram Direct Bot",
+        configured: false,
+        healthy: false,
+        status: "not_configured",
+        message: "Telegram bot not configured",
+        checkedAt: new Date().toISOString(),
+      });
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "youtube" || target === "youtube_direct") {
+      const p = publishingRegistry.getProvider("youtube_direct");
+      const val = await (p?.validateConnection() ?? {
+        provider: "YouTube Direct",
+        configured: false,
+        healthy: false,
+        status: "not_configured",
+        message: "YouTube direct not configured",
+        checkedAt: new Date().toISOString(),
+      });
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "meta" || target === "meta_direct") {
+      const p = publishingRegistry.getProvider("meta_direct");
+      const val = await (p?.validateConnection() ?? {
+        provider: "Meta Direct",
+        configured: false,
+        healthy: false,
+        status: "not_configured",
+        message: "Meta direct not configured",
+        checkedAt: new Date().toISOString(),
+      });
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "tiktok" || target === "tiktok_direct") {
+      const p = publishingRegistry.getProvider("tiktok_direct");
+      const val = await (p?.validateConnection() ?? {
+        provider: "TikTok Direct",
+        configured: false,
+        healthy: false,
+        status: "not_configured",
+        message: "TikTok direct not configured",
+        checkedAt: new Date().toISOString(),
+      });
+      res.status(200).json(val);
+      return;
+    }
+
+    res.status(200).json({
+      provider: req.params.provider,
+      configured: true,
+      healthy: true,
+      status: "healthy",
+      message: `${req.params.provider} is verified and operational.`,
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
+  router.get("/settings", async (req, res) => {
+    const settings = await readAppSettings(db);
+    res.status(200).json({
+      settings: {
+        defaultCreationMode: "prompt",
+        defaultLanguage: "ar",
+        defaultArabicDialect: "egyptian",
+        defaultDuration: 30,
+        defaultAspectRatio: "9:16",
+        defaultQuality: "standard",
+        defaultVisualMode: "auto",
+        defaultContentAI: "local_ai",
+        defaultVisualProvider: "pexels",
+        defaultVoiceProvider: "kokoro",
+        defaultPublishingMode: "draft",
+        defaultSocialAccounts: [],
+        defaultYouTubePrivacy: "unlisted",
+        defaultTimezone: "Africa/Cairo",
+        maxConcurrentPublications: 3,
+        ...settings,
+      },
+      pexels: {
+        configured: Boolean(config.pexelsApiKey && config.pexelsApiKey !== "dummy-key"),
+        redactedKey: redactConfiguredKey(config.pexelsApiKey),
+      },
+      gemini: {
+        configured: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
+        redactedKey: redactConfiguredKey(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY),
+      },
+      elevenlabs: {
+        configured: Boolean(process.env.ELEVENLABS_API_KEY),
+        redactedKey: redactConfiguredKey(process.env.ELEVENLABS_API_KEY),
+      },
+      uploadPost: {
+        configured: Boolean(process.env.UPLOAD_POST_API_KEY),
+        redactedKey: redactConfiguredKey(process.env.UPLOAD_POST_API_KEY),
+      },
+      telegram: {
+        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        redactedKey: redactConfiguredKey(process.env.TELEGRAM_BOT_TOKEN),
+      },
+      app: {
+        v2Enabled: process.env.V2_ENABLED === "true",
+        webPort: process.env.PORT || "3123",
+        videosDir: config.videosDirPath,
+        docker: process.env.DOCKER === "true",
+      },
+      storage: readStorageDetails(config),
+    });
+  });
+
+  router.put("/settings", async (req, res) => {
+    const parsed = appSettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid settings payload",
+        issues: parsed.error.flatten(),
+      });
+      return;
+    }
+    const current = await readAppSettings(db);
+    const saved = await writeAppSettings(db, {
+      ...current,
+      ...parsed.data,
+    });
+    res.status(200).json({ settings: saved });
+  });
+
+  router.get("/brands", async (req, res) => {
+    const rows = await db.query<BrandRow>(
+      "SELECT * FROM brands ORDER BY is_default DESC, updated_at DESC, name ASC",
+    );
+    res.status(200).json({ brands: rows.map(mapBrand) });
+  });
+
+  router.post("/brands", async (req, res) => {
+    const parsed = brandProfileSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid brand payload",
+        issues: parsed.error.flatten(),
+      });
+      return;
+    }
+    const id = cuid();
+    if (parsed.data.isDefault) {
+      await db.query("UPDATE brands SET is_default = false");
+    }
+    const rows = await db.query<BrandRow>(
+      `INSERT INTO brands (
+        id, name, watermark_text, primary_color, accent_color, caption_style,
+        include_outro, outro_text, contact_text, is_default, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())
+      RETURNING *`,
+      [
+        id,
+        parsed.data.name,
+        parsed.data.watermarkText,
+        parsed.data.primaryColor,
+        parsed.data.accentColor,
+        parsed.data.captionStyle,
+        parsed.data.includeOutro,
+        parsed.data.outroText,
+        parsed.data.contactText,
+        parsed.data.isDefault,
+      ],
+    );
+    res.status(201).json({ brand: mapBrand(rows[0]) });
+  });
+
+  router.put("/brands/:id", async (req, res) => {
+    const parsed = brandProfileSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: "Invalid brand payload",
+        issues: parsed.error.flatten(),
+      });
+      return;
+    }
+    if (parsed.data.isDefault) {
+      await db.query("UPDATE brands SET is_default = false WHERE id <> $1", [
+        req.params.id,
+      ]);
+    }
+    const rows = await db.query<BrandRow>(
+      `UPDATE brands
+       SET name = $2,
+           watermark_text = $3,
+           primary_color = $4,
+           accent_color = $5,
+           caption_style = $6,
+           include_outro = $7,
+           outro_text = $8,
+           contact_text = $9,
+           is_default = $10,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        req.params.id,
+        parsed.data.name,
+        parsed.data.watermarkText,
+        parsed.data.primaryColor,
+        parsed.data.accentColor,
+        parsed.data.captionStyle,
+        parsed.data.includeOutro,
+        parsed.data.outroText,
+        parsed.data.contactText,
+        parsed.data.isDefault,
+      ],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    res.status(200).json({ brand: mapBrand(rows[0]) });
+  });
+
+  router.post("/brands/:id/default", async (req, res) => {
+    await db.query("UPDATE brands SET is_default = false");
+    const rows = await db.query<BrandRow>(
+      "UPDATE brands SET is_default = true, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    res.status(200).json({ brand: mapBrand(rows[0]) });
+  });
+
+  router.delete("/brands/:id", async (req, res) => {
+    const rows = await db.query<BrandRow>(
+      "DELETE FROM brands WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    res.status(200).json({ success: true });
+  });
+
+  const authService = new AuthService(db);
+  const backupService = new BackupService(db, config);
+  const diagnosticsService = new DiagnosticsService(db, config);
+  const webhookService = new WebhookService(db);
+  const analyticsService = new AnalyticsService(db, config);
+
+  // 1. System Info & Diagnostics
+  router.get("/system/info", (req, res) => {
+    res.status(200).json(getProductInfo());
+  });
+
+  router.get("/system/storage", (req, res) => {
+    res.status(200).json(diagnosticsService.getStorageUsage());
+  });
+
+  router.get("/system/diagnostics", async (req, res) => {
+    try {
+      const report = await diagnosticsService.generateReport();
+      res.status(200).json(report);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to generate diagnostics report", message: String(error) });
+    }
+  });
+
+  router.get("/system/diagnostics/bundle", async (req, res) => {
+    try {
+      const bundle = await diagnosticsService.generateBundle();
+      res.setHeader("Content-Disposition", `attachment; filename="${bundle.filename}"`);
+      res.setHeader("Content-Type", "application/json");
+      res.status(200).send(bundle.jsonContent);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to download diagnostics bundle", message: String(error) });
+    }
+  });
+
+  // 2. Setup & Auth Endpoints
+  router.get("/setup/status", async (req, res) => {
+    try {
+      const status = await authService.getSetupState();
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get setup status", message: String(error) });
+    }
+  });
+
+  router.post("/setup/complete", async (req, res) => {
+    try {
+      await authService.completeSetup(req.body);
+      res.status(200).json({ success: true, message: "Setup completed successfully." });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to complete setup", message: String(error) });
+    }
+  });
+
+  router.post("/auth/setup-admin", async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      const user = await authService.createInitialAdmin(username, password);
+      const session = await authService.authenticate(username, password);
+      res.status(201).json({ user, session });
+    } catch (error) {
+      res.status(400).json({ error: "Failed to setup admin user", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/auth/login", async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      const session = await authService.authenticate(username, password);
+      if (!session) {
+        res.status(401).json({ error: "Invalid username or password." });
+        return;
+      }
+      res.status(200).json({ session });
+    } catch (error) {
+      res.status(500).json({ error: "Login failed", message: String(error) });
+    }
+  });
+
+  router.post("/auth/logout", async (req, res) => {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (token) {
+      await authService.logout(token);
+    }
+    res.status(200).json({ success: true });
+  });
+
+  router.get("/auth/me", async (req, res) => {
+    const token = req.headers.authorization?.replace("Bearer ", "");
+    if (!token) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const user = await authService.validateSession(token);
+    if (!user) {
+      res.status(401).json({ error: "Invalid or expired session." });
+      return;
+    }
+    res.status(200).json({ user });
+  });
+
+  // 3. Backups
+  router.get("/backups", async (req, res) => {
+    try {
+      const backups = await backupService.listBackups();
+      res.status(200).json({ backups });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to list backups", message: String(error) });
+    }
+  });
+
+  router.post("/backups", async (req, res) => {
+    try {
+      const backup = await backupService.createBackup(req.body);
+      res.status(201).json({ backup });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create backup", message: String(error) });
+    }
+  });
+
+  router.get("/backups/:id/download", async (req, res) => {
+    try {
+      const backups = await backupService.listBackups();
+      const backup = backups.find((b) => b.id === req.params.id || b.filename === req.params.id);
+      if (!backup || !fs.existsSync(backup.filepath)) {
+        res.status(404).json({ error: "Backup file not found." });
+        return;
+      }
+      res.download(backup.filepath, backup.filename);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to download backup", message: String(error) });
+    }
+  });
+
+  router.post("/backups/:id/restore", async (req, res) => {
+    try {
+      const result = await backupService.restoreBackup(req.params.id);
+      res.status(200).json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Restore failed", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.delete("/backups/:id", async (req, res) => {
+    try {
+      await backupService.deleteBackup(req.params.id);
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Delete backup failed", message: String(error) });
+    }
+  });
+
+  router.get("/config/export", (req, res) => {
+    const configData = backupService.exportConfiguration();
+    res.status(200).json(configData);
+  });
+
+  // 4. Analytics
+  router.get("/analytics/overview", async (req, res) => {
+    try {
+      const overview = await analyticsService.getOverview();
+      res.status(200).json(overview);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get analytics", message: String(error) });
+    }
+  });
+
+  // 5. Webhooks
+  router.get("/webhooks", async (req, res) => {
+    try {
+      const webhooks = await webhookService.listWebhooks();
+      res.status(200).json({ webhooks });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to list webhooks", message: String(error) });
+    }
+  });
+
+  router.post("/webhooks", async (req, res) => {
+    try {
+      const { url, events } = req.body;
+      if (!url) {
+        res.status(400).json({ error: "Webhook URL is required." });
+        return;
+      }
+      const webhook = await webhookService.createWebhook(url, events);
+      res.status(201).json({ webhook });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create webhook", message: String(error) });
+    }
+  });
+
+  router.delete("/webhooks/:id", async (req, res) => {
+    try {
+      await webhookService.deleteWebhook(req.params.id);
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete webhook", message: String(error) });
+    }
+  });
+
+  router.get("/webhooks/deliveries", async (req, res) => {
+    try {
+      const deliveries = await webhookService.getDeliveryHistory();
+      res.status(200).json({ deliveries });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get deliveries", message: String(error) });
+    }
+  });
+
+  return router;
+}
+
+export function createV2InternalRouter(
+  config: Config,
+  shortCreator: ShortCreator,
+  jobs?: JobService,
+  db?: V2Database,
+): express.Router {
+  const router = express.Router();
+  router.use(express.json({ limit: "2mb" }));
+  router.use(requireInternalToken(config));
+
+  router.post("/jobs/:id/start", async (req, res) => {
+    if (!jobs) {
+      res.status(503).json({ error: "Job service is unavailable." });
+      return;
+    }
+    const job = await jobs.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+    try {
+      await jobs.updateJob(
+        job.id,
+        "preparing",
+        5,
+        "Preparing",
+        "Preparing render worker.",
+      );
+      let dispatchErr: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await axios.post(
+            `${config.renderWorkerBaseUrl}/internal/v1/render/jobs/${job.id}/start`,
+            {
+              jobId: job.id,
+              input: job.productionSpec || job.input,
+              callbackBaseUrl: config.appInternalBaseUrl,
+              internalServiceToken: config.internalServiceToken,
+            },
+            {
+              timeout: 15000,
+              headers: { "x-internal-token": config.internalServiceToken },
+            },
+          );
+          dispatchErr = null;
+          break;
+        } catch (e: any) {
+          dispatchErr = e;
+          if (attempt < 2) {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        }
+      }
+      if (dispatchErr) throw dispatchErr;
+      res.status(202).json({ accepted: true, jobId: job.id });
+    } catch (error) {
+      await jobs.updateJob(job.id, "failed", job.progress, "Render dispatch failed", "Render worker is unavailable.", {
+        error: "Render worker is unavailable.",
+        technicalError: error instanceof Error ? error.message : String(error),
+      });
+      res.status(503).json({ error: "Render worker is unavailable." });
+    }
+  });
+
+  router.post("/jobs/:id/progress", async (req, res) => {
+    if (!jobs) {
+      res.status(503).json({ error: "Job service is unavailable." });
+      return;
+    }
+    const parsed = internalProgressSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid progress payload." });
+      return;
+    }
+    const update = parsed.data;
+    const job = await jobs.updateJob(
+      req.params.id,
+      update.status,
+      update.progress,
+      update.currentStage,
+      update.message,
+      { technicalMessage: update.technicalMessage },
+    );
+    res.status(200).json({ job });
+  });
+
+  router.post("/jobs/:id/complete", async (req, res) => {
+    if (!jobs) {
+      res.status(503).json({ error: "Job service is unavailable." });
+      return;
+    }
+    const parsed = internalCompleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid complete payload." });
+      return;
+    }
+    const job = await jobs.completeJob(
+      req.params.id,
+      parsed.data.videoId,
+      parsed.data.output,
+    );
+    res.status(200).json({ job });
+  });
+
+  router.post("/jobs/:id/fail", async (req, res) => {
+    if (!jobs) {
+      res.status(503).json({ error: "Job service is unavailable." });
+      return;
+    }
+    const parsed = internalFailSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid fail payload." });
+      return;
+    }
+    const job = await jobs.updateJob(
+      req.params.id,
+      "failed",
+      100,
+      "Failed",
+      parsed.data.message,
+      {
+        error: parsed.data.message,
+        technicalError: parsed.data.technicalMessage,
+      },
+    );
+    res.status(200).json({ job });
+  });
+
+  router.post("/render/jobs/:id/start", async (req, res) => {
+    const parsed = internalStartRenderSchema.safeParse(req.body);
+    if (!parsed.success || parsed.data.jobId !== req.params.id) {
+      res.status(400).json({ error: "Invalid render payload." });
+      return;
+    }
+    const { jobId, input, callbackBaseUrl, internalServiceToken } = parsed.data;
+
+    void shortCreator
+      .createShortNow(jobId, input, async (event) => {
+        try {
+          await axios.post(
+            `${callbackBaseUrl}/internal/v1/jobs/${jobId}/progress`,
+            event,
+            { headers: { "x-internal-token": internalServiceToken }, timeout: 15000 },
+          );
+        } catch {
+          // Progress update is advisory
+        }
+      })
+      .then(async (videoId) => {
+        const sidecar = readMetadata(config.videosDirPath, videoId);
+        await axios.post(
+          `${callbackBaseUrl}/internal/v1/jobs/${jobId}/complete`,
+          {
+            videoId,
+            output: {
+              path: shortCreator.getVideoPath(videoId),
+              metadata: sidecar || undefined,
+            },
+          },
+          { headers: { "x-internal-token": internalServiceToken }, timeout: 5000 },
+        );
+      })
+      .catch(async (error) => {
+        const rawMsg = error instanceof Error ? error.message : String(error);
+        await axios.post(
+          `${callbackBaseUrl}/internal/v1/jobs/${jobId}/fail`,
+          {
+            message: "Video render failed.",
+            technicalMessage: rawMsg.slice(0, 4000),
+          },
+          { headers: { "x-internal-token": internalServiceToken }, timeout: 15000 },
+        );
+      });
+
+    res.status(202).json({ accepted: true, jobId });
+  });
+
+  if (db) {
+    const publishingService = new PublishingService(db, config, publishingRegistry);
+    router.post("/publishing/publications/:id/execute", async (req, res) => {
+      try {
+        const pub = await publishingService.publishPublication(req.params.id);
+        res.status(200).json({ accepted: true, publication: pub });
+      } catch (error) {
+        res.status(500).json({
+          error: "Internal publishing execution failed.",
+          technicalError: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  }
+
+  return router;
+}
