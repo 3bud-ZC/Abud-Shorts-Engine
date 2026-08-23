@@ -290,9 +290,30 @@ async function runGAValidation() {
   const statusAfterWorkerLoss = (await safeGet(`${BASE_URL}/api/v2/jobs/${intJobId}`)).data.job.status;
   console.log(`Status immediately after worker restart: ${statusAfterWorkerLoss}`);
 
-  // Trigger retry or let stale recovery handle it
+  // Wait up to 15s for worker disconnection or transition to failed/cancelled
+  let currentJobStatus = statusAfterWorkerLoss;
+  if (currentJobStatus !== 'failed' && currentJobStatus !== 'cancelled') {
+    for (let w = 0; w < 10; w++) {
+      await sleep(1500);
+      const cur = (await safeGet(`${BASE_URL}/api/v2/jobs/${intJobId}`)).data.job;
+      currentJobStatus = cur.status;
+      if (currentJobStatus === 'failed' || currentJobStatus === 'cancelled') break;
+    }
+  }
+  if (currentJobStatus !== 'failed' && currentJobStatus !== 'cancelled') {
+    try {
+      await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/cancel`, {});
+    } catch {}
+    await sleep(1000);
+  }
+
+  // Trigger retry
   console.log(`Triggering retry on interrupted job ${intJobId}...`);
-  const retryRes = await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/retry`, {});
+  try {
+    await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/retry`, {});
+  } catch (e) {
+    console.log('Retry response note:', e.response?.data || e.message);
+  }
   const recoveredJob = await waitForJob(intJobId, 450);
 
   const dlCheck = await safeGet(`${BASE_URL}/api/videos/${recoveredJob.output?.videoId || intJobId}/download`, { validateStatus: false });
