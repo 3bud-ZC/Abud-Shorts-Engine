@@ -89,6 +89,37 @@ describe("Media Intelligence Service & Asset Scorer", () => {
     expect(score.reasons).toContain("Duplicate asset already used in video");
   });
 
+  it("prefers passing stock candidates over higher-risk failing candidates", () => {
+    const tooShort: StockAssetCandidate = {
+      id: "short-hd",
+      url: "https://pexels.com/short.mp4",
+      width: 1080,
+      height: 1920,
+      duration: 1.5,
+      tags: ["technology", "dashboard"],
+      qualityScore: 95,
+    };
+    const usable: StockAssetCandidate = {
+      id: "usable-hd",
+      url: "https://pexels.com/usable.mp4",
+      width: 1080,
+      height: 1920,
+      duration: 7,
+      tags: ["technology", "software"],
+      qualityScore: 70,
+    };
+
+    const selection = selectBestCandidate([tooShort, usable], {
+      queryTerms: ["technology"],
+      visualIntent: "technology",
+      orientation: "portrait",
+      targetDurationSeconds: 6,
+    });
+
+    expect(selection.best?.id).toBe("usable-hd");
+    expect(selection.scoreResult?.passed).toBe(true);
+  });
+
   it("splits long scenes into multi-asset segments in fast pacing and high quality", () => {
     const service = new MediaIntelligenceService();
     const sceneSpec = {

@@ -7,6 +7,7 @@ export type AssetScoringOptions = {
   targetDurationSeconds?: number;
   previouslyUsedIds?: (string | number)[];
   previouslyUsedCreators?: string[];
+  previousCandidates?: StockAssetCandidate[];
 };
 
 export type AssetScoreResult = {
@@ -20,8 +21,96 @@ export type AssetScoreResult = {
     relevanceScore: number;
     diversityScore: number;
     duplicatePenalty: number;
+    motionScore: number;
+    cropSafetyScore: number;
+    qualityScore: number;
+    nearDuplicateRisk: number;
   };
 };
+
+function tokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\u0600-\u06ff]+/g, " ")
+      .split(/\s+/)
+      .filter((token) => token.length > 2),
+  );
+}
+
+export function estimateNearDuplicateRisk(
+  candidate: StockAssetCandidate,
+  previousCandidates: StockAssetCandidate[] = [],
+): number {
+  const currentText = [
+    candidate.id,
+    candidate.creator,
+    ...(candidate.tags || []),
+    candidate.sourceUrl,
+  ].filter(Boolean).join(" ");
+  const currentTokens = tokens(currentText);
+  if (currentTokens.size === 0) return 0;
+
+  let highest = 0;
+  for (const previous of previousCandidates) {
+    if (String(previous.id) === String(candidate.id)) return 100;
+    const previousText = [
+      previous.id,
+      previous.creator,
+      ...(previous.tags || []),
+      previous.sourceUrl,
+    ].filter(Boolean).join(" ");
+    const previousTokens = tokens(previousText);
+    const intersection = [...currentTokens].filter((token) => previousTokens.has(token)).length;
+    const union = new Set([...currentTokens, ...previousTokens]).size || 1;
+    const metadataSimilarity = Math.round((intersection / union) * 100);
+    const sameCreator = candidate.creator && previous.creator && candidate.creator === previous.creator ? 20 : 0;
+    const closeDimensions =
+      Math.abs((candidate.width || 0) - (previous.width || 0)) < 64 &&
+      Math.abs((candidate.height || 0) - (previous.height || 0)) < 64
+        ? 10
+        : 0;
+    highest = Math.max(highest, Math.min(100, metadataSimilarity + sameCreator + closeDimensions));
+  }
+  return highest;
+}
+
+export function selectSmartClipWindow(
+  candidate: StockAssetCandidate,
+  targetDurationSeconds = 5,
+): { sourceDuration: number; selectedStart: number; selectedEnd: number; reason: string } {
+  const sourceDuration = Math.max(candidate.duration || targetDurationSeconds, targetDurationSeconds);
+  const usableDuration = Math.min(targetDurationSeconds, sourceDuration);
+  const avoidHead = sourceDuration > usableDuration + 2 ? Math.min(1.2, sourceDuration * 0.08) : 0;
+  const avoidTail = sourceDuration > usableDuration + 2 ? Math.min(1.0, sourceDuration * 0.06) : 0;
+  const available = Math.max(0, sourceDuration - avoidHead - avoidTail - usableDuration);
+  const selectedStart = Math.round((avoidHead + available * 0.38) * 100) / 100;
+  const selectedEnd = Math.round(Math.min(sourceDuration, selectedStart + usableDuration) * 100) / 100;
+  return {
+    sourceDuration: Math.round(sourceDuration * 100) / 100,
+    selectedStart,
+    selectedEnd,
+    reason: selectedStart > 0 ? "Skipped likely intro/setup frames" : "Full clip used from start",
+  };
+}
+
+export function estimatePortraitCrop(
+  candidate: StockAssetCandidate,
+): { mode: "native_portrait" | "center_crop" | "letterbox_safe"; xCenter: number; safetyScore: number; reason: string } {
+  if (candidate.height >= candidate.width) {
+    return { mode: "native_portrait", xCenter: 0.5, safetyScore: 96, reason: "Native portrait or square-ish clip" };
+  }
+  const tags = (candidate.tags || []).join(" ").toLowerCase();
+  const peopleLikely = /\b(person|people|owner|team|customer|face|hands|office|business)\b/.test(tags);
+  return {
+    mode: "center_crop",
+    xCenter: peopleLikely ? 0.48 : 0.5,
+    safetyScore: peopleLikely ? 78 : 70,
+    reason: peopleLikely
+      ? "Center crop with slight subject-prior bias from tags"
+      : "Deterministic center crop fallback",
+  };
+}
 
 /**
  * Deterministically ranks and scores stock media assets for intelligent selection.
@@ -33,16 +122,26 @@ export function scoreStockAsset(
   const reasons: string[] = [];
   const {
     queryTerms = [],
+    visualIntent,
     orientation = "portrait",
     targetDurationSeconds = 5,
     previouslyUsedIds = [],
     previouslyUsedCreators = [],
+    previousCandidates = [],
   } = options;
 
   let duplicatePenalty = 0;
   if (previouslyUsedIds.some((id) => String(id) === String(candidate.id))) {
     duplicatePenalty = -1000;
     reasons.push("Duplicate asset already used in video");
+  }
+  const nearDuplicateRisk = estimateNearDuplicateRisk(candidate, previousCandidates);
+  if (nearDuplicateRisk >= 70) {
+    duplicatePenalty = Math.min(duplicatePenalty, -35);
+    reasons.push(`High near-duplicate risk (${nearDuplicateRisk}/100)`);
+  } else if (nearDuplicateRisk >= 45) {
+    duplicatePenalty -= 12;
+    reasons.push(`Moderate near-duplicate risk (${nearDuplicateRisk}/100)`);
   }
 
   // 1. Orientation score (max 25)
@@ -104,7 +203,7 @@ export function scoreStockAsset(
     reasons.push(`Clip too short (${candidate.duration}s vs ${targetDurationSeconds}s target)`);
   }
 
-  // 4. Query & Tag Relevance score (max 20)
+  // 4. Query, intent & tag relevance score (max 20)
   let relevanceScore = 10;
   if (candidate.tags && candidate.tags.length > 0 && queryTerms.length > 0) {
     const candidateTagsLower = candidate.tags.map((t) => t.toLowerCase());
@@ -120,6 +219,33 @@ export function scoreStockAsset(
       reasons.push(`Matched ${matchCount} search keyword(s)`);
     }
   }
+  if (visualIntent && candidate.tags?.length) {
+    const intentTerms: Record<string, string[]> = {
+      product_hero: ["product", "brand", "fashion", "item", "display"],
+      lifestyle: ["people", "lifestyle", "home", "street", "customer"],
+      problem: ["problem", "stress", "frustrated", "empty", "slow"],
+      solution: ["solution", "service", "team", "success", "workflow"],
+      demonstration: ["demo", "hands", "process", "using", "screen"],
+      social_proof: ["review", "customer", "testimonial", "people"],
+      environment: ["office", "store", "city", "workspace", "interior"],
+      detail: ["close", "detail", "texture", "macro", "hands"],
+      technology: ["technology", "computer", "software", "dashboard", "phone"],
+      people: ["person", "people", "team", "customer", "owner"],
+      cta: ["phone", "message", "contact", "call", "mobile"],
+      abstract: ["abstract", "motion", "background", "pattern"],
+    };
+    const tags = candidate.tags.map((tag) => tag.toLowerCase()).join(" ");
+    const intentMatch = (intentTerms[visualIntent] || []).some((term) => tags.includes(term));
+    if (intentMatch) {
+      relevanceScore = Math.min(20, relevanceScore + 4);
+      reasons.push(`Matched visual intent (${visualIntent})`);
+    }
+  }
+  if (typeof candidate.qualityScore === "number") {
+    const qualityAdjustment = Math.round(Math.max(-5, Math.min(5, (candidate.qualityScore - 70) / 6)));
+    relevanceScore = Math.max(0, Math.min(20, relevanceScore + qualityAdjustment));
+    if (qualityAdjustment > 0) reasons.push("Provider quality score improved ranking");
+  }
 
   // 5. Creator & Visual Diversity bonus (max 10)
   let diversityScore = 5;
@@ -132,16 +258,35 @@ export function scoreStockAsset(
     }
   }
 
+  const motionScore = candidate.duration >= targetDurationSeconds + 2 ? 8 : 5;
+  if (motionScore >= 8) reasons.push("Clip has enough duration for smart sub-window selection");
+
+  const crop = estimatePortraitCrop(candidate);
+  const cropSafetyScore = Math.round(crop.safetyScore / 10);
+  if (crop.safetyScore < 75) reasons.push("Crop safety is fallback-level; subject detection not available");
+
+  const providerQualityScore = typeof candidate.qualityScore === "number"
+    ? Math.max(0, Math.min(10, Math.round(candidate.qualityScore / 10)))
+    : 7;
+
   const rawScore =
     orientationScore +
     resolutionScore +
     durationScore +
     relevanceScore +
     diversityScore +
+    motionScore +
+    cropSafetyScore +
+    providerQualityScore +
     duplicatePenalty;
 
   const score = Math.max(0, Math.min(100, Math.round(rawScore)));
-  const passed = score >= 40 && duplicatePenalty === 0;
+  const passed =
+    score >= 40 &&
+    duplicatePenalty === 0 &&
+    candidate.duration >= targetDurationSeconds * 0.5 &&
+    resolutionScore >= 12 &&
+    nearDuplicateRisk < 80;
 
   return {
     score,
@@ -154,6 +299,10 @@ export function scoreStockAsset(
       relevanceScore,
       diversityScore,
       duplicatePenalty,
+      motionScore,
+      cropSafetyScore,
+      qualityScore: providerQualityScore,
+      nearDuplicateRisk,
     },
   };
 }
@@ -176,8 +325,9 @@ export function selectBestCandidate(
     }))
     .sort((a, b) => b.result.score - a.result.score);
 
-  const best = ranked[0]?.candidate || null;
-  const scoreResult = ranked[0]?.result || null;
+  const preferred = ranked.find((item) => item.result.passed) || ranked[0];
+  const best = preferred?.candidate || null;
+  const scoreResult = preferred?.result || null;
 
   return {
     best,

@@ -8,7 +8,25 @@ import { kokoroModelPrecision, whisperModels } from "./types/shorts";
 const defaultLogLevel: pino.Level = "info";
 const defaultPort = 3123;
 const whisperVersion = "1.7.1";
-const defaultWhisperModel: whisperModels = "medium.en";
+const defaultWhisperModel: whisperModels = "small";
+const defaultRequestTimeoutMs = 30_000;
+const defaultProviderTimeoutMs = 45_000;
+const defaultWebhookTimeoutMs = 10_000;
+const defaultMinFreeDiskBytes = 536_870_912;
+const defaultTempMaxAgeMs = 24 * 60 * 60 * 1000;
+const defaultHealthCacheTtlMs = 10_000;
+const defaultDatabaseMaxConnections = 10;
+const defaultDatabaseIdleTimeoutMs = 30_000;
+const defaultDatabaseConnectionTimeoutMs = 5_000;
+const defaultDatabaseStatementTimeoutMs = 60_000;
+
+export type RuntimeEnvironment = "development" | "test" | "production";
+
+export type RuntimeConfigIssue = {
+  severity: "warning" | "critical";
+  code: string;
+  message: string;
+};
 
 // Create the global logger
 const versionNumber = process.env.npm_package_version;
@@ -55,6 +73,18 @@ export class Config {
   public appInternalBaseUrl: string;
   public v2PublicUrl: string;
   public pexelsValidationTimeoutMs: number;
+  public environment: RuntimeEnvironment;
+  public requestTimeoutMs: number;
+  public providerTimeoutMs: number;
+  public webhookTimeoutMs: number;
+  public minFreeDiskBytes: number;
+  public tempMaxAgeMs: number;
+  public healthCacheTtlMs: number;
+  public databaseMaxConnections: number;
+  public databaseIdleTimeoutMs: number;
+  public databaseConnectionTimeoutMs: number;
+  public databaseStatementTimeoutMs: number;
+  public enableTestProviders: boolean;
 
   // docker-specific, performance-related settings to prevent memory issues
   public concurrency?: number;
@@ -104,6 +134,48 @@ export class Config {
     this.pexelsValidationTimeoutMs = process.env.PEXELS_VALIDATION_TIMEOUT_MS
       ? parseInt(process.env.PEXELS_VALIDATION_TIMEOUT_MS)
       : 12000;
+    this.environment = normalizeEnvironment(process.env.NODE_ENV);
+    this.requestTimeoutMs = parsePositiveInt(
+      process.env.REQUEST_TIMEOUT_MS,
+      defaultRequestTimeoutMs,
+    );
+    this.providerTimeoutMs = parsePositiveInt(
+      process.env.PROVIDER_TIMEOUT_MS,
+      defaultProviderTimeoutMs,
+    );
+    this.webhookTimeoutMs = parsePositiveInt(
+      process.env.WEBHOOK_TIMEOUT_MS,
+      defaultWebhookTimeoutMs,
+    );
+    this.minFreeDiskBytes = parsePositiveInt(
+      process.env.MIN_FREE_DISK_BYTES,
+      defaultMinFreeDiskBytes,
+    );
+    this.tempMaxAgeMs = parsePositiveInt(
+      process.env.TEMP_MAX_AGE_MS,
+      defaultTempMaxAgeMs,
+    );
+    this.healthCacheTtlMs = parsePositiveInt(
+      process.env.HEALTH_CACHE_TTL_MS,
+      defaultHealthCacheTtlMs,
+    );
+    this.databaseMaxConnections = parsePositiveInt(
+      process.env.DATABASE_MAX_CONNECTIONS,
+      defaultDatabaseMaxConnections,
+    );
+    this.databaseIdleTimeoutMs = parsePositiveInt(
+      process.env.DATABASE_IDLE_TIMEOUT_MS,
+      defaultDatabaseIdleTimeoutMs,
+    );
+    this.databaseConnectionTimeoutMs = parsePositiveInt(
+      process.env.DATABASE_CONNECTION_TIMEOUT_MS,
+      defaultDatabaseConnectionTimeoutMs,
+    );
+    this.databaseStatementTimeoutMs = parsePositiveInt(
+      process.env.DATABASE_STATEMENT_TIMEOUT_MS,
+      defaultDatabaseStatementTimeoutMs,
+    );
+    this.enableTestProviders = process.env.ENABLE_TEST_PROVIDERS === "true";
 
     if (process.env.WHISPER_MODEL) {
       this.whisperModel = process.env.WHISPER_MODEL as whisperModels;
@@ -125,6 +197,24 @@ export class Config {
   }
 
   public ensureConfig() {
+    const validation = this.validateRuntimeConfig();
+    for (const issue of validation.issues) {
+      const logPayload = { code: issue.code, severity: issue.severity };
+      if (issue.severity === "critical") {
+        logger.error(logPayload, issue.message);
+      } else {
+        logger.warn(logPayload, issue.message);
+      }
+    }
+    if (!validation.valid) {
+      throw new Error(
+        `Runtime configuration failed validation: ${validation.issues
+          .filter((issue) => issue.severity === "critical")
+          .map((issue) => issue.code)
+          .join(", ")}`,
+      );
+    }
+
     if (!this.pexelsApiKey) {
       if (process.env.V2_ENABLED === "true") {
         logger.warn(
@@ -142,6 +232,69 @@ export class Config {
       );
     }
   }
+
+  public validateRuntimeConfig(): { valid: boolean; issues: RuntimeConfigIssue[] } {
+    const issues: RuntimeConfigIssue[] = [];
+    const v2Enabled = process.env.V2_ENABLED === "true";
+    const productionLike = this.environment === "production" && !this.devMode;
+
+    const add = (
+      severity: RuntimeConfigIssue["severity"],
+      code: string,
+      message: string,
+    ) => issues.push({ severity, code, message });
+
+    if (v2Enabled && !this.internalServiceToken) {
+      add("critical", "missing_internal_service_token", "INTERNAL_SERVICE_TOKEN is required when V2 is enabled.");
+    }
+    if (v2Enabled && this.internalServiceToken && this.internalServiceToken.length < 24) {
+      add("warning", "weak_internal_service_token", "INTERNAL_SERVICE_TOKEN should be at least 24 characters.");
+    }
+    if (productionLike && /change-this|change-me|dummy|test/i.test(this.internalServiceToken)) {
+      add("critical", "placeholder_internal_service_token", "INTERNAL_SERVICE_TOKEN must not use placeholder values in production.");
+    }
+    if (v2Enabled && this.serviceRole === "app" && !this.databaseUrl) {
+      add("critical", "missing_database_url", "DATABASE_URL is required for the V2 app role.");
+    }
+    if (productionLike && this.enableTestProviders) {
+      add("critical", "test_providers_enabled", "ENABLE_TEST_PROVIDERS must be false in production.");
+    }
+    if (this.databaseUrl && !/^postgres(ql)?:\/\//i.test(this.databaseUrl)) {
+      add("critical", "invalid_database_url", "DATABASE_URL must be a PostgreSQL connection string.");
+    }
+    for (const [code, url] of [
+      ["invalid_n8n_base_url", this.n8nBaseUrl],
+      ["invalid_render_worker_base_url", this.renderWorkerBaseUrl],
+      ["invalid_app_internal_base_url", this.appInternalBaseUrl],
+      ["invalid_v2_public_url", this.v2PublicUrl],
+    ] as const) {
+      try {
+        new URL(url);
+      } catch {
+        add("critical", code, `${code.replace(/_/g, " ")} must be a valid URL.`);
+      }
+    }
+    if (this.minFreeDiskBytes < 100 * 1024 * 1024) {
+      add("warning", "low_disk_guard", "MIN_FREE_DISK_BYTES is below 100MB.");
+    }
+
+    return {
+      valid: !issues.some((issue) => issue.severity === "critical"),
+      issues,
+    };
+  }
 }
 
 export const KOKORO_MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
+
+function normalizeEnvironment(value?: string): RuntimeEnvironment {
+  if (value === "production" || value === "test") return value;
+  return "development";
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}

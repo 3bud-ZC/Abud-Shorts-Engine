@@ -18,6 +18,7 @@ export interface BackupManifest {
   includesMedia: boolean;
   includesSecrets: boolean;
   mediaCount: number;
+  artifactCount?: number;
   tablesCount: Record<string, number>;
   checksumSha256: string;
   createdAt: string;
@@ -160,7 +161,7 @@ export class BackupService {
       ];
 
       if (type !== "config_only") {
-        tableNames.push("jobs", "job_events", "generated_assets", "publishing_attempts", "publishing_events");
+        tableNames.push("jobs", "job_events", "generated_assets", "publishing_attempts", "publishing_events", "video_revisions", "scene_artifacts");
       }
 
       for (const table of tableNames) {
@@ -189,7 +190,9 @@ export class BackupService {
 
     // Collect Media if type === 'full'
     const mediaFiles: Record<string, string> = {}; // filename -> base64
+    const artifactFiles: Record<string, string> = {}; // data-dir relative path -> base64
     let mediaCount = 0;
+    let artifactCount = 0;
     if (type === "full" && fs.existsSync(this.config.videosDirPath)) {
       const files = fs.readdirSync(this.config.videosDirPath);
       for (const file of files) {
@@ -197,6 +200,18 @@ export class BackupService {
         if (fs.statSync(fullPath).isFile() && statIsReasonable(fullPath)) {
           mediaFiles[file] = fs.readFileSync(fullPath).toString("base64");
           mediaCount++;
+        }
+      }
+    }
+    if (type === "full") {
+      const artifactRoot = path.join(this.config.dataDirPath, "artifacts");
+      if (fs.existsSync(artifactRoot)) {
+        for (const filePath of collectFiles(artifactRoot)) {
+          if (!statIsReasonable(filePath)) continue;
+          const relative = path.relative(this.config.dataDirPath, filePath).replace(/\\/g, "/");
+          if (!relative.startsWith("artifacts/") || relative.includes("..")) continue;
+          artifactFiles[relative] = fs.readFileSync(filePath).toString("base64");
+          artifactCount++;
         }
       }
     }
@@ -211,6 +226,7 @@ export class BackupService {
       createdAt: new Date().toISOString(),
       database: tablesData,
       media: mediaFiles,
+      artifacts: artifactFiles,
     };
 
     const rawJson = JSON.stringify(payload);
@@ -228,6 +244,7 @@ export class BackupService {
       includesMedia: type === "full",
       includesSecrets: includeSecrets,
       mediaCount,
+      artifactCount,
       tablesCount,
       checksumSha256,
       createdAt: new Date().toISOString(),
@@ -367,6 +384,71 @@ export class BackupService {
             );
           }
           restoredTables.push(table);
+        } else if (table === "video_revisions") {
+          for (const revision of rows) {
+            await this.db.query(
+              `INSERT INTO video_revisions (
+                id, project_id, revision_number, parent_revision_id, source_job_id, output_video_id,
+                status, reason, change_type, changed_fields, is_final, created_at, updated_at
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+              ON CONFLICT (id) DO UPDATE SET
+                output_video_id = EXCLUDED.output_video_id,
+                status = EXCLUDED.status,
+                changed_fields = EXCLUDED.changed_fields,
+                is_final = EXCLUDED.is_final,
+                updated_at = EXCLUDED.updated_at`,
+              [
+                revision.id,
+                revision.project_id,
+                revision.revision_number,
+                revision.parent_revision_id || null,
+                revision.source_job_id || null,
+                revision.output_video_id || null,
+                revision.status || "ready",
+                revision.reason || null,
+                revision.change_type || "full",
+                JSON.stringify(revision.changed_fields || {}),
+                Boolean(revision.is_final),
+                revision.created_at || new Date(),
+                revision.updated_at || new Date(),
+              ],
+            );
+          }
+          restoredTables.push(table);
+        } else if (table === "scene_artifacts") {
+          for (const artifact of rows) {
+            await this.db.query(
+              `INSERT INTO scene_artifacts (
+                artifact_id, project_id, type, scene_index, segment_index, source_job_id, source_revision_id,
+                provider, model, input_hash, storage_ref, checksum_sha256, duration_seconds,
+                metadata, valid, superseded_at, created_at
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+              ON CONFLICT (artifact_id) DO UPDATE SET
+                valid = EXCLUDED.valid,
+                superseded_at = EXCLUDED.superseded_at,
+                metadata = EXCLUDED.metadata`,
+              [
+                artifact.artifact_id,
+                artifact.project_id,
+                artifact.type,
+                artifact.scene_index,
+                artifact.segment_index ?? null,
+                artifact.source_job_id || null,
+                artifact.source_revision_id || null,
+                artifact.provider || null,
+                artifact.model || null,
+                artifact.input_hash,
+                artifact.storage_ref,
+                artifact.checksum_sha256,
+                artifact.duration_seconds ?? null,
+                JSON.stringify(artifact.metadata || {}),
+                artifact.valid !== false,
+                artifact.superseded_at || null,
+                artifact.created_at || new Date(),
+              ],
+            );
+          }
+          restoredTables.push(table);
         }
       }
     }
@@ -379,6 +461,20 @@ export class BackupService {
       for (const [filename, base64Data] of Object.entries(payload.media as Record<string, string>)) {
         const destPath = path.join(this.config.videosDirPath, filename);
         if (!fs.existsSync(destPath)) {
+          fs.writeFileSync(destPath, Buffer.from(base64Data, "base64"));
+        }
+      }
+    }
+
+    if (payload.artifacts && typeof payload.artifacts === "object") {
+      for (const [relative, base64Data] of Object.entries(payload.artifacts as Record<string, string>)) {
+        const normalized = String(relative || "").replace(/\\/g, "/");
+        if (!normalized.startsWith("artifacts/") || normalized.includes("..")) continue;
+        const destPath = path.resolve(this.config.dataDirPath, normalized);
+        const dataRoot = path.resolve(this.config.dataDirPath);
+        if (!destPath.startsWith(dataRoot + path.sep)) continue;
+        if (!fs.existsSync(destPath)) {
+          fs.mkdirSync(path.dirname(destPath), { recursive: true });
           fs.writeFileSync(destPath, Buffer.from(base64Data, "base64"));
         }
       }
@@ -439,4 +535,17 @@ function statIsReasonable(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function collectFiles(root: string): string[] {
+  const found: string[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...collectFiles(fullPath));
+    } else if (entry.isFile()) {
+      found.push(fullPath);
+    }
+  }
+  return found;
 }

@@ -6,6 +6,7 @@ dist/
 *.log
 logs.txt
 data-dev/
+data/
 videos/
 app/data/
 C:/abud-shorts-engine/data-dev

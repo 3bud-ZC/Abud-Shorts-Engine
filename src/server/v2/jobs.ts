@@ -12,6 +12,14 @@ import {
 import { convertTemplateToProductionSpec } from "./templateToSpec";
 import type { ProductionSpec } from "../../types/productionSpec";
 import { estimateProductionCost } from "./cost-estimator";
+import {
+  type CheckpointStage,
+  completeStage,
+  failStage,
+  beginStage,
+  invalidateFromStage,
+  reusableStages,
+} from "./checkpoints";
 
 const allowedTransitions: Record<JobStatus, JobStatus[]> = {
   queued: ["preparing", "canceled", "failed"],
@@ -54,12 +62,15 @@ type DbJobRow = {
   language?: string;
   dialect?: string;
   cost_estimate?: Record<string, unknown>;
+  idempotency_key?: string;
   template_id?: string;
   brand_name?: string;
   input: any;
   output?: Record<string, unknown>;
   error?: string;
   technical_error?: string;
+  stage_timings?: Record<string, number>;
+  checkpoint?: Record<string, unknown>;
   created_at: Date;
   started_at?: Date;
   completed_at?: Date;
@@ -82,6 +93,13 @@ export function isValidJobTransition(current: JobStatus, next: JobStatus): boole
   return allowedTransitions[current]?.includes(next) ?? false;
 }
 
+export function sanitizeIdempotencyKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(normalized)) return undefined;
+  return normalized;
+}
+
 export class JobService {
   private events = new EventEmitter();
 
@@ -90,6 +108,14 @@ export class JobService {
   }
 
   public async createVideoJob(input: CreateVideoJobInput | any): Promise<JobRecord> {
+    const idempotencyKey = sanitizeIdempotencyKey(input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await this.getJobByIdempotencyKey(idempotencyKey);
+      if (existing) {
+        return existing;
+      }
+    }
+
     const id = cuid();
 
     let resolvedSpec: ProductionSpec | undefined;
@@ -141,8 +167,10 @@ export class JobService {
       `INSERT INTO jobs (
         id, type, status, progress, current_stage, title, template_id, brand_name, input,
         creation_mode, original_prompt, production_spec, ai_provider, visual_mode,
-        voice_provider, quality_profile, resolution, aspect_ratio, language, dialect, cost_estimate
-      ) VALUES ($1, 'video', 'queued', 0, 'Queued', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        voice_provider, quality_profile, resolution, aspect_ratio, language, dialect, cost_estimate,
+        idempotency_key
+      ) VALUES ($1, 'video', 'queued', 0, 'Queued', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
       RETURNING *`,
       [
         id,
@@ -162,21 +190,32 @@ export class JobService {
         language,
         dialect,
         costEstimate ? JSON.stringify(costEstimate) : null,
+        idempotencyKey,
       ],
     );
+
+    if (!rows[0] && idempotencyKey) {
+      const existing = await this.getJobByIdempotencyKey(idempotencyKey);
+      if (existing) return existing;
+    }
+    if (!rows[0]) {
+      throw new Error("Job could not be created.");
+    }
 
     await this.addEvent(id, "queued", 0, "Queued", "Video job queued.");
     return this.mapJob(rows[0]);
   }
 
-  public async listJobs(status?: string): Promise<JobRecord[]> {
+  public async listJobs(status?: string, limit = 100): Promise<JobRecord[]> {
+    const boundedLimit = Math.min(1000, Math.max(1, Math.floor(limit)));
     const rows = status
       ? await this.db.query<DbJobRow>(
-          "SELECT * FROM jobs WHERE status = $1 ORDER BY created_at DESC LIMIT 100",
-          [status],
+          "SELECT * FROM jobs WHERE status = $1 ORDER BY created_at DESC LIMIT $2",
+          [status, boundedLimit],
         )
       : await this.db.query<DbJobRow>(
-          "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 100",
+          "SELECT * FROM jobs ORDER BY created_at DESC LIMIT $1",
+          [boundedLimit],
         );
     return rows.map((row) => this.mapJob(row));
   }
@@ -185,6 +224,16 @@ export class JobService {
     const rows = await this.db.query<DbJobRow>("SELECT * FROM jobs WHERE id = $1", [
       id,
     ]);
+    return rows[0] ? this.mapJob(rows[0]) : null;
+  }
+
+  public async getJobByIdempotencyKey(idempotencyKey: string): Promise<JobRecord | null> {
+    const safeKey = sanitizeIdempotencyKey(idempotencyKey);
+    if (!safeKey) return null;
+    const rows = await this.db.query<DbJobRow>(
+      "SELECT * FROM jobs WHERE idempotency_key = $1",
+      [safeKey],
+    );
     return rows[0] ? this.mapJob(rows[0]) : null;
   }
 
@@ -208,6 +257,8 @@ export class JobService {
       technicalError?: string;
       technicalMessage?: string;
       visualProvidersUsed?: string[];
+      stageTimings?: Record<string, number>;
+      checkpoint?: Record<string, unknown>;
     } = {},
   ): Promise<JobRecord> {
     const current = await this.getJob(id);
@@ -233,6 +284,8 @@ export class JobService {
            error = COALESCE($6, error),
            technical_error = COALESCE($7, technical_error),
            visual_providers_used = COALESCE($8, visual_providers_used),
+           stage_timings = COALESCE($9, stage_timings),
+           checkpoint = COALESCE($10, checkpoint),
            started_at = ${startedAt},
            completed_at = ${completedAt},
            updated_at = now()
@@ -247,6 +300,8 @@ export class JobService {
         options.error || null,
         options.technicalError || null,
         options.visualProvidersUsed || null,
+        options.stageTimings ? JSON.stringify(options.stageTimings) : null,
+        options.checkpoint ? JSON.stringify(options.checkpoint) : null,
       ],
     );
 
@@ -257,6 +312,72 @@ export class JobService {
       currentStage,
       message,
       options.technicalMessage,
+    );
+    return this.mapJob(rows[0]);
+  }
+
+  public async updateStageCheckpoint(
+    id: string,
+    stage: CheckpointStage,
+    state: "running" | "completed" | "failed",
+    options: {
+      input?: unknown;
+      provider?: string;
+      artifacts?: Record<string, unknown>;
+      error?: string;
+      timingMs?: number;
+    } = {},
+  ): Promise<JobRecord> {
+    const current = await this.getJob(id);
+    if (!current) throw new Error("Job not found.");
+    let checkpoint: Record<string, unknown>;
+    if (state === "running") {
+      checkpoint = beginStage(current.checkpoint, stage, options.input, options.provider);
+    } else if (state === "completed") {
+      checkpoint = completeStage(current.checkpoint, stage, options.artifacts || {}, options.provider);
+    } else {
+      checkpoint = failStage(current.checkpoint, stage, options.error || "Stage failed.");
+    }
+    const stageTimings = {
+      ...(current.stageTimings || {}),
+      ...(typeof options.timingMs === "number" ? { [`${stage}Ms`]: Math.round(options.timingMs) } : {}),
+    };
+    const rows = await this.db.query<DbJobRow>(
+      `UPDATE jobs
+       SET checkpoint = $2,
+           stage_timings = $3,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [id, JSON.stringify(checkpoint), JSON.stringify(stageTimings)],
+    );
+    return this.mapJob(rows[0]);
+  }
+
+  public async retryStage(id: string, stage: CheckpointStage): Promise<JobRecord> {
+    const current = await this.getJob(id);
+    if (!current) throw new Error("Job not found.");
+    const checkpoint = invalidateFromStage(current.checkpoint, stage);
+    const rows = await this.db.query<DbJobRow>(
+      `UPDATE jobs
+       SET status = 'queued',
+           progress = LEAST(progress, 75),
+           current_stage = $3,
+           checkpoint = $2,
+           updated_at = now()
+       WHERE id = $1 AND status IN ('failed','canceled','ready','queued')
+       RETURNING *`,
+      [id, JSON.stringify(checkpoint), `Retry queued from ${stage}`],
+    );
+    if (!rows[0]) {
+      throw new Error("Stage retry is only available for queued, failed, canceled, or ready jobs.");
+    }
+    await this.addEvent(
+      id,
+      "queued",
+      rows[0].progress,
+      `Retry ${stage}`,
+      `Retry queued from ${stage}; reusable stages: ${reusableStages(checkpoint).join(", ") || "none"}.`,
     );
     return this.mapJob(rows[0]);
   }
@@ -369,12 +490,15 @@ export class JobService {
       language: row.language,
       dialect: row.dialect,
       costEstimate: row.cost_estimate,
+      idempotencyKey: row.idempotency_key,
       templateId: row.template_id,
       brandName: row.brand_name,
       input: row.input,
       output: row.output,
       error: row.error,
       technicalError: row.technical_error,
+      stageTimings: row.stage_timings || {},
+      checkpoint: row.checkpoint || {},
       createdAt: row.created_at.toISOString(),
       startedAt: row.started_at?.toISOString(),
       completedAt: row.completed_at?.toISOString(),

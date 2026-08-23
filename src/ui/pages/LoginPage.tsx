@@ -9,8 +9,12 @@ import {
   TextField,
   Typography,
   Alert,
+  IconButton,
+  InputAdornment,
 } from "@mui/material";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -20,6 +24,19 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+
+  React.useEffect(() => {
+    try {
+      if (localStorage.getItem("abud_auth_notice") === "session_expired") {
+        setNotice("Your session expired. Sign in again to continue.");
+        localStorage.removeItem("abud_auth_notice");
+      }
+    } catch {
+      // Ignore storage availability issues.
+    }
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,7 +54,9 @@ export const LoginPage: React.FC = () => {
       });
       if (res.data.session?.token) {
         localStorage.setItem("abud_session_token", res.data.session.token);
-        navigate("/");
+        const returnTo = localStorage.getItem("abud_auth_return_to") || "/";
+        localStorage.removeItem("abud_auth_return_to");
+        navigate(returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/");
       } else {
         setError("Invalid credentials.");
       }
@@ -75,12 +94,18 @@ export const LoginPage: React.FC = () => {
               <LockOutlinedIcon sx={{ color: "primary.main" }} />
             </Box>
             <Typography variant="h5" fontWeight={800} color="primary.main">
-              Admin Login
+              Sign in
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              ABUD Shorts Engine V2 Control Plane
+              ABUD Shorts Engine V2
             </Typography>
           </Box>
+
+          {notice && (
+            <Alert severity="info" sx={{ mb: 2.5 }}>
+              {notice}
+            </Alert>
+          )}
 
           {error && (
             <Alert severity="error" sx={{ mb: 2.5 }}>
@@ -97,14 +122,29 @@ export const LoginPage: React.FC = () => {
                 fullWidth
                 size="small"
                 autoFocus
+                autoComplete="username"
               />
               <TextField
                 label="Password"
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 fullWidth
                 size="small"
+                autoComplete="current-password"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        onClick={() => setShowPassword((value) => !value)}
+                        edge="end"
+                      >
+                        {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
               />
               <Button
                 type="submit"

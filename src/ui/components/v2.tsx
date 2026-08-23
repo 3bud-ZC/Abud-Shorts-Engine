@@ -62,11 +62,17 @@ export function bidiProps(text?: string) {
 
 export const JOB_STATUS_LABELS: Record<string, string> = {
   queued: "Queued",
+  all: "All",
+  active: "Active",
   planning: "Planning Creative",
+  preparing: "Preparing",
+  generating_content: "Planning Creative",
+  searching_assets: "Finding Visuals",
   collecting_media: "Collecting Media",
   generating_voice: "Synthesizing Voice",
   generating_captions: "Generating Captions",
   rendering: "Rendering Video",
+  finalizing: "Finalizing",
   validating: "Validating Output",
   ready: "Completed",
   failed: "Failed",
@@ -78,7 +84,7 @@ export const STAGE_LABELS: Record<string, string> = {
   "Planning Creative": "Creative Script Planning",
   "Collecting Media": "Fetching Visual Assets",
   "Generating Voice": "Neural Voice Synthesis",
-  "Generating Captions": "Whisper Speech Sync",
+  "Generating Captions": "Caption Timing",
   "Rendering Video": "Remotion Composition",
   Validating: "FFmpeg Quality Validation",
   Ready: "Production Complete",
@@ -519,7 +525,7 @@ export function RecentJobCard({
           {/* Footer: Latest update/error */}
           {job.error && (
             <Typography variant="caption" color="error.main" sx={{ display: "block", wordBreak: "break-word" }}>
-              ⚠️ {job.error}
+              Issue: {job.error}
             </Typography>
           )}
         </Stack>

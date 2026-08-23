@@ -465,7 +465,7 @@ export const PublishingPage: React.FC = () => {
       {tab === "scheduled" && (
         <SectionCard
           title="Scheduled Publications"
-          description="Queued publications persisted in PostgreSQL. Survives application restarts."
+          description="Scheduled posts are saved safely and continue after application restarts."
         >
           {scheduledList.length === 0 ? (
             <Typography color="text.secondary" sx={{ py: 3, textAlign: "center" }}>

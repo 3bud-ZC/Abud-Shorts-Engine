@@ -34,8 +34,8 @@ const steps = [
   "System Check",
   "Admin Access",
   "Storage",
-  "Free Providers",
-  "Optional AI",
+  "Local Providers",
+  "Optional Cloud",
   "Publishing",
   "Defaults",
   "Verification",
@@ -98,10 +98,13 @@ export const SetupWizard: React.FC = () => {
 
       setLoading(true);
       try {
-        await axios.post("/api/v2/auth/setup-admin", {
+        const res = await axios.post("/api/v2/auth/setup-admin", {
           username: adminUsername,
           password: adminPassword,
         });
+        if (res.data.session?.token) {
+          localStorage.setItem("abud_session_token", res.data.session.token);
+        }
       } catch (err: any) {
         // If already configured, allow proceeding
         if (!err.response?.data?.message?.includes("already configured")) {
@@ -153,7 +156,7 @@ export const SetupWizard: React.FC = () => {
             ABUD Shorts Engine V2
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Production First-Run Setup Wizard · Version 2.0.1
+            Production First-Run Setup Wizard · Version 2.1.0
           </Typography>
         </Box>
 
@@ -181,9 +184,9 @@ export const SetupWizard: React.FC = () => {
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 600 }}>
                 This wizard will guide you through setting up your local video production and multi-platform publishing engine.
-                The system includes a 100% free local pipeline (Local Creative Director, Pexels, Kokoro TTS, Whisper & Remotion) with zero mandatory cloud subscriptions.
+                This wizard prepares the local video engine, admin access, default voice settings, and optional publishing. Piper provides the local Arabic path, Kokoro provides local English, and cloud providers stay optional.
               </Typography>
-              <Chip label="Zero Manual Config Required" color="success" variant="outlined" />
+              <Chip label="Local-first video production" color="success" variant="outlined" />
             </Stack>
           )}
 
@@ -194,16 +197,16 @@ export const SetupWizard: React.FC = () => {
                 System Diagnostic & Health Check
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Verifying Docker runtime, internal networking, PostgreSQL, and storage directories.
+                Verifying the local application stack, database, worker, automation engine, and storage.
               </Typography>
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
                     <Typography variant="subtitle2" fontWeight={700}>
-                      PostgreSQL Database
+                      Database
                     </Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> Connected & Schema Version 2.5.0
+                      <CheckCircleIcon fontSize="small" /> Connected and ready
                     </Typography>
                   </Card>
                 </Grid>
@@ -213,27 +216,27 @@ export const SetupWizard: React.FC = () => {
                       Media Storage
                     </Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> /app/data/videos & cache mounted
+                      <CheckCircleIcon fontSize="small" /> Video and cache storage ready
                     </Typography>
                   </Card>
                 </Grid>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
                     <Typography variant="subtitle2" fontWeight={700}>
-                      Render Worker
+                      Render worker
                     </Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> FFmpeg 4.4 + Kokoro + Remotion
+                      <CheckCircleIcon fontSize="small" /> FFmpeg, Remotion, Piper, Kokoro, and Whisper available
                     </Typography>
                   </Card>
                 </Grid>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
                     <Typography variant="subtitle2" fontWeight={700}>
-                      Internal Orchestration
+                      Automation engine
                     </Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> n8n Automation Engine Active
+                      <CheckCircleIcon fontSize="small" /> Internal workflow engine active
                     </Typography>
                   </Card>
                 </Grid>
@@ -285,14 +288,14 @@ export const SetupWizard: React.FC = () => {
                 Persistent Storage Locations
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                All videos, cached assets, and backups are stored in isolated persistent Docker volumes.
+                Videos, reusable artifacts, cache, logs, and backups are stored in the private application data volume.
               </Typography>
               <Card variant="outlined" sx={{ p: 2, bgcolor: "#f9fafb" }}>
                 <Stack spacing={1}>
-                  <Typography variant="body2">📁 <strong>Videos Directory:</strong> <code>/app/data/videos</code></Typography>
-                  <Typography variant="body2">📁 <strong>Media Cache:</strong> <code>/app/data/cache</code></Typography>
-                  <Typography variant="body2">📁 <strong>Backups:</strong> <code>/app/data/backups</code></Typography>
-                  <Typography variant="body2">📁 <strong>Application Logs:</strong> <code>/app/data/logs</code></Typography>
+                  <Typography variant="body2"><strong>Rendered videos:</strong> kept for preview, download, revisions, and publishing.</Typography>
+                  <Typography variant="body2"><strong>Reusable artifacts:</strong> retained so revisions can reuse voice, captions, and media.</Typography>
+                  <Typography variant="body2"><strong>Temporary cache:</strong> cleaned by retention policy when no longer needed.</Typography>
+                  <Typography variant="body2"><strong>Backups and logs:</strong> available through System diagnostics with secret redaction.</Typography>
                 </Stack>
               </Card>
             </Stack>
@@ -302,22 +305,22 @@ export const SetupWizard: React.FC = () => {
           {activeStep === 4 && (
             <Stack spacing={2}>
               <Typography variant="h6" fontWeight={700}>
-                Free & Local Media Providers
+                Local and free providers
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                The core engine uses local AI models and free visual libraries. You can optionally provide a free Pexels API key.
+                Required production can run locally for voice/captions/rendering. Pexels is recommended for stock footage.
               </Typography>
               <TextField
-                label="Pexels API Key (Optional — Free from pexels.com/api)"
+                label="Pexels API Key (Recommended for stock footage)"
                 value={pexelsKey}
                 onChange={(e) => setPexelsKey(e.target.value)}
                 placeholder="e.g. 563492ad6f91700001000001..."
                 fullWidth
                 size="small"
-                helperText="If omitted, the engine uses local placeholder & curated background assets."
+                helperText="If omitted, stock footage search will be unavailable until configured."
               />
               <Alert severity="info">
-                Local Kokoro TTS voice models and Whisper subtitles run entirely on-device without API charges.
+                Piper Arabic, Kokoro English, Whisper small captions, Remotion, and FFmpeg run locally. They do not require paid API calls.
               </Alert>
             </Stack>
           )}
@@ -326,10 +329,10 @@ export const SetupWizard: React.FC = () => {
           {activeStep === 5 && (
             <Stack spacing={2}>
               <Typography variant="h6" fontWeight={700}>
-                Optional Cloud AI Providers
+                Optional cloud providers
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                You can configure optional generative AI models now or later in Settings.
+                Configure optional cloud providers now or later. They are not required for the local pipeline.
               </Typography>
               <TextField
                 label="Google Gemini API Key (Optional)"
@@ -338,10 +341,10 @@ export const SetupWizard: React.FC = () => {
                 type="password"
                 fullWidth
                 size="small"
-                helperText="Provides enhanced script generation and creative director intelligence."
+                helperText="Optional. Used only when explicitly configured for enhanced planning."
               />
               <Typography variant="caption" color="text.secondary">
-                Other providers (Google Veo, fal.ai, ElevenLabs) can be configured anytime from the Providers tab.
+                Google Cloud TTS can provide Arabic MSA voices with free-tier availability. ElevenLabs is premium. Both require server-side credentials before use.
               </Typography>
             </Stack>
           )}
@@ -409,7 +412,7 @@ export const SetupWizard: React.FC = () => {
                 Configuration Verified
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 500 }}>
-                All configuration parameters have been validated. Clicking <strong>Complete Setup</strong> will persist your configuration in PostgreSQL and unlock the production dashboard.
+                All configuration choices are ready. Clicking <strong>Complete Setup</strong> saves the setup and opens the dashboard.
               </Typography>
             </Stack>
           )}

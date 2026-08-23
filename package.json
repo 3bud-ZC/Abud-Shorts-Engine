@@ -1,6 +1,6 @@
 {
   "name": "abud-shorts-engine-v2",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Creates short videos for TikTok, Instagram Reels, and YouTube Shorts using the Model Context Protocol (MCP) and a REST API.",
   "main": "index.js",
   "bugs": "https://github.com/gyoridavid/short-video-maker/issues",
@@ -67,6 +67,7 @@
     "express": "^4.18.2",
     "fluent-ffmpeg": "^2.1.3",
     "fs-extra": "^11.3.0",
+    "google-auth-library": "^11.0.2",
     "kokoro-js": "^1.2.0",
     "nock": "^14.0.3",
     "pg": "^8.23.0",

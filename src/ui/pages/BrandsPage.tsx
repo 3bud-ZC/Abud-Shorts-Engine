@@ -88,7 +88,7 @@ const BrandsPage: React.FC = () => {
     <>
       <PageHeader
         title="Brands"
-        description="Persistent brand profiles stored in PostgreSQL and available to Create Video."
+        description="Reusable brand profiles for colors, outro text, contact details, and preferred voice settings."
         actions={<Button startIcon={<AddIcon />} onClick={reset}>New Brand</Button>}
       />
       {message && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message}</Alert>}
@@ -115,6 +115,38 @@ const BrandsPage: React.FC = () => {
                   <MenuItem value="minimal">Minimal</MenuItem>
                 </Select>
               </FormControl>
+              <FormControl fullWidth>
+                <InputLabel>Voice Provider</InputLabel>
+                <Select
+                  label="Voice Provider"
+                  value={draft.voiceProfile?.provider || "auto"}
+                  onChange={(e) => setDraft({
+                    ...draft,
+                    voiceProfile: {
+                      ...(draft.voiceProfile || {}),
+                      provider: e.target.value as any,
+                    },
+                  })}
+                >
+                  <MenuItem value="auto">Auto</MenuItem>
+                  <MenuItem value="piper">Piper Arabic (Local / Free)</MenuItem>
+                  <MenuItem value="google_cloud_tts">Google Cloud — Free Tier Available</MenuItem>
+                  <MenuItem value="kokoro">Kokoro English (Local / Free)</MenuItem>
+                  <MenuItem value="elevenlabs">ElevenLabs (Premium)</MenuItem>
+                </Select>
+              </FormControl>
+              <TextField
+                label="Voice ID"
+                value={draft.voiceProfile?.voiceId || ""}
+                onChange={(e) => setDraft({
+                  ...draft,
+                  voiceProfile: {
+                    ...(draft.voiceProfile || {}),
+                    voiceId: e.target.value,
+                  },
+                })}
+                helperText="Optional. For Google, use a voice returned by the Providers or Voice Preview list."
+              />
               <TextField label="Outro" value={draft.outroText || ""} onChange={(e) => setDraft({ ...draft, outroText: e.target.value })} />
               <TextField label="Contact" value={draft.contactText || ""} onChange={(e) => setDraft({ ...draft, contactText: e.target.value })} />
               <FormControlLabel control={<Checkbox checked={draft.includeOutro !== false} onChange={(e) => setDraft({ ...draft, includeOutro: e.target.checked })} />} label="Include outro" />
@@ -137,7 +169,7 @@ const BrandsPage: React.FC = () => {
                       {brand.isDefault && <StatusBadge status="ready" label="Default" />}
                     </Stack>
                     <Typography variant="body2" color="text.secondary">
-                      {brand.watermarkText || "No watermark"} · {brand.captionStyle} · {brand.contactText || "No contact"}
+                      {brand.watermarkText || "No watermark"} · {brand.captionStyle} · {brand.voiceProfile?.provider || "auto voice"} · {brand.contactText || "No contact"}
                     </Typography>
                     <Stack direction="row" spacing={1}>
                       <span style={{ width: 28, height: 18, background: brand.primaryColor, border: "1px solid #d0d5dd", borderRadius: 4 }} />

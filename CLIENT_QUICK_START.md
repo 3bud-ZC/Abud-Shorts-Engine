@@ -9,7 +9,7 @@ Welcome to **ABUD Shorts Engine V2**! This guide gets you up and running in unde
 1. **Install Docker Desktop**:  
    Download and install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/). Make sure Docker Desktop is open and running.
 2. **Extract the Engine**:  
-   Extract the `ABUD-Shorts-Engine-2.0.0.zip` package to a folder of your choice (e.g. `C:\ABUD-Shorts-Engine`).
+   Extract the `ABUD-Shorts-Engine-2.1.0.zip` package to a folder of your choice (e.g. `C:\ABUD-Shorts-Engine`).
 3. **Run the Installer**:  
    Right-click in the extracted folder, select **Open in Terminal** or open **PowerShell**, and run:
    ```powershell
@@ -22,9 +22,16 @@ Welcome to **ABUD Shorts Engine V2**! This guide gets you up and running in unde
    ```text
    http://localhost:3130
    ```
-6. **Complete the Setup Wizard**:  
+6. **Sign in or Complete Setup**:  
+   The prepared local handoff installation uses:
+   ```text
+   URL: http://localhost:3130
+   Login: 1234
+   ```
+   The password is provided through the private handoff channel. Fresh clean installations continue through the Setup Wizard.
+7. **Complete the Setup Wizard**:  
    The browser will direct you to `http://localhost:3130/setup`. Follow the 10 quick steps to create your admin password and add your free Pexels key.
-7. **Create Your First Video**:  
+8. **Create Your First Video**:  
    Go to **Create Video**, choose **Prompt** or a **Template** (e.g. Product Ad), enter your concept, and click **Generate Video**!
 
 ---
@@ -59,8 +66,10 @@ Welcome to **ABUD Shorts Engine V2**! This guide gets you up and running in unde
 
 ## 4. Video Creation Modes
 
-- **Prompt Studio**: Enter a topic or script prompt. Select language (`Arabic` / `English`) and dialect (`Egyptian`, `Gulf`, `MSA`). The engine plans the scenes and renders automatically.
+- **Prompt Studio**: Enter a topic or script prompt. Select language (`Arabic` / `English`), dialect (`Egyptian`, `Gulf`, `MSA`), duration, aspect ratio, quality, voice provider, and voice. The engine plans the scenes and renders automatically.
 - **Template Studio**: Choose from 6 pre-built business templates (Product Ad, Restaurant Promo, Real Estate, Viral Hook, Educational Explainer, Event Promo). Fill in your business details and brand style.
+- **Voice Preview**: Preview local Piper Arabic or Kokoro English before starting a job.
+- **Revision Studio**: Make caption-style, voice, or media revisions from Video Details. Caption-style revisions reuse existing voice/caption artifacts where the pipeline can safely do so.
 
 ---
 

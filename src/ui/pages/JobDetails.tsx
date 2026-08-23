@@ -5,6 +5,7 @@ import {
   AccordionDetails,
   AccordionSummary,
   Alert,
+  AlertTitle,
   Box,
   Button,
   Card,
@@ -39,6 +40,7 @@ import {
   StatusBadge,
 } from "../components/v2";
 import type { V2Job, V2JobEvent } from "./v2Types";
+import { withMediaAccessToken } from "../utils/auth";
 
 function formatDuration(startedAt?: string, completedAt?: string) {
   if (!startedAt) return "Not started";
@@ -62,6 +64,7 @@ const JobDetailsContent: React.FC = () => {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [retryingStage, setRetryingStage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!effectiveId) {
@@ -97,7 +100,7 @@ const JobDetailsContent: React.FC = () => {
 
     let source: EventSource | null = null;
     try {
-      source = new EventSource(`/api/v2/jobs/${effectiveId}/events`);
+      source = new EventSource(withMediaAccessToken(`/api/v2/jobs/${effectiveId}/events`));
       source.addEventListener("job-event", (event) => {
         try {
           const parsed = JSON.parse((event as MessageEvent).data) as V2JobEvent;
@@ -145,6 +148,21 @@ const JobDetailsContent: React.FC = () => {
   const videoId = job?.output?.videoId || (job?.status === "ready" ? job?.id : undefined);
   const isPromptMode = job?.creationMode === "prompt";
   const cost = job?.costEstimate || job?.productionSpec?.costEstimate;
+  const stageKeys = ["planning", "media", "voice", "captions", "render", "mastering", "validation"];
+
+  const retryStage = async (stage: string) => {
+    if (!job) return;
+    setRetryingStage(stage);
+    try {
+      const res = await axios.post(`/api/v2/jobs/${job.id}/stages/${stage}/retry`);
+      setJob(res.data.job);
+      setError(null);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Stage retry failed.");
+    } finally {
+      setRetryingStage(null);
+    }
+  };
 
   // 1. Loading State
   if (loading && !job) {
@@ -157,7 +175,7 @@ const JobDetailsContent: React.FC = () => {
       <Box sx={{ py: 4 }}>
         <EmptyState
           title="Job Not Found"
-          description={`The requested job ID "${effectiveId || "unknown"}" does not exist in the database or may have been deleted.`}
+          description="The requested production job could not be found. It may have been deleted or the link may be out of date."
           action={
             <Button variant="contained" startIcon={<ArrowBackIcon />} onClick={() => navigate("/jobs")}>
               Back to Jobs
@@ -205,7 +223,7 @@ const JobDetailsContent: React.FC = () => {
     <>
       <PageHeader
         title={displayTitle}
-        eyebrow={`Job ID: ${job.id}`}
+        eyebrow="Production Job"
         description={
           `${isPromptMode ? "Prompt Studio" : (job.templateId || "Template Mode")}` +
           `${job.brandName ? ` · Brand: ${job.brandName}` : ""}` +
@@ -314,6 +332,59 @@ const JobDetailsContent: React.FC = () => {
               </Stack>
             </SectionCard>
 
+            <SectionCard title="Production Timing & Checkpoints">
+              <Stack spacing={1}>
+                <Alert severity="info">
+                  Reused means existing output was kept, so that stage did not run again. Generated means the stage produced new output for this job.
+                </Alert>
+                {stageKeys.map((stage) => {
+                  const checkpoint = (job.checkpoint as any)?.[stage];
+                  const timing = job.stageTimings?.[`${stage}Ms`];
+                  const artifactState = checkpoint?.status === "failed"
+                    ? "FAILED"
+                    : checkpoint?.artifacts?.reused
+                      ? "REUSED"
+                      : checkpoint?.artifacts?.invalidated
+                        ? "INVALIDATED"
+                        : checkpoint?.status === "completed"
+                          ? "GENERATED"
+                          : "PENDING";
+                  const artifactType = checkpoint?.artifacts?.type || checkpoint?.artifacts?.artifactId ? stage : undefined;
+                  return (
+                    <Card key={stage} variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
+                      <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1}>
+                        <Box>
+                          <Typography variant="body2" fontWeight={800} sx={{ textTransform: "capitalize" }}>
+                            {stage}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {checkpoint?.status || "pending"} · attempt {checkpoint?.attempt || 0}
+                            {checkpoint?.provider ? ` · ${checkpoint.provider}` : ""}
+                            {timing ? ` · ${Math.round(timing / 1000)}s` : ""}
+                            {checkpoint?.artifacts?.sourceRevisionId ? ` · source revision ${checkpoint.artifacts.sourceRevisionId}` : ""}
+                            {artifactType ? ` · ${artifactType}` : ""}
+                          </Typography>
+                        </Box>
+                        <Stack direction="row" spacing={1} alignItems="center">
+                          <Chip size="small" label={artifactState} color={artifactState === "FAILED" ? "error" : artifactState === "REUSED" ? "success" : artifactState === "INVALIDATED" ? "warning" : "default"} />
+                          {["media", "voice", "captions", "render"].includes(stage) && (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            disabled={Boolean(retryingStage)}
+                            onClick={() => retryStage(stage)}
+                          >
+                            {retryingStage === stage ? "Retrying..." : "Retry Stage"}
+                          </Button>
+                          )}
+                        </Stack>
+                      </Stack>
+                    </Card>
+                  );
+                })}
+              </Stack>
+            </SectionCard>
+
             {/* 2. Ready Video Card (When Ready) */}
             {job.status === "ready" && videoId && (
               <SectionCard
@@ -334,8 +405,8 @@ const JobDetailsContent: React.FC = () => {
                     }}
                   >
                     <video
-                      src={`/api/short-video/${videoId}`}
-                      poster={`/api/videos/${videoId}/thumbnail`}
+                      src={withMediaAccessToken(`/api/short-video/${videoId}`)}
+                      poster={withMediaAccessToken(`/api/videos/${videoId}/thumbnail`)}
                       controls
                       style={{
                         maxHeight: 400,
@@ -534,7 +605,7 @@ const JobDetailsContent: React.FC = () => {
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
                   <Typography variant="body2" color="text.secondary">Voice Synthesizer</Typography>
                   <Typography variant="body2" fontWeight={700}>
-                    {job.voiceProvider || "Kokoro Neural TTS (Local/Free)"}
+                    {job.voiceProvider || "Auto-selected local voice"}
                   </Typography>
                 </Stack>
                 <Divider />
@@ -567,7 +638,7 @@ const JobDetailsContent: React.FC = () => {
             <Accordion variant="outlined" sx={{ borderRadius: 2, bgcolor: "#ffffff" }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Typography variant="subtitle2" fontWeight={800}>
-                  Technical Specification & Raw Payloads
+                  Advanced technical details
                 </Typography>
               </AccordionSummary>
               <AccordionDetails>
@@ -589,7 +660,7 @@ const JobDetailsContent: React.FC = () => {
                   )}
 
                   <Typography variant="caption" fontWeight={700} color="text.secondary">
-                    Production Spec JSON:
+                    Production plan payload
                   </Typography>
                   <pre
                     style={{

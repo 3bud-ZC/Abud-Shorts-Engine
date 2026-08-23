@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { getProductInfo, PRODUCT_VERSION } from "../../version";
+import { getProductInfo, PRODUCT_VERSION, DATABASE_SCHEMA_VERSION } from "../../version";
 import { AuthService } from "./auth/authService";
 import { BackupService } from "./backup/backupService";
 import { DiagnosticsService, redactSecrets } from "./diagnostics/diagnosticsService";
@@ -158,8 +158,8 @@ describe("V2-05 Release-Gate Engine Suites", () => {
     const info = getProductInfo();
     expect(info.version).toBe(PRODUCT_VERSION);
     expect(info.stage).toBe("General Availability");
-    expect(info.schemaVersion).toBe("2.5.0");
-    expect(PRODUCT_VERSION).toBe("2.0.1");
+    expect(info.schemaVersion).toBe(DATABASE_SCHEMA_VERSION);
+    expect(PRODUCT_VERSION).toBe("2.1.0");
   });
 
   it("2. Local Admin Authentication & Password Security", async () => {

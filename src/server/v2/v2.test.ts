@@ -7,10 +7,16 @@ import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 import { Config } from "../../config";
 import { ShortCreator } from "../../short-creator/ShortCreator";
+import { Server } from "../server";
 import { listVideoFiles, mergeMetadata, readMetadata, writeMetadata } from "../videoMetadata";
 import { validatePexelsProvider } from "./health";
 import { createV2InternalRouter, createV2PublicRouter } from "./routes";
-import { isValidJobTransition, JobService } from "./jobs";
+import { isValidJobTransition, JobService, sanitizeIdempotencyKey } from "./jobs";
+import {
+  assertPathInside,
+  checkStoragePolicy,
+  cleanupTemporaryArtifacts,
+} from "./storage/storagePolicy";
 import type { JobStatus } from "./types";
 
 type JobRow = {
@@ -32,6 +38,7 @@ type JobRow = {
   language?: string;
   dialect?: string;
   cost_estimate?: any;
+  idempotency_key?: string;
   template_id?: string;
   brand_name?: string;
   input: any;
@@ -85,7 +92,8 @@ class FakeDb {
         include_outro: values[6],
         outro_text: values[7],
         contact_text: values[8],
-        is_default: values[9],
+        voice_profile: values.length > 10 ? values[9] : null,
+        is_default: values.length > 10 ? values[10] : values[9],
         created_at: now,
         updated_at: now,
       };
@@ -106,7 +114,8 @@ class FakeDb {
         row.include_outro = values[6];
         row.outro_text = values[7];
         row.contact_text = values[8];
-        row.is_default = values[9];
+        row.voice_profile = values.length > 10 ? values[9] : null;
+        row.is_default = values.length > 10 ? values[10] : values[9];
       }
       row.updated_at = new Date();
       return [row];
@@ -136,7 +145,12 @@ class FakeDb {
         language,
         dialect,
         costEstimateJson,
+        idempotencyKey,
       ] = values;
+      if (idempotencyKey) {
+        const existing = Array.from(this.jobs.values()).find((job) => job.idempotency_key === idempotencyKey);
+        if (existing) return [];
+      }
       const now = new Date();
       const row: JobRow = {
         id,
@@ -160,6 +174,7 @@ class FakeDb {
         language,
         dialect,
         cost_estimate: costEstimateJson ? JSON.parse(costEstimateJson) : undefined,
+        idempotency_key: idempotencyKey,
         created_at: now,
         updated_at: now,
       };
@@ -179,6 +194,10 @@ class FakeDb {
       };
       this.events.push(row);
       return [row];
+    }
+    if (text.includes("SELECT * FROM jobs WHERE idempotency_key")) {
+      const row = Array.from(this.jobs.values()).find((job) => job.idempotency_key === values[0]);
+      return row ? [row] : [];
     }
     if (text.includes("SELECT * FROM jobs WHERE id")) {
       const row = this.jobs.get(values[0]);
@@ -268,9 +287,99 @@ describe("V2 jobs", () => {
     expect(isValidJobTransition("queued", "preparing")).toBe(true);
     expect(isValidJobTransition("ready", "rendering")).toBe(false);
   });
+
+  it("reuses the existing job for a valid idempotency key", async () => {
+    const db = new FakeDb();
+    const service = new JobService(db as any);
+    const first = await service.createVideoJob({
+      ...validInput,
+      idempotencyKey: "job-retry-001",
+    } as any);
+    const second = await service.createVideoJob({
+      ...validInput,
+      title: "Duplicate retry should not create a new job",
+      idempotencyKey: "job-retry-001",
+    } as any);
+
+    expect(second.id).toBe(first.id);
+    expect(Array.from(db.jobs.values())).toHaveLength(1);
+    expect(second.idempotencyKey).toBe("job-retry-001");
+    expect(sanitizeIdempotencyKey("../../bad")).toBeUndefined();
+  });
+});
+
+describe("V2 storage policy", () => {
+  it("rejects paths outside the configured data root", () => {
+    expect(() => assertPathInside("C:/data/root", "C:/data/root/temp/a.mp4")).not.toThrow();
+    expect(() => assertPathInside("C:/data/root", "C:/data/other/a.mp4")).toThrow();
+  });
+
+  it("checks writable storage and cleans only old temp files", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "abud-v2-storage-"));
+    const oldFile = path.join(root, "temp", "old.tmp");
+    const newFile = path.join(root, "temp", "new.tmp");
+    fs.ensureDirSync(path.dirname(oldFile));
+    fs.writeFileSync(oldFile, "old");
+    fs.writeFileSync(newFile, "new");
+    const oldDate = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(oldFile, oldDate, oldDate);
+    const config = makeConfig();
+    config.dataDirPath = root;
+    config.videosDirPath = path.join(root, "videos");
+    config.tempDirPath = path.join(root, "temp");
+    config.tempMaxAgeMs = 60 * 60 * 1000;
+    config.minFreeDiskBytes = 1;
+
+    const check = await checkStoragePolicy(config);
+    expect(check.ok).toBe(true);
+    const cleanup = await cleanupTemporaryArtifacts(config);
+    expect(cleanup.deleted).toBe(1);
+    expect(fs.existsSync(oldFile)).toBe(false);
+    expect(fs.existsSync(newFile)).toBe(true);
+    fs.removeSync(root);
+  });
+});
+
+describe("V2 runtime config validation", () => {
+  it("flags missing app database configuration when V2 is enabled", () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.V2_ENABLED = "true";
+    process.env.INTERNAL_SERVICE_TOKEN = "valid-internal-token-value-for-tests";
+    delete process.env.DATABASE_URL;
+    const config = new Config();
+    config.serviceRole = "app";
+    const validation = config.validateRuntimeConfig();
+
+    expect(validation.valid).toBe(false);
+    expect(validation.issues.some((issue) => issue.code === "missing_database_url")).toBe(true);
+
+    if (previousDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+  });
+});
+
+describe("Server request boundary", () => {
+  it("returns request-correlated API 404 errors", async () => {
+    const config = makeConfig();
+    config.port = 0;
+    const server = new Server(config, {} as ShortCreator);
+    const res = await request(server.getApp())
+      .get("/api/does-not-exist")
+      .set("x-request-id", "request-test-001")
+      .expect(404);
+
+    expect(res.headers["x-request-id"]).toBe("request-test-001");
+    expect(res.body.error.code).toBe("not_found");
+    expect(res.body.error.requestId).toBe("request-test-001");
+  });
 });
 
 describe("V2 routes", () => {
+  const authHeader = { Authorization: "Bearer test_admin_session" };
+
   afterEach(() => {
     nock.cleanAll();
   });
@@ -287,8 +396,8 @@ describe("V2 routes", () => {
     const app = express();
     app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
 
-    await request(app).post("/api/v2/jobs").send({ scenes: [] }).expect(400);
-    const settings = await request(app).get("/api/v2/settings").expect(200);
+    await request(app).post("/api/v2/jobs").set(authHeader).send({ scenes: [] }).expect(400);
+    const settings = await request(app).get("/api/v2/settings").set(authHeader).expect(200);
     expect(settings.body.pexels.redactedKey).toBe("••••••••");
     expect(JSON.stringify(settings.body)).not.toContain("A".repeat(56));
   });
@@ -301,6 +410,7 @@ describe("V2 routes", () => {
 
     const preview = await request(app)
       .post("/api/v2/production-spec/preview")
+      .set(authHeader)
       .send({ prompt: "اعمل اعلان 20 ثانية لبراند ملابس" })
       .expect(200);
 
@@ -310,6 +420,7 @@ describe("V2 routes", () => {
 
     const enhance = await request(app)
       .post("/api/v2/prompt/enhance")
+      .set(authHeader)
       .send({ prompt: "اعمل اعلان لكافيه" })
       .expect(200);
 
@@ -329,6 +440,7 @@ describe("V2 routes", () => {
 
     const res = await request(app)
       .post("/api/v2/jobs")
+      .set(authHeader)
       .send({
         creationMode: "prompt",
         prompt: "Create a 30-second English tech tutorial about automated cloud backups",
@@ -352,15 +464,15 @@ describe("V2 routes", () => {
     const app = express();
     app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
 
-    const res = await request(app).get("/api/v2/providers").expect(200);
+    const res = await request(app).get("/api/v2/providers").set(authHeader).expect(200);
     expect(res.body.providers.some((p: any) => p.category === "Content AI")).toBe(true);
     expect(res.body.providers.some((p: any) => p.category === "Visuals")).toBe(true);
     expect(res.body.providers.some((p: any) => p.category === "Voice")).toBe(true);
 
-    const valGemini = await request(app).post("/api/v2/providers/gemini/validate").expect(200);
+    const valGemini = await request(app).post("/api/v2/providers/gemini/validate").set(authHeader).expect(200);
     expect(valGemini.body.provider).toBe("Google Gemini");
 
-    const valKokoro = await request(app).post("/api/v2/providers/kokoro/validate").expect(200);
+    const valKokoro = await request(app).post("/api/v2/providers/kokoro/validate").set(authHeader).expect(200);
     expect(valKokoro.body.healthy).toBe(true);
   });
 
@@ -389,7 +501,7 @@ describe("V2 routes", () => {
     const app = express();
     app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
 
-    const response = await request(app).post("/api/v2/providers/pexels/validate").expect(200);
+    const response = await request(app).post("/api/v2/providers/pexels/validate").set(authHeader).expect(200);
     expect(response.body.status).toBe("healthy");
     expect(response.body.configured).toBe(true);
     expect(response.body.componentStatus).toBe("healthy");
@@ -406,7 +518,7 @@ describe("V2 routes", () => {
     const app = express();
     app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
 
-    const response = await request(app).post("/api/v2/providers/pexels/validate").expect(200);
+    const response = await request(app).post("/api/v2/providers/pexels/validate").set(authHeader).expect(200);
     expect(response.body.status).toBe("invalid_credentials");
     expect(response.body.configured).toBe(true);
     expect(response.body.componentStatus).toBe("unhealthy");
@@ -466,6 +578,7 @@ describe("V2 routes", () => {
 
     const created = await request(app)
       .post("/api/v2/brands")
+      .set(authHeader)
       .send({
         name: "ABUD",
         watermarkText: "ABUD",
@@ -479,18 +592,19 @@ describe("V2 routes", () => {
     expect(created.body.brand.name).toBe("ABUD");
     expect(created.body.brand.isDefault).toBe(true);
 
-    const listed = await request(app).get("/api/v2/brands").expect(200);
+    const listed = await request(app).get("/api/v2/brands").set(authHeader).expect(200);
     expect(listed.body.brands).toHaveLength(1);
 
     await request(app)
       .put("/api/v2/settings")
+      .set(authHeader)
       .send({ defaultBrandId: created.body.brand.id, defaultTemplateId: "product_ad" })
       .expect(200);
-    const settings = await request(app).get("/api/v2/settings").expect(200);
+    const settings = await request(app).get("/api/v2/settings").set(authHeader).expect(200);
     expect(settings.body.settings.defaultTemplateId).toBe("product_ad");
 
-    await request(app).delete(`/api/v2/brands/${created.body.brand.id}`).expect(200);
-    const empty = await request(app).get("/api/v2/brands").expect(200);
+    await request(app).delete(`/api/v2/brands/${created.body.brand.id}`).set(authHeader).expect(200);
+    const empty = await request(app).get("/api/v2/brands").set(authHeader).expect(200);
     expect(empty.body.brands).toHaveLength(0);
   });
 
@@ -500,7 +614,7 @@ describe("V2 routes", () => {
     const app = express();
     app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
 
-    const response = await request(app).get("/api/v2/templates").expect(200);
+    const response = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
     expect(response.body.templates.some((template: any) => template.id === "product_ad")).toBe(true);
   });
 });

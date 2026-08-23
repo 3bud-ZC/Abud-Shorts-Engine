@@ -19,6 +19,7 @@ export type VisualRenderOptions = {
   excludeIds?: (string | number)[];
   tempDirPath: string;
   targetDurationSeconds?: number;
+  previousCandidates?: Record<string, unknown>[];
 };
 
 export type SceneCostEstimate = {

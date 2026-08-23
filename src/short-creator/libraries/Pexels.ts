@@ -2,7 +2,11 @@
 import { getOrientationConfig } from "../../components/utils";
 import { logger } from "../../logger";
 import { OrientationEnum, type Video } from "../../types/shorts";
-import { selectBestCandidate } from "../../server/v2/media-intelligence/assetScorer";
+import {
+  estimatePortraitCrop,
+  selectBestCandidate,
+  selectSmartClipWindow,
+} from "../../server/v2/media-intelligence/assetScorer";
 
 const jokerTerms: string[] = ["nature", "globe", "space", "ocean"];
 const durationBufferSeconds = 3;
@@ -16,6 +20,7 @@ type FindVideoOptions = {
   timeout?: number;
   retryCounter?: number;
   fallbackSearchTerms?: string[];
+  previousCandidates?: any[];
 };
 
 function sanitizeTerms(terms: string[] = []): string[] {
@@ -37,6 +42,7 @@ export class PexelsAPI {
     excludeIds: string[],
     orientation: OrientationEnum,
     timeout: number,
+    previousCandidates: any[] = [],
   ): Promise<Video> {
     if (!this.API_KEY) {
       throw new Error("API key not set");
@@ -123,10 +129,12 @@ export class PexelsAPI {
         {
           id: video.id,
           url: matchingFile.link,
+          sourceUrl: matchingFile.link,
           width: matchingFile.width,
           height: matchingFile.height,
           duration: video.duration,
           tags: [searchTerm],
+          providerMetadata: { fileId: matchingFile.id, fps: matchingFile.fps, quality: matchingFile.quality },
         },
       ];
     });
@@ -137,9 +145,12 @@ export class PexelsAPI {
       orientation: orientation === OrientationEnum.landscape ? "landscape" : "portrait",
       targetDurationSeconds: minDurationSeconds,
       previouslyUsedIds: excludeIds,
+      previousCandidates,
     });
 
     if (scoredSelection.best) {
+      const smartClip = selectSmartClipWindow(scoredSelection.best, minDurationSeconds);
+      const smartCrop = estimatePortraitCrop(scoredSelection.best);
       logger.debug(
         {
           searchTerm,
@@ -154,6 +165,31 @@ export class PexelsAPI {
         url: scoredSelection.best.url,
         width: scoredSelection.best.width,
         height: scoredSelection.best.height,
+        duration: scoredSelection.best.duration,
+        metadata: {
+          searchTerm,
+          candidateCount: candidates.length,
+          selectedScore: scoredSelection.scoreResult?.score,
+          selectedReasons: scoredSelection.scoreResult?.reasons,
+          scoreBreakdown: scoredSelection.scoreResult?.breakdown,
+          rankedCandidates: scoredSelection.ranked.slice(0, 8).map((item) => ({
+            id: String(item.candidate.id),
+            width: item.candidate.width,
+            height: item.candidate.height,
+            duration: item.candidate.duration,
+            score: item.result.score,
+            passed: item.result.passed,
+            reasons: item.result.reasons.slice(0, 5),
+            breakdown: item.result.breakdown,
+          })),
+          smartClip,
+          smartCrop,
+          technicalValidation: {
+            readable: true,
+            minResolutionPassed: Math.min(scoredSelection.best.width, scoredSelection.best.height) >= 480,
+            durationFit: scoredSelection.best.duration >= minDurationSeconds * 0.5,
+          },
+        },
       };
     }
 
@@ -165,6 +201,26 @@ export class PexelsAPI {
         url: fallbackFile.link,
         width: fallbackFile.width,
         height: fallbackFile.height,
+        duration: videos[0].duration,
+        metadata: {
+          searchTerm,
+          candidateCount: candidates.length,
+          fallback: true,
+          smartClip: selectSmartClipWindow({
+            id: videos[0].id,
+            url: fallbackFile.link,
+            width: fallbackFile.width,
+            height: fallbackFile.height,
+            duration: videos[0].duration,
+          }, minDurationSeconds),
+          smartCrop: estimatePortraitCrop({
+            id: videos[0].id,
+            url: fallbackFile.link,
+            width: fallbackFile.width,
+            height: fallbackFile.height,
+            duration: videos[0].duration,
+          }),
+        },
       };
     }
 
@@ -195,6 +251,7 @@ export class PexelsAPI {
       timeout = defaultTimeoutMs,
       retryCounter = 0,
       fallbackSearchTerms = [],
+      previousCandidates = [],
     } = normalizedOptions;
 
     const primaryTerms = sanitizeTerms(searchTerms);
@@ -249,6 +306,7 @@ export class PexelsAPI {
             excludeIds,
             orientation,
             timeout,
+            previousCandidates,
           );
           logger.debug(
             { searchTerm },

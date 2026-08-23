@@ -103,6 +103,16 @@ export const brandKitSchema = z.object({
   includeOutro: z.boolean().optional(),
   outroText: z.string().optional(),
   contactText: z.string().optional(),
+  voiceProfile: z
+    .object({
+      provider: z.enum(["auto", "kokoro", "piper", "google_cloud_tts", "elevenlabs"]).optional(),
+      voiceId: z.string().max(120).optional(),
+      dialect: z.string().max(40).optional(),
+      style: z.string().max(40).optional(),
+      pace: z.string().max(40).optional(),
+      pronunciationDictionary: z.record(z.string()).optional(),
+    })
+    .optional(),
 });
 export type BrandKit = z.infer<typeof brandKitSchema>;
 
@@ -152,6 +162,8 @@ export type Video = {
   url: string;
   width: number;
   height: number;
+  duration?: number;
+  metadata?: Record<string, unknown>;
 };
 export type Caption = {
   text: string;

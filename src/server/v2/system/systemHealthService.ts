@@ -1,8 +1,9 @@
-import fs from "fs";
 import { Config } from "../../../config";
 import { logger } from "../../../logger";
 import { getProductInfo } from "../../../version";
 import { V2Database } from "../db";
+import { WorkerLeaseService } from "../workers/workerLeaseService";
+import { checkStoragePolicy } from "../storage/storagePolicy";
 
 export class SystemHealthService {
   constructor(
@@ -21,18 +22,35 @@ export class SystemHealthService {
     };
   }
 
-  public async checkReadiness(): Promise<{ ready: boolean; checks: Record<string, boolean>; message: string }> {
-    const dataDir = this.config?.dataDirPath || "./data";
-    const videosDir = this.config?.videosDirPath || "./data/videos";
+  public async checkReadiness(): Promise<{
+    ready: boolean;
+    checks: Record<string, boolean>;
+    message: string;
+    details: Record<string, unknown>;
+  }> {
+    const storage = await checkStoragePolicy(this.config);
+    const runtimeConfigValid =
+      typeof this.config.validateRuntimeConfig === "function"
+        ? this.config.validateRuntimeConfig().valid
+        : true;
     const checks: Record<string, boolean> = {
-      storage: fs.existsSync(dataDir) || true,
-      videosDir: fs.existsSync(videosDir) || true,
+      config: runtimeConfigValid,
+      storage: storage.ok,
+      videosDir: storage.ok,
       postgres: false,
+    };
+    const details: Record<string, unknown> = {
+      storage,
+      databasePool:
+        typeof this.db.getPoolState === "function"
+          ? this.db.getPoolState()
+          : { configured: this.db.enabled },
     };
 
     if (this.db.enabled) {
       const pgHealth = await this.db.health();
       checks.postgres = pgHealth.ok;
+      details.postgres = pgHealth;
     } else {
       checks.postgres = true;
     }
@@ -43,6 +61,7 @@ export class SystemHealthService {
       ready,
       checks,
       message: ready ? "Application is ready to serve requests." : "Application is starting or degraded.",
+      details,
     };
   }
 
@@ -54,6 +73,9 @@ export class SystemHealthService {
 
     try {
       // 1. Recover stale jobs left in 'rendering' or 'processing'
+      const leaseRecovery = await new WorkerLeaseService(this.db).recoverExpiredLeases();
+      recoveredJobsCount += leaseRecovery.recoveredJobs.length;
+
       const staleJobs = await this.db.query<{ id: string }>(
         `UPDATE jobs
          SET status = 'failed',
@@ -63,7 +85,7 @@ export class SystemHealthService {
          WHERE status IN ('rendering', 'processing')
          RETURNING id`,
       );
-      recoveredJobsCount = staleJobs.length;
+      recoveredJobsCount += staleJobs.length;
       if (recoveredJobsCount > 0) {
         logger.info({ recoveredJobsCount }, "Recovered stale interrupted jobs on startup");
       }

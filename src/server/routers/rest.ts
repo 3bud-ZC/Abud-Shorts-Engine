@@ -26,6 +26,8 @@ import {
   applyBusinessTemplateToScenes,
 } from "../../short-creator/templateEnrichment";
 import type { SceneInputWithFallback } from "../../types/shorts";
+import { AuthService } from "../v2/auth/authService";
+import { ApiTokenService } from "../v2/auth/apiTokenService";
 
 // todo abstract class
 export class APIRouter {
@@ -33,12 +35,12 @@ export class APIRouter {
   private shortCreator: ShortCreator;
   private config: Config;
 
-  constructor(config: Config, shortCreator: ShortCreator) {
+  constructor(config: Config, shortCreator: ShortCreator, private authService?: AuthService, private apiTokenService?: ApiTokenService) {
     this.config = config;
     this.router = express.Router();
     this.shortCreator = shortCreator;
 
-    this.router.use(express.json());
+    this.router.use(express.json({ limit: "2mb" }));
 
     this.setupRoutes();
   }
@@ -46,6 +48,7 @@ export class APIRouter {
   private setupRoutes() {
     this.router.post(
       "/short-video",
+      this.requireProtectedAccess("production:create"),
       async (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const input = validateCreateShortInput(req.body);
@@ -106,6 +109,7 @@ export class APIRouter {
 
     this.router.get(
       "/short-video/:videoId/status",
+      this.requireProtectedAccess("videos:read"),
       async (req: ExpressRequest, res: ExpressResponse) => {
         const { videoId } = req.params;
         if (!videoId) {
@@ -132,6 +136,42 @@ export class APIRouter {
       res.status(200).json(this.shortCreator.ListAvailableVoices());
     });
 
+    this.router.post(
+      "/voice-preview",
+      this.requireProtectedAccess("production:create"),
+      async (req: ExpressRequest, res: ExpressResponse) => {
+        try {
+          const text = String(req.body?.text || "").trim();
+          if (!text || text.length > 500) {
+            res.status(400).json({
+              error: "Invalid preview text",
+              message: "Voice preview text must be between 1 and 500 characters.",
+            });
+            return;
+          }
+          const preview = await this.shortCreator.previewVoice({
+            text,
+            language: typeof req.body?.language === "string" ? req.body.language : "auto",
+            dialect: typeof req.body?.dialect === "string" ? req.body.dialect : "none",
+            qualityProfile: req.body?.qualityProfile || "balanced",
+            provider: req.body?.provider || "auto",
+            voiceId: typeof req.body?.voiceId === "string" ? req.body.voiceId : undefined,
+            pronunciationDictionary:
+              req.body?.pronunciationDictionary &&
+              typeof req.body.pronunciationDictionary === "object"
+                ? req.body.pronunciationDictionary
+                : undefined,
+          });
+          res.status(201).json(preview);
+        } catch (error: unknown) {
+          res.status(422).json({
+            error: "Voice preview unavailable",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+    );
+
     this.router.get(
       "/business-templates",
       (req: ExpressRequest, res: ExpressResponse) => {
@@ -141,6 +181,7 @@ export class APIRouter {
 
     this.router.get(
       "/short-videos",
+      this.requireProtectedAccess("videos:read"),
       (req: ExpressRequest, res: ExpressResponse) => {
         const videos = this.shortCreator.listAllVideos();
         res.status(200).json({
@@ -151,6 +192,7 @@ export class APIRouter {
 
     this.router.delete(
       "/short-video/:videoId",
+      this.requireProtectedAccess("production:create"),
       (req: ExpressRequest, res: ExpressResponse) => {
         const { videoId } = req.params;
         if (!videoId) {
@@ -163,6 +205,28 @@ export class APIRouter {
         res.status(200).json({
           success: true,
         });
+      },
+    );
+
+    this.router.get(
+      "/voice-preview/:fileName",
+      this.requireProtectedAccess("videos:read"),
+      (req: ExpressRequest, res: ExpressResponse) => {
+        const { fileName } = req.params;
+        if (!/^[a-zA-Z0-9_-]+\.mp3$/.test(fileName || "")) {
+          res.status(400).json({ error: "Invalid preview file" });
+          return;
+        }
+        const previewPath = path.join(this.config.tempDirPath, fileName);
+        const resolvedPath = path.resolve(previewPath);
+        const resolvedTempDir = path.resolve(this.config.tempDirPath);
+        if (!resolvedPath.startsWith(resolvedTempDir) || !fs.existsSync(previewPath)) {
+          res.status(404).json({ error: "Voice preview not found" });
+          return;
+        }
+        res.setHeader("Content-Type", "audio/mpeg");
+        res.setHeader("Cache-Control", "private, max-age=900");
+        fs.createReadStream(previewPath).pipe(res);
       },
     );
 
@@ -237,6 +301,7 @@ export class APIRouter {
 
     this.router.get(
       "/short-video/:videoId",
+      this.requireProtectedAccess("videos:read"),
       (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const { videoId } = req.params;
@@ -246,13 +311,18 @@ export class APIRouter {
             });
             return;
           }
-          const video = this.shortCreator.getVideo(videoId);
-          res.setHeader("Content-Type", "video/mp4");
-          res.setHeader(
-            "Content-Disposition",
-            `inline; filename=${videoId}.mp4`,
-          );
-          res.send(video);
+          if (!isSafeVideoId(videoId)) {
+            res.status(400).json({ error: "Invalid videoId" });
+            return;
+          }
+          const videoPath = path.join(this.config.videosDirPath, `${videoId}.mp4`);
+          const resolvedPath = path.resolve(videoPath);
+          const resolvedVideosDir = path.resolve(this.config.videosDirPath);
+          if (!resolvedPath.startsWith(resolvedVideosDir) || !fs.existsSync(videoPath)) {
+            res.status(404).json({ error: "Video not found" });
+            return;
+          }
+          sendVideoWithRange(req, res, videoPath, `inline; filename=${videoId}.mp4`);
         } catch (error: unknown) {
           logger.error(error, "Error getting video");
           res.status(404).json({
@@ -265,10 +335,10 @@ export class APIRouter {
     // Delivery API — list all generated videos with metadata
     this.router.get(
       "/videos",
+      this.requireProtectedAccess("videos:read"),
       (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const videosDir = this.config.videosDirPath;
-          const hostPathHint = "C:/abud-shorts-engine/data-dev/videos";
           if (!fs.existsSync(videosDir)) {
             res.status(200).json({ videos: [] });
             return;
@@ -285,7 +355,6 @@ export class APIRouter {
               const status = this.shortCreator.status(videoId);
               const sidecar = readMetadata(videosDir, videoId);
               const downloadFilename = buildDownloadFilename(videoId, sidecar);
-              const containerPath = path.join(this.config.videosDirPath, file);
 
               const fileMeta = {
                 videoId,
@@ -296,8 +365,6 @@ export class APIRouter {
                 downloadUrl: `/api/videos/${videoId}/download`,
                 previewUrl: `/api/short-video/${videoId}`,
                 downloadFilename,
-                containerPath,
-                hostPathHint,
               };
 
               return mergeMetadata(fileMeta, sidecar);
@@ -330,6 +397,7 @@ export class APIRouter {
     // Delivery API — get single video metadata
     this.router.get(
       "/videos/:videoId",
+      this.requireProtectedAccess("videos:read"),
       (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const { videoId } = req.params;
@@ -362,7 +430,6 @@ export class APIRouter {
           const status = this.shortCreator.status(videoId);
           const sidecar = readMetadata(this.config.videosDirPath, videoId);
           const downloadFilename = buildDownloadFilename(videoId, sidecar);
-          const hostPathHint = "C:/abud-shorts-engine/data-dev/videos";
 
           const fileMeta = {
             videoId,
@@ -373,8 +440,6 @@ export class APIRouter {
             downloadUrl: `/api/videos/${videoId}/download`,
             previewUrl: `/api/short-video/${videoId}`,
             downloadFilename,
-            containerPath: videoPath,
-            hostPathHint,
           };
 
           res.status(200).json(mergeMetadata(fileMeta, sidecar));
@@ -390,6 +455,7 @@ export class APIRouter {
     // Delivery API — thumbnail cover image
     this.router.get(
       ["/videos/:videoId/thumbnail", "/short-video/:videoId/thumbnail"],
+      this.requireProtectedAccess("videos:read"),
       (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const { videoId } = req.params;
@@ -417,6 +483,7 @@ export class APIRouter {
     // Delivery API — download video with safe filename
     this.router.get(
       "/videos/:videoId/download",
+      this.requireProtectedAccess("videos:read"),
       (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const { videoId } = req.params;
@@ -470,6 +537,42 @@ export class APIRouter {
       },
     );
   }
+
+  private requireProtectedAccess(requiredScope: "production:create" | "videos:read") {
+    return async (req: ExpressRequest, res: ExpressResponse, next: express.NextFunction) => {
+      if (!this.authService) {
+        next();
+        return;
+      }
+      const header = req.headers.authorization || "";
+      const token = header.toLowerCase().startsWith("bearer ")
+        ? header.slice(7).trim()
+        : typeof req.query.access_token === "string"
+          ? req.query.access_token
+          : "";
+      if (!token) {
+        res.status(401).json({ error: "Unauthorized." });
+        return;
+      }
+      const admin = await this.authService.validateSession(token);
+      if (admin?.role === "admin") {
+        next();
+        return;
+      }
+      if (this.apiTokenService) {
+        const apiToken = await this.apiTokenService.validateToken(token, requiredScope);
+        if (apiToken.forbidden) {
+          res.status(403).json({ error: "API token does not include the required scope.", requiredScope });
+          return;
+        }
+        if (apiToken.valid) {
+          next();
+          return;
+        }
+      }
+      res.status(401).json({ error: "Invalid or expired credential." });
+    };
+  }
 }
 
 export function isSafeVideoId(videoId: string): boolean {
@@ -479,4 +582,39 @@ export function isSafeVideoId(videoId: string): boolean {
 export function sanitizeDownloadFilename(videoId: string): string {
   const sanitized = videoId.replace(/[^a-zA-Z0-9_-]/g, "");
   return `abud-short-${sanitized}.mp4`;
+}
+
+function sendVideoWithRange(
+  req: ExpressRequest,
+  res: ExpressResponse,
+  videoPath: string,
+  contentDisposition: string,
+): void {
+  const stat = fs.statSync(videoPath);
+  const range = req.headers.range;
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Content-Disposition", contentDisposition);
+
+  if (!range) {
+    res.setHeader("Content-Length", stat.size);
+    fs.createReadStream(videoPath).pipe(res);
+    return;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) {
+    res.status(416).end();
+    return;
+  }
+  const start = match[1] ? Number(match[1]) : 0;
+  const end = match[2] ? Number(match[2]) : stat.size - 1;
+  if (start >= stat.size || end >= stat.size || start > end) {
+    res.status(416).setHeader("Content-Range", `bytes */${stat.size}`).end();
+    return;
+  }
+  res.status(206);
+  res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+  res.setHeader("Content-Length", end - start + 1);
+  fs.createReadStream(videoPath, { start, end }).pipe(res);
 }

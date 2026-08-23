@@ -28,6 +28,28 @@ class FakePublishingDb {
   public jobs = new Map<string, any>();
 
   async query(text: string, values: any[] = []): Promise<any[]> {
+    if (text.includes("FROM system_settings WHERE key = 'setup_completed'")) {
+      return [{ value: { completed: true, completedAt: new Date().toISOString() } }];
+    }
+    if (text.includes("SELECT count(*) as count") && text.includes("admin_users")) {
+      return [{ count: "1" }];
+    }
+    if (text.includes("provider_settings")) {
+      return [{ count: "0" }];
+    }
+    if (text.includes("FROM admin_sessions s")) {
+      if (values[0] === "test_admin_session") {
+        return [{
+          user_id: "admin_test",
+          username: "admin",
+          role: "admin",
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 3600000).toISOString(),
+        }];
+      }
+      return [];
+    }
+
     // 1. Social Accounts
     if (text.includes("INSERT INTO social_accounts")) {
       const row = {
@@ -646,8 +668,10 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
   });
 
   describe("7. REST API Endpoints", () => {
+    const authHeader = { Authorization: "Bearer test_admin_session" };
+
     it("GET /api/v2/publishing/summary returns summary stats", async () => {
-      const res = await supertest(app).get("/api/v2/publishing/summary");
+      const res = await supertest(app).get("/api/v2/publishing/summary").set(authHeader);
       expect(res.status).toBe(200);
       expect(res.body.totalPublications).toBeDefined();
       expect(res.body.scheduledCount).toBeDefined();
@@ -656,6 +680,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
     it("POST /api/v2/publishing/metadata/generate returns AI metadata", async () => {
       const res = await supertest(app)
         .post("/api/v2/publishing/metadata/generate")
+        .set(authHeader)
         .send({
           prompt: "How to stay focused all day",
           platform: "youtube",
@@ -671,6 +696,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
     it("POST /api/v2/publishing/batch creates publications across multiple videos", async () => {
       const res = await supertest(app)
         .post("/api/v2/publishing/batch")
+        .set(authHeader)
         .send({
           videoIds: ["vid_batch_1", "vid_batch_2"],
           platforms: ["youtube", "tiktok"],
@@ -683,7 +709,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
     });
 
     it("GET /api/v2/videos/:videoId/publishing returns overall video distribution status", async () => {
-      const res = await supertest(app).get("/api/v2/videos/v_check/publishing");
+      const res = await supertest(app).get("/api/v2/videos/v_check/publishing").set(authHeader);
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("not_published");
       expect(res.body.platforms).toBeDefined();

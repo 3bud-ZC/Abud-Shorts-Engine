@@ -1,6 +1,6 @@
 # ==============================================================================
 # ABUD Shorts Engine V2 — Production Installer (Windows PowerShell)
-# Version: 2.0.1
+# Version: 2.1.0
 # ==============================================================================
 
 [CmdletBinding()]
@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "  ABUD Shorts Engine V2 — One-Command Production Installer" -ForegroundColor Cyan
-Write-Host "  Version: 2.0.1" -ForegroundColor Cyan
+Write-Host "  Version: 2.1.0" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -120,6 +120,19 @@ APP_INTERNAL_BASE_URL=http://app:3123
 RENDER_WORKER_BASE_URL=http://render-worker:3124
 N8N_BASE_URL=http://n8n:5678
 DATABASE_URL=postgresql://abud_shorts:$pgPass@postgres:5432/abud_shorts
+WHISPER_MODEL=small
+KOKORO_MODEL_PRECISION=q4
+
+# Local Arabic voice path.
+PIPER_BIN=/opt/piper/bin/piper
+PIPER_AR_MODEL_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx
+PIPER_AR_MODEL_CONFIG_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx.json
+PIPER_AR_VOICE_ID=ar_JO-kareem-medium
+PIPER_AR_LENGTH_SCALE=1.50
+PIPER_AR_SENTENCE_SILENCE=0.25
+PIPER_AR_MODEL_LICENSE=MIT
+PIPER_AR_RUNTIME_LICENSE=GPL-3.0-or-later
+PIPER_AR_MODEL_COMMERCIAL_USE=allowed
 
 # Cryptographic Secrets
 INTERNAL_SERVICE_TOKEN=$internalToken
@@ -181,7 +194,7 @@ Write-Host "  ABUD Shorts Engine V2 is Ready!" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host "  Dashboard:       http://localhost:$Port" -ForegroundColor Cyan
 Write-Host "  Setup Wizard:    http://localhost:$Port/setup" -ForegroundColor Cyan
-Write-Host "  Free Pipeline:   Ready (Local Director, Pexels, Kokoro, Remotion)" -ForegroundColor Green
+Write-Host "  Free Pipeline:   Ready (Local Director, Pexels, Piper Arabic, Kokoro English, Whisper, Remotion)" -ForegroundColor Green
 Write-Host "  Database:        PostgreSQL Connected & Migrated" -ForegroundColor Green
 Write-Host "  Orchestrator:    n8n Internal Automation Active" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green

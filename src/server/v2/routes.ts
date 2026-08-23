@@ -19,13 +19,18 @@ import { N8nOrchestrator } from "./orchestrator";
 import {
   appSettingsSchema,
   brandProfileSchema,
+  captionStyleRevisionSchema,
   createVideoJobSchema,
   internalCompleteSchema,
   internalFailSchema,
   internalProgressSchema,
   internalStartRenderSchema,
+  mediaRevisionSchema,
+  productionJobSchema,
   productionSpecPreviewSchema,
   promptEnhanceRequestSchema,
+  stageRetrySchema,
+  voiceRevisionSchema,
 } from "./types";
 import { ContentAIRegistry } from "./content-ai/registry";
 import { estimateProductionCost } from "./cost-estimator";
@@ -38,6 +43,9 @@ import { convertTemplateToProductionSpec } from "./templateToSpec";
 import { VeoVisualProvider } from "./visual-providers/veoVisualProvider";
 import { FalVisualProvider } from "./visual-providers/falVisualProvider";
 import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvider";
+import { GoogleCloudTtsProvider } from "./voice-providers/googleCloudTtsProvider";
+import { VoiceRegistry } from "./voice-providers/registry";
+import { PIPER_ARABIC_MODEL } from "./voice-providers/piperArabicModel";
 import { mediaIntelligenceService } from "./media-intelligence/mediaIntelligenceService";
 import { mediaCache } from "./media-cache/mediaCache";
 import { imageRegistry } from "./image-providers/registry";
@@ -47,11 +55,20 @@ import { PublishingScheduler } from "./publishing/scheduler";
 import { publishingRegistry } from "./publishing/registry";
 import { getProductInfo } from "../../version";
 import { AuthService } from "./auth/authService";
+import { ApiTokenService, type ApiTokenScope } from "./auth/apiTokenService";
 import { BackupService } from "./backup/backupService";
 import { DiagnosticsService } from "./diagnostics/diagnosticsService";
 import { WebhookService } from "./webhooks/webhookService";
 import { AnalyticsService } from "./analytics/analyticsService";
 import { SystemHealthService } from "./system/systemHealthService";
+import { RevisionService } from "./revisions/revisionService";
+import { WorkerLeaseService } from "./workers/workerLeaseService";
+import { checkpointStages } from "./checkpoints";
+import {
+  buildRevisionReusePlan,
+  filterReusableArtifacts,
+  type DurableSceneArtifact,
+} from "./artifacts/durableArtifacts";
 
 type BrandRow = {
   id: string;
@@ -63,6 +80,7 @@ type BrandRow = {
   include_outro: boolean;
   outro_text: string;
   contact_text: string;
+  voice_profile?: Record<string, unknown> | null;
   is_default: boolean;
   created_at: Date;
   updated_at: Date;
@@ -85,6 +103,7 @@ function mapBrand(row: BrandRow) {
     includeOutro: row.include_outro,
     outroText: row.outro_text,
     contactText: row.contact_text,
+    voiceProfile: row.voice_profile || undefined,
     isDefault: row.is_default,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -126,6 +145,75 @@ async function writeAppSettings(db: V2Database, value: Record<string, unknown>) 
   return rows[0]?.value || value;
 }
 
+function metadataArtifacts(metadata: any): DurableSceneArtifact[] {
+  return filterReusableArtifacts({
+    artifacts: Array.isArray(metadata?.durableArtifacts) ? metadata.durableArtifacts as DurableSceneArtifact[] : [],
+  });
+}
+
+function publicArtifactSummary(artifact: DurableSceneArtifact) {
+  return {
+    artifactId: artifact.artifactId,
+    type: artifact.type,
+    sceneIndex: artifact.sceneIndex,
+    segmentIndex: artifact.segmentIndex,
+    sourceJobId: artifact.sourceJobId,
+    sourceRevisionId: artifact.sourceRevisionId,
+    provider: artifact.provider,
+    model: artifact.model,
+    inputHash: artifact.inputHash,
+    checksum: artifact.checksum,
+    duration: artifact.duration,
+    valid: artifact.valid,
+    createdAt: artifact.createdAt,
+  };
+}
+
+function revisionReuseSummary(plan: ReturnType<typeof buildRevisionReusePlan>) {
+  return {
+    reusedStages: plan.reusedStages,
+    regeneratedStages: plan.regeneratedStages,
+    reusedArtifacts: plan.artifacts.map(publicArtifactSummary),
+  };
+}
+
+async function persistSceneArtifacts(db: V2Database, projectId: string, artifacts: DurableSceneArtifact[]) {
+  const safeArtifacts = filterReusableArtifacts({ artifacts });
+  for (const artifact of safeArtifacts) {
+    await db.query(
+      `INSERT INTO scene_artifacts (
+        artifact_id, project_id, type, scene_index, segment_index, source_job_id, source_revision_id,
+        provider, model, input_hash, storage_ref, checksum_sha256, duration_seconds,
+        metadata, valid, superseded_at, created_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+      ON CONFLICT (artifact_id) DO UPDATE SET
+        project_id = EXCLUDED.project_id,
+        valid = EXCLUDED.valid,
+        superseded_at = EXCLUDED.superseded_at,
+        metadata = EXCLUDED.metadata`,
+      [
+        artifact.artifactId,
+        projectId,
+        artifact.type,
+        artifact.sceneIndex,
+        artifact.segmentIndex ?? null,
+        artifact.sourceJobId,
+        artifact.sourceRevisionId || null,
+        artifact.provider || null,
+        artifact.model || null,
+        artifact.inputHash,
+        artifact.storageRef,
+        artifact.checksum,
+        artifact.duration ?? null,
+        JSON.stringify(artifact.metadata || {}),
+        artifact.valid,
+        artifact.supersededAt || null,
+        artifact.createdAt || new Date().toISOString(),
+      ],
+    );
+  }
+}
+
 function requireInternalToken(config: Config) {
   return (
     req: ExpressRequest,
@@ -141,6 +229,97 @@ function requireInternalToken(config: Config) {
   };
 }
 
+function bearerToken(req: ExpressRequest): string {
+  const header = req.headers.authorization || "";
+  if (header.toLowerCase().startsWith("bearer ")) return header.slice(7).trim();
+  const queryToken = req.query.access_token;
+  return typeof queryToken === "string" ? queryToken.trim() : "";
+}
+
+function scopeForRequest(req: ExpressRequest): ApiTokenScope | null {
+  const method = req.method.toUpperCase();
+  const routePath = req.path;
+  if (routePath.startsWith("/publishing")) return "publishing:write";
+  if (routePath.startsWith("/videos/") && routePath.endsWith("/publishing")) return "production:read";
+  if (routePath.startsWith("/videos/") && routePath.includes("/revisions") && method === "GET") return "videos:read";
+  if (routePath.startsWith("/videos/") && routePath.includes("/revisions") && method === "POST") return "production:create";
+  if (routePath.startsWith("/production/jobs") && method === "GET") return "production:read";
+  if (routePath === "/production/jobs" && method === "POST") return "production:create";
+  if (routePath.startsWith("/jobs") && method === "GET") return "production:read";
+  if (routePath.startsWith("/jobs/") && routePath.includes("/stages") && method === "GET") return "production:read";
+  if (routePath.startsWith("/jobs/") && routePath.includes("/stages") && method === "POST") return "production:create";
+  if (routePath === "/jobs" && method === "POST") return "production:create";
+  if (routePath.startsWith("/production-spec") || routePath.startsWith("/prompt") || routePath.startsWith("/cost-estimate")) {
+    return "production:create";
+  }
+  if (routePath.startsWith("/media/upload")) return "production:create";
+  if (routePath.startsWith("/media/uploads")) return "videos:read";
+  return null;
+}
+
+function isPublicHealthOrBootstrapPath(req: ExpressRequest): boolean {
+  const method = req.method.toUpperCase();
+  const routePath = req.path;
+  return (
+    (method === "GET" && (routePath === "/health" || routePath === "/system/health" || routePath === "/system/info" || routePath === "/setup/status")) ||
+    (method === "POST" && routePath === "/auth/login")
+  );
+}
+
+function requireV2Access(authService: AuthService, apiTokenService: ApiTokenService) {
+  return async (req: ExpressRequest, res: ExpressResponse, next: express.NextFunction) => {
+    try {
+      if (isPublicHealthOrBootstrapPath(req)) {
+        next();
+        return;
+      }
+
+      const setupState = await authService.getSetupState();
+      const setupComplete = setupState.isSetupCompleted;
+      const method = req.method.toUpperCase();
+      const routePath = req.path;
+
+      if (method === "POST" && routePath === "/auth/setup-admin" && !setupState.isAdminConfigured && !setupComplete) {
+        next();
+        return;
+      }
+
+      const token = bearerToken(req);
+      if (!token) {
+        res.status(401).json({ error: "Unauthorized." });
+        return;
+      }
+
+      const admin = await authService.validateSession(token);
+      if (admin?.role === "admin") {
+        (req as any).v2Auth = { type: "admin", user: admin };
+        next();
+        return;
+      }
+
+      const requiredScope = scopeForRequest(req);
+      if (!requiredScope) {
+        res.status(401).json({ error: "Admin session required." });
+        return;
+      }
+
+      const apiToken = await apiTokenService.validateToken(token, requiredScope);
+      if (apiToken.forbidden) {
+        res.status(403).json({ error: "API token does not include the required scope.", requiredScope });
+        return;
+      }
+      if (!apiToken.valid) {
+        res.status(401).json({ error: "Invalid or expired credential." });
+        return;
+      }
+      (req as any).v2Auth = { type: "api_token", token: apiToken.token, scope: requiredScope };
+      next();
+    } catch (error) {
+      res.status(500).json({ error: "Access control failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  };
+}
+
 export function createV2PublicRouter(
   config: Config,
   db: V2Database,
@@ -151,12 +330,21 @@ export function createV2PublicRouter(
   const contentAIRegistry = new ContentAIRegistry(config);
   const publishingService = new PublishingService(db, config, publishingRegistry);
   const publishingScheduler = new PublishingScheduler(db, publishingService);
+  const authService = new AuthService(db);
+  const apiTokenService = new ApiTokenService(db);
+  const backupService = new BackupService(db, config);
+  const diagnosticsService = new DiagnosticsService(db, config);
+  const webhookService = new WebhookService(db, { timeoutMs: config.webhookTimeoutMs });
+  const analyticsService = new AnalyticsService(db, config);
+  const revisionService = new RevisionService(db);
+  const workerLeaseService = new WorkerLeaseService(db);
 
   if (config.serviceRole === "app") {
     publishingScheduler.start();
   }
 
   router.use(express.json({ limit: "2mb" }));
+  router.use(requireV2Access(authService, apiTokenService));
 
   // Mount Publishing & Distribution Routes
   router.use("/publishing", createPublishingRouter(config, publishingService));
@@ -170,6 +358,263 @@ export function createV2PublicRouter(
         error: "Failed to get video publishing status",
         message: error instanceof Error ? error.message : String(error),
       });
+    }
+  });
+
+  router.get("/videos/:videoId/revisions", async (req, res) => {
+    const videoId = req.params.videoId;
+    try {
+      const metadata = readMetadata(config.videosDirPath, videoId);
+      if (!metadata && !fs.existsSync(path.join(config.videosDirPath, `${videoId}.mp4`))) {
+        res.status(404).json({ error: "Video not found." });
+        return;
+      }
+      if (metadata?.productionSpec) {
+        await revisionService.ensureInitialRevision({
+          projectId: videoId,
+          sourceJobId: videoId,
+          outputVideoId: videoId,
+        });
+      }
+      const revisions = await revisionService.listRevisions(videoId);
+      res.status(200).json({
+        revisions,
+        legacy: !metadata?.productionSpec,
+        message: metadata?.productionSpec ? undefined : "Legacy video / revision history unavailable.",
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load revisions.", message: String(error) });
+    }
+  });
+
+  router.post("/videos/:videoId/revisions/voice", async (req, res) => {
+    const parsed = voiceRevisionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid voice revision payload.", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const videoId = req.params.videoId;
+      const metadata = readMetadata(config.videosDirPath, videoId);
+      if (!metadata?.productionSpec) {
+        res.status(409).json({ error: "Legacy video / revision history unavailable." });
+        return;
+      }
+      const baseSpec = metadata.productionSpec as any;
+      const selectedVisuals = metadata.selectedVisuals || [];
+      const revisionId = cuid();
+      const reusePlan = buildRevisionReusePlan({
+        changeType: "voice",
+        artifacts: metadataArtifacts(metadata),
+      });
+      const nextSpec = validateProductionSpec({
+        ...baseSpec,
+        id: revisionId,
+        voiceProvider: parsed.data.voiceProvider || baseSpec.voiceProvider,
+        voiceId: parsed.data.voiceId || baseSpec.voiceId,
+        captionStyle: parsed.data.captionProfile || baseSpec.captionStyle,
+        scenes: parsed.data.spokenNarration
+          ? baseSpec.scenes.map((scene: any, index: number) => ({
+              ...scene,
+              spokenNarration: index === 0 ? parsed.data.spokenNarration : scene.spokenNarration,
+            }))
+          : baseSpec.scenes,
+        metadata: {
+          ...(baseSpec.metadata || {}),
+          revision: {
+            revisionId,
+            type: "voice",
+            parentVideoId: videoId,
+            reuseStages: reusePlan.reusedStages,
+            regeneratedStages: reusePlan.regeneratedStages,
+            reuseArtifacts: reusePlan.artifacts,
+            reuseMediaAssets: selectedVisuals,
+          },
+        },
+      });
+      const initial = await revisionService.ensureInitialRevision({ projectId: videoId, sourceJobId: videoId, outputVideoId: videoId });
+      const job = await jobs.createVideoJob({
+        type: "video",
+        creationMode: "prompt",
+        title: `${metadata.templateName || metadata.filename || videoId} voice revision`,
+        productionSpec: nextSpec,
+      });
+      const revision = await revisionService.createRevision({
+        id: revisionId,
+        projectId: videoId,
+        parentRevisionId: initial.id,
+        sourceJobId: job.id,
+        reason: parsed.data.reason || "Voice-only revision",
+        changeType: "voice",
+        changedFields: {
+          spokenNarration: Boolean(parsed.data.spokenNarration),
+          voiceProvider: parsed.data.voiceProvider,
+          voiceId: parsed.data.voiceId,
+          captionProfile: parsed.data.captionProfile,
+          reusedStages: reusePlan.reusedStages,
+          regeneratedStages: reusePlan.regeneratedStages,
+          reusedArtifactIds: reusePlan.artifacts.map((artifact) => artifact.artifactId),
+        },
+      });
+      await orchestrator.enqueue(job);
+      await webhookService.dispatchEvent("video.revision.created", { videoId, revisionId: revision.id, jobId: job.id, changeType: "voice" });
+      res.status(201).json({ revision, job, ...revisionReuseSummary(reusePlan) });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create voice revision.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/videos/:videoId/revisions/media", async (req, res) => {
+    const parsed = mediaRevisionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid media revision payload.", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const videoId = req.params.videoId;
+      const metadata = readMetadata(config.videosDirPath, videoId);
+      if (!metadata?.productionSpec) {
+        res.status(409).json({ error: "Legacy video / revision history unavailable." });
+        return;
+      }
+      const baseSpec = metadata.productionSpec as any;
+      const revisionId = cuid();
+      const reusePlan = buildRevisionReusePlan({
+        changeType: "media",
+        artifacts: metadataArtifacts(metadata),
+        changedSceneIndex: parsed.data.sceneIndex,
+      });
+      const nextSpec = validateProductionSpec({
+        ...baseSpec,
+        id: revisionId,
+        scenes: baseSpec.scenes.map((scene: any, index: number) =>
+          index === parsed.data.sceneIndex
+            ? {
+                ...scene,
+                stockSearchTerms: parsed.data.searchTerms || scene.stockSearchTerms,
+                visualIntent: parsed.data.visualIntent || scene.visualIntent,
+              }
+            : scene,
+        ),
+        metadata: {
+          ...(baseSpec.metadata || {}),
+          revision: {
+            revisionId,
+            type: "media",
+            parentVideoId: videoId,
+            changedSceneIndex: parsed.data.sceneIndex,
+            reuseStages: reusePlan.reusedStages,
+            regeneratedStages: reusePlan.regeneratedStages,
+            reuseArtifacts: reusePlan.artifacts,
+          },
+        },
+      });
+      const initial = await revisionService.ensureInitialRevision({ projectId: videoId, sourceJobId: videoId, outputVideoId: videoId });
+      const job = await jobs.createVideoJob({
+        type: "video",
+        creationMode: "prompt",
+        title: `${metadata.templateName || metadata.filename || videoId} media revision`,
+        productionSpec: nextSpec,
+      });
+      const revision = await revisionService.createRevision({
+        id: revisionId,
+        projectId: videoId,
+        parentRevisionId: initial.id,
+        sourceJobId: job.id,
+        reason: parsed.data.reason || `Scene ${parsed.data.sceneIndex + 1} media revision`,
+        changeType: "media",
+        changedFields: {
+          sceneIndex: parsed.data.sceneIndex,
+          searchTerms: parsed.data.searchTerms,
+          visualIntent: parsed.data.visualIntent,
+          reusedStages: reusePlan.reusedStages,
+          regeneratedStages: reusePlan.regeneratedStages,
+          reusedArtifactIds: reusePlan.artifacts.map((artifact) => artifact.artifactId),
+        },
+      });
+      await orchestrator.enqueue(job);
+      await webhookService.dispatchEvent("video.revision.created", { videoId, revisionId: revision.id, jobId: job.id, changeType: "media" });
+      res.status(201).json({ revision, job, ...revisionReuseSummary(reusePlan) });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create media revision.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/videos/:videoId/revisions/caption-style", async (req, res) => {
+    const parsed = captionStyleRevisionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid caption-style revision payload.", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const videoId = req.params.videoId;
+      const metadata = readMetadata(config.videosDirPath, videoId);
+      if (!metadata?.productionSpec) {
+        res.status(409).json({ error: "Legacy video / revision history unavailable." });
+        return;
+      }
+      const baseSpec = metadata.productionSpec as any;
+      const revisionId = cuid();
+      const reusePlan = buildRevisionReusePlan({
+        changeType: "caption",
+        artifacts: metadataArtifacts(metadata),
+      });
+      const nextSpec = validateProductionSpec({
+        ...baseSpec,
+        id: revisionId,
+        captionStyle: parsed.data.captionProfile,
+        metadata: {
+          ...(baseSpec.metadata || {}),
+          revision: {
+            revisionId,
+            type: "caption",
+            parentVideoId: videoId,
+            reuseStages: reusePlan.reusedStages,
+            regeneratedStages: reusePlan.regeneratedStages,
+            reuseArtifacts: reusePlan.artifacts,
+          },
+        },
+      });
+      const initial = await revisionService.ensureInitialRevision({ projectId: videoId, sourceJobId: videoId, outputVideoId: videoId });
+      const job = await jobs.createVideoJob({
+        type: "video",
+        creationMode: "prompt",
+        title: `${metadata.templateName || metadata.filename || videoId} caption revision`,
+        productionSpec: nextSpec,
+      });
+      const revision = await revisionService.createRevision({
+        id: revisionId,
+        projectId: videoId,
+        parentRevisionId: initial.id,
+        sourceJobId: job.id,
+        reason: parsed.data.reason || "Caption-style revision",
+        changeType: "caption",
+        changedFields: {
+          captionProfile: parsed.data.captionProfile,
+          reusedStages: reusePlan.reusedStages,
+          regeneratedStages: reusePlan.regeneratedStages,
+          reusedArtifactIds: reusePlan.artifacts.map((artifact) => artifact.artifactId),
+        },
+      });
+      await orchestrator.enqueue(job);
+      await webhookService.dispatchEvent("video.revision.created", { videoId, revisionId: revision.id, jobId: job.id, changeType: "caption" });
+      res.status(201).json({ revision, job, ...revisionReuseSummary(reusePlan) });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create caption-style revision.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/videos/:videoId/revisions/:revisionId/final", async (req, res) => {
+    try {
+      const revision = await revisionService.markFinal(req.params.videoId, req.params.revisionId);
+      if (!revision) {
+        res.status(404).json({ error: "Revision not found." });
+        return;
+      }
+      await webhookService.dispatchEvent("video.revision.finalized", { videoId: req.params.videoId, revisionId: revision.id, outputVideoId: revision.outputVideoId });
+      res.status(200).json({ revision });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to mark final revision.", message: String(error) });
     }
   });
 
@@ -296,6 +741,99 @@ export function createV2PublicRouter(
     }
   });
 
+  router.post("/production/jobs", async (req, res) => {
+    const parsed = productionJobSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid production job payload.", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const qualityMap: Record<string, "draft" | "standard" | "premium"> = {
+        fast: "draft",
+        balanced: "standard",
+        premium: "premium",
+      };
+      const provider = contentAIRegistry.getProvider();
+      const spec = await provider.generateProductionSpec({
+        creationMode: "prompt",
+        prompt: parsed.data.prompt,
+        language: parsed.data.language,
+        dialect: parsed.data.dialect,
+        durationSeconds: parsed.data.durationSeconds || parsed.data.duration || 20,
+        aspectRatio: parsed.data.aspectRatio,
+        quality: qualityMap[parsed.data.qualityProfile],
+        visualMode: parsed.data.visualMode,
+        voiceId: parsed.data.voice,
+        brandId: parsed.data.brandId,
+      } as any);
+      const job = await jobs.createVideoJob({
+        type: "video",
+        creationMode: "prompt",
+        title: spec.title,
+        productionSpec: {
+          ...spec,
+          metadata: {
+            ...(spec.metadata || {}),
+            apiContract: "production.jobs.v1",
+            publishIntent: parsed.data.publishIntent || undefined,
+            qualityProfileRequested: parsed.data.qualityProfile,
+          },
+        },
+      });
+      await orchestrator.enqueue(job);
+      await webhookService.dispatchEvent("job.created", { jobId: job.id, status: job.status });
+      res.status(202).json({
+        jobId: job.id,
+        status: job.status,
+        statusUrl: `/api/v2/production/jobs/${job.id}`,
+        eventsUrl: `/api/v2/jobs/${job.id}/events`,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create production job.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/production/jobs/:id", async (req, res) => {
+    const job = await jobs.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+    res.status(200).json({ job });
+  });
+
+  router.get("/production/jobs/:id/stages", async (req, res) => {
+    const job = await jobs.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+    res.status(200).json({
+      jobId: job.id,
+      stageTimings: job.stageTimings || {},
+      checkpoint: job.checkpoint || {},
+      stages: checkpointStages.map((stage) => ({
+        stage,
+        checkpoint: (job.checkpoint as any)?.[stage] || { status: "pending", attempt: 0 },
+        timingMs: job.stageTimings?.[`${stage}Ms`],
+      })),
+    });
+  });
+
+  router.get("/production/jobs/:id/output", async (req, res) => {
+    const job = await jobs.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+    res.status(200).json({
+      jobId: job.id,
+      status: job.status,
+      output: job.output || null,
+      videoId: job.output?.videoId,
+    });
+  });
+
   router.get("/media/uploads/:filename", (req, res) => {
     const filename = path.basename(req.params.filename);
     const targetPath = path.join(mediaCache.getUploadsDir(), filename);
@@ -318,7 +856,17 @@ export function createV2PublicRouter(
     }
 
     try {
-      let resolvedPayload = parsed.data;
+      let resolvedPayload = parsed.data as any;
+      const headerIdempotencyKey =
+        typeof req.headers["idempotency-key"] === "string"
+          ? req.headers["idempotency-key"]
+          : undefined;
+      if (headerIdempotencyKey && !resolvedPayload.idempotencyKey) {
+        resolvedPayload = {
+          ...resolvedPayload,
+          idempotencyKey: headerIdempotencyKey,
+        };
+      }
 
       // If user sent a raw prompt without full spec, generate the production spec first
       if ((resolvedPayload as any).prompt && !(resolvedPayload as any).productionSpec) {
@@ -329,6 +877,7 @@ export function createV2PublicRouter(
           creationMode: "prompt",
           title: (resolvedPayload as any).title || generatedSpec.title,
           productionSpec: generatedSpec,
+          idempotencyKey: resolvedPayload.idempotencyKey,
         } as any;
       } else if ((resolvedPayload as any).businessTemplateId && !(resolvedPayload as any).productionSpec) {
         const generatedSpec = convertTemplateToProductionSpec({
@@ -342,6 +891,7 @@ export function createV2PublicRouter(
           creationMode: "template",
           title: (resolvedPayload as any).title || generatedSpec.title,
           productionSpec: generatedSpec,
+          idempotencyKey: resolvedPayload.idempotencyKey,
         } as any;
       }
 
@@ -372,8 +922,10 @@ export function createV2PublicRouter(
 
   router.get("/jobs", async (req, res) => {
     try {
+      const requestedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 100;
       const jobsList = await jobs.listJobs(
         typeof req.query.status === "string" ? req.query.status : undefined,
+        Number.isFinite(requestedLimit) ? requestedLimit : 100,
       );
       res.status(200).json({ jobs: jobsList });
     } catch (error) {
@@ -412,6 +964,36 @@ export function createV2PublicRouter(
     req.on("close", unsubscribe);
   });
 
+  router.get("/jobs/:id/stages", async (req, res) => {
+    const job = await jobs.getJob(req.params.id);
+    if (!job) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+    res.status(200).json({ checkpoint: job.checkpoint || {}, stageTimings: job.stageTimings || {} });
+  });
+
+  router.post("/jobs/:id/stages/:stage/retry", async (req, res) => {
+    const parsed = stageRetrySchema.safeParse({ stage: req.params.stage });
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid stage retry request.", issues: parsed.error.flatten() });
+      return;
+    }
+    try {
+      const job = await jobs.retryStage(req.params.id, parsed.data.stage);
+      await webhookService.dispatchEvent("job.stage.retry", { jobId: job.id, stage: parsed.data.stage });
+      await orchestrator.enqueue(job);
+      res.status(202).json({
+        job,
+        retryStage: parsed.data.stage,
+        checkpoint: job.checkpoint,
+        reusedStages: checkpointStages.filter((stage) => (job.checkpoint as any)?.[stage]?.status === "completed"),
+      });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Stage retry failed." });
+    }
+  });
+
   router.post("/jobs/:id/cancel", async (req, res) => {
     try {
       const job = await jobs.cancelJob(req.params.id);
@@ -444,25 +1026,61 @@ export function createV2PublicRouter(
     }
   });
 
-  router.get("/system/health", async (req, res) => {
+  const sendHealth = async (_req: express.Request, res: express.Response) => {
     const health = await getV2Health(config, db);
     res.status(200).json(health);
-  });
+  };
+
+  router.get("/health", sendHealth);
+
+  router.get("/system/health", sendHealth);
 
   router.get("/templates", async (req, res) => {
     res.status(200).json({ templates: listBusinessTemplates() });
   });
 
+  router.get("/voices", async (req, res) => {
+    try {
+      const provider = typeof req.query.provider === "string" ? req.query.provider : "auto";
+      const language = typeof req.query.language === "string" ? req.query.language : undefined;
+      const registry = new VoiceRegistry({
+        listAvailableVoices: () => ["af_heart", "am_adam", "bf_emma"],
+        generate: async () => ({ audio: Buffer.from(""), audioLength: 0 }),
+      } as any);
+      const voices = provider && provider !== "auto"
+        ? await registry.getProviderStrict(provider as any)?.listVoices(language === "ar" ? "ar-XA" : language) || []
+        : await registry.listAllVoices(language === "ar" ? "ar-XA" : language);
+      res.status(200).json({ voices });
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to list voices",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   router.get("/providers", async (req, res) => {
     const health = await getV2Health(config, db);
+    const shouldValidateLocalVoiceModels = process.env.NODE_ENV !== "test" && process.env.VITEST !== "true";
+    const voiceResults = shouldValidateLocalVoiceModels
+      ? await new VoiceRegistry({} as any).validateAll()
+      : [];
 
     const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasVeoKey = Boolean(process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasFalKey = Boolean(process.env.FAL_KEY);
     const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
+    const googleTts = new GoogleCloudTtsProvider();
+    const googleTtsValidation = voiceResults.find((provider) => provider.provider === "Google Cloud TTS");
+    const googleTtsConfigured = googleTts.isConfigured();
+    const googleVoices = googleTtsConfigured
+      ? await googleTts.listVoices("ar-XA").catch(() => [])
+      : [];
+    const googleFamilies = Array.from(new Set(googleVoices.map((voice) => voice.voiceFamily).filter(Boolean)));
 
     const pexelsComp = health.components.find((c) => c.name === "Pexels");
     const kokoroComp = health.components.find((c) => c.name === "Kokoro");
+    const piperVoice = voiceResults.find((provider) => provider.provider === "Piper Arabic");
     const whisperComp = health.components.find((c) => c.name === "Whisper");
     const remotionComp = health.components.find((c) => c.name === "Remotion");
     const ffmpegComp = health.components.find((c) => c.name === "FFmpeg");
@@ -535,9 +1153,90 @@ export function createV2PublicRouter(
         tier: "free",
         status: kokoroComp?.status || "healthy",
         configured: true,
-        isDefault: true,
-        message: kokoroComp?.message || "Local Kokoro TTS is active.",
+        isDefault: !Boolean(process.env.PIPER_BIN && process.env.PIPER_AR_MODEL_PATH),
+        message: "Local Kokoro TTS is healthy for English-focused voices. It is not verified for Arabic/Egyptian Arabic production narration.",
         checkedAt: kokoroComp?.checkedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: true,
+          healthy: kokoroComp?.status === "healthy",
+          liveVerified: false,
+          languages: ["en-US", "en-GB"],
+          arabicSupport: "not_verified",
+          egyptianSupport: "not_verified",
+          local: true,
+          license: "Apache-2.0 model weights (Kokoro-82M v1.0 ONNX)",
+        },
+      },
+      {
+        name: "Piper Arabic",
+        category: "Voice",
+        tier: "free",
+        status: piperVoice?.status || "not_configured",
+        configured: piperVoice?.configured || false,
+        isDefault: piperVoice?.healthy || false,
+        message:
+          piperVoice?.message ||
+          "Piper Arabic is unavailable until the runtime and pinned Arabic voice model are provisioned.",
+        checkedAt: piperVoice?.checkedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: piperVoice?.configured || false,
+          healthy: piperVoice?.healthy || false,
+          liveVerified: piperVoice?.healthy || false,
+          languages: ["ar"],
+          arabicSupport: "verified_local_model",
+          egyptianSupport: "human_listening_required",
+          local: true,
+          license: `${PIPER_ARABIC_MODEL.runtimeLicense} runtime; ${PIPER_ARABIC_MODEL.modelLicense} voice model`,
+          commercialUse: PIPER_ARABIC_MODEL.commercialUseAllowed ? "allowed" : "not_allowed",
+          model: PIPER_ARABIC_MODEL.model,
+          voice: PIPER_ARABIC_MODEL.voice,
+          modelSource: PIPER_ARABIC_MODEL.modelSource,
+          modelSha256: PIPER_ARABIC_MODEL.modelSha256,
+        },
+      },
+      {
+        id: "google_cloud_tts",
+        name: "Google Cloud TTS",
+        category: "Voice",
+        tier: "cloud_free_tier",
+        status: googleTtsValidation?.status || (googleTtsConfigured ? "provider_unavailable" : "not_configured"),
+        configured: googleTtsConfigured,
+        isDefault: false,
+        message: googleTtsConfigured
+          ? googleTtsValidation?.message || "Google Cloud TTS credentials are configured. Arabic voices are loaded dynamically from Google."
+          : "Google Cloud TTS credentials are not configured. Use Application Default Credentials or GOOGLE_APPLICATION_CREDENTIALS.",
+        checkedAt: googleTtsValidation?.checkedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: googleTtsConfigured,
+          healthy: googleTtsValidation?.healthy || false,
+          liveVerified: googleTtsValidation?.healthy || false,
+          languages: ["ar-XA"],
+          arabicSupport: "Arabic - Modern Standard Arabic",
+          egyptianSupport: "not_specifically_verified",
+          local: false,
+          cloud: true,
+          costTier: "cloud_free_tier",
+          freeTierLabel: "Google Cloud - Free Tier Available",
+          billingNotice: "Billing account may be required. Usage above Google's free monthly allowance may incur charges.",
+          authentication: googleTtsConfigured ? "Configured" : "Not Configured",
+          supportsSSML: true,
+          supportsSpeakingRate: true,
+          supportsPitch: true,
+          supportsWordTimings: false,
+          sampleRate: 24000,
+          voiceFamilies: googleFamilies,
+          voices: googleVoices.map((voice) => ({
+            id: voice.id,
+            name: voice.name,
+            gender: voice.gender,
+            voiceFamily: voice.voiceFamily,
+            sampleRate: voice.sampleRate,
+            language: voice.language,
+          })),
+        },
       },
       {
         name: "ElevenLabs",
@@ -550,6 +1249,17 @@ export function createV2PublicRouter(
           ? "ElevenLabs Multilingual & Arabic TTS configured."
           : "ELEVENLABS_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: hasElevenLabsKey,
+          healthy: hasElevenLabsKey,
+          liveVerified: false,
+          languages: ["multilingual", "ar", "en"],
+          arabicSupport: hasElevenLabsKey ? "configured_provider" : "not_configured",
+          egyptianSupport: "human_listening_required",
+          local: false,
+          costTier: "premium",
+        },
       },
       // Captions
       {
@@ -719,6 +1429,12 @@ export function createV2PublicRouter(
       res.status(200).json(val);
       return;
     }
+    if (target === "google" || target === "googlecloudtts" || target === "google_cloud_tts") {
+      const google = new GoogleCloudTtsProvider();
+      const val = await google.validate();
+      res.status(200).json(val);
+      return;
+    }
     if (target === "upload-post" || target === "upload_post") {
       const p = publishingRegistry.getProvider("upload_post");
       const val = await (p?.validateConnection() ?? {
@@ -808,7 +1524,7 @@ export function createV2PublicRouter(
         defaultVisualMode: "auto",
         defaultContentAI: "local_ai",
         defaultVisualProvider: "pexels",
-        defaultVoiceProvider: "kokoro",
+        defaultVoiceProvider: "piper",
         defaultPublishingMode: "draft",
         defaultSocialAccounts: [],
         defaultYouTubePrivacy: "unlisted",
@@ -886,9 +1602,9 @@ export function createV2PublicRouter(
     const rows = await db.query<BrandRow>(
       `INSERT INTO brands (
         id, name, watermark_text, primary_color, accent_color, caption_style,
-        include_outro, outro_text, contact_text, is_default, created_at, updated_at
+        include_outro, outro_text, contact_text, voice_profile, is_default, created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
       RETURNING *`,
       [
         id,
@@ -900,6 +1616,7 @@ export function createV2PublicRouter(
         parsed.data.includeOutro,
         parsed.data.outroText,
         parsed.data.contactText,
+        parsed.data.voiceProfile ? JSON.stringify(parsed.data.voiceProfile) : null,
         parsed.data.isDefault,
       ],
     );
@@ -930,7 +1647,8 @@ export function createV2PublicRouter(
            include_outro = $7,
            outro_text = $8,
            contact_text = $9,
-           is_default = $10,
+           voice_profile = $10,
+           is_default = $11,
            updated_at = now()
        WHERE id = $1
        RETURNING *`,
@@ -944,6 +1662,7 @@ export function createV2PublicRouter(
         parsed.data.includeOutro,
         parsed.data.outroText,
         parsed.data.contactText,
+        parsed.data.voiceProfile ? JSON.stringify(parsed.data.voiceProfile) : null,
         parsed.data.isDefault,
       ],
     );
@@ -979,12 +1698,6 @@ export function createV2PublicRouter(
     res.status(200).json({ success: true });
   });
 
-  const authService = new AuthService(db);
-  const backupService = new BackupService(db, config);
-  const diagnosticsService = new DiagnosticsService(db, config);
-  const webhookService = new WebhookService(db);
-  const analyticsService = new AnalyticsService(db, config);
-
   // 1. System Info & Diagnostics
   router.get("/system/info", (req, res) => {
     res.status(200).json(getProductInfo());
@@ -992,6 +1705,48 @@ export function createV2PublicRouter(
 
   router.get("/system/storage", (req, res) => {
     res.status(200).json(diagnosticsService.getStorageUsage());
+  });
+
+  router.get("/system/observability", async (req, res) => {
+    try {
+      const [worker, storage, health, deliveries] = await Promise.all([
+        workerLeaseService.getObservability(),
+        Promise.resolve(diagnosticsService.getStorageUsage()),
+        getV2Health(config, db),
+        webhookService.getDeliveryHistory(10),
+      ]);
+      const statusRows = await db.query<{ status: string; count: string }>(
+        "SELECT status, count(*)::text AS count FROM jobs GROUP BY status",
+      ).catch(() => []);
+      res.status(200).json({
+        queueDepth: worker.queueDepth,
+        activeWorkers: worker.activeWorkers,
+        activeRenders: worker.activeRenders,
+        maxConcurrentRenders: config.concurrency || 1,
+        workers: worker.workers,
+        averageGenerationTimeMs: worker.averageGenerationTimeMs,
+        recentStageBottleneck: worker.recentStageBottleneck,
+        jobCounts: Object.fromEntries(statusRows.map((row) => [row.status, Number(row.count)])),
+        cache: {
+          tempDir: config.tempDirPath,
+          maxStorageBytes: config.videoCacheSizeInBytes,
+          usedProjectStorageBytes: (storage as any).usedProjectStorageBytes,
+          cacheStorageBytes: (storage as any).cacheStorageBytes,
+        },
+        providerHealth: health.components,
+        diskUsage: storage,
+        recentWebhookDeliveries: deliveries.map((delivery) => ({
+          id: delivery.id,
+          event: delivery.event,
+          status: delivery.status,
+          responseCode: delivery.responseCode,
+          attemptCount: delivery.attemptCount,
+          createdAt: delivery.createdAt,
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to load observability.", message: String(error) });
+    }
   });
 
   router.get("/system/diagnostics", async (req, res) => {
@@ -1026,6 +1781,11 @@ export function createV2PublicRouter(
 
   router.post("/setup/complete", async (req, res) => {
     try {
+      const state = await authService.getSetupState();
+      if (state.isSetupCompleted) {
+        res.status(403).json({ error: "Setup is already complete." });
+        return;
+      }
       await authService.completeSetup(req.body);
       res.status(200).json({ success: true, message: "Setup completed successfully." });
     } catch (error) {
@@ -1035,6 +1795,11 @@ export function createV2PublicRouter(
 
   router.post("/auth/setup-admin", async (req, res) => {
     try {
+      const state = await authService.getSetupState();
+      if (state.isAdminConfigured || state.isSetupCompleted) {
+        res.status(403).json({ error: "Admin account is already configured." });
+        return;
+      }
       const { username, password } = req.body;
       const user = await authService.createInitialAdmin(username, password);
       const session = await authService.authenticate(username, password);
@@ -1059,7 +1824,7 @@ export function createV2PublicRouter(
   });
 
   router.post("/auth/logout", async (req, res) => {
-    const token = req.headers.authorization?.replace("Bearer ", "");
+    const token = bearerToken(req);
     if (token) {
       await authService.logout(token);
     }
@@ -1067,7 +1832,7 @@ export function createV2PublicRouter(
   });
 
   router.get("/auth/me", async (req, res) => {
-    const token = req.headers.authorization?.replace("Bearer ", "");
+    const token = bearerToken(req);
     if (!token) {
       res.status(401).json({ error: "Unauthorized." });
       return;
@@ -1087,6 +1852,37 @@ export function createV2PublicRouter(
       res.status(200).json({ backups });
     } catch (error) {
       res.status(500).json({ error: "Failed to list backups", message: String(error) });
+    }
+  });
+
+  router.get("/api-tokens", async (_req, res) => {
+    try {
+      const tokens = await apiTokenService.listTokens();
+      res.status(200).json({ tokens });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to list API tokens", message: String(error) });
+    }
+  });
+
+  router.post("/api-tokens", async (req, res) => {
+    try {
+      const token = await apiTokenService.createToken(req.body?.name, req.body?.scopes || []);
+      res.status(201).json({ token });
+    } catch (error) {
+      res.status(400).json({ error: "Failed to create API token", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/api-tokens/:id/revoke", async (req, res) => {
+    try {
+      const token = await apiTokenService.revokeToken(req.params.id);
+      if (!token) {
+        res.status(404).json({ error: "API token not found." });
+        return;
+      }
+      res.status(200).json({ token });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to revoke API token", message: String(error) });
     }
   });
 
@@ -1200,6 +1996,19 @@ export function createV2InternalRouter(
   const router = express.Router();
   router.use(express.json({ limit: "2mb" }));
   router.use(requireInternalToken(config));
+  const scheduleStartRetry = (jobId: string, delayMs = 10000) => {
+    const timer = setTimeout(() => {
+      void axios.post(
+        `${config.appInternalBaseUrl}/internal/v1/jobs/${jobId}/start`,
+        {},
+        {
+          timeout: config.webhookTimeoutMs,
+          headers: { "x-internal-token": config.internalServiceToken },
+        },
+      ).catch(() => undefined);
+    }, delayMs);
+    timer.unref?.();
+  };
 
   router.post("/jobs/:id/start", async (req, res) => {
     if (!jobs) {
@@ -1211,7 +2020,38 @@ export function createV2InternalRouter(
       res.status(404).json({ error: "Job not found." });
       return;
     }
+    const workerLeaseService = db ? new WorkerLeaseService(db) : null;
+    const workerId = process.env.WORKER_ID || "render-worker";
     try {
+      if (workerLeaseService) {
+        const claim = await workerLeaseService.claimJob(job.id, {
+          workerId,
+          maxConcurrentRenders: config.concurrency || 1,
+          capabilities: { render: true, ffmpeg: true, remotion: true },
+        });
+        if (!claim.claimed && claim.reason === "backpressure") {
+          scheduleStartRetry(job.id);
+          res.status(202).json({
+            accepted: false,
+            queued: true,
+            reason: "Backpressure active; max concurrent renders reached.",
+            queueDepth: claim.queueDepth,
+            activeRenders: claim.activeRenders,
+            retryAfterMs: 10000,
+          });
+          return;
+        }
+        if (!claim.claimed) {
+          res.status(409).json({
+            accepted: false,
+            queued: false,
+            reason: claim.reason || "Job is not claimable.",
+            queueDepth: claim.queueDepth,
+            activeRenders: claim.activeRenders,
+          });
+          return;
+        }
+      }
       await jobs.updateJob(
         job.id,
         "preparing",
@@ -1229,9 +2069,10 @@ export function createV2InternalRouter(
               input: job.productionSpec || job.input,
               callbackBaseUrl: config.appInternalBaseUrl,
               internalServiceToken: config.internalServiceToken,
+              workerId,
             },
             {
-              timeout: 15000,
+              timeout: config.webhookTimeoutMs,
               headers: { "x-internal-token": config.internalServiceToken },
             },
           );
@@ -1251,6 +2092,7 @@ export function createV2InternalRouter(
         error: "Render worker is unavailable.",
         technicalError: error instanceof Error ? error.message : String(error),
       });
+      await workerLeaseService?.release(workerId);
       res.status(503).json({ error: "Render worker is unavailable." });
     }
   });
@@ -1274,6 +2116,23 @@ export function createV2InternalRouter(
       update.message,
       { technicalMessage: update.technicalMessage },
     );
+    if (update.stageKey && update.checkpointStatus) {
+      await jobs.updateStageCheckpoint(req.params.id, update.stageKey, update.checkpointStatus, {
+        input: update.inputHashSource,
+        provider: update.provider,
+        artifacts: update.artifacts,
+        error: update.technicalMessage,
+        timingMs: update.timingMs,
+      });
+      if (update.checkpointStatus === "completed") {
+        const webhookService = db ? new WebhookService(db, { timeoutMs: config.webhookTimeoutMs }) : null;
+        await webhookService?.dispatchEvent("job.stage.completed", {
+          jobId: req.params.id,
+          stage: update.stageKey,
+          timingMs: update.timingMs,
+        });
+      }
+    }
     res.status(200).json({ job });
   });
 
@@ -1292,6 +2151,35 @@ export function createV2InternalRouter(
       parsed.data.videoId,
       parsed.data.output,
     );
+    if (db) {
+      await new WorkerLeaseService(db).release(process.env.WORKER_ID || "render-worker");
+      const revision = await new RevisionService(db).markRevisionReadyForJob(req.params.id, parsed.data.videoId);
+      const completedMetadata = readMetadata(config.videosDirPath, parsed.data.videoId);
+      const projectId = revision?.projectId || (completedMetadata?.revisionMetadata as any)?.parentVideoId || parsed.data.videoId;
+      if (completedMetadata?.durableArtifacts) {
+        await persistSceneArtifacts(db, projectId, completedMetadata.durableArtifacts as DurableSceneArtifact[]);
+      }
+      if (!revision) {
+        await new RevisionService(db).ensureInitialRevision({
+          projectId: parsed.data.videoId,
+          sourceJobId: req.params.id,
+          outputVideoId: parsed.data.videoId,
+        });
+      }
+      await new WebhookService(db, { timeoutMs: config.webhookTimeoutMs }).dispatchEvent("video.ready", {
+        jobId: req.params.id,
+        videoId: parsed.data.videoId,
+        output: parsed.data.output,
+      });
+      if (revision) {
+        await new WebhookService(db, { timeoutMs: config.webhookTimeoutMs }).dispatchEvent("video.revision.ready", {
+          jobId: req.params.id,
+          revisionId: revision.id,
+          projectId: revision.projectId,
+          outputVideoId: parsed.data.videoId,
+        });
+      }
+    }
     res.status(200).json({ job });
   });
 
@@ -1316,6 +2204,13 @@ export function createV2InternalRouter(
         technicalError: parsed.data.technicalMessage,
       },
     );
+    if (db) {
+      await new WorkerLeaseService(db).release(process.env.WORKER_ID || "render-worker");
+      await new WebhookService(db, { timeoutMs: config.webhookTimeoutMs }).dispatchEvent("video.failed", {
+        jobId: req.params.id,
+        message: parsed.data.message,
+      });
+    }
     res.status(200).json({ job });
   });
 
@@ -1325,11 +2220,19 @@ export function createV2InternalRouter(
       res.status(400).json({ error: "Invalid render payload." });
       return;
     }
-    const { jobId, input, callbackBaseUrl, internalServiceToken } = parsed.data;
+    const { jobId, input, callbackBaseUrl, internalServiceToken, workerId } = parsed.data;
 
     void shortCreator
       .createShortNow(jobId, input, async (event) => {
         try {
+          if (db && workerId) {
+            await new WorkerLeaseService(db).heartbeat({
+              workerId,
+              status: "busy",
+              activeJobId: jobId,
+              capabilities: { render: true, ffmpeg: true, remotion: true },
+            });
+          }
           await axios.post(
             `${callbackBaseUrl}/internal/v1/jobs/${jobId}/progress`,
             event,

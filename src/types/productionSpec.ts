@@ -47,7 +47,7 @@ export type AspectRatio = z.infer<typeof aspectRatioEnum>;
 export const visualModeEnum = z.enum(["auto", "stock", "ai", "hybrid"]);
 export type VisualMode = z.infer<typeof visualModeEnum>;
 
-export const voiceProviderEnum = z.enum(["auto", "kokoro", "elevenlabs"]);
+export const voiceProviderEnum = z.enum(["auto", "kokoro", "piper", "google_cloud_tts", "elevenlabs"]);
 export type VoiceProvider = z.infer<typeof voiceProviderEnum>;
 
 export const captionStyleEnum = z.enum(["none", "clean", "bold", "minimal"]);
@@ -76,6 +76,10 @@ export const productionSceneSpecSchema = z.object({
   purpose: scenePurposeEnum.default("custom"),
   durationSeconds: z.number().min(0.5).max(30).default(5),
   narration: z.string().trim().min(1).max(500),
+  spokenNarration: z.string().trim().min(1).max(500).optional(),
+  displayText: z.string().trim().max(140).optional(),
+  captionText: z.string().trim().max(500).optional(),
+  visualIntent: z.string().trim().max(80).optional(),
   onScreenText: z.string().trim().max(140).optional(),
   stockSearchTerms: z.array(z.string().trim().min(1)).min(1).default(["video"]),
   visualPrompt: z.string().trim().max(500).optional(),
@@ -113,6 +117,7 @@ export const costEstimateBreakdownSchema = z.object({
     provider: z.string().default("kokoro"),
     charCount: z.number().int().min(0).default(0),
     cost: z.number().min(0).default(0),
+    estimatedCostTier: z.enum(["local_free", "cloud_free_tier", "premium"]).optional(),
   }),
   rendering: z.number().min(0).default(0),
 });

@@ -1,10 +1,10 @@
-# Release Notes — ABUD Shorts Engine V2.0.0
+# Release Notes — ABUD Shorts Engine V2.1.0
 
-**Release Version:** `2.0.0`  
+**Release Version:** `2.1.0`  
 **Release Stage:** General Availability (GA)  
 **Release Date:** 2026-08-23  
 
-We are proud to announce the **General Availability (GA) release of ABUD Shorts Engine V2.0.0**. This major release establishes a production-grade, local-first vertical video creation, multi-platform scheduling, and social distribution platform.
+ABUD Shorts Engine V2.1.0 is the final General Availability package for the local-first V2 engine.
 
 ---
 
@@ -18,13 +18,16 @@ We are proud to announce the **General Availability (GA) release of ABUD Shorts 
 - Complete end-to-end video creation without recurring cloud API fees.
 - **Creative Director**: Local deterministic rule-based AI script and storyboard planner.
 - **Visual Intelligence**: Semantic search integration with curated HD Pexels vertical video assets.
-- **Voice Synthesis**: Embedded high-performance local Kokoro TTS engine (`q4` precision).
-- **Subtitles & Captions**: Embedded Whisper.cpp (`tiny.en`) word-level subtitle synchronizer with RTL Arabic font support.
-- **Rendering Engine**: Remotion composition engine and FFmpeg 4.4 audio/video encoder.
+- **Arabic Voice Synthesis**: Piper Arabic `ar_JO-kareem-medium` local voice path for Arabic/Egyptian Arabic production.
+- **English Voice Synthesis**: Kokoro local English TTS path.
+- **Subtitles & Captions**: Whisper.cpp `small` multilingual caption timing with RTL Arabic font support.
+- **Rendering Engine**: Remotion composition engine, FFmpeg 4.4 audio/video encoder, Audio Mastering, and balanced music ducking.
+- **Revision Studio**: Caption-style, media, and voice revision flows with durable artifact reuse.
 
 ### 3. Optional Cloud AI Extensions
 - **Google Gemini**: Dynamic script generation and Creative Director enhancements.
-- **ElevenLabs**: Multilingual neural speech synthesis.
+- **Google Cloud TTS**: Optional server-side Arabic cloud TTS provider; implemented and shown as Not Configured until credentials are supplied.
+- **ElevenLabs**: Optional premium multilingual neural speech provider; implemented and shown as Not Configured until credentials are supplied.
 - **Google Veo & fal.ai**: Synthetic AI video clip generation.
 *(Note: External AI providers require customer-provided credentials; unconfigured providers remain cleanly marked as "Not Configured / Not Live Verified" in the dashboard).*
 
@@ -38,19 +41,20 @@ We are proud to announce the **General Availability (GA) release of ABUD Shorts 
 - **Local Authentication**: PBKDF2 salted password hashing (100,000 rounds) with secure session management.
 - **Zero Secret Exposure**: All API keys, tokens, and database credentials are redacted from logs, diagnostic exports, and UI payloads.
 - **Container Isolation**: PostgreSQL, n8n, and render worker are restricted to private Docker bridge networking.
-- **Security Headers**: Content Security Policy, X-Frame-Options, X-Content-Type-Options, and Strict-Transport-Security enforced.
+- **Security Headers**: Content Security Policy, X-Frame-Options, X-Content-Type-Options, and Referrer-Policy enabled.
 
 ### 6. Operations, Disaster Recovery & Upgrades
 - **10-Step Setup Wizard**: Automated first-run verification and configuration.
 - **Disaster Recovery**: Configurable backup engine (`config_only`, `config_db`, `full`) with SHA256 manifest verification and automated pre-restore snapshots.
 - **One-Command Maintenance**: Safe `install`, `upgrade`, and `uninstall` scripts for Windows (PowerShell) and Linux/macOS (Bash).
 - **System Telemetry**: Comprehensive diagnostic dashboard with storage breakdown and one-click diagnostic bundle export.
+- **Human Arabic Voice Acceptance**: Deferred by user. This release does not claim subjective voice approval.
 
 ---
 
 ## Upgrade Information
 
-To upgrade from earlier release candidates:
+To upgrade from 2.0.x or earlier release candidates:
 ```powershell
 .\upgrade.ps1
 ```

@@ -29,6 +29,7 @@ import {
   StatusBadge,
 } from "../components/v2";
 import type { V2HealthComponent } from "./v2Types";
+import type { SystemObservability } from "./v2Types";
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes === 0) return "0 MB";
@@ -39,11 +40,19 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
+function serviceDisplayName(name: string): string {
+  if (name.toLowerCase() === "n8n") return "Automation engine";
+  if (name.toLowerCase() === "database") return "Database";
+  if (name.toLowerCase().includes("render worker")) return "Render worker";
+  return name;
+}
+
 export const SystemPage: React.FC = () => {
   const [tab, setTab] = useState(0);
   const [health, setHealth] = useState<{ status: string; components: V2HealthComponent[] } | null>(null);
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [storage, setStorage] = useState<any>(null);
+  const [observability, setObservability] = useState<SystemObservability | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloadingBundle, setDownloadingBundle] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,9 +65,11 @@ export const SystemPage: React.FC = () => {
         axios.get("/api/v2/system/diagnostics"),
         axios.get("/api/v2/system/storage"),
       ]);
+      const obsRes = await axios.get("/api/v2/system/observability").catch(() => ({ data: null }));
       setHealth(healthRes.data);
       setDiagnostics(diagRes.data);
       setStorage(storRes.data);
+      setObservability(obsRes.data);
       setError(null);
     } catch {
       setError("Failed to load system metrics.");
@@ -96,9 +107,9 @@ export const SystemPage: React.FC = () => {
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="System Diagnostics & Runtime"
+        title="System"
         eyebrow="Operations"
-        description="Comprehensive diagnostic monitoring across Docker containers, PostgreSQL persistence, storage usage, sanitized logs, and health readiness."
+        description="Check production readiness, storage usage, workers, and sanitized diagnostics without exposing credentials."
         actions={
           <Stack direction="row" spacing={1}>
             <Button
@@ -121,7 +132,7 @@ export const SystemPage: React.FC = () => {
       {/* Top Overview Cards */}
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Product Version" value={diagnostics?.product?.version || "2.0.1"} />
+          <StatCard label="Product Version" value={diagnostics?.product?.version || "2.1.0"} />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard label="System Status" value={<StatusBadge status={health?.status || "healthy"} />} />
@@ -132,14 +143,30 @@ export const SystemPage: React.FC = () => {
         <Grid item xs={12} sm={6} md={3}>
           <StatCard label="Uptime" value={`${Math.round((diagnostics?.product?.uptimeSeconds || 0) / 60)} min`} />
         </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <StatCard label="Queue Depth" value={String(observability?.queueDepth ?? 0)} />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <StatCard label="Active Workers" value={String(observability?.activeWorkers ?? 0)} />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <StatCard label="Active Renders" value={`${observability?.activeRenders ?? 0} / ${observability?.maxConcurrentRenders ?? 1}`} />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <StatCard
+            label="Average Generation"
+            value={observability?.averageGenerationTimeMs ? `${Math.round(observability.averageGenerationTimeMs / 1000)}s` : "N/A"}
+          />
+        </Grid>
       </Grid>
 
       {/* Navigation Tabs */}
       <Tabs value={tab} onChange={(_, val) => setTab(val)} sx={{ borderBottom: 1, borderColor: "divider" }}>
-        <Tab label="Services & Health" />
+        <Tab label="Health" />
         <Tab label="Storage Breakdown" />
-        <Tab label="Sanitized Logs" />
+        <Tab label="Logs" />
         <Tab label="Support Bundle" />
+        <Tab label="Observability" />
       </Tabs>
 
       {/* Tab 0: Services & Health */}
@@ -150,7 +177,7 @@ export const SystemPage: React.FC = () => {
               <SectionCard>
                 <Stack spacing={1}>
                   <Stack direction="row" justifyContent="space-between" spacing={1}>
-                    <Typography variant="h6">{component.name}</Typography>
+                    <Typography variant="h6">{serviceDisplayName(component.name)}</Typography>
                     <StatusBadge status={component.status} />
                   </Stack>
                   <Typography variant="body2" color="text.secondary">
@@ -171,30 +198,30 @@ export const SystemPage: React.FC = () => {
       {tab === 1 && (
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
-            <SectionCard title="Storage Allocations">
+            <SectionCard title="Storage usage">
               <Stack spacing={2}>
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">🎬 Videos Directory (<code>data/videos</code>):</Typography>
+                  <Typography variant="body2">Rendered videos</Typography>
                   <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.videosStorageBytes || 0)}</Typography>
                 </Box>
                 <Divider />
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">⚡ Media Cache (<code>data/cache</code>):</Typography>
+                  <Typography variant="body2">Temporary cache</Typography>
                   <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.cacheStorageBytes || 0)}</Typography>
                 </Box>
                 <Divider />
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">📦 Backups Directory (<code>data/backups</code>):</Typography>
+                  <Typography variant="body2">Backups</Typography>
                   <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.backupsStorageBytes || 0)}</Typography>
                 </Box>
                 <Divider />
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">📝 System Logs (<code>data/logs</code>):</Typography>
+                  <Typography variant="body2">System logs</Typography>
                   <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.logsStorageBytes || 0)}</Typography>
                 </Box>
                 <Divider />
                 <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="subtitle2" fontWeight={800}>Total Project Storage:</Typography>
+                  <Typography variant="subtitle2" fontWeight={800}>Total project storage</Typography>
                   <Typography variant="subtitle2" fontWeight={800} color="primary.main">
                     {formatBytes(storage?.usedProjectStorageBytes || 0)}
                   </Typography>
@@ -203,19 +230,19 @@ export const SystemPage: React.FC = () => {
             </SectionCard>
           </Grid>
           <Grid item xs={12} md={6}>
-            <SectionCard title="Lifecycle & Retention">
+            <SectionCard title="Lifecycle and retention">
               <Stack spacing={1.5}>
                 <Typography variant="body2" color="text.secondary">
-                  - <strong>Temporary Render Frames:</strong> Automatically purged upon video completion.
+                  Temporary render files are removed after completion.
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  - <strong>Pexels Cache:</strong> Media cache items expire after 7 days if unreferenced.
+                  Cached stock media can expire when it is no longer referenced.
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  - <strong>Application Logs:</strong> Rotated within container volume.
+                  Logs are rotated and included in diagnostics only after redaction.
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  - <strong>Preservation Guarantee:</strong> Final rendered videos and database records are never purged automatically.
+                  Final videos and production records are not purged automatically.
                 </Typography>
               </Stack>
             </SectionCard>
@@ -225,7 +252,7 @@ export const SystemPage: React.FC = () => {
 
       {/* Tab 2: Sanitized Logs */}
       {tab === 2 && (
-        <SectionCard title="Recent Application Logs (Secrets Automatically Redacted)">
+        <SectionCard title="Recent logs">
           <Paper
             sx={{
               p: 2,
@@ -249,13 +276,13 @@ export const SystemPage: React.FC = () => {
 
       {/* Tab 3: Support Bundle */}
       {tab === 3 && (
-        <SectionCard title="Generate Diagnostic Support Bundle">
+        <SectionCard title="Download diagnostics">
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
-              If you require assistance, you can generate an automated diagnostic bundle containing sanitized system telemetry, service states, disk breakdown, and error summaries.
+              Download a support bundle with service status, storage breakdown, and recent error summaries.
             </Typography>
             <Alert severity="info">
-              Security Guarantee: All API tokens, passwords, private keys, and internal secrets are automatically redacted prior to export.
+              Secrets are redacted before export. Review the file before sharing it outside your team.
             </Alert>
             <Box>
               <Button
@@ -269,6 +296,49 @@ export const SystemPage: React.FC = () => {
             </Box>
           </Stack>
         </SectionCard>
+      )}
+
+      {tab === 4 && (
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={6}>
+            <SectionCard title="Queue & Workers">
+              <Stack spacing={1.25}>
+                <Typography variant="body2">Queue depth: <strong>{observability?.queueDepth ?? 0}</strong></Typography>
+                <Typography variant="body2">Active renders: <strong>{observability?.activeRenders ?? 0}</strong></Typography>
+                <Typography variant="body2">Recent bottleneck: <strong>{observability?.recentStageBottleneck || "N/A"}</strong></Typography>
+                <Divider />
+                {observability?.workers?.length ? observability.workers.map((worker) => (
+                  <Box key={worker.workerId} sx={{ p: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography variant="body2" fontWeight={800}>Render worker</Typography>
+                      <Chip size="small" label={worker.status} />
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary">
+                      Heartbeat {new Date(worker.lastHeartbeat).toLocaleTimeString()}
+                    </Typography>
+                  </Box>
+                )) : (
+                  <Typography variant="body2" color="text.secondary">No worker activity recorded yet.</Typography>
+                )}
+              </Stack>
+            </SectionCard>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <SectionCard title="Cache, Jobs & Webhooks">
+              <Stack spacing={1.25}>
+                <Typography variant="body2">Cache: <strong>{formatBytes(Number(observability?.cache?.cacheStorageBytes || 0))}</strong></Typography>
+                <Typography variant="body2">Project disk: <strong>{formatBytes(Number(observability?.cache?.usedProjectStorageBytes || 0))}</strong></Typography>
+                <Typography variant="body2">Job counts: <strong>{JSON.stringify(observability?.jobCounts || {})}</strong></Typography>
+                <Divider />
+                {(observability?.recentWebhookDeliveries || []).slice(0, 5).map((delivery: any) => (
+                  <Typography key={delivery.id} variant="caption" color="text.secondary">
+                    {delivery.event} · {delivery.status} · attempts {delivery.attemptCount}
+                  </Typography>
+                ))}
+              </Stack>
+            </SectionCard>
+          </Grid>
+        </Grid>
       )}
     </Stack>
   );

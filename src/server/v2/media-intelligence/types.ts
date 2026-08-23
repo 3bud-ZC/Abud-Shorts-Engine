@@ -19,6 +19,15 @@ export type VisualIntent = z.infer<typeof visualIntentEnum>;
 
 export const pacingProfileEnum = z.enum(["fast", "balanced", "cinematic"]);
 export type PacingProfile = z.infer<typeof pacingProfileEnum>;
+export const editingRhythmProfileEnum = z.enum([
+  "viral",
+  "ad",
+  "educational",
+  "story",
+  "product",
+  "professional",
+]);
+export type EditingRhythmProfile = z.infer<typeof editingRhythmProfileEnum>;
 
 export const motionPresetEnum = z.enum([
   "none",
@@ -121,6 +130,8 @@ export type SceneMediaPlan = {
   stockCandidatesCount?: number;
   selectedAssetScore?: number;
   selectionReason?: string;
+  searchCandidates?: string[];
+  qualityChecks?: Record<string, unknown>;
 };
 
 export type QualityReviewScore = {
@@ -148,6 +159,7 @@ export type FullMediaPlan = {
   ctaLayout: CtaLayout;
   sfxPreset: SfxPreset;
   mediaPriority: MediaPriority;
+  editingRhythmProfile: EditingRhythmProfile;
   scenes: SceneMediaPlan[];
   recommendedMusicMood: string;
   qualityReview: QualityReviewScore;
@@ -165,4 +177,6 @@ export type StockAssetCandidate = {
   tags?: string[];
   creator?: string;
   qualityScore?: number;
+  sourceUrl?: string;
+  providerMetadata?: Record<string, unknown>;
 };

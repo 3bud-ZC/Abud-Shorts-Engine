@@ -21,7 +21,7 @@ import {
 } from "../components/v2";
 import type { V2Job } from "./v2Types";
 
-const groups = ["all", "running", "ready", "failed", "canceled"];
+const groups = ["all", "active", "ready", "failed", "canceled"];
 
 const JobsPageContent: React.FC = () => {
   const navigate = useNavigate();
@@ -34,7 +34,7 @@ const JobsPageContent: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const response = await axios.get("/api/v2/jobs");
+      const response = await axios.get("/api/v2/jobs", { params: { limit: 1000 } });
       setJobs(response.data.jobs || []);
       setError(null);
     } catch {
@@ -54,7 +54,7 @@ const JobsPageContent: React.FC = () => {
     return jobs.filter((job) => {
       const matchesTab =
         tab === "all" ||
-        (tab === "running" && !["ready", "failed", "canceled"].includes(job.status)) ||
+        (tab === "active" && !["ready", "failed", "canceled"].includes(job.status)) ||
         (tab === "ready" && job.status === "ready") ||
         job.status === tab;
       const haystack = `${job.title || ""} ${job.templateId || ""} ${job.brandName || ""} ${job.currentStage || ""}`.toLowerCase();
@@ -88,7 +88,7 @@ const JobsPageContent: React.FC = () => {
       <PageHeader
         title="Jobs"
         eyebrow="Pipeline Orchestration"
-        description="Track, inspect, and manage every video creation request from initial prompt to final rendered MP4."
+        description="Track, inspect, and manage every video creation request from prompt to completed video."
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Button variant="outlined" startIcon={<RefreshIcon />} onClick={load}>

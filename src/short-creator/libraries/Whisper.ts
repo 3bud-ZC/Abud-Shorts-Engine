@@ -12,6 +12,15 @@ import { logger } from "../../logger";
 
 export const ErrorWhisper = new Error("There was an error with WhisperCpp");
 
+const minWhisperModelBytes: Record<string, number> = {
+  tiny: 50 * 1024 * 1024,
+  "tiny.en": 50 * 1024 * 1024,
+  base: 100 * 1024 * 1024,
+  "base.en": 100 * 1024 * 1024,
+  small: 350 * 1024 * 1024,
+  "small.en": 350 * 1024 * 1024,
+};
+
 export class Whisper {
   constructor(private config: Config) { }
 
@@ -26,6 +35,22 @@ export class Whisper {
     } else {
       const modelFiles = await fs.readdir(modelsDir);
       shouldInstall = modelFiles.length === 0;
+      const expectedModelPath = path.join(modelsDir, `ggml-${config.whisperModel}.bin`);
+      const minBytes = minWhisperModelBytes[config.whisperModel] || 20 * 1024 * 1024;
+      if (!shouldInstall && !(await fs.pathExists(expectedModelPath))) {
+        shouldInstall = true;
+      }
+      if (!shouldInstall) {
+        const stats = await fs.stat(expectedModelPath);
+        if (stats.size < minBytes) {
+          logger.warn(
+            { expectedModelPath, actualBytes: stats.size, minBytes },
+            "Whisper model file is too small for the configured model; reprovisioning.",
+          );
+          await fs.remove(expectedModelPath);
+          shouldInstall = true;
+        }
+      }
     }
 
     if (!config.runningInDocker || shouldInstall) {
@@ -57,8 +82,8 @@ export class Whisper {
   }
 
   // todo shall we extract it to a Caption class?
-  async CreateCaption(audioPath: string): Promise<Caption[]> {
-    logger.debug({ audioPath }, "Starting to transcribe audio");
+  async CreateCaption(audioPath: string, language?: string): Promise<Caption[]> {
+    logger.debug({ audioPath, language }, "Starting to transcribe audio");
     const { transcription } = await transcribe({
       model: this.config.whisperModel,
       whisperPath: this.config.whisperInstallPath,
@@ -66,6 +91,7 @@ export class Whisper {
       whisperCppVersion: this.config.whisperVersion,
       inputPath: audioPath,
       tokenLevelTimestamps: true,
+      language: language === "ar" ? "ar" : language?.startsWith("en") ? "en" : null,
       printOutput: this.config.whisperVerbose,
       onProgress: (progress) => {
         logger.debug({ audioPath }, `Transcribing is ${progress} complete`);

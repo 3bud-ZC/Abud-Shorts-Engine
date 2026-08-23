@@ -310,6 +310,161 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: "2.6.0",
+    name: "v2_1_voice_profiles_api_tokens_and_stage_metadata",
+    up: async (pool: Pool) => {
+      await pool.query(`
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS voice_profile JSONB;
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS stage_timings JSONB NOT NULL DEFAULT '{}';
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS checkpoint JSONB NOT NULL DEFAULT '{}';
+
+        CREATE TABLE IF NOT EXISTS api_tokens (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          scopes JSONB NOT NULL DEFAULT '[]',
+          last_used_at TIMESTAMPTZ,
+          revoked_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+        CREATE INDEX IF NOT EXISTS idx_jobs_updated_status ON jobs(status, updated_at DESC);
+      `);
+    },
+  },
+  {
+    version: "2.7.0",
+    name: "v2_1_phase3_revisions_workers_and_webhooks",
+    up: async (pool: Pool) => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS video_revisions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          revision_number INTEGER NOT NULL,
+          parent_revision_id TEXT REFERENCES video_revisions(id) ON DELETE SET NULL,
+          source_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          output_video_id TEXT,
+          status TEXT NOT NULL DEFAULT 'queued',
+          reason TEXT,
+          change_type TEXT NOT NULL,
+          changed_fields JSONB NOT NULL DEFAULT '{}',
+          is_final BOOLEAN NOT NULL DEFAULT false,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          UNIQUE(project_id, revision_number)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_video_revisions_one_final
+          ON video_revisions(project_id)
+          WHERE is_final = true;
+        CREATE INDEX IF NOT EXISTS idx_video_revisions_project
+          ON video_revisions(project_id, revision_number ASC);
+        CREATE INDEX IF NOT EXISTS idx_video_revisions_output
+          ON video_revisions(output_video_id);
+
+        CREATE TABLE IF NOT EXISTS worker_leases (
+          worker_id TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'idle',
+          active_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          capabilities JSONB NOT NULL DEFAULT '{}',
+          started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT now(),
+          lease_expires_at TIMESTAMPTZ
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_worker_leases_status
+          ON worker_leases(status, lease_expires_at);
+        CREATE INDEX IF NOT EXISTS idx_worker_leases_active_job
+          ON worker_leases(active_job_id);
+
+        ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+        ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS signature_version TEXT DEFAULT 'hmac-sha256-v1';
+      `);
+    },
+  },
+  {
+    version: "2.8.0",
+    name: "v2_1_durable_scene_artifacts",
+    up: async (pool: Pool) => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS scene_artifacts (
+          artifact_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          scene_index INTEGER NOT NULL,
+          segment_index INTEGER,
+          source_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+          source_revision_id TEXT REFERENCES video_revisions(id) ON DELETE SET NULL,
+          provider TEXT,
+          model TEXT,
+          input_hash TEXT NOT NULL,
+          storage_ref TEXT NOT NULL,
+          checksum_sha256 TEXT NOT NULL,
+          duration_seconds DOUBLE PRECISION,
+          metadata JSONB NOT NULL DEFAULT '{}',
+          valid BOOLEAN NOT NULL DEFAULT true,
+          superseded_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scene_artifacts_project
+          ON scene_artifacts(project_id, type, scene_index);
+        CREATE INDEX IF NOT EXISTS idx_scene_artifacts_source_job
+          ON scene_artifacts(source_job_id);
+        CREATE INDEX IF NOT EXISTS idx_scene_artifacts_source_revision
+          ON scene_artifacts(source_revision_id);
+        CREATE INDEX IF NOT EXISTS idx_scene_artifacts_input_hash
+          ON scene_artifacts(type, input_hash)
+          WHERE valid = true;
+      `);
+    },
+  },
+  {
+    version: "2.9.0",
+    name: "v2_2_server_workflow_hardening",
+    up: async (pool: Pool) => {
+      await pool.query(`
+        ALTER TABLE jobs ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key
+          ON jobs(idempotency_key)
+          WHERE idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_jobs_status_created
+          ON jobs(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_status_updated
+          ON jobs(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_today
+          ON jobs(created_at DESC)
+          WHERE status IN ('ready','failed','canceled','queued','preparing','generating_content','searching_assets','generating_voice','generating_captions','rendering','finalizing');
+
+        CREATE INDEX IF NOT EXISTS idx_job_events_created
+          ON job_events(job_id, created_at ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_generated_assets_kind_created
+          ON generated_assets(kind, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_scene_artifacts_reuse
+          ON scene_artifacts(project_id, type, scene_index, input_hash)
+          WHERE valid = true;
+        CREATE INDEX IF NOT EXISTS idx_scene_artifacts_ref_lifecycle
+          ON scene_artifacts(storage_ref, valid, superseded_at);
+
+        CREATE INDEX IF NOT EXISTS idx_worker_leases_expiry_busy
+          ON worker_leases(lease_expires_at)
+          WHERE status = 'busy';
+
+        CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry
+          ON webhook_deliveries(status, next_attempt_at)
+          WHERE status = 'failed';
+
+        CREATE INDEX IF NOT EXISTS idx_publications_schedule_lookup
+          ON publications(status, scheduled_at ASC);
+        CREATE INDEX IF NOT EXISTS idx_scheduled_publications_claim
+          ON scheduled_publications(status, scheduled_at ASC, locked_at);
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {

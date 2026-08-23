@@ -1,5 +1,5 @@
 import React from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   AppBar,
   Box,
@@ -24,6 +24,7 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import MonitorHeartIcon from "@mui/icons-material/MonitorHeart";
 import MenuIcon from "@mui/icons-material/Menu";
 import SendIcon from "@mui/icons-material/Send";
+import CircleIcon from "@mui/icons-material/Circle";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -70,22 +71,83 @@ const theme = createTheme({
   },
 });
 
-const navItems = [
-  { label: "Dashboard", path: "/", icon: <DashboardIcon /> },
-  { label: "Create Video", path: "/create", icon: <AddIcon /> },
-  { label: "Jobs", path: "/jobs", icon: <WorkIcon /> },
-  { label: "Videos", path: "/videos", icon: <VideoIcon /> },
-  { label: "Publishing", path: "/publishing", icon: <SendIcon /> },
-  { label: "Brands", path: "/brands", icon: <BusinessIcon /> },
-  { label: "Templates", path: "/templates", icon: <ViewModuleIcon /> },
-  { label: "Providers", path: "/providers", icon: <HubIcon /> },
-  { label: "Settings", path: "/settings", icon: <SettingsIcon /> },
-  { label: "System", path: "/system", icon: <MonitorHeartIcon /> },
+const navSections = [
+  {
+    label: "Overview",
+    items: [{ label: "Dashboard", path: "/", icon: <DashboardIcon /> }],
+  },
+  {
+    label: "Production",
+    items: [
+      { label: "Create Video", path: "/create", icon: <AddIcon /> },
+      { label: "Jobs", path: "/jobs", icon: <WorkIcon /> },
+      { label: "Videos", path: "/videos", icon: <VideoIcon /> },
+    ],
+  },
+  {
+    label: "Content",
+    items: [
+      { label: "Brands", path: "/brands", icon: <BusinessIcon /> },
+      { label: "Templates", path: "/templates", icon: <ViewModuleIcon /> },
+    ],
+  },
+  {
+    label: "Distribution",
+    items: [{ label: "Publishing", path: "/publishing", icon: <SendIcon /> }],
+  },
+  {
+    label: "Configuration",
+    items: [
+      { label: "Providers", path: "/providers", icon: <HubIcon /> },
+      { label: "Settings", path: "/settings", icon: <SettingsIcon /> },
+    ],
+  },
+  {
+    label: "Operations",
+    items: [{ label: "System", path: "/system", icon: <MonitorHeartIcon /> }],
+  },
 ];
+
+const pageTitles: Record<string, string> = {
+  "/": "Dashboard",
+  "/create": "Create Video",
+  "/jobs": "Jobs",
+  "/videos": "Videos",
+  "/publishing": "Publishing",
+  "/brands": "Brands",
+  "/templates": "Templates",
+  "/providers": "Providers",
+  "/settings": "Settings",
+  "/system": "System",
+  "/setup": "Setup",
+  "/login": "Sign in",
+};
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [mobileOpen, setMobileOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    const exactTitle = pageTitles[location.pathname];
+    const dynamicTitle = location.pathname.startsWith("/jobs/")
+      ? "Job Details"
+      : location.pathname.startsWith("/video/")
+        ? "Video Details"
+        : exactTitle || "ABUD Shorts Engine";
+    document.title = `${dynamicTitle} - ABUD Shorts Engine`;
+  }, [location.pathname]);
+
+  if (location.pathname === "/login") {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Box sx={{ minHeight: "100vh", bgcolor: "background.default", px: 2 }}>
+          {children}
+        </Box>
+      </ThemeProvider>
+    );
+  }
 
   const drawer = (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
@@ -99,38 +161,65 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           </Typography>
         </Box>
       </Toolbar>
-      <Stack spacing={0.75} sx={{ px: 1.5, pb: 2 }}>
-        {navItems.map((item) => (
-          <Button
-            key={item.path}
-            component={NavLink}
-            to={item.path}
-            startIcon={item.icon}
-            fullWidth
-            onClick={() => setMobileOpen(false)}
-            sx={{
-              justifyContent: "flex-start",
-              minHeight: 42,
-              px: 1.5,
-              color: "text.secondary",
-              "& .MuiButton-startIcon": { color: "inherit" },
-              "&.active": {
-                bgcolor: "rgba(36, 84, 90, 0.1)",
-                color: "primary.main",
-              },
-            }}
-          >
-            {item.label}
-          </Button>
+      <Stack spacing={1.25} sx={{ px: 1.5, pb: 2 }}>
+        {navSections.map((section) => (
+          <Box key={section.label}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", px: 1.5, py: 0.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}
+            >
+              {section.label}
+            </Typography>
+            <Stack spacing={0.35}>
+              {section.items.map((item) => (
+                <Button
+                  key={item.path}
+                  component={NavLink}
+                  to={item.path}
+                  end={item.path === "/" ? true : undefined}
+                  startIcon={item.icon}
+                  fullWidth
+                  onClick={() => setMobileOpen(false)}
+                  sx={{
+                    justifyContent: "flex-start",
+                    minHeight: 42,
+                    px: 1.5,
+                    color: "text.secondary",
+                    borderRadius: 1.5,
+                    "& .MuiButton-startIcon": { color: "inherit", minWidth: 24 },
+                    "&:hover": { bgcolor: "rgba(36, 84, 90, 0.06)", color: "text.primary" },
+                    "&.active": {
+                      bgcolor: "rgba(36, 84, 90, 0.12)",
+                      color: "primary.main",
+                      boxShadow: "inset 3px 0 0 #24545a",
+                    },
+                    "&:focus-visible": {
+                      outline: "3px solid rgba(36,84,90,0.32)",
+                      outlineOffset: 2,
+                    },
+                  }}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </Stack>
+          </Box>
         ))}
       </Stack>
       <Box sx={{ mt: "auto", px: 2, pb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" fontWeight={700}>
-          ABUD Shorts Engine V2 · v2.0.1
+          ABUD Shorts Engine · v2.1.0
         </Typography>
         <Typography variant="caption" color="text.secondary" display="block">
-          Local &amp; Cloud Hybrid Pipeline
+          V2.2 acceptance pending
         </Typography>
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 1 }}>
+          <CircleIcon sx={{ fontSize: 9, color: "success.main" }} />
+          <Typography variant="caption" color="text.secondary">
+            Local stack running
+          </Typography>
+        </Stack>
         <Box sx={{ mt: 1 }}>
           <Button
             size="small"

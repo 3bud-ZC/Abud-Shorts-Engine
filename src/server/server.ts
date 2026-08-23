@@ -1,6 +1,8 @@
 import http from "http";
+import crypto from "crypto";
 import express from "express";
 import type {
+  NextFunction,
   Request as ExpressRequest,
   Response as ExpressResponse,
 } from "express";
@@ -14,11 +16,15 @@ import { V2Database } from "./v2/db";
 import { JobService } from "./v2/jobs";
 import { createV2InternalRouter, createV2PublicRouter } from "./v2/routes";
 import { SystemHealthService } from "./v2/system/systemHealthService";
+import { AuthService } from "./v2/auth/authService";
+import { ApiTokenService } from "./v2/auth/apiTokenService";
+import { cleanupTemporaryArtifacts } from "./v2/storage/storagePolicy";
 
 export class Server {
   private app: express.Application;
   private config: Config;
   private systemHealth?: SystemHealthService;
+  private shutdownHooks: Array<() => Promise<void> | void> = [];
 
   constructor(
     config: Config,
@@ -28,6 +34,19 @@ export class Server {
   ) {
     this.config = config;
     this.app = express();
+    this.app.disable("x-powered-by");
+    this.app.use(express.json({ limit: "2mb" }));
+    this.app.use((req, res, next) => {
+      const headerRequestId = req.headers["x-request-id"];
+      const requestId =
+        typeof headerRequestId === "string" && /^[A-Za-z0-9._:-]{8,128}$/.test(headerRequestId)
+          ? headerRequestId
+          : crypto.randomUUID();
+      res.locals.requestId = requestId;
+      res.setHeader("X-Request-ID", requestId);
+      req.setTimeout(this.config.requestTimeoutMs);
+      next();
+    });
 
     if (v2Database) {
       this.systemHealth = new SystemHealthService(v2Database, config);
@@ -63,7 +82,9 @@ export class Server {
       }
     });
 
-    const apiRouter = new APIRouter(config, shortCreator);
+    const authService = v2Database ? new AuthService(v2Database) : undefined;
+    const apiTokenService = v2Database ? new ApiTokenService(v2Database) : undefined;
+    const apiRouter = new APIRouter(config, shortCreator, authService, apiTokenService);
     const mcpRouter = new MCPRouter(shortCreator);
     this.app.use("/api", apiRouter.router);
     this.app.use("/mcp", mcpRouter.router);
@@ -75,10 +96,18 @@ export class Server {
       );
       if (v2Database && jobService && config.serviceRole === "app") {
         this.app.use("/api/v2", createV2PublicRouter(config, v2Database, jobService));
+        this.registerShutdownHook(() => v2Database.close());
         // Recover stale jobs/publications on startup
         this.systemHealth?.recoverStaleJobs().catch((err) => {
           logger.warn({ err }, "Stale job recovery encountered non-fatal error");
         });
+        cleanupTemporaryArtifacts(config)
+          .then((result) => {
+            if (result.deleted > 0) {
+              logger.info(result, "Cleaned old temporary artifacts");
+            }
+          })
+          .catch((err) => logger.warn({ err }, "Temporary artifact cleanup failed"));
       }
     }
 
@@ -90,9 +119,39 @@ export class Server {
     );
 
     // Serve the React app for all other routes (must be last)
+    this.app.use((req, res, next) => {
+      if (req.path.startsWith("/api") || req.path.startsWith("/internal") || req.path.startsWith("/mcp")) {
+        res.status(404).json({
+          error: {
+            code: "not_found",
+            message: "Endpoint not found.",
+            requestId: res.locals.requestId,
+            retryable: false,
+          },
+        });
+        return;
+      }
+      next();
+    });
     this.app.get("*", (req: ExpressRequest, res: ExpressResponse) => {
       res.sendFile(path.join(__dirname, "../../dist/ui/index.html"));
     });
+    this.app.use((err: unknown, req: ExpressRequest, res: ExpressResponse, _next: NextFunction) => {
+      const message = err instanceof Error ? err.message : "Unexpected server error.";
+      logger.error({ err, requestId: res.locals.requestId, path: req.path }, "Request failed");
+      res.status(500).json({
+        error: {
+          code: "internal_error",
+          message: this.config.environment === "production" ? "Internal server error." : message,
+          requestId: res.locals.requestId,
+          retryable: true,
+        },
+      });
+    });
+  }
+
+  public registerShutdownHook(hook: () => Promise<void> | void): void {
+    this.shutdownHooks.push(hook);
   }
 
   public start(): http.Server {
@@ -111,9 +170,19 @@ export class Server {
     });
 
     // Graceful Shutdown
+    let shuttingDown = false;
     const handleShutdown = (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       logger.info({ signal }, "Received shutdown signal, closing HTTP server gracefully...");
-      server.close(() => {
+      server.close(async () => {
+        for (const hook of this.shutdownHooks) {
+          try {
+            await hook();
+          } catch (err) {
+            logger.warn({ err }, "Shutdown hook failed");
+          }
+        }
         logger.info("HTTP server closed.");
         process.exit(0);
       });

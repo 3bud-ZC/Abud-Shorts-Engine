@@ -15,6 +15,7 @@ import { Config } from "../config";
 import { logger } from "../logger";
 import { MusicManager } from "./music";
 import {
+  readMetadata,
   writeMetadata,
   deleteMetadata,
   type VideoMetadata,
@@ -35,14 +36,27 @@ import {
   type ProductionSpec,
   type ProductionSceneSpec,
   type ResolvedProductionTimeline,
+  compactNarrationToBudget,
   resolveProductionTimeline,
   validateProductionSpec,
 } from "../types/productionSpec";
 import { convertTemplateToProductionSpec } from "../server/v2/templateToSpec";
 import { VisualRegistry } from "../server/v2/visual-providers/registry";
 import { VoiceRegistry } from "../server/v2/voice-providers/registry";
+import type { VoiceProviderId, VoiceQualityProfile } from "../server/v2/voice-providers/types";
 import { AutoVisualRouter } from "../server/v2/visual-providers/router";
 import { mediaIntelligenceService } from "../server/v2/media-intelligence/mediaIntelligenceService";
+import { mediaCache } from "../server/v2/media-cache/mediaCache";
+import { AudioMasteringService } from "./audioMasteringService";
+import {
+  DurableArtifactStore,
+  type DurableSceneArtifact,
+  createCaptionInputHash,
+  createMediaInputHash,
+  createVoiceInputHash,
+  filterReusableArtifacts,
+} from "../server/v2/artifacts/durableArtifacts";
+import { assertStorageReady } from "../server/v2/storage/storagePolicy";
 
 type RenderProgressEvent = {
   status:
@@ -56,6 +70,12 @@ type RenderProgressEvent = {
   progress: number;
   currentStage: string;
   message: string;
+  stageKey?: "planning" | "media" | "voice" | "captions" | "render" | "mastering" | "validation";
+  checkpointStatus?: "running" | "completed" | "failed";
+  provider?: string;
+  artifacts?: Record<string, unknown>;
+  inputHashSource?: unknown;
+  timingMs?: number;
 };
 
 type RenderProgressCallback = (event: RenderProgressEvent) => Promise<void> | void;
@@ -69,6 +89,7 @@ export class ShortCreator {
   private visualRegistry: VisualRegistry;
   private voiceRegistry: VoiceRegistry;
   private visualRouter: AutoVisualRouter;
+  private audioMastering: AudioMasteringService;
 
   constructor(
     private config: Config,
@@ -82,12 +103,17 @@ export class ShortCreator {
     this.visualRegistry = new VisualRegistry(this.pexelsApi, this.config);
     this.visualRouter = this.visualRegistry.getRouter();
     this.voiceRegistry = new VoiceRegistry(this.kokoro);
+    this.audioMastering = new AudioMasteringService(this.ffmpeg);
   }
 
   public status(id: string): VideoStatus {
     const videoPath = this.getVideoPath(id);
     if (this.queue.find((item) => item.id === id)) {
       return "processing";
+    }
+    const sidecar = readMetadata(this.config.videosDirPath, id);
+    if (sidecar?.status === "failed") {
+      return "failed";
     }
     if (fs.existsSync(videoPath)) {
       return "ready";
@@ -218,6 +244,9 @@ export class ShortCreator {
     spec: ProductionSpec,
     onProgress?: RenderProgressCallback,
   ): Promise<string> {
+    await assertStorageReady(this.config);
+    const totalStartedAt = Date.now();
+    const planningStartedAt = Date.now();
     const timeline: ResolvedProductionTimeline = resolveProductionTimeline(spec, 25);
     const mediaPlan = mediaIntelligenceService.generateMediaPlan(spec, {
       pacingProfile: (spec.metadata?.pacing as any) || (spec.quality === "high" || spec.quality === "premium" ? "fast" : undefined),
@@ -242,8 +271,36 @@ export class ShortCreator {
 
     const scenes: any[] = [];
     const excludeVideoIds: (string | number)[] = [];
+    const previousVisualCandidates: any[] = [];
     const tempFiles: string[] = [];
     const visualProvidersUsed = new Set<string>();
+    const voiceProvidersUsed = new Set<string>();
+    const voiceArtifacts: any[] = [];
+    const selectedVisuals: any[] = [];
+    const sceneQa: any[] = [];
+    const durableArtifacts: DurableSceneArtifact[] = [];
+    const artifactReuse = {
+      reusedArtifacts: [] as DurableSceneArtifact[],
+      regeneratedArtifacts: [] as DurableSceneArtifact[],
+      providerInvocations: { piper: 0, kokoro: 0, google_cloud_tts: 0, elevenlabs: 0, whisper: 0, pexels: 0 },
+    };
+    const artifactStore = new DurableArtifactStore(this.config);
+    const revision = (spec.metadata?.revision || {}) as any;
+    const reusableMediaAssets = Array.isArray(revision.reuseMediaAssets) ? revision.reuseMediaAssets : [];
+    const reusableArtifacts = filterReusableArtifacts({
+      artifacts: Array.isArray(revision.reuseArtifacts) ? revision.reuseArtifacts as DurableSceneArtifact[] : [],
+    });
+    const reusableArtifactFor = (
+      type: DurableSceneArtifact["type"],
+      sceneIndex: number,
+      predicate?: (artifact: DurableSceneArtifact) => boolean,
+    ) =>
+      reusableArtifacts.find((artifact) =>
+        artifact.type === type &&
+        artifact.sceneIndex === sceneIndex &&
+        artifact.valid === true &&
+        (!predicate || predicate(artifact)),
+      );
 
     const orientation: OrientationEnum =
       spec.aspectRatio === "16:9" ? OrientationEnum.landscape : OrientationEnum.portrait;
@@ -253,6 +310,12 @@ export class ShortCreator {
       progress: 10,
       currentStage: "Generating content",
       message: "Media Intelligence plan, pacing profile, and canonical timeline are resolved.",
+      stageKey: "planning",
+      checkpointStatus: "completed",
+      provider: String(spec.metadata?.planner || "local_ai"),
+      artifacts: { mediaPlanId: mediaPlan.id, sceneCount: mediaPlan.scenes.length },
+      inputHashSource: spec,
+      timingMs: Date.now() - planningStartedAt,
     });
 
     let index = 0;
@@ -278,60 +341,294 @@ export class ShortCreator {
 
       const sceneProgressBase = 15 + Math.round((index / timeline.scenes.length) * 55);
 
+      const voiceStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "generating_voice",
         progress: sceneProgressBase,
         currentStage: "Generating voice",
         message: `Generating narration audio for scene ${index + 1}/${timeline.scenes.length}.`,
+        stageKey: "voice",
+        checkpointStatus: "running",
+        inputHashSource: { sceneIndex: index, narration: sceneTimeline.narration, voiceProvider: spec.voiceProvider },
       });
 
-      const voiceAudio = await this.voiceRegistry.generateVoice(
-        sceneTimeline.narration,
-        spec.voiceId || "af_heart",
-        spec.voiceProvider,
-      );
-
-      const rawAudioLength = voiceAudio.audioLength || 5;
+      const brandVoiceProfile = spec.brandKit?.voiceProfile as any;
+      const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || sceneTimeline.narration);
       const targetSceneDuration = sceneTimeline.durationSeconds;
+      const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
+      const requestedVoiceProvider = ((brandVoiceProfile?.provider || spec.voiceProvider || "auto") as VoiceProviderId | "auto");
+      const requestedVoiceId = brandVoiceProfile?.voiceId || spec.voiceId || undefined;
 
       const tempId = cuid();
       const tempWavFileName = `${tempId}.wav`;
+      const tempMasteredWavFileName = `${tempId}.mastered.wav`;
       const tempMp3FileName = `${tempId}.mp3`;
       const tempWavPath = path.join(this.config.tempDirPath, tempWavFileName);
+      const tempMasteredWavPath = path.join(this.config.tempDirPath, tempMasteredWavFileName);
       const tempMp3Path = path.join(this.config.tempDirPath, tempMp3FileName);
-      tempFiles.push(tempWavPath, tempMp3Path);
+      tempFiles.push(tempWavPath, tempMasteredWavPath, tempMp3Path);
 
-      // Determine audio speed adjustment if raw audio length exceeds target duration budget
+      let voiceAudio: any = null;
+      let voiceMastering: any = null;
       let speedFactor = 1.0;
-      if (rawAudioLength > targetSceneDuration * 1.05) {
-        speedFactor = Math.min(1.35, Math.max(0.85, rawAudioLength / targetSceneDuration));
+      let actualVoiceDuration = targetSceneDuration;
+      let captionAudioPath = tempMasteredWavPath;
+      let voiceArtifact: DurableSceneArtifact | undefined;
+      const revisionType = String(revision.type || "");
+      const upstreamVoiceIsExplicitlyReusable = ["media", "caption", "display_text", "music"].includes(revisionType);
+      const reusableVoice = reusableArtifactFor("voice", index, (artifact) => {
+        if (upstreamVoiceIsExplicitlyReusable) return true;
+        const key = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+        const artifactProvider = artifact.provider || key.provider;
+        const providerCompatible = requestedVoiceProvider === "auto" ||
+          artifactProvider === requestedVoiceProvider ||
+          (spec.language === "ar" && requestedVoiceProvider === "kokoro" && artifactProvider === "piper");
+        return (
+          key.spokenNarration === requestedSpokenNarration &&
+          key.language === spec.language &&
+          key.dialect === (brandVoiceProfile?.dialect || spec.dialect) &&
+          key.qualityProfile === requestedVoiceQuality &&
+          (!requestedVoiceId || key.voiceId === requestedVoiceId) &&
+          providerCompatible
+        );
+      });
+
+      if (reusableVoice) {
+        artifactStore.copyToTemp(reusableVoice, tempMp3Path);
+        actualVoiceDuration = reusableVoice.duration || await this.ffmpeg.getMediaDuration(tempMp3Path);
+        captionAudioPath = tempMp3Path;
+        voiceArtifact = reusableVoice;
+        artifactReuse.reusedArtifacts.push(reusableVoice);
+        voiceProvidersUsed.add(String(reusableVoice.provider || "reused"));
+        const priorVoice = (reusableVoice.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+        voiceArtifacts.push({
+          ...priorVoice,
+          sceneIndex: index,
+          artifactId: reusableVoice.artifactId,
+          reused: true,
+          reuseSourceJobId: reusableVoice.sourceJobId,
+          reuseSourceRevisionId: reusableVoice.sourceRevisionId,
+        });
+      } else {
+        voiceAudio = await this.voiceRegistry.synthesize({
+          text: requestedSpokenNarration,
+          language: spec.language,
+          dialect: (brandVoiceProfile?.dialect || spec.dialect) as any,
+          qualityProfile: requestedVoiceQuality,
+          requestedProvider: requestedVoiceProvider,
+          voiceId: requestedVoiceId,
+          fallbackPolicy: "local",
+          brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+        });
+        const firstProvider = voiceAudio.provider || voiceAudio.decision.providerId;
+        if (firstProvider in artifactReuse.providerInvocations) {
+          artifactReuse.providerInvocations[firstProvider as keyof typeof artifactReuse.providerInvocations]++;
+        }
+
+        let normalized = await this.ffmpeg.saveNormalizedAudioWithSpeed(
+          voiceAudio.audio,
+          tempWavPath,
+          1,
+        );
+        let measuredVoiceDuration = normalized.duration || voiceAudio.audioLength || targetSceneDuration;
+
+        if (measuredVoiceDuration > targetSceneDuration * 1.05) {
+          const compactedText = compactNarrationToBudget(
+            voiceAudio.processedText || requestedSpokenNarration,
+            Math.max(1.5, targetSceneDuration * 0.88),
+            spec.language === "ar",
+          );
+          if (compactedText && compactedText !== (voiceAudio.processedText || requestedSpokenNarration)) {
+            voiceAudio = await this.voiceRegistry.synthesize({
+              text: compactedText,
+              language: spec.language,
+              dialect: (brandVoiceProfile?.dialect || spec.dialect) as any,
+              qualityProfile: requestedVoiceQuality,
+              requestedProvider: requestedVoiceProvider,
+              voiceId: requestedVoiceId,
+              fallbackPolicy: "local",
+              brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+            });
+            const retryProvider = voiceAudio.provider || voiceAudio.decision.providerId;
+            if (retryProvider in artifactReuse.providerInvocations) {
+              artifactReuse.providerInvocations[retryProvider as keyof typeof artifactReuse.providerInvocations]++;
+            }
+            normalized = await this.ffmpeg.saveNormalizedAudioWithSpeed(
+              voiceAudio.audio,
+              tempWavPath,
+              1,
+            );
+            measuredVoiceDuration = normalized.duration || voiceAudio.audioLength || measuredVoiceDuration;
+          }
+        }
+
+        // Keep any final tempo correction small; rewriting narration is the main fitting strategy.
+        if (measuredVoiceDuration > targetSceneDuration * 1.08) {
+          speedFactor = Math.min(1.08, measuredVoiceDuration / targetSceneDuration);
+          normalized = await this.ffmpeg.saveNormalizedAudioWithSpeed(
+            voiceAudio.audio,
+            tempWavPath,
+            speedFactor,
+          );
+          measuredVoiceDuration = normalized.duration || measuredVoiceDuration;
+        }
+
+        voiceMastering = await this.audioMastering.masterVoice(tempWavPath, tempMasteredWavPath);
+        await this.ffmpeg.saveWavToMp3(tempMasteredWavPath, tempMp3Path);
+        actualVoiceDuration = await this.ffmpeg.getMediaDuration(tempMasteredWavPath);
+        captionAudioPath = tempMasteredWavPath;
       }
-
-      const { duration: actualVoiceDuration } = await this.ffmpeg.saveNormalizedAudioWithSpeed(
-        voiceAudio.audio,
-        tempWavPath,
-        speedFactor,
-      );
-      await this.ffmpeg.saveWavToMp3(tempWavPath, tempMp3Path);
-
-      sceneTimeline.actualSpeechDurationSeconds = actualVoiceDuration || rawAudioLength;
+      sceneTimeline.actualSpeechDurationSeconds = actualVoiceDuration || targetSceneDuration;
       sceneTimeline.audioSpeedFactor = speedFactor;
+      const speechWindowStartMs = 0;
+      const speechWindowEndMs = Math.min(
+        Math.round((actualVoiceDuration || targetSceneDuration) * 1000),
+        Math.round(targetSceneDuration * 1000),
+      );
 
+      if (!voiceArtifact && voiceAudio && voiceMastering) {
+        voiceProvidersUsed.add(voiceAudio.provider || voiceAudio.decision.providerId);
+        const voiceInputHash = createVoiceInputHash({
+          spokenNarration: requestedSpokenNarration,
+          provider: voiceAudio.provider || voiceAudio.decision.providerId,
+          model: voiceAudio.model,
+          voiceId: voiceAudio.voiceId,
+          language: voiceAudio.language,
+          dialect: voiceAudio.dialect,
+          qualityProfile: requestedVoiceQuality,
+          pace: brandVoiceProfile?.pace,
+          style: brandVoiceProfile?.style,
+        });
+        const voiceArtifactDetails = {
+          sceneIndex: index,
+          provider: voiceAudio.provider || voiceAudio.decision.providerId,
+          model: voiceAudio.model,
+          voiceId: voiceAudio.voiceId,
+          voiceFamily: voiceAudio.voiceFamily,
+          language: voiceAudio.language,
+          dialect: voiceAudio.dialect,
+          estimatedCostTier: voiceAudio.estimatedCostTier || (voiceAudio.provider === "google_cloud_tts" ? "cloud_free_tier" : voiceAudio.provider === "elevenlabs" ? "premium" : "local_free"),
+          generationMs: voiceAudio.generationMs,
+          sampleRate: voiceAudio.sampleRate,
+          processedText: voiceAudio.processedText,
+          requestedSpokenNarration,
+          displayText: (originalSceneSpec as any).displayText || originalSceneSpec.onScreenText,
+          captionText: (originalSceneSpec as any).captionText || originalSceneSpec.narration,
+          visualIntent: sceneMediaPlan.visualIntent,
+          routingReason: voiceAudio.decision.reason,
+          warnings: voiceAudio.decision.warnings,
+          inputVoiceLufs: voiceMastering.inputMetrics.integratedLufs,
+          masteredVoiceLufs: voiceMastering.masteredMetrics.integratedLufs,
+          masteredTruePeakDbtp: voiceMastering.masteredMetrics.truePeakDbtp,
+          masteringIssues: voiceMastering.issues,
+          speechWindowMs: { startMs: speechWindowStartMs, endMs: speechWindowEndMs },
+        };
+        voiceArtifact = artifactStore.persistFile({
+          type: "voice",
+          sceneIndex: index,
+          sourceJobId: videoId,
+          sourceRevisionId: revision.revisionId,
+          provider: voiceArtifactDetails.provider,
+          model: voiceArtifactDetails.model,
+          inputHash: voiceInputHash,
+          sourcePath: tempMp3Path,
+          extension: "mp3",
+          duration: actualVoiceDuration,
+          metadata: {
+            voiceArtifact: voiceArtifactDetails,
+            reuseKey: {
+              spokenNarration: requestedSpokenNarration,
+              provider: voiceArtifactDetails.provider,
+              model: voiceArtifactDetails.model,
+              voiceId: voiceArtifactDetails.voiceId,
+              language: voiceArtifactDetails.language,
+              dialect: voiceArtifactDetails.dialect,
+              qualityProfile: requestedVoiceQuality,
+              pace: brandVoiceProfile?.pace || "normal",
+              style: brandVoiceProfile?.style || "default",
+              preprocessingVersion: "arabic-preprocessor-v2",
+            },
+          },
+        });
+        durableArtifacts.push(voiceArtifact);
+        artifactReuse.regeneratedArtifacts.push(voiceArtifact);
+        voiceArtifacts.push({ ...voiceArtifactDetails, artifactId: voiceArtifact.artifactId, reused: false });
+      }
+      await this.emitProgress(onProgress, {
+        status: "generating_voice",
+        progress: Math.min(sceneProgressBase + 6, 68),
+        currentStage: reusableVoice ? "Voice reused" : "Voice generated",
+        message: reusableVoice ? `Reused voice artifact for scene ${index + 1}.` : `Voice completed for scene ${index + 1}.`,
+        stageKey: "voice",
+        checkpointStatus: "completed",
+        provider: String(voiceArtifact?.provider || voiceAudio?.provider || voiceAudio?.decision?.providerId || "reused"),
+        artifacts: {
+          sceneIndex: index,
+          artifactId: voiceArtifact?.artifactId,
+          reused: Boolean(reusableVoice),
+          type: "voice",
+          sourceRevisionId: voiceArtifact?.sourceRevisionId,
+          provider: voiceArtifact?.provider || voiceAudio?.provider || voiceAudio?.decision?.providerId,
+          model: voiceArtifact?.model || voiceAudio?.model,
+          voiceId: voiceAudio?.voiceId || (voiceArtifact?.metadata?.reuseKey as any)?.voiceId,
+          durationSeconds: actualVoiceDuration,
+        },
+        timingMs: Date.now() - voiceStartedAt,
+      });
+
+      const captionsStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "generating_captions",
         progress: Math.min(sceneProgressBase + 8, 70),
         currentStage: "Generating captions",
         message: `Generating Whisper captions for scene ${index + 1}.`,
+        stageKey: "captions",
+        checkpointStatus: "running",
+        inputHashSource: { sceneIndex: index, audioDuration: actualVoiceDuration },
       });
       let rawCaptions: Caption[] = [];
-      try {
-        rawCaptions = await this.whisper.CreateCaption(tempWavPath);
-      } catch (whisperErr) {
-        logger.warn(whisperErr, `Whisper transcription notice for scene ${index + 1}; using synthesized word timestamps`);
+      let timingSource: "provider" | "whisper" | "synthetic_fallback" = "synthetic_fallback";
+      let captionArtifact: DurableSceneArtifact | undefined;
+      const captionInputHash = createCaptionInputHash({
+        voiceChecksum: voiceArtifact?.checksum || "",
+        whisperModel: this.config.whisperModel,
+        language: spec.language,
+      });
+      const reusableCaption = reusableArtifactFor("captions", index, (artifact) =>
+        artifact.inputHash === captionInputHash &&
+        (artifact.metadata as any)?.voiceArtifactId === voiceArtifact?.artifactId,
+      );
+      if (reusableCaption) {
+        const payload = artifactStore.readJsonArtifact<{ captions: Caption[]; timingSource?: typeof timingSource }>(reusableCaption);
+        rawCaptions = payload.captions || [];
+        timingSource = payload.timingSource || "whisper";
+        captionArtifact = reusableCaption;
+        artifactReuse.reusedArtifacts.push(reusableCaption);
+      } else if (voiceAudio?.wordTimings && voiceAudio.wordTimings.length > 0) {
+        rawCaptions = voiceAudio.wordTimings.map((timing: any) => ({
+          text: timing.word,
+          startMs: timing.startMs,
+          endMs: timing.endMs,
+        }));
+        timingSource = "provider";
+      } else {
+        try {
+          artifactReuse.providerInvocations.whisper++;
+          rawCaptions = await this.whisper.CreateCaption(
+            captionAudioPath,
+            voiceAudio?.language || (voiceArtifact?.metadata?.reuseKey as any)?.language || spec.language,
+          );
+          if (rawCaptions.length > 0) {
+            timingSource = "whisper";
+          }
+        } catch (whisperErr) {
+          logger.warn(whisperErr, `Whisper transcription notice for scene ${index + 1}; using synthesized word timestamps`);
+        }
       }
 
       if (!rawCaptions || rawCaptions.length === 0) {
-        const words = (sceneTimeline.narration || "").trim().split(/\s+/).filter(Boolean);
+        const captionText = String((originalSceneSpec as any).captionText || sceneTimeline.narration || "");
+        const words = captionText.trim().split(/\s+/).filter(Boolean);
         if (words.length > 0) {
           const totalMs = Math.round(targetSceneDuration * 1000);
           const wordMs = Math.max(250, Math.floor(totalMs / words.length));
@@ -346,6 +643,7 @@ export class ShortCreator {
           });
         }
       }
+      voiceArtifacts[voiceArtifacts.length - 1].timingSource = timingSource;
 
       // Enforce caption boundaries strictly within the scene duration
       const maxSceneMs = Math.round(targetSceneDuration * 1000) + 100;
@@ -355,12 +653,64 @@ export class ShortCreator {
           ...c,
           endMs: Math.min(c.endMs, maxSceneMs),
         }));
+      if (!captionArtifact && voiceArtifact) {
+        captionArtifact = artifactStore.persistJson({
+          type: "captions",
+          sceneIndex: index,
+          sourceJobId: videoId,
+          sourceRevisionId: revision.revisionId,
+          provider: timingSource,
+          model: timingSource === "whisper" ? this.config.whisperModel : timingSource,
+          inputHash: captionInputHash,
+          payload: {
+            captions,
+            timingSource,
+            sceneIndex: index,
+            voiceArtifactId: voiceArtifact.artifactId,
+          },
+          duration: targetSceneDuration,
+          metadata: {
+            voiceArtifactId: voiceArtifact.artifactId,
+            voiceChecksum: voiceArtifact.checksum,
+            timingConfig: "word-timings-v1",
+          },
+        });
+        durableArtifacts.push(captionArtifact);
+        artifactReuse.regeneratedArtifacts.push(captionArtifact);
+      }
+      await this.emitProgress(onProgress, {
+        status: "generating_captions",
+        progress: Math.min(sceneProgressBase + 12, 72),
+        currentStage: reusableCaption ? "Captions reused" : "Captions generated",
+        message: reusableCaption ? `Reused caption timing artifact for scene ${index + 1}.` : `Caption timing completed for scene ${index + 1}.`,
+        stageKey: "captions",
+        checkpointStatus: "completed",
+        provider: timingSource,
+        artifacts: {
+          sceneIndex: index,
+          artifactId: captionArtifact?.artifactId,
+          reused: Boolean(reusableCaption),
+          type: "captions",
+          sourceRevisionId: captionArtifact?.sourceRevisionId,
+          timingSource,
+          captionCount: captions.length,
+        },
+        timingMs: Date.now() - captionsStartedAt,
+      });
 
+      const mediaStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "searching_assets",
         progress: Math.min(sceneProgressBase + 15, 75),
         currentStage: "Searching footage",
         message: `Resolving media asset(s) for scene ${index + 1} (${sceneMediaPlan.visualIntent || "stock"}).`,
+        stageKey: "media",
+        checkpointStatus: "running",
+        inputHashSource: {
+          sceneIndex: index,
+          searchTerms: sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms,
+          visualIntent: sceneMediaPlan.visualIntent,
+        },
       });
 
       // Handle multi-asset segment scenes if planned
@@ -378,27 +728,95 @@ export class ShortCreator {
           const segVideoPath = path.join(this.config.tempDirPath, segVideoFileName);
           tempFiles.push(segVideoPath);
 
-          const segAsset = await this.visualRouter.resolveSceneVisual(
-            {
-              ...originalSceneSpec,
-              stockSearchTerms: seg.searchTerms,
-              visualPrompt: seg.visualPrompt || originalSceneSpec.visualPrompt,
-            } as any,
-            spec,
-            {
-              excludeIds: excludeVideoIds,
-              orientation,
-              tempDirPath: this.config.tempDirPath,
-              targetDurationSeconds: seg.durationSeconds,
-            },
+          const reusableMediaArtifact = reusableArtifacts.find((artifact) =>
+            artifact.type === "media" &&
+            artifact.sceneIndex === index &&
+            artifact.segmentIndex === seg.segmentIndex &&
+            artifact.valid === true,
           );
+          const reusedSeg = reusableMediaAssets.find((asset: any) => asset.sceneIndex === index && asset.segmentIndex === seg.segmentIndex);
+          let segAsset: any = reusableMediaArtifact?.metadata?.visualAsset || reusedSeg;
+          let mediaArtifact: DurableSceneArtifact | undefined = reusableMediaArtifact;
+          if (reusableMediaArtifact) {
+            artifactStore.copyToTemp(reusableMediaArtifact, segVideoPath);
+            artifactReuse.reusedArtifacts.push(reusableMediaArtifact);
+          } else {
+            segAsset = reusedSeg || await this.visualRouter.resolveSceneVisual(
+              {
+                ...originalSceneSpec,
+                stockSearchTerms: sceneMediaPlan.searchCandidates || seg.searchTerms,
+                visualPrompt: seg.visualPrompt || originalSceneSpec.visualPrompt,
+              } as any,
+              spec,
+              {
+                excludeIds: excludeVideoIds,
+                orientation,
+                tempDirPath: this.config.tempDirPath,
+                targetDurationSeconds: seg.durationSeconds,
+                previousCandidates: previousVisualCandidates,
+              },
+            );
+            if (!reusedSeg && segAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
+            const cacheId = segAsset.metadata?.pexelsVideoId || segAsset.url;
+            const cached = cacheId ? mediaCache.getCachedAsset(segAsset.provider, cacheId as any) : null;
+            if (cached) {
+              fs.copySync(cached.filePath, segVideoPath);
+            } else {
+              await this.downloadFile(segAsset.url, segVideoPath);
+              if (cacheId) mediaCache.saveCachedAsset(segAsset.provider, cacheId as any, segVideoPath);
+            }
+            const mediaInputHash = createMediaInputHash({
+              provider: segAsset.provider,
+              sourceId: segAsset.metadata?.pexelsVideoId,
+              url: segAsset.url,
+              selectedClip: segAsset.metadata?.smartClip,
+              crop: segAsset.metadata?.smartCrop,
+              visualIntent: sceneMediaPlan.visualIntent,
+              sceneIndex: index,
+              segmentIndex: seg.segmentIndex,
+            });
+            mediaArtifact = artifactStore.persistFile({
+              type: "media",
+              sceneIndex: index,
+              segmentIndex: seg.segmentIndex,
+              sourceJobId: videoId,
+              sourceRevisionId: revision.revisionId,
+              provider: segAsset.provider,
+              model: segAsset.metadata?.pexelsVideoId,
+              inputHash: mediaInputHash,
+              sourcePath: segVideoPath,
+              extension: "mp4",
+              duration: seg.durationSeconds,
+              metadata: { visualAsset: segAsset, visualIntent: sceneMediaPlan.visualIntent },
+            });
+            durableArtifacts.push(mediaArtifact);
+            artifactReuse.regeneratedArtifacts.push(mediaArtifact);
+          }
 
-          visualProvidersUsed.add(segAsset.provider);
-          await this.downloadFile(segAsset.url, segVideoPath);
+          visualProvidersUsed.add(segAsset.provider || mediaArtifact?.provider || "reused");
 
           if (segAsset.metadata?.pexelsVideoId) {
             excludeVideoIds.push(segAsset.metadata.pexelsVideoId as string | number);
           }
+          previousVisualCandidates.push({
+            id: segAsset.metadata?.pexelsVideoId || segAsset.url,
+            url: segAsset.url,
+            width: segAsset.metadata?.width || 0,
+            height: segAsset.metadata?.height || 0,
+            duration: segAsset.durationSeconds,
+            tags: segAsset.metadata?.searchTermsUsed,
+          });
+          selectedVisuals.push({
+            sceneIndex: index,
+            segmentIndex: seg.segmentIndex,
+            artifactId: mediaArtifact?.artifactId,
+            reused: Boolean(reusableMediaArtifact),
+            provider: segAsset.provider,
+            source: segAsset.source,
+            url: segAsset.url,
+            durationSeconds: segAsset.durationSeconds,
+            metadata: segAsset.metadata,
+          });
 
           renderedSegments.push({
             video: `http://localhost:${this.config.port}/api/tmp/${segVideoFileName}`,
@@ -417,6 +835,7 @@ export class ShortCreator {
             url: `http://localhost:${this.config.port}/api/tmp/${tempMp3FileName}`,
             duration: targetSceneDuration,
           },
+          speechWindowsMs: [{ startMs: speechWindowStartMs, endMs: speechWindowEndMs }],
         });
       } else {
         // Single segment scene
@@ -424,26 +843,111 @@ export class ShortCreator {
         const tempVideoPath = path.join(this.config.tempDirPath, tempVideoFileName);
         tempFiles.push(tempVideoPath);
 
-        const visualAsset = await this.visualRouter.resolveSceneVisual(
-          {
-            ...originalSceneSpec,
-            stockSearchTerms: sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms,
-          } as any,
-          spec,
-          {
-            excludeIds: excludeVideoIds,
-            orientation,
-            tempDirPath: this.config.tempDirPath,
-            targetDurationSeconds: targetSceneDuration,
-          },
-        );
+        const reusableMediaArtifact = reusableArtifactFor("media", index, (artifact) => artifact.segmentIndex === undefined);
+        let visualAsset: any;
+        let mediaArtifact: DurableSceneArtifact | undefined;
+        if (reusableMediaArtifact) {
+          artifactStore.copyToTemp(reusableMediaArtifact, tempVideoPath);
+          mediaArtifact = reusableMediaArtifact;
+          artifactReuse.reusedArtifacts.push(reusableMediaArtifact);
+          visualAsset = (reusableMediaArtifact.metadata?.visualAsset || reusableMediaArtifact.metadata || {}) as any;
+        } else {
+          const reusedAsset = reusableMediaAssets.find((asset: any) => asset.sceneIndex === index && asset.segmentIndex === undefined);
+          visualAsset = reusedAsset || await this.visualRouter.resolveSceneVisual(
+            {
+              ...originalSceneSpec,
+              stockSearchTerms: sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms,
+            } as any,
+            spec,
+            {
+              excludeIds: excludeVideoIds,
+              orientation,
+              tempDirPath: this.config.tempDirPath,
+              targetDurationSeconds: targetSceneDuration,
+              previousCandidates: previousVisualCandidates,
+            },
+          );
+          if (!reusedAsset && visualAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
+
+          const cacheId = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+          const cached = cacheId ? mediaCache.getCachedAsset(visualAsset.provider, cacheId as any) : null;
+          if (cached) {
+            fs.copySync(cached.filePath, tempVideoPath);
+          } else {
+            await this.downloadFile(visualAsset.url, tempVideoPath);
+            if (cacheId) mediaCache.saveCachedAsset(visualAsset.provider, cacheId as any, tempVideoPath);
+          }
+
+          const mediaDurationForArtifact = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => undefined);
+          const mediaInputHash = createMediaInputHash({
+            provider: visualAsset.provider,
+            sourceId: visualAsset.metadata?.pexelsVideoId || visualAsset.source || visualAsset.url,
+            url: visualAsset.url,
+            selectedClip: visualAsset.metadata?.selectedClip,
+            crop: visualAsset.metadata?.smartCrop,
+            visualIntent: originalSceneSpec.visualIntent,
+            sceneIndex: index,
+          });
+          mediaArtifact = artifactStore.persistFile({
+            type: "media",
+            sceneIndex: index,
+            sourceJobId: videoId,
+            sourceRevisionId: revision.revisionId,
+            provider: visualAsset.provider,
+            model: String(visualAsset.metadata?.source || visualAsset.source || visualAsset.provider),
+            inputHash: mediaInputHash,
+            sourcePath: tempVideoPath,
+            extension: "mp4",
+            duration: mediaDurationForArtifact,
+            metadata: {
+              visualAsset,
+              reuseKey: {
+                provider: visualAsset.provider,
+                sourceId: visualAsset.metadata?.pexelsVideoId || visualAsset.source || visualAsset.url,
+                selectedClip: visualAsset.metadata?.selectedClip,
+                crop: visualAsset.metadata?.smartCrop,
+                visualIntent: originalSceneSpec.visualIntent,
+              },
+            },
+          });
+          durableArtifacts.push(mediaArtifact);
+          artifactReuse.regeneratedArtifacts.push(mediaArtifact);
+        }
 
         visualProvidersUsed.add(visualAsset.provider);
-        await this.downloadFile(visualAsset.url, tempVideoPath);
-
         if (visualAsset.metadata?.pexelsVideoId) {
           excludeVideoIds.push(visualAsset.metadata.pexelsVideoId as string | number);
         }
+        previousVisualCandidates.push({
+          id: visualAsset.metadata?.pexelsVideoId || visualAsset.url,
+          url: visualAsset.url,
+          width: visualAsset.width || 0,
+          height: visualAsset.height || 0,
+          duration: visualAsset.durationSeconds,
+          tags: visualAsset.metadata?.searchTermsUsed,
+        });
+        selectedVisuals.push({
+          sceneIndex: index,
+          provider: visualAsset.provider,
+          source: visualAsset.source,
+          url: visualAsset.url,
+          durationSeconds: visualAsset.durationSeconds,
+          metadata: visualAsset.metadata,
+          artifactId: mediaArtifact?.artifactId,
+          reused: Boolean(reusableMediaArtifact),
+        });
+        const mediaDuration = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => 0);
+        sceneQa.push({
+          sceneIndex: index,
+          assetExists: fs.existsSync(tempVideoPath),
+          assetReadable: mediaDuration > 0,
+          durationFit: mediaDuration >= targetSceneDuration * 0.5,
+          visualRelevanceScore: visualAsset.metadata?.selectedScore,
+          duplicateRisk: visualAsset.metadata?.scoreBreakdown?.nearDuplicateRisk,
+          cropSafety: visualAsset.metadata?.smartCrop,
+          captionSafeLayout: true,
+          voiceDurationFit: actualVoiceDuration <= targetSceneDuration * 1.08,
+        });
 
         scenes.push({
           captions,
@@ -454,8 +958,26 @@ export class ShortCreator {
             url: `http://localhost:${this.config.port}/api/tmp/${tempMp3FileName}`,
             duration: targetSceneDuration,
           },
+          speechWindowsMs: [{ startMs: speechWindowStartMs, endMs: speechWindowEndMs }],
         });
       }
+      await this.emitProgress(onProgress, {
+        status: "searching_assets",
+        progress: Math.min(sceneProgressBase + 20, 78),
+        currentStage: "Media selected",
+        message: `Media QA completed for scene ${index + 1}.`,
+        stageKey: "media",
+        checkpointStatus: "completed",
+        provider: Array.from(visualProvidersUsed).join(","),
+        artifacts: {
+          sceneIndex: index,
+          type: "media",
+          reused: selectedVisuals.filter((asset) => asset.sceneIndex === index).every((asset) => Boolean((asset as any).reused)),
+          selectedVisuals: selectedVisuals.filter((asset) => asset.sceneIndex === index),
+          sceneQa: sceneQa.filter((item) => item.sceneIndex === index),
+        },
+        timingMs: Date.now() - mediaStartedAt,
+      });
 
       index++;
     }
@@ -468,7 +990,11 @@ export class ShortCreator {
       progress: 82,
       currentStage: "Rendering",
       message: "Rendering video with Remotion Motion Design and Advanced Captions.",
+      stageKey: "render",
+      checkpointStatus: "running",
+      inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds },
     });
+    const renderStartedAt = Date.now();
 
     await this.remotion.render(
       {
@@ -481,7 +1007,8 @@ export class ShortCreator {
           captionPosition: "bottom" as any,
           captionPreset: mediaPlan.captionPreset || spec.captionStyle || "bold",
           ctaLayout: mediaPlan.ctaLayout || "centered",
-          musicVolume: "high" as any,
+          musicVolume: "medium" as any,
+          musicDuckingProfile: "balanced",
           brandKit: spec.brandKit,
         },
       },
@@ -489,12 +1016,27 @@ export class ShortCreator {
       orientation,
       spec.quality || "standard",
     );
+    await this.emitProgress(onProgress, {
+      status: "rendering",
+      progress: 90,
+      currentStage: "Rendered",
+      message: "Remotion render completed.",
+      stageKey: "render",
+      checkpointStatus: "completed",
+      provider: "remotion",
+      artifacts: { videoId, sceneCount: scenes.length },
+      timingMs: Date.now() - renderStartedAt,
+    });
 
+    const validationStartedAt = Date.now();
     await this.emitProgress(onProgress, {
       status: "finalizing",
       progress: 94,
       currentStage: "Finalizing",
       message: "Generating thumbnail cover and validating output quality.",
+      stageKey: "validation",
+      checkpointStatus: "running",
+      inputHashSource: { videoId, requestedDuration: timeline.requestedDurationSeconds },
     });
 
     for (const file of tempFiles) {
@@ -513,6 +1055,33 @@ export class ShortCreator {
         videoPath,
         timeline.requestedDurationSeconds,
       );
+      const masteringStartedAt = Date.now();
+      await this.emitProgress(onProgress, {
+        status: "finalizing",
+        progress: 96,
+        currentStage: "Mastering final mix",
+        message: "Measuring mastered final mix loudness and peak levels.",
+        stageKey: "mastering",
+        checkpointStatus: "running",
+        provider: "ffmpeg",
+        inputHashSource: { videoId, selectedMusic: selectedMusic.file },
+      });
+      const finalAudioQa = await this.audioMastering.validateFinalMix(videoPath);
+      await this.emitProgress(onProgress, {
+        status: "finalizing",
+        progress: 97,
+        currentStage: "Mastering completed",
+        message: "Final mix mastering metrics recorded.",
+        stageKey: "mastering",
+        checkpointStatus: finalAudioQa.pass ? "completed" : "failed",
+        provider: "ffmpeg",
+        artifacts: {
+          finalMixLufs: finalAudioQa.finalMixMetrics.integratedLufs,
+          truePeakDbtp: finalAudioQa.finalMixMetrics.truePeakDbtp,
+          clippingDetected: finalAudioQa.finalMixMetrics.clippingDetected,
+        },
+        timingMs: Date.now() - masteringStartedAt,
+      });
 
       const stats = fs.statSync(videoPath);
       const totalVoiceDuration = timeline.scenes.reduce(
@@ -539,7 +1108,7 @@ export class ShortCreator {
         videoId,
         filename: `${videoId}.mp4`,
         thumbnailUrl: `/api/videos/${videoId}/thumbnail`,
-        status: "ready",
+        status: finalAudioQa.pass ? "ready" : "failed",
         creationMode: spec.creationMode,
         originalPrompt: spec.userPrompt,
         templateId: spec.templateId,
@@ -562,17 +1131,53 @@ export class ShortCreator {
         aiProvider: spec.metadata?.planner ? String(spec.metadata.planner) : undefined,
         visualProvidersUsed: Array.from(visualProvidersUsed),
         voiceProvider: spec.voiceProvider,
+        voiceProvidersUsed: Array.from(voiceProvidersUsed) as any,
+        voiceArtifacts,
         costEstimate: spec.costEstimate as any,
         productionSpec: spec as any,
         timeline: timeline as any,
         mediaPlan: mediaPlan as any,
+        selectedVisuals,
+        sceneQa,
+        durableArtifacts,
+        artifactReuse: {
+          reusedStages: revision.reuseStages || [],
+          regeneratedStages: revision.regeneratedStages || [],
+          reusedArtifacts: artifactReuse.reusedArtifacts,
+          regeneratedArtifacts: artifactReuse.regeneratedArtifacts,
+          providerInvocations: artifactReuse.providerInvocations,
+        },
+        schemaVersion: "ProductionSpecV3",
+        revisionMetadata: revision,
+        stageTimings: {
+          totalMs: Date.now() - totalStartedAt,
+          validationMs: Date.now() - validationStartedAt,
+        },
         qualityScore: validationResult.technicalScore,
         technicalScore: validationResult.technicalScore,
         mediaPlanScore: mediaPlan.qualityReview?.overallScore || 90,
-        overallProductionScore: Math.round(
-          (validationResult.technicalScore * 0.5) + ((mediaPlan.qualityReview?.overallScore || 90) * 0.5),
-        ),
+        qualityScoreV2: {
+          technical: validationResult.technicalScore,
+          audioQa: finalAudioQa.pass ? 100 : 0,
+          duration: Math.max(0, 100 - Math.round(Math.abs(validationResult.durationVariance) * 10)),
+          captionAlignment: voiceArtifacts.every((artifact) => artifact.timingSource !== "synthetic_fallback") ? 90 : 55,
+          mediaTechnicalQuality: Math.round(sceneQa.reduce((sum, item) => sum + (item.assetReadable ? 90 : 30), 0) / Math.max(1, sceneQa.length)),
+          mediaRelevance: Math.round(sceneQa.reduce((sum, item) => sum + (Number(item.visualRelevanceScore) || 70), 0) / Math.max(1, sceneQa.length)),
+          mediaDiversity: selectedVisuals.length === new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size ? 95 : 65,
+          subjectiveQuality: "Human Review Required",
+        },
+        overallProductionScore: undefined,
         validationResult: validationResult as any,
+        audioQa: {
+          pass: finalAudioQa.pass,
+          issues: finalAudioQa.issues,
+          stream: finalAudioQa.stream,
+          finalMixLufs: finalAudioQa.finalMixMetrics.integratedLufs,
+          truePeakDbtp: finalAudioQa.finalMixMetrics.truePeakDbtp,
+          clippingDetected: finalAudioQa.finalMixMetrics.clippingDetected,
+          effectivelySilent: finalAudioQa.finalMixMetrics.effectivelySilent,
+          duckingProfile: "balanced",
+        },
         createdAt: stats.mtime.toISOString(),
         updatedAt: new Date().toISOString(),
         durationSeconds: validationResult.durationSeconds,
@@ -585,10 +1190,25 @@ export class ShortCreator {
         sizeBytes: stats.size,
         pexelsTerms: spec.scenes.flatMap((s) => s.stockSearchTerms || []),
         narrationLines: timeline.scenes.map((s) => s.narration),
+        spokenNarrationLines: voiceArtifacts.map((artifact) => artifact.processedText).filter(Boolean),
         downloadUrl: `/api/videos/${videoId}/download`,
         previewUrl: `/api/short-video/${videoId}`,
       };
       writeMetadata(this.config.videosDirPath, metadata);
+      await this.emitProgress(onProgress, {
+        status: "finalizing",
+        progress: 98,
+        currentStage: "Validation completed",
+        message: "Objective final QA completed.",
+        stageKey: "validation",
+        checkpointStatus: finalAudioQa.pass ? "completed" : "failed",
+        provider: "ffmpeg",
+        artifacts: { videoId, thumbnailPath, audioQa: metadata.audioQa, validationResult },
+        timingMs: Date.now() - validationStartedAt,
+      });
+      if (!finalAudioQa.pass) {
+        throw new Error(`Audio QA gate failed: ${finalAudioQa.issues.join("; ")}`);
+      }
       logger.info(
         {
           videoId,
@@ -605,6 +1225,7 @@ export class ShortCreator {
       );
     } catch (metaErr) {
       logger.error(metaErr, "Failed to save video metadata sidecar");
+      throw metaErr;
     }
 
     return videoId;
@@ -772,5 +1393,63 @@ export class ShortCreator {
 
   public ListAvailableVoices(): string[] {
     return this.kokoro.listAvailableVoices();
+  }
+
+  public async previewVoice(input: {
+    text: string;
+    language?: string;
+    dialect?: any;
+    qualityProfile?: VoiceQualityProfile;
+    provider?: VoiceProviderId | "auto";
+    voiceId?: string;
+    pronunciationDictionary?: Record<string, string>;
+  }): Promise<{
+    audioUrl: string;
+    provider: string;
+    voiceId: string;
+    language: string;
+    dialect?: string;
+    processedText: string;
+    durationSeconds: number;
+    generationMs?: number;
+    warnings: string[];
+  }> {
+    const result = await this.voiceRegistry.synthesize({
+      text: input.text,
+      language: input.language,
+      dialect: input.dialect,
+      qualityProfile: input.qualityProfile || "balanced",
+      requestedProvider: input.provider || "auto",
+      voiceId: input.voiceId,
+      fallbackPolicy: "none",
+      brandPronunciations: input.pronunciationDictionary,
+    });
+    const tempId = cuid();
+    const wavPath = path.join(this.config.tempDirPath, `${tempId}.wav`);
+    const masteredWavPath = path.join(this.config.tempDirPath, `${tempId}.mastered.wav`);
+    const mp3Path = path.join(this.config.tempDirPath, `${tempId}.mp3`);
+    await this.ffmpeg.saveNormalizedAudioWithSpeed(result.audio, wavPath, 1.0);
+    await this.audioMastering.masterVoice(wavPath, masteredWavPath);
+    await this.ffmpeg.saveWavToMp3(masteredWavPath, mp3Path);
+    const durationSeconds = await this.ffmpeg.getMediaDuration(masteredWavPath);
+    fs.removeSync(wavPath);
+    fs.removeSync(masteredWavPath);
+    return {
+      audioUrl: `/api/voice-preview/${tempId}.mp3`,
+      provider: result.provider || result.decision.providerId,
+      voiceId: result.voiceId || result.decision.voiceId,
+      language: result.language || result.decision.language,
+      dialect: result.dialect,
+      processedText: result.processedText || result.decision.processedText,
+      durationSeconds: Math.round((durationSeconds || result.audioLength || 0) * 100) / 100,
+      generationMs: result.generationMs,
+      warnings: result.decision.warnings,
+    };
+  }
+
+  private mapVoiceQuality(quality?: string): VoiceQualityProfile {
+    if (quality === "premium" || quality === "high") return "premium";
+    if (quality === "draft") return "fast";
+    return "balanced";
   }
 }

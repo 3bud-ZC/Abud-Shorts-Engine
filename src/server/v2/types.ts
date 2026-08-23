@@ -3,6 +3,7 @@ import { createShortInput, renderConfig } from "../../types/shorts";
 import {
   arabicDialectEnum,
   aspectRatioEnum,
+  captionStyleEnum,
   contentStyleEnum,
   creationModeEnum,
   productionSpecSchema,
@@ -33,6 +34,15 @@ export const terminalJobStatuses = ["ready", "failed", "canceled"] as const;
 export type JobStatus = (typeof jobStatuses)[number];
 
 export const jobStatusSchema = z.enum(jobStatuses);
+export const checkpointStageSchema = z.enum([
+  "planning",
+  "media",
+  "voice",
+  "captions",
+  "render",
+  "mastering",
+  "validation",
+]);
 
 function normalizeDurationInput(val: any) {
   if (val && typeof val === "object") {
@@ -97,6 +107,7 @@ export const createVideoJobSchema = z.union([
     type: z.literal("video").optional(),
     title: z.string().trim().min(1).max(140).optional(),
     creationMode: creationModeEnum.optional(),
+    idempotencyKey: z.string().trim().min(8).max(160).optional(),
     productionSpec: productionSpecSchema,
   }),
   promptJobInputSchema,
@@ -145,6 +156,12 @@ export const internalProgressSchema = z.object({
   currentStage: z.string().trim().min(1).max(120),
   message: z.string().trim().min(1).max(500),
   technicalMessage: z.string().trim().max(2000).optional(),
+  stageKey: checkpointStageSchema.optional(),
+  checkpointStatus: z.enum(["running", "completed", "failed"]).optional(),
+  provider: z.string().trim().max(80).optional(),
+  artifacts: z.record(z.unknown()).optional(),
+  inputHashSource: z.unknown().optional(),
+  timingMs: z.number().min(0).max(30 * 60 * 1000).optional(),
 });
 
 export const internalCompleteSchema = z.object({
@@ -163,6 +180,48 @@ export const internalStartRenderSchema = z.object({
   input: z.union([productionSpecSchema, createShortInput]),
   callbackBaseUrl: z.string().url(),
   internalServiceToken: z.string().trim().min(16),
+  workerId: z.string().trim().min(1).max(160).optional(),
+});
+
+export const productionJobSchema = z.preprocess(
+  normalizeDurationInput,
+  z.object({
+    prompt: z.string().trim().min(1).max(4000),
+    duration: z.number().min(5).max(120).optional(),
+    durationSeconds: z.number().min(5).max(120).optional(),
+    aspectRatio: aspectRatioEnum.optional().default("9:16"),
+    language: videoLanguageEnum.optional().default("auto"),
+    dialect: arabicDialectEnum.optional().default("none"),
+    brandId: z.string().trim().max(140).optional(),
+    voice: z.string().trim().max(120).optional(),
+    qualityProfile: z.enum(["fast", "balanced", "premium"]).optional().default("balanced"),
+    visualMode: visualModeEnum.optional().default("stock"),
+    publishIntent: z.record(z.unknown()).optional(),
+  }),
+);
+
+export const stageRetrySchema = z.object({
+  stage: checkpointStageSchema,
+});
+
+export const voiceRevisionSchema = z.object({
+  spokenNarration: z.string().trim().min(1).max(4000).optional(),
+  voiceProvider: voiceProviderEnum.optional(),
+  voiceId: z.string().trim().max(120).optional(),
+  reason: z.string().trim().max(240).optional(),
+  captionProfile: z.string().trim().max(60).optional(),
+});
+
+export const mediaRevisionSchema = z.object({
+  sceneIndex: z.number().int().min(0).max(20),
+  searchTerms: z.array(z.string().trim().min(1).max(80)).min(1).max(8).optional(),
+  visualIntent: z.string().trim().max(80).optional(),
+  reason: z.string().trim().max(240).optional(),
+});
+
+export const captionStyleRevisionSchema = z.object({
+  captionProfile: captionStyleEnum,
+  reason: z.string().trim().max(240).optional(),
 });
 
 export type CreateVideoJobInput = z.infer<typeof createVideoJobSchema>;
@@ -188,12 +247,15 @@ export type JobRecord = {
   language?: string;
   dialect?: string;
   costEstimate?: Record<string, unknown>;
+  idempotencyKey?: string;
   templateId?: string;
   brandName?: string;
   input: any;
   output?: Record<string, unknown>;
   error?: string;
   technicalError?: string;
+  stageTimings?: Record<string, number>;
+  checkpoint?: Record<string, unknown>;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -230,6 +292,16 @@ export const brandProfileSchema = z.object({
   outroText: z.string().trim().max(220).optional().default(""),
   contactText: z.string().trim().max(180).optional().default(""),
   isDefault: z.boolean().optional().default(false),
+  voiceProfile: z
+    .object({
+      provider: voiceProviderEnum.optional().default("auto"),
+      voiceId: z.string().trim().max(120).optional(),
+      dialect: arabicDialectEnum.optional().default("egyptian"),
+      style: z.enum(["natural", "energetic", "professional", "storytelling", "calm", "viral_fast"]).optional().default("natural"),
+      pace: z.enum(["slow", "normal", "fast"]).optional().default("normal"),
+      pronunciationDictionary: z.record(z.string().trim().max(120)).optional().default({}),
+    })
+    .optional(),
 });
 
 export const appSettingsSchema = z.object({
@@ -242,7 +314,7 @@ export const appSettingsSchema = z.object({
   defaultVisualMode: visualModeEnum.optional().default("auto"),
   defaultContentAI: z.string().trim().max(80).optional().default("local_ai"),
   defaultVisualProvider: z.string().trim().max(80).optional().default("pexels"),
-  defaultVoiceProvider: z.string().trim().max(80).optional().default("kokoro"),
+  defaultVoiceProvider: z.string().trim().max(80).optional().default("piper"),
   defaultBrandId: z.string().trim().max(140).nullable().optional(),
   defaultTemplateId: z.string().trim().max(80).nullable().optional(),
   defaultMusic: z.string().trim().max(80).nullable().optional(),

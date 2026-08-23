@@ -63,11 +63,12 @@ const ProvidersPage: React.FC = () => {
     return Array.from(map.entries()).filter(([, items]) => items.length > 0);
   }, [providers, categories]);
 
-  const testProviderConnection = async (providerName: string) => {
+  const testProviderConnection = async (provider: ProviderItem) => {
+    const providerName = provider.name;
     setValidatingProvider(providerName);
     setValidationAlert(null);
     try {
-      const slug = providerName.toLowerCase().split(" ")[0].replace(/[^a-z]/g, "");
+      const slug = provider.id || providerName.toLowerCase().split(" ")[0].replace(/[^a-z]/g, "");
       const response = await axios.post(`/api/v2/providers/${slug}/validate`);
       setValidationAlert({
         provider: providerName,
@@ -91,9 +92,9 @@ const ProvidersPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Providers & AI Engine"
-        eyebrow="Provider Architecture"
-        description="Unified provider abstractions for Content AI, Visuals, Voice, Captions, and Rendering. Secrets are never exposed in the browser."
+        title="Providers"
+        eyebrow="Configuration"
+        description="Review which local, cloud, and premium services are available. Credentials stay server-side and are never shown in the browser."
         actions={
           <Button startIcon={<RefreshIcon />} onClick={load}>
             Refresh Status
@@ -119,14 +120,14 @@ const ProvidersPage: React.FC = () => {
               title={category}
               description={
                 category === "Content AI"
-                  ? "Creative Director abstractions (Gemini cloud planning and Local deterministic AI)."
+                  ? "Script and production planning providers."
                   : category === "Visuals"
-                    ? "Stock footage (Pexels) and optional AI Video generation (Google Veo, fal.ai Kling/Wan)."
+                    ? "Stock footage and optional AI video providers."
                     : category === "Voice"
-                      ? "Free local Kokoro TTS and premium multilingual ElevenLabs."
+                      ? "Piper for local Arabic, Kokoro for local English, optional Google Cloud TTS, and premium ElevenLabs."
                       : category === "Captions"
-                        ? "Whisper speech-to-text with word-level synchronization."
-                        : "Video rendering and workflow orchestration."
+                        ? "Caption timing and transcript generation."
+                        : "Rendering, automation, and supporting services."
               }
             >
               <Grid container spacing={2}>
@@ -146,18 +147,60 @@ const ProvidersPage: React.FC = () => {
                             <Chip size="small" color="primary" label="Default" />
                           )}
                           {provider.tier && (
-                            <Chip size="small" variant="outlined" label={provider.tier.toUpperCase()} />
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={provider.tier === "cloud_free_tier" ? "CLOUD / FREE TIER AVAILABLE" : provider.tier.toUpperCase()}
+                            />
+                          )}
+                          {provider.details?.local !== undefined && (
+                            <Chip size="small" variant="outlined" label={provider.details.local ? "LOCAL" : "CLOUD"} />
                           )}
                         </Stack>
+                        {provider.category === "Voice" && provider.details && (
+                          <Stack spacing={0.5}>
+                            <Typography variant="caption" color="text.secondary">
+                              Languages: {Array.isArray(provider.details.languages) ? provider.details.languages.join(", ") : "unknown"}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Arabic: {String(provider.details.arabicSupport || "unknown")} · Egyptian: {String(provider.details.egyptianSupport || "unknown")}
+                            </Typography>
+                            {provider.details.license && (
+                              <Typography variant="caption" color="text.secondary">
+                                License: {String(provider.details.license)}
+                              </Typography>
+                            )}
+                            {provider.details.authentication && (
+                              <Typography variant="caption" color="text.secondary">
+                                Authentication: {String(provider.details.authentication)}
+                              </Typography>
+                            )}
+                            {provider.details.freeTierLabel && (
+                              <Typography variant="caption" color="text.secondary">
+                                Tier: {String(provider.details.freeTierLabel)}
+                              </Typography>
+                            )}
+                            {provider.details.billingNotice && (
+                              <Typography variant="caption" color="text.secondary">
+                                {String(provider.details.billingNotice)}
+                              </Typography>
+                            )}
+                            {Array.isArray(provider.details.voiceFamilies) && provider.details.voiceFamilies.length > 0 && (
+                              <Typography variant="caption" color="text.secondary">
+                                Families: {provider.details.voiceFamilies.join(", ")}
+                              </Typography>
+                            )}
+                          </Stack>
+                        )}
                         <Divider />
                         <Stack direction="row" justifyContent="space-between" alignItems="center">
                           <Button
                             size="small"
                             variant="outlined"
                             disabled={validatingProvider === provider.name}
-                            onClick={() => testProviderConnection(provider.name)}
+                            onClick={() => testProviderConnection(provider)}
                           >
-                            {validatingProvider === provider.name ? "Testing..." : "Test Connection"}
+                            {provider.configured === false ? "Not configured" : validatingProvider === provider.name ? "Testing..." : "Test Connection"}
                           </Button>
                         </Stack>
                       </Stack>

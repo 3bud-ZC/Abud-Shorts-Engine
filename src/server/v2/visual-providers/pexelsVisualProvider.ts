@@ -47,6 +47,7 @@ export class PexelsVisualProvider implements VisualProvider {
       metadata: {
         pexelsVideoId: video.id,
         searchTermsUsed: searchTerms,
+        ...(video.metadata || {}),
       },
     };
   }

@@ -4,6 +4,7 @@ import path from "path";
 import { Config } from "../../config";
 import { V2Database } from "./db";
 import type { ComponentHealth, PexelsValidationResult } from "./types";
+import { checkStoragePolicy } from "./storage/storagePolicy";
 
 let pexelsCache:
   | { keyFingerprint: string; expiresAt: number; result: PexelsValidationResult }
@@ -226,11 +227,18 @@ export async function getV2Health(
     })),
     timedCheck("Database", async () => {
       const health = await db.health();
-      return { ok: health.ok, message: health.message };
+      return {
+        ok: health.ok,
+        message: health.message,
+        details: {
+          latencyMs: health.latencyMs,
+          pool: db.getPoolState(),
+        },
+      };
     }),
     timedCheck("n8n", async () => {
       const response = await axios.get(`${config.n8nBaseUrl}/healthz`, {
-        timeout: 3000,
+        timeout: Math.min(config.providerTimeoutMs, 5000),
       });
       return {
         ok: response.status >= 200 && response.status < 300,
@@ -239,7 +247,7 @@ export async function getV2Health(
     }),
     timedCheck("Render Worker", async () => {
       const response = await axios.get(`${config.renderWorkerBaseUrl}/health`, {
-        timeout: 3000,
+        timeout: Math.min(config.providerTimeoutMs, 5000),
       });
       return {
         ok: response.status >= 200 && response.status < 300,
@@ -279,6 +287,7 @@ export async function getV2Health(
       };
     }),
     timedCheck("Disk", async () => {
+      const storage = await checkStoragePolicy(config);
       fs.ensureDirSync(config.videosDirPath);
       const files = fs.readdirSync(config.videosDirPath);
       const bytes = files.reduce((total, file) => {
@@ -287,9 +296,9 @@ export async function getV2Health(
         return stats.isFile() ? total + stats.size : total;
       }, 0);
       return {
-        ok: true,
-        message: "Video storage is writable.",
-        details: { videosDir: config.videosDirPath, bytes },
+        ok: storage.ok,
+        message: storage.ok ? "Video storage is writable." : "Video storage failed readiness checks.",
+        details: { ...storage, bytes },
       };
     }),
   ]);

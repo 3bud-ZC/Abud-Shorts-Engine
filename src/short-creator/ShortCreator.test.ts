@@ -105,10 +105,61 @@ vi.mock("@remotion/install-whisper-cpp", () => {
 
 test("test me", async () => {
   const kokoro = await Kokoro.init("fp16");
+  vi.spyOn(kokoro, "generate").mockResolvedValue({
+    audio: new ArrayBuffer(8),
+    audioLength: 1,
+  } as any);
   const ffmpeg = await FFMpeg.init();
 
   vi.spyOn(ffmpeg, "saveNormalizedAudio").mockResolvedValue("mocked-path.wav");
   vi.spyOn(ffmpeg, "saveToMp3").mockResolvedValue("mocked-path.mp3");
+  vi.spyOn(ffmpeg, "saveNormalizedAudioWithSpeed").mockImplementation(async (_audio, outputPath) => {
+    fs.writeFileSync(outputPath, "wav");
+    return { duration: 1 };
+  });
+  vi.spyOn(ffmpeg, "masterVoiceAudioFile").mockImplementation(async (_inputPath, outputPath) => {
+    fs.writeFileSync(outputPath, "mastered wav");
+    return outputPath;
+  });
+  vi.spyOn(ffmpeg, "saveWavToMp3").mockImplementation(async (_wavPath, mp3Path) => {
+    fs.writeFileSync(mp3Path, "mp3");
+    return mp3Path;
+  });
+  vi.spyOn(ffmpeg, "getMediaDuration").mockResolvedValue(1);
+  vi.spyOn(ffmpeg, "measureAudioLoudness").mockResolvedValue({
+    integratedLufs: -16,
+    truePeakDbtp: -1.5,
+    loudnessRange: 8,
+    clippingDetected: false,
+    effectivelySilent: false,
+  });
+  vi.spyOn(ffmpeg, "generateThumbnail").mockImplementation(async (_videoPath, outputPath) => {
+    fs.writeFileSync(outputPath, "thumb");
+    return outputPath;
+  });
+  vi.spyOn(ffmpeg, "validateRenderedVideo").mockResolvedValue({
+    valid: true,
+    durationSeconds: 6,
+    durationVariance: 0,
+    durationVariancePercent: 0,
+    hasVideoStream: true,
+    hasAudioStream: true,
+    width: 1080,
+    height: 1920,
+    aspectRatio: "9:16",
+    fileSizeBytes: 1000000,
+    bitrateBps: 1000000,
+    fps: 25,
+    technicalScore: 100,
+    issues: [],
+  });
+  vi.spyOn(ffmpeg, "getAudioStreamInfo").mockResolvedValue({
+    codec: "aac",
+    sampleRate: 48000,
+    channels: 2,
+    durationSeconds: 6,
+    hasAudioStream: true,
+  });
 
   const pexelsAPI = new PexelsAPI("mock-api-key");
   vi.spyOn(pexelsAPI, "findVideo").mockResolvedValue({
@@ -149,6 +200,9 @@ test("test me", async () => {
     pexelsAPI,
     musicManager,
   );
+  vi.spyOn(shortCreator as any, "downloadFile").mockImplementation(async (_url: string, destPath: string) => {
+    fs.writeFileSync(destPath, "mock media");
+  });
 
   const videoId = shortCreator.addToQueue(
     [

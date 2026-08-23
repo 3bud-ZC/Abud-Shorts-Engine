@@ -2,14 +2,18 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import {
   Alert,
+  Box,
   Button,
+  Checkbox,
   Divider,
+  FormControlLabel,
   FormControl,
   Grid,
   InputLabel,
   MenuItem,
   Select,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import SaveIcon from "@mui/icons-material/Save";
@@ -20,7 +24,7 @@ import {
   StatCard,
   StatusBadge,
 } from "../components/v2";
-import type { BusinessTemplateOption, V2Brand } from "./v2Types";
+import type { ApiTokenItem, BusinessTemplateOption, V2Brand } from "./v2Types";
 
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<any>(null);
@@ -347,8 +351,17 @@ const SettingsPage: React.FC = () => {
         {/* Backup & Restore Management */}
         <Grid item xs={12}>
           <SectionCard
+            title="API Tokens"
+            description="Create scoped server API tokens for production jobs, read-only job access, video reads, and publishing."
+          >
+            <ApiTokenManager />
+          </SectionCard>
+        </Grid>
+
+        <Grid item xs={12}>
+          <SectionCard
             title="Backup & Disaster Recovery"
-            description="Create encrypted or secret-free backups of configuration, brands, templates, PostgreSQL database records, and rendered media."
+            description="Create backups of configuration, brand profiles, templates, production records, and rendered media."
             actions={
               <Button
                 variant="outlined"
@@ -394,6 +407,96 @@ const SettingsPage: React.FC = () => {
         </Grid>
       </Grid>
     </>
+  );
+};
+
+const API_SCOPES = ["production:create", "production:read", "videos:read", "publishing:write"];
+
+const ApiTokenManager: React.FC = () => {
+  const [tokens, setTokens] = useState<ApiTokenItem[]>([]);
+  const [name, setName] = useState("");
+  const [scopes, setScopes] = useState<string[]>(["production:create", "production:read"]);
+  const [shownToken, setShownToken] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    const res = await axios.get("/api/v2/api-tokens");
+    setTokens(res.data.tokens || []);
+  };
+
+  useEffect(() => {
+    load().catch(() => setError("Failed to load API tokens."));
+  }, []);
+
+  const toggleScope = (scope: string) => {
+    setScopes((current) =>
+      current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope],
+    );
+  };
+
+  const createToken = async () => {
+    setError(null);
+    try {
+      const res = await axios.post("/api/v2/api-tokens", { name, scopes });
+      setShownToken(res.data.token?.token || null);
+      setName("");
+      await load();
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "API token could not be created.");
+    }
+  };
+
+  const revoke = async (id: string) => {
+    await axios.post(`/api/v2/api-tokens/${id}/revoke`);
+    await load();
+  };
+
+  return (
+    <Stack spacing={2}>
+      {error && <Alert severity="error">{error}</Alert>}
+      {shownToken && (
+        <Alert severity="warning" onClose={() => setShownToken(null)}>
+          New token, shown once: <code>{shownToken}</code>
+        </Alert>
+      )}
+      <Grid container spacing={1.5}>
+        <Grid item xs={12} md={4}>
+          <TextField fullWidth label="Token name" value={name} onChange={(e) => setName(e.target.value)} />
+        </Grid>
+        <Grid item xs={12} md={6}>
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            {API_SCOPES.map((scope) => (
+              <FormControlLabel
+                key={scope}
+                control={<Checkbox checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} />}
+                label={scope}
+              />
+            ))}
+          </Stack>
+        </Grid>
+        <Grid item xs={12} md={2}>
+          <Button fullWidth variant="contained" disabled={!name || scopes.length === 0} onClick={createToken}>
+            Create
+          </Button>
+        </Grid>
+      </Grid>
+      <Stack spacing={1}>
+        {tokens.map((token) => (
+          <Box key={token.id} sx={{ display: "flex", justifyContent: "space-between", gap: 1, p: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+            <Box>
+              <Typography variant="body2" fontWeight={800}>{token.name}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {token.scopes.join(", ")} · Created {new Date(token.createdAt).toLocaleString()}
+                {token.lastUsedAt ? ` · Last used ${new Date(token.lastUsedAt).toLocaleString()}` : ""}
+              </Typography>
+            </Box>
+            <Button size="small" color="error" disabled={Boolean(token.revokedAt)} onClick={() => revoke(token.id)}>
+              {token.revokedAt ? "Revoked" : "Revoke"}
+            </Button>
+          </Box>
+        ))}
+      </Stack>
+    </Stack>
   );
 };
 

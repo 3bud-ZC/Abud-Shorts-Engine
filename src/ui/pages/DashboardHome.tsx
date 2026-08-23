@@ -21,15 +21,7 @@ import {
   StatusBadge,
 } from "../components/v2";
 import type { V2HealthComponent, V2Job, VideoItem } from "./v2Types";
-
-function formatBytes(bytes = 0) {
-  if (!bytes) return "0 MB";
-  const mb = bytes / (1024 * 1024);
-  if (mb > 1024) {
-    return `${(mb / 1024).toFixed(2)} GB`;
-  }
-  return `${mb.toFixed(1)} MB`;
-}
+import { buildDashboardMetrics, formatDashboardBytes, summarizeDashboardFailures } from "../utils/dashboardMetrics";
 
 const DashboardHomeContent: React.FC = () => {
   const navigate = useNavigate();
@@ -42,18 +34,19 @@ const DashboardHomeContent: React.FC = () => {
   const loadData = useCallback(() => {
     setLoading(true);
     Promise.allSettled([
-      axios.get("/api/v2/jobs"),
+      axios.get("/api/v2/jobs", { params: { limit: 1000 } }),
       axios.get("/api/videos"),
       axios.get("/api/v2/system/health"),
     ]).then(([jobsResult, videosResult, healthResult]) => {
       if (jobsResult.status === "fulfilled") setJobs(jobsResult.value.data.jobs || []);
       if (videosResult.status === "fulfilled") setVideos(videosResult.value.data.videos || []);
       if (healthResult.status === "fulfilled") setHealth(healthResult.value.data);
-      if ([jobsResult, videosResult, healthResult].some((result) => result.status === "rejected")) {
-        setError("Some dashboard metrics could not be loaded.");
-      } else {
-        setError(null);
-      }
+      const failedSources = [
+        jobsResult.status === "rejected" ? "jobs" : "",
+        videosResult.status === "rejected" ? "videos" : "",
+        healthResult.status === "rejected" ? "system health" : "",
+      ].filter(Boolean);
+      setError(summarizeDashboardFailures(failedSources));
       setLoading(false);
     });
   }, []);
@@ -65,26 +58,7 @@ const DashboardHomeContent: React.FC = () => {
   }, [loadData]);
 
   const metrics = useMemo(() => {
-    const today = new Date().toDateString();
-    const running = jobs.filter((j) => !["ready", "failed", "canceled"].includes(j.status)).length;
-    const diskComponent = health?.components?.find((c) => c.name === "Disk");
-    const diskBytes =
-      typeof diskComponent?.details?.bytes === "number"
-        ? diskComponent.details.bytes
-        : videos.reduce((sum, v) => sum + (v.sizeBytes || 0), 0);
-
-    return [
-      { label: "Total Videos", value: videos.length, hint: "Generated MP4 files" },
-      { label: "Videos Ready", value: videos.filter((v) => v.status === "ready").length, hint: "Available in library" },
-      { label: "Active Jobs", value: running, hint: running > 0 ? "Rendering in background" : "Pipeline idle" },
-      { label: "Failed Jobs", value: jobs.filter((j) => j.status === "failed").length, hint: "Requires review" },
-      {
-        label: "Videos Today",
-        value: videos.filter((v) => new Date(v.createdAt).toDateString() === today).length,
-        hint: "Produced today",
-      },
-      { label: "Disk Storage", value: formatBytes(diskBytes), hint: "Local media folder" },
-    ];
+    return buildDashboardMetrics({ jobs, videos, health });
   }, [jobs, videos, health]);
 
   if (loading && jobs.length === 0 && videos.length === 0) {
@@ -95,8 +69,8 @@ const DashboardHomeContent: React.FC = () => {
     <>
       <PageHeader
         title="Dashboard"
-        eyebrow="Control Plane V2"
-        description="Monitor automated rendering pipelines, track job execution events, and distribute videos to social platforms."
+        eyebrow="Production Overview"
+        description="Create videos, watch production progress, review completed outputs, and prepare publishing from one workspace."
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadData}>
@@ -132,7 +106,7 @@ const DashboardHomeContent: React.FC = () => {
         <Grid item xs={12} lg={8}>
           <SectionCard
             title="Recent Video Jobs"
-            description="Live execution stream from PostgreSQL database."
+            description="Latest video production requests and their current progress."
             actions={
               <Button size="small" endIcon={<ArrowForwardIcon />} onClick={() => navigate("/jobs")}>
                 View All Jobs ({jobs.length})
@@ -169,7 +143,7 @@ const DashboardHomeContent: React.FC = () => {
             {/* System Health Panel */}
             <SectionCard
               title="System Health"
-              description="Real-time status of pipeline services."
+              description="Core services required for video production."
               actions={<StatusBadge status={health?.status || "healthy"} />}
             >
               <Stack spacing={1}>
@@ -251,7 +225,7 @@ const DashboardHomeContent: React.FC = () => {
                             {video.title || video.templateName || "Untitled Short"}
                           </Typography>
                           <Typography variant="caption" color="text.secondary" display="block">
-                            {formatBytes(video.sizeBytes)} · {new Date(video.createdAt).toLocaleDateString()}
+                            {formatDashboardBytes(video.sizeBytes)} · {new Date(video.createdAt).toLocaleDateString()}
                           </Typography>
                         </Box>
                       </Stack>

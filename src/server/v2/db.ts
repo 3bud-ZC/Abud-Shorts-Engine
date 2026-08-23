@@ -10,8 +10,10 @@ export class V2Database {
     if (config.databaseUrl) {
       this.pool = new Pool({
         connectionString: config.databaseUrl,
-        max: 10,
-        connectionTimeoutMillis: 5000,
+        max: config.databaseMaxConnections,
+        idleTimeoutMillis: config.databaseIdleTimeoutMs,
+        connectionTimeoutMillis: config.databaseConnectionTimeoutMs,
+        statement_timeout: config.databaseStatementTimeoutMs,
       });
       this.pool.on("error", (error) => {
         logger.warn({ error }, "V2 database pool connection error");
@@ -32,6 +34,22 @@ export class V2Database {
     }
     const result = await this.pool.query<T>(text, values);
     return result.rows;
+  }
+
+  public getPoolState(): {
+    configured: boolean;
+    totalCount: number;
+    idleCount: number;
+    waitingCount: number;
+    maxConnections: number;
+  } {
+    return {
+      configured: Boolean(this.pool),
+      totalCount: this.pool?.totalCount || 0,
+      idleCount: this.pool?.idleCount || 0,
+      waitingCount: this.pool?.waitingCount || 0,
+      maxConnections: this.config.databaseMaxConnections,
+    };
   }
 
   public async migrate(): Promise<void> {

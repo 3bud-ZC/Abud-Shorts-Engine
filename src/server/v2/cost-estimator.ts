@@ -26,8 +26,12 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>): CostEstim
 
   let voiceCost = 0;
   const voiceProvider = spec.voiceProvider || "kokoro";
+  let estimatedCostTier: "local_free" | "cloud_free_tier" | "premium" = "local_free";
   if (voiceProvider === "elevenlabs") {
+    estimatedCostTier = "premium";
     voiceCost = Math.round(totalChars * 0.0003 * 100) / 100;
+  } else if (voiceProvider === "google_cloud_tts") {
+    estimatedCostTier = "cloud_free_tier";
   }
 
   const contentAICost = spec.metadata?.planner === "GeminiContentAIProvider" ? 0.001 : 0;
@@ -50,6 +54,7 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>): CostEstim
         provider: voiceProvider,
         charCount: totalChars,
         cost: Math.round(voiceCost * 100) / 100,
+        estimatedCostTier,
       },
       rendering: 0,
     },

@@ -2,6 +2,7 @@ import axios from "axios";
 import { Readable } from "stream";
 import type {
   VoiceAudioResult,
+  VoiceCapabilities,
   VoiceOption,
   VoiceProvider,
   VoiceProviderValidationResult,
@@ -17,6 +18,25 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
   public isConfigured(): boolean {
     const key = this.apiKey || process.env.ELEVENLABS_API_KEY;
     return Boolean(key && key.trim().length > 10 && !key.includes("your_"));
+  }
+
+  public getCapabilities(): VoiceCapabilities {
+    return {
+      languages: ["multilingual", "ar", "en"],
+      dialects: ["egyptian", "msa"],
+      supportsLanguageDetection: true,
+      supportsWordTimings: false,
+      supportsStyles: true,
+      supportsPace: true,
+      local: false,
+      commercialUse: "allowed",
+      license: "Commercial SaaS provider terms; requires configured ElevenLabs account.",
+      notes: "Premium provider. Do not use unless explicitly selected/configured by the operator.",
+    };
+  }
+
+  public supportsLanguage(language?: string): boolean {
+    return !language || language === "auto" || language === "ar" || language === "en" || language === "multilingual";
   }
 
   public async generateVoice(
@@ -59,6 +79,12 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     return {
       audio: stream,
       audioLength: approxDuration,
+      sampleRate: 44100,
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId,
+      language: "multilingual",
+      estimatedCost: text.length * 0.00003,
     };
   }
 
@@ -71,6 +97,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         tier: "premium",
         language: "multilingual",
         gender: "female",
+        license: this.getCapabilities().license,
+        commercialUse: "allowed",
       },
       {
         id: "AZnzlk1XvdvUeBnXmlld",
@@ -79,6 +107,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         tier: "premium",
         language: "multilingual",
         gender: "female",
+        license: this.getCapabilities().license,
+        commercialUse: "allowed",
       },
       {
         id: "EXAVITQu4vr4xnSDxMaL",
@@ -87,6 +117,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         tier: "premium",
         language: "multilingual",
         gender: "female",
+        license: this.getCapabilities().license,
+        commercialUse: "allowed",
       },
       {
         id: "ErXwobaYiN019PkySvjV",
@@ -95,6 +127,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         tier: "premium",
         language: "multilingual",
         gender: "male",
+        license: this.getCapabilities().license,
+        commercialUse: "allowed",
       },
       {
         id: "MF3mGyEYCl7XYWbV9V6O",
@@ -104,6 +138,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         language: "ar",
         dialect: "egyptian",
         gender: "male",
+        license: this.getCapabilities().license,
+        commercialUse: "allowed",
       },
     ];
 

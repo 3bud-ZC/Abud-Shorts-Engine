@@ -6,6 +6,7 @@ import {
   Box,
   Button,
   Checkbox,
+  Divider,
   Grid,
   Stack,
   ToggleButton,
@@ -32,6 +33,7 @@ import {
 import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal";
 import { BatchPublishModal } from "../components/publishing/BatchPublishModal";
 import type { VideoItem } from "./v2Types";
+import { withMediaAccessToken } from "../utils/auth";
 
 function formatFileSize(bytes: number): string {
   if (!bytes) return "0 B";
@@ -184,7 +186,7 @@ const VideoList: React.FC = () => {
                     >
                       {isReady ? (
                         <img
-                          src={video.thumbnailUrl || `/api/videos/${video.videoId}/thumbnail`}
+                          src={withMediaAccessToken(video.thumbnailUrl || `/api/videos/${video.videoId}/thumbnail`)}
                           alt={videoTitle(video)}
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = "none";
@@ -230,7 +232,7 @@ const VideoList: React.FC = () => {
                       <Stack direction="row" spacing={1}>
                         <Button size="small" startIcon={<OpenInNewIcon />} disabled={!isReady} onClick={() => navigate(`/video/${video.videoId}`)}>Preview</Button>
                         <Button size="small" startIcon={<SendIcon />} disabled={!isReady} onClick={() => setReviewVideo(video)}>Publish</Button>
-                        <Button size="small" startIcon={<DownloadIcon />} component="a" href={video.downloadUrl} disabled={!isReady}>Download</Button>
+                        <Button size="small" startIcon={<DownloadIcon />} component="a" href={withMediaAccessToken(video.downloadUrl)} disabled={!isReady}>Download</Button>
                       </Stack>
                       <ActionMenu
                         items={[

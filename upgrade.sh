@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # ABUD Shorts Engine V2 — Production Upgrade Script (Linux / macOS)
-# Version: 2.0.1
+# Version: 2.1.0
 # ==============================================================================
 
 set -euo pipefail
 
 echo "================================================================="
-echo "  ABUD Shorts Engine V2 — Safe Production Upgrade (v2.0.1)"
+echo "  ABUD Shorts Engine V2 — Safe Production Upgrade (v2.1.0)"
 echo "================================================================="
 
 # 1. Automatic Pre-Upgrade Safety Backup

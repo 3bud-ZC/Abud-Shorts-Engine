@@ -1,7 +1,7 @@
 # ABUD Shorts Engine V2
 
 **Product:** ABUD Shorts Engine V2  
-**Version:** 2.0.0 (General Availability)  
+**Version:** 2.1.0 (General Availability)  
 **Canonical Dashboard:** http://localhost:3130  
 **License:** MIT  
 
@@ -36,7 +36,8 @@ ABUD Shorts Engine V2 transforms text ideas and brand assets into high-engagemen
   - **Prompt Studio**: AI-powered scriptwriting in Egyptian Arabic, Gulf Arabic, Modern Standard Arabic (MSA), and English with automatic scene segmentation.
   - **Template Studio**: 6 pre-built business templates (Product Ad, Restaurant Promo, Real Estate Showcase, Viral Hook, Educational Explainer, Event Promo) with custom brand injection.
 - **Production Spec Engine**: Exact duration guarantees, multi-scene timeline assembly, animated text overlays, RTL Arabic typography, and motion presets.
-- **100% Free/Local Core**: Generate unlimited high-definition vertical videos without recurring cloud API fees using local AI planning, Pexels media library, Kokoro TTS, Whisper speech-to-text, and Remotion rendering.
+- **100% Free/Local Core**: Generate high-definition vertical videos using local AI planning, Pexels media, Piper Arabic TTS, Kokoro English TTS, Whisper small captions, Remotion, FFmpeg, and Audio Mastering.
+- **Revision Studio**: Create voice, media, and caption-style revisions with durable artifact reuse so cheap edits avoid unnecessary voice/caption regeneration where possible.
 - **Publishing & Scheduling Automation**: Unified scheduling, atomic publication state machine, retry policies, dead-letter isolation, and live SSE event streams.
 - **Security & Reliability**: Salted password authentication, zero secret leakage, role-based Docker isolation, automated pre-upgrade safety snapshots, and one-click diagnostic bundles.
 
@@ -113,9 +114,10 @@ ABUD Shorts Engine V2 is engineered so that you do **not** need paid third-party
 | --- | --- | --- |
 | **Creative Direction** | Local Rule-Based Creative Director | Generates complete scene blueprints, hooks, visual search queries, and narration lines deterministically. |
 | **Visual Assets** | Pexels API Integration | Fetches HD vertical background videos based on semantic tags and scene themes. |
-| **Voice Synthesis** | Kokoro TTS (`q4` precision) | Fast, high-quality local text-to-speech audio rendering directly inside the worker container. |
-| **Captions & Subtitles** | Whisper.cpp (`tiny.en`) | Generates exact word-level subtitle timings with custom font styling and RTL Arabic formatting. |
-| **Composition & Render** | Remotion + FFmpeg 4.4 | Assembles video scenes, transitions, background music, audio normalization, and encodes final MP4. |
+| **Arabic Voice Synthesis** | Piper Arabic (`ar_JO-kareem-medium`) | Local Arabic narration path used for Arabic/Egyptian Arabic production jobs; human subjective acceptance is deferred by user. |
+| **English Voice Synthesis** | Kokoro TTS (`q4` precision) | Local English narration path inside the worker container. |
+| **Captions & Subtitles** | Whisper.cpp (`small`, multilingual) | Generates subtitle timings with custom font styling and RTL Arabic formatting. |
+| **Composition & Render** | Remotion + FFmpeg 4.4 | Assembles video scenes, transitions, balanced music ducking, Audio Mastering, and final MP4 encoding. |
 
 ---
 
@@ -124,7 +126,8 @@ ABUD Shorts Engine V2 is engineered so that you do **not** need paid third-party
 For enhanced generative workflows, optional cloud providers can be activated in **Providers & AI Engine** (`/providers`):
 
 - **Google Gemini** (`GEMINI_API_KEY`): Advanced multi-scene creative direction, viral script brainstorming, and dynamic Arabic copywriting.
-- **ElevenLabs** (`ELEVENLABS_API_KEY`): Premium multilingual neural voice cloning and emotional delivery.
+- **Google Cloud TTS** (`GOOGLE_APPLICATION_CREDENTIALS` or ADC): Optional server-side Arabic cloud TTS provider.
+- **ElevenLabs** (`ELEVENLABS_API_KEY`): Optional premium multilingual neural speech provider.
 - **Google Veo & fal.ai Kling/Wan** (`FAL_KEY`): AI text-to-video clip generation for scenes requiring synthetic visuals.
 
 ---
@@ -145,7 +148,8 @@ Manage accounts, schedule releases, and publish to multiple platforms simultaneo
 - **Local Authentication**: Salted PBKDF2 (100,000 iterations) with SHA-512 password derivation and secure cookie sessions.
 - **Network Isolation**: PostgreSQL, n8n orchestrator, and render worker are bound to internal Docker bridge network only; only the web app port (`3130`) is exposed.
 - **Zero Secret Leakage**: API keys and database credentials are fully masked/redacted in browser UI, diagnostic bundles, and system logs.
-- **Security Headers**: Standard OWASP security headers enabled (Content Security Policy, X-Frame-Options, X-Content-Type-Options, Strict-Transport-Security).
+- **Security Headers**: Standard browser hardening headers enabled, including Content Security Policy, X-Frame-Options, X-Content-Type-Options, and Referrer-Policy.
+Fresh installations use the Setup Wizard to create an initial admin account. The prepared local handoff installation has admin username `1234` configured; the password is delivered through the private handoff channel, not public documentation.
 
 ---
 

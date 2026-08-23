@@ -8,10 +8,13 @@ import {
   Alert,
   Box,
   Button,
+  Card,
   Chip,
   Divider,
   Grid,
+  MenuItem,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -36,7 +39,8 @@ import {
   StatusBadge,
 } from "../components/v2";
 import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal";
-import type { V2Job, VideoItem, VideoPublishingStatus } from "./v2Types";
+import type { V2Job, VideoItem, VideoPublishingStatus, VideoRevisionItem } from "./v2Types";
+import { withMediaAccessToken } from "../utils/auth";
 
 function formatFileSize(bytes?: number): string {
   if (!bytes) return "Unknown";
@@ -61,6 +65,10 @@ const VideoDetailsContent: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [revisions, setRevisions] = useState<VideoRevisionItem[]>([]);
+  const [revisionText, setRevisionText] = useState("");
+  const [mediaSceneIndex, setMediaSceneIndex] = useState(0);
+  const [captionProfile, setCaptionProfile] = useState<"none" | "clean" | "bold" | "minimal">("bold");
 
   const fetchDetails = () => {
     if (!videoId) return;
@@ -76,6 +84,9 @@ const VideoDetailsContent: React.FC = () => {
       }
       if (jobResult.status === "fulfilled") setJob(jobResult.value.data.job);
       if (pubResult.status === "fulfilled") setPubStatus(pubResult.value.data);
+      axios.get(`/api/v2/videos/${videoId}/revisions`)
+        .then((res) => setRevisions(res.data.revisions || []))
+        .catch(() => setRevisions([]));
       setLoading(false);
     });
   };
@@ -102,6 +113,57 @@ const VideoDetailsContent: React.FC = () => {
     }
   };
 
+  const createVoiceRevision = async () => {
+    if (!videoId) return;
+    try {
+      const res = await axios.post(`/api/v2/videos/${videoId}/revisions/voice`, {
+        spokenNarration: revisionText || undefined,
+        reason: "Voice-only revision from Video Details",
+      });
+      setFeedback(`Voice revision queued: ${res.data.job.id}`);
+      setRevisionText("");
+      fetchDetails();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Voice revision failed.");
+    }
+  };
+
+  const createMediaRevision = async () => {
+    if (!videoId) return;
+    try {
+      const terms = video?.pexelsTerms?.slice(0, 3) || ["small business", "office"];
+      const res = await axios.post(`/api/v2/videos/${videoId}/revisions/media`, {
+        sceneIndex: mediaSceneIndex,
+        searchTerms: terms,
+        reason: `Scene ${mediaSceneIndex + 1} media replacement`,
+      });
+      setFeedback(`Media revision queued: ${res.data.job.id}`);
+      fetchDetails();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Media revision failed.");
+    }
+  };
+
+  const createCaptionStyleRevision = async () => {
+    if (!videoId) return;
+    try {
+      const res = await axios.post(`/api/v2/videos/${videoId}/revisions/caption-style`, {
+        captionProfile,
+        reason: `Caption style changed to ${captionProfile}`,
+      });
+      setFeedback(`Caption-style revision queued: ${res.data.job.id}`);
+      fetchDetails();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Caption-style revision failed.");
+    }
+  };
+
+  const markFinal = async (revisionId: string) => {
+    if (!videoId) return;
+    await axios.post(`/api/v2/videos/${videoId}/revisions/${revisionId}/final`);
+    fetchDetails();
+  };
+
   if (loading) return <LoadingState label="Loading video details..." />;
 
   if (!video && !loading) {
@@ -109,7 +171,7 @@ const VideoDetailsContent: React.FC = () => {
       <Box sx={{ py: 4 }}>
         <EmptyState
           title="Video Not Found"
-          description={`The requested video ID "${videoId || "unknown"}" could not be found or has been deleted.`}
+          description="The requested video could not be found. It may have been deleted or the link may be out of date."
           action={
             <Button variant="contained" onClick={() => navigate("/videos")}>
               Back to Videos
@@ -128,7 +190,11 @@ const VideoDetailsContent: React.FC = () => {
 
   const previewUrl = video?.previewUrl || `/api/short-video/${videoId}`;
   const downloadUrl = video?.downloadUrl || `/api/videos/${videoId}/download`;
+  const authedPreviewUrl = withMediaAccessToken(previewUrl);
+  const authedDownloadUrl = withMediaAccessToken(downloadUrl);
   const cost = video?.costEstimate;
+  const durableArtifacts = video?.durableArtifacts || [];
+  const lastReuse = video?.artifactReuse || {};
 
   return (
     <>
@@ -154,7 +220,7 @@ const VideoDetailsContent: React.FC = () => {
             </Button>
             <Button
               component="a"
-              href={downloadUrl}
+              href={authedDownloadUrl}
               variant="outlined"
               startIcon={<DownloadIcon />}
             >
@@ -180,7 +246,7 @@ const VideoDetailsContent: React.FC = () => {
             <SectionCard title="Video Preview">
               <video
                 controls
-                src={previewUrl}
+                src={authedPreviewUrl}
                 style={{
                   width: "100%",
                   aspectRatio: video.aspectRatio === "16:9" ? "16 / 9" : "9 / 16",
@@ -347,6 +413,93 @@ const VideoDetailsContent: React.FC = () => {
                 </Stack>
               </SectionCard>
             )}
+
+            <SectionCard title="Revision Studio">
+              <Stack spacing={2}>
+                <Alert severity="info">
+                  Voice-only revisions reuse planning/media. Media-only revisions reuse planning, voice, and captions. Caption-style revisions reuse speech timings.
+                </Alert>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                  <Chip size="small" label="Will reuse: Planning" />
+                  <Chip size="small" label={`Voice artifacts: ${durableArtifacts.filter((a: any) => a.type === "voice").length}`} />
+                  <Chip size="small" label={`Caption timings: ${durableArtifacts.filter((a: any) => a.type === "captions").length}`} />
+                  <Chip size="small" label={`Media scenes: ${durableArtifacts.filter((a: any) => a.type === "media").length}`} />
+                </Stack>
+                <TextField
+                  label="Replacement spoken narration"
+                  value={revisionText}
+                  onChange={(e) => setRevisionText(e.target.value)}
+                  multiline
+                  minRows={2}
+                  fullWidth
+                />
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                  <Button variant="contained" startIcon={<RefreshIcon />} onClick={createVoiceRevision}>
+                    Regenerate Voice
+                  </Button>
+                  <TextField
+                    type="number"
+                    size="small"
+                    label="Scene"
+                    value={mediaSceneIndex + 1}
+                    onChange={(e) => setMediaSceneIndex(Math.max(0, Number(e.target.value || 1) - 1))}
+                    sx={{ width: 120 }}
+                  />
+                  <Button variant="outlined" onClick={createMediaRevision}>
+                    Replace Scene Media
+                  </Button>
+                  <TextField
+                    select
+                    size="small"
+                    label="Captions"
+                    value={captionProfile}
+                    onChange={(e) => setCaptionProfile(e.target.value as any)}
+                    sx={{ width: 150 }}
+                  >
+                    {["bold", "clean", "minimal", "none"].map((profile) => (
+                      <MenuItem key={profile} value={profile}>{profile}</MenuItem>
+                    ))}
+                  </TextField>
+                  <Button variant="outlined" onClick={createCaptionStyleRevision}>
+                    Restyle Captions
+                  </Button>
+                </Stack>
+                {(lastReuse.reusedArtifacts?.length || lastReuse.regeneratedArtifacts?.length) && (
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                    <Chip color="success" size="small" label={`Reused artifacts: ${lastReuse.reusedArtifacts?.length || 0}`} />
+                    <Chip color="warning" size="small" label={`Regenerated artifacts: ${lastReuse.regeneratedArtifacts?.length || 0}`} />
+                  </Stack>
+                )}
+                <Divider />
+                <Typography variant="subtitle2" fontWeight={800}>Version History</Typography>
+                {revisions.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">Legacy video / revision history unavailable.</Typography>
+                ) : (
+                  revisions.map((revision) => (
+                    <Card key={revision.id} variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
+                      <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1}>
+                        <Box>
+                          <Typography variant="body2" fontWeight={800}>
+                            Revision {revision.revisionNumber} · {revision.changeType}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {revision.reason || "No summary"} · {revision.status} · {new Date(revision.createdAt).toLocaleString()}
+                          </Typography>
+                        </Box>
+                        <Stack direction="row" spacing={1}>
+                          {revision.outputVideoId && (
+                            <Button size="small" onClick={() => navigate(`/video/${revision.outputVideoId}`)}>Preview</Button>
+                          )}
+                          <Button size="small" variant={revision.isFinal ? "contained" : "outlined"} onClick={() => markFinal(revision.id)}>
+                            {revision.isFinal ? "Final" : "Mark Final"}
+                          </Button>
+                        </Stack>
+                      </Stack>
+                    </Card>
+                  ))
+                )}
+              </Stack>
+            </SectionCard>
           </Grid>
 
           <Grid item xs={12} lg={4}>
@@ -436,7 +589,7 @@ const VideoDetailsContent: React.FC = () => {
                   </Stack>
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Voice Provider</Typography>
-                    <Typography fontWeight={700}>{video.voiceProvider || "Kokoro TTS"}</Typography>
+                    <Typography fontWeight={700}>{video.voiceProvider || "Auto-selected local voice"}</Typography>
                   </Stack>
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Visual Provider</Typography>
@@ -463,6 +616,23 @@ const VideoDetailsContent: React.FC = () => {
               {/* Production Details */}
               <SectionCard title="Production Details">
                 <Stack spacing={1.25}>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Audio QA</Typography>
+                    <Typography fontWeight={700}>{video.audioQa?.pass === false ? "Failed" : video.audioQa?.pass ? "Passed" : "N/A"}</Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Caption Timing</Typography>
+                    <Typography fontWeight={700}>{video.voiceArtifacts?.[0]?.timingSource || "N/A"}</Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Music Ducking</Typography>
+                    <Typography fontWeight={700}>{video.audioQa?.duckingProfile || "N/A"}</Typography>
+                  </Stack>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography color="text.secondary">Media Diversity</Typography>
+                    <Typography fontWeight={700}>{video.qualityScoreV2?.mediaDiversity ?? "Human Review Required"}</Typography>
+                  </Stack>
+                  <Divider />
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Caption Preset</Typography>
                     <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
@@ -526,7 +696,7 @@ const VideoDetailsContent: React.FC = () => {
               {video.productionSpec && (
                 <Accordion>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography fontWeight={800}>Production Spec JSON</Typography>
+                    <Typography fontWeight={800}>Advanced production plan</Typography>
                   </AccordionSummary>
                   <AccordionDetails>
                     <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, background: "#0f172a", color: "#38bdf8", padding: 10, borderRadius: 6 }}>
@@ -552,7 +722,7 @@ const VideoDetailsContent: React.FC = () => {
       <ConfirmDialog
         open={confirmDelete}
         title="Delete video?"
-        description="This will remove the generated MP4 file and its metadata sidecar. The V2 job record in PostgreSQL is preserved."
+        description="This removes the generated video file and its metadata. The original production job remains in history."
         confirmLabel="Delete"
         onClose={() => setConfirmDelete(false)}
         onConfirm={deleteVideo}

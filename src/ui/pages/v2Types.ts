@@ -25,6 +25,8 @@ export type V2Job = {
   output?: any;
   error?: string;
   technicalError?: string;
+  stageTimings?: Record<string, number>;
+  checkpoint?: Record<string, any>;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -89,6 +91,14 @@ export type V2Brand = {
   includeOutro?: boolean;
   outroText?: string;
   contactText?: string;
+  voiceProfile?: {
+    provider?: "auto" | "kokoro" | "piper" | "google_cloud_tts" | "elevenlabs";
+    voiceId?: string;
+    dialect?: string;
+    style?: string;
+    pace?: string;
+    pronunciationDictionary?: Record<string, string>;
+  };
   isDefault?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -113,6 +123,29 @@ export type VideoItem = {
   aiProvider?: string;
   visualProvidersUsed?: string[];
   voiceProvider?: string;
+  voiceProvidersUsed?: string[];
+  voiceArtifacts?: any[];
+  durableArtifacts?: any[];
+  artifactReuse?: any;
+  audioQa?: any;
+  validationResult?: any;
+  mediaPlan?: any;
+  selectedVisuals?: any[];
+  sceneQa?: any[];
+  qualityScoreV2?: any;
+  stageTimings?: Record<string, number>;
+  captionProfileUsed?: string;
+  musicTrack?: string;
+  musicMood?: string;
+  motionPresetsUsed?: string[];
+  transitionPresetsUsed?: string[];
+  mediaSegmentCount?: number;
+  technicalScore?: number;
+  mediaPlanScore?: number;
+  overallProductionScore?: number;
+  requestedDurationSeconds?: number;
+  durationVarianceSeconds?: number;
+  durationVariancePercent?: number;
   costEstimate?: any;
   productionSpec?: any;
   templateId?: string;
@@ -129,7 +162,53 @@ export type VideoItem = {
   error?: string;
 };
 
+export type ApiTokenItem = {
+  id: string;
+  name: string;
+  scopes: string[];
+  lastUsedAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+  token?: string;
+};
+
+export type VideoRevisionItem = {
+  id: string;
+  projectId: string;
+  revisionNumber: number;
+  parentRevisionId?: string;
+  sourceJobId?: string;
+  outputVideoId?: string;
+  status: string;
+  reason?: string;
+  changeType: string;
+  changedFields: Record<string, unknown>;
+  isFinal: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SystemObservability = {
+  queueDepth: number;
+  activeWorkers: number;
+  activeRenders: number;
+  maxConcurrentRenders: number;
+  workers: Array<{
+    workerId: string;
+    status: string;
+    activeJobId?: string;
+    lastHeartbeat: string;
+    leaseExpiresAt?: string;
+  }>;
+  averageGenerationTimeMs?: number | null;
+  recentStageBottleneck?: string;
+  cache?: Record<string, unknown>;
+  jobCounts?: Record<string, number>;
+  recentWebhookDeliveries?: any[];
+};
+
 export type ProviderItem = {
+  id?: string;
   name: string;
   category: string;
   tier?: string;

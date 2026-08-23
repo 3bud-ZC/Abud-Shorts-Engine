@@ -20,6 +20,7 @@ import {
   type SceneMediaPlan,
   type QualityReviewScore,
   type FullMediaPlan,
+  type EditingRhythmProfile,
 } from "./types";
 
 export class MediaIntelligenceService {
@@ -169,6 +170,60 @@ export class MediaIntelligenceService {
     }
 
     return Array.from(new Set(terms));
+  }
+
+  public generateSearchCandidates(
+    sceneSpec: ProductionSceneSpec,
+    visualIntent: VisualIntent,
+    spec: ProductionSpec,
+  ): string[] {
+    const base = sceneSpec.stockSearchTerms || [];
+    const context = [
+      spec.brandKit?.brandName,
+      spec.contentStyle,
+      sceneSpec.purpose,
+      visualIntent,
+    ].filter(Boolean).join(" ");
+    const narration = `${sceneSpec.visualPrompt || ""} ${sceneSpec.narration || ""}`.toLowerCase();
+    const environment = narration.includes("موقع") || narration.includes("website")
+      ? "small business website office"
+      : narration.includes("مطعم") || narration.includes("restaurant")
+        ? "small restaurant owner"
+        : "small business owner";
+    const mood = spec.tone?.includes("احترافي") || spec.metadata?.rhythmProfile === "professional"
+      ? "professional clean"
+      : "natural realistic";
+    const action = visualIntent === "cta"
+      ? "phone contact message"
+      : visualIntent === "problem"
+        ? "business owner stressed laptop"
+        : visualIntent === "solution"
+          ? "web designer client meeting"
+          : "business team working";
+    return Array.from(new Set([
+      ...base,
+      `${environment} ${action}`,
+      `${action} ${mood}`,
+      `${context} ${environment}`.trim(),
+      this.enrichSearchTerms(base, visualIntent, spec.language).join(" "),
+    ].map((term) => term.trim()).filter(Boolean))).slice(0, 6);
+  }
+
+  public selectEditingRhythm(spec: ProductionSpec): EditingRhythmProfile {
+    if (spec.contentStyle === "viral_curiosity" || spec.metadata?.rhythmProfile === "viral") return "viral";
+    if (spec.contentStyle === "educational" || spec.contentStyle === "explainer") return "educational";
+    if (spec.contentStyle === "product_showcase") return "product";
+    if (spec.tone?.toLowerCase().includes("story")) return "story";
+    if (spec.tone?.includes("احترافي") || spec.metadata?.rhythmProfile === "professional") return "professional";
+    return "ad";
+  }
+
+  public profileToPacing(profile: EditingRhythmProfile): PacingProfile {
+    if (profile === "viral") return "fast";
+    if (profile === "story" || profile === "professional") return "balanced";
+    if (profile === "educational") return "balanced";
+    if (profile === "product") return "balanced";
+    return "fast";
   }
 
   /**
@@ -355,8 +410,10 @@ export class MediaIntelligenceService {
       hookStyle?: HookStyle;
     } = {},
   ): FullMediaPlan {
+    const editingRhythmProfile = (spec.metadata?.rhythmProfile as EditingRhythmProfile | undefined) || this.selectEditingRhythm(spec);
     const pacingProfile: PacingProfile =
       options.pacingProfile ||
+      this.profileToPacing(editingRhythmProfile) ||
       (spec.contentStyle === "advertisement" || spec.contentStyle === "viral_curiosity"
         ? "fast"
         : spec.contentStyle === "cinematic"
@@ -419,6 +476,7 @@ export class MediaIntelligenceService {
       );
 
       const motion = this.selectMotionPreset(visualIntent, pacingProfile, isFirst);
+      const searchCandidates = this.generateSearchCandidates(sceneSpec, visualIntent, spec);
       const enrichedSearchTerms = this.enrichSearchTerms(
         sceneSpec.stockSearchTerms || ["video"],
         visualIntent,
@@ -437,6 +495,7 @@ export class MediaIntelligenceService {
         needsTextOverlay: Boolean(sceneSpec.onScreenText || isFirst || isLast),
         onScreenText: sceneSpec.onScreenText,
         searchTerms: enrichedSearchTerms,
+        searchCandidates,
         visualPrompt: sceneSpec.visualPrompt,
       });
 
@@ -454,6 +513,7 @@ export class MediaIntelligenceService {
       ctaLayout,
       sfxPreset,
       mediaPriority,
+      editingRhythmProfile,
       scenes,
       recommendedMusicMood,
       qualityReview,

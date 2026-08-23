@@ -1,6 +1,6 @@
 # ==============================================================================
 # ABUD Shorts Engine V2 — Production Upgrade Script (Windows PowerShell)
-# Version: 2.0.1
+# Version: 2.1.0
 # ==============================================================================
 
 [CmdletBinding()]
@@ -13,7 +13,7 @@ param (
 $ErrorActionPreference = "Stop"
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "  ABUD Shorts Engine V2 — Safe Production Upgrade (v2.0.1)" -ForegroundColor Cyan
+Write-Host "  ABUD Shorts Engine V2 — Safe Production Upgrade (v2.1.0)" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 
 # 1. Automatic Pre-Upgrade Safety Backup

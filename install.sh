@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # ABUD Shorts Engine V2 — Production Installer (Linux / macOS)
-# Version: 2.0.1
+# Version: 2.1.0
 # ==============================================================================
 
 set -euo pipefail
@@ -10,7 +10,7 @@ PORT="${1:-3130}"
 
 echo "================================================================="
 echo "  ABUD Shorts Engine V2 — One-Command Production Installer"
-echo "  Version: 2.0.1"
+echo "  Version: 2.1.0"
 echo "================================================================="
 echo ""
 
@@ -80,6 +80,19 @@ APP_INTERNAL_BASE_URL=http://app:3123
 RENDER_WORKER_BASE_URL=http://render-worker:3124
 N8N_BASE_URL=http://n8n:5678
 DATABASE_URL=postgresql://abud_shorts:${PG_PASS}@postgres:5432/abud_shorts
+WHISPER_MODEL=small
+KOKORO_MODEL_PRECISION=q4
+
+# Local Arabic voice path.
+PIPER_BIN=/opt/piper/bin/piper
+PIPER_AR_MODEL_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx
+PIPER_AR_MODEL_CONFIG_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx.json
+PIPER_AR_VOICE_ID=ar_JO-kareem-medium
+PIPER_AR_LENGTH_SCALE=1.50
+PIPER_AR_SENTENCE_SILENCE=0.25
+PIPER_AR_MODEL_LICENSE=MIT
+PIPER_AR_RUNTIME_LICENSE=GPL-3.0-or-later
+PIPER_AR_MODEL_COMMERCIAL_USE=allowed
 
 # Cryptographic Secrets
 INTERNAL_SERVICE_TOKEN=${INTERNAL_TOKEN}
@@ -126,7 +139,7 @@ echo "  ABUD Shorts Engine V2 is Ready!"
 echo "================================================================="
 echo "  Dashboard:       http://localhost:${PORT}"
 echo "  Setup Wizard:    http://localhost:${PORT}/setup"
-echo "  Free Pipeline:   Ready (Local Director, Pexels, Kokoro, Remotion)"
+echo "  Free Pipeline:   Ready (Local Director, Pexels, Piper Arabic, Kokoro English, Whisper, Remotion)"
 echo "  Database:        PostgreSQL Connected & Migrated"
 echo "  Orchestrator:    n8n Internal Automation Active"
 echo "================================================================="

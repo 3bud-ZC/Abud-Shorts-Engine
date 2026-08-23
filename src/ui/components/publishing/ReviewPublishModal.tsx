@@ -46,6 +46,7 @@ import type {
   SocialAccount,
   VideoItem,
 } from "../../pages/v2Types";
+import { withMediaAccessToken } from "../../utils/auth";
 
 const AVAILABLE_PLATFORMS: { id: PublishingPlatform; label: string; icon: React.ReactNode; color: string }[] = [
   { id: "youtube", label: "YouTube Shorts", icon: <YouTubeIcon />, color: "#ff0000" },
@@ -337,7 +338,7 @@ export const ReviewPublishModal: React.FC<ReviewPublishModalProps> = ({
               <Card variant="outlined" sx={{ p: 1, bgcolor: "#0f172a", borderRadius: 2 }}>
                 <video
                   controls
-                  src={video.previewUrl || `/api/short-video/${video.videoId}`}
+                  src={withMediaAccessToken(video.previewUrl || `/api/short-video/${video.videoId}`)}
                   style={{
                     width: "100%",
                     maxHeight: 280,
@@ -746,7 +747,7 @@ export const ReviewPublishModal: React.FC<ReviewPublishModalProps> = ({
       <DialogActions sx={{ px: 3, py: 2 }}>
         <Button
           component="a"
-          href={video.downloadUrl || `/api/videos/${video.videoId}/download`}
+          href={withMediaAccessToken(video.downloadUrl || `/api/videos/${video.videoId}/download`)}
           startIcon={<DownloadIcon />}
           sx={{ mr: "auto" }}
         >

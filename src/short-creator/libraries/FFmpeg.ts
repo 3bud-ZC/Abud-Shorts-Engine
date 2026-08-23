@@ -21,6 +21,24 @@ export type RenderValidationResult = {
   issues: string[];
 };
 
+export type AudioStreamInfo = {
+  codec?: string;
+  sampleRate?: number;
+  channels?: number;
+  durationSeconds: number;
+  hasAudioStream: boolean;
+};
+
+export type AudioLoudnessMetrics = {
+  integratedLufs: number | null;
+  truePeakDbtp: number | null;
+  loudnessRange: number | null;
+  threshold?: number | null;
+  clippingDetected: boolean;
+  effectivelySilent: boolean;
+  raw?: Record<string, unknown>;
+};
+
 export class FFMpeg {
   static async init(): Promise<FFMpeg> {
     return import("@ffmpeg-installer/ffmpeg").then((ffmpegInstaller) => {
@@ -31,13 +49,11 @@ export class FFMpeg {
   }
 
   async saveNormalizedAudio(
-    audio: ArrayBuffer,
+    audio: ArrayBuffer | Buffer | Readable,
     outputPath: string,
   ): Promise<string> {
     logger.debug("Normalizing audio for Whisper");
-    const inputStream = new Readable();
-    inputStream.push(Buffer.from(audio));
-    inputStream.push(null);
+    const inputStream = this.toReadableAudio(audio);
 
     return new Promise((resolve, reject) => {
       ffmpeg()
@@ -59,9 +75,7 @@ export class FFMpeg {
   }
 
   async createMp3DataUri(audio: ArrayBuffer): Promise<string> {
-    const inputStream = new Readable();
-    inputStream.push(Buffer.from(audio));
-    inputStream.push(null);
+    const inputStream = this.toReadableAudio(audio);
     return new Promise((resolve, reject) => {
       const chunk: Buffer[] = [];
 
@@ -98,15 +112,98 @@ export class FFMpeg {
     });
   }
 
+  async getAudioStreamInfo(filePath: string): Promise<AudioStreamInfo> {
+    return new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(filePath, (err, metadata) => {
+        if (err) return reject(err);
+        const audioStream = metadata?.streams?.find((s) => s.codec_type === "audio");
+        const duration = metadata?.format?.duration;
+        resolve({
+          codec: audioStream?.codec_name,
+          sampleRate: audioStream?.sample_rate ? Number(audioStream.sample_rate) : undefined,
+          channels: audioStream?.channels,
+          durationSeconds: typeof duration === "number" ? duration : parseFloat(String(duration || "0")),
+          hasAudioStream: Boolean(audioStream),
+        });
+      });
+    });
+  }
+
+  async measureAudioLoudness(filePath: string): Promise<AudioLoudnessMetrics> {
+    const nullOutput = process.platform === "win32" ? "NUL" : "/dev/null";
+    return new Promise((resolve, reject) => {
+      let stderr = "";
+      ffmpeg(filePath)
+        .audioFilters("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json")
+        .format("null")
+        .output(nullOutput)
+        .on("stderr", (line) => {
+          stderr += `${line}\n`;
+        })
+        .on("end", () => {
+          const jsonStart = stderr.lastIndexOf("{");
+          const jsonEnd = stderr.lastIndexOf("}");
+          if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+            resolve({
+              integratedLufs: null,
+              truePeakDbtp: null,
+              loudnessRange: null,
+              clippingDetected: false,
+              effectivelySilent: false,
+            });
+            return;
+          }
+          try {
+            const raw = JSON.parse(stderr.slice(jsonStart, jsonEnd + 1));
+            const integrated = Number(raw.input_i);
+            const truePeak = Number(raw.input_tp);
+            const lra = Number(raw.input_lra);
+            resolve({
+              integratedLufs: Number.isFinite(integrated) ? integrated : null,
+              truePeakDbtp: Number.isFinite(truePeak) ? truePeak : null,
+              loudnessRange: Number.isFinite(lra) ? lra : null,
+              threshold: Number.isFinite(Number(raw.input_thresh)) ? Number(raw.input_thresh) : null,
+              clippingDetected: Number.isFinite(truePeak) ? truePeak > -0.1 : false,
+              effectivelySilent: Number.isFinite(integrated) ? integrated < -55 : false,
+              raw,
+            });
+          } catch (error) {
+            reject(error);
+          }
+        })
+        .on("error", reject)
+        .run();
+    });
+  }
+
+  async masterVoiceAudioFile(inputPath: string, outputPath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .audioFilters([
+          "silenceremove=start_periods=1:start_duration=0.08:start_threshold=-45dB:stop_periods=1:stop_duration=0.12:stop_threshold=-45dB",
+          "highpass=f=80",
+          "acompressor=threshold=-18dB:ratio=2.2:attack=12:release=180:makeup=1",
+          "loudnorm=I=-16:TP=-2:LRA=11",
+          "volume=-2dB",
+          "alimiter=limit=0.70",
+        ])
+        .audioCodec("pcm_s16le")
+        .audioChannels(1)
+        .audioFrequency(16000)
+        .toFormat("wav")
+        .save(outputPath)
+        .on("end", () => resolve(outputPath))
+        .on("error", reject);
+    });
+  }
+
   async saveNormalizedAudioWithSpeed(
-    audio: ArrayBuffer,
+    audio: ArrayBuffer | Buffer | Readable,
     outputPath: string,
     speedFactor = 1.0,
   ): Promise<{ duration: number }> {
     logger.debug({ speedFactor }, "Normalizing audio with speed factor for Whisper");
-    const inputStream = new Readable();
-    inputStream.push(Buffer.from(audio));
-    inputStream.push(null);
+    const inputStream = this.toReadableAudio(audio);
 
     const safeSpeed = Math.max(0.75, Math.min(1.4, speedFactor));
 
@@ -155,9 +252,7 @@ export class FFMpeg {
   }
 
   async saveToMp3(audio: ArrayBuffer, filePath: string): Promise<string> {
-    const inputStream = new Readable();
-    inputStream.push(Buffer.from(audio));
-    inputStream.push(null);
+    const inputStream = this.toReadableAudio(audio);
     return new Promise((resolve, reject) => {
       ffmpeg()
         .input(inputStream)
@@ -174,6 +269,16 @@ export class FFMpeg {
           reject(err);
         });
     });
+  }
+
+  private toReadableAudio(audio: ArrayBuffer | Buffer | Readable): Readable {
+    if (audio instanceof Readable) {
+      return audio;
+    }
+    const inputStream = new Readable();
+    inputStream.push(Buffer.from(audio));
+    inputStream.push(null);
+    return inputStream;
   }
 
   /**

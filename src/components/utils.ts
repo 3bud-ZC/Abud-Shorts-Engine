@@ -28,6 +28,14 @@ export const shortVideoSchema = z.object({
       motion: z.string().optional(),
       transition: z.string().optional(),
       segments: z.array(sceneSegmentSchema).optional(),
+      speechWindowsMs: z
+        .array(
+          z.object({
+            startMs: z.number(),
+            endMs: z.number(),
+          }),
+        )
+        .optional(),
     }),
   ),
   config: z.object({
@@ -38,6 +46,7 @@ export const shortVideoSchema = z.object({
     ctaLayout: z.string().optional(),
     durationMs: z.number(),
     musicVolume: z.nativeEnum(MusicVolumeEnum).optional(),
+    musicDuckingProfile: z.enum(["subtle", "balanced", "strong"]).optional(),
     brandKit: z
       .lazy(() => brandKitSchema)
       .optional(),

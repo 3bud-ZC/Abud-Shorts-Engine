@@ -1,7 +1,9 @@
 import axios from "axios";
+import cuid from "cuid";
 import { Config } from "../../config";
 import { JobService } from "./jobs";
 import type { JobRecord } from "./types";
+import { buildN8nContractPayload, n8nContractSchema } from "./orchestration/contract";
 
 export class N8nOrchestrator {
   constructor(
@@ -11,17 +13,20 @@ export class N8nOrchestrator {
 
   public async enqueue(job: JobRecord): Promise<void> {
     const url = `${this.config.n8nBaseUrl}${this.config.n8nWebhookPath}`;
+    const payload = buildN8nContractPayload({
+      jobId: job.id,
+      requestId: cuid(),
+      appBaseUrl: this.config.appInternalBaseUrl,
+      renderWorkerBaseUrl: this.config.renderWorkerBaseUrl,
+      jobInput: job.input,
+    });
+    n8nContractSchema.parse(payload);
     try {
       await axios.post(
         url,
+        payload,
         {
-          jobId: job.id,
-          input: job.input,
-          appBaseUrl: this.config.appInternalBaseUrl,
-          renderWorkerBaseUrl: this.config.renderWorkerBaseUrl,
-        },
-        {
-          timeout: 10000,
+          timeout: this.config.webhookTimeoutMs,
           headers: {
             "x-internal-token": this.config.internalServiceToken,
           },

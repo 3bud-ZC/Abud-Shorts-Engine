@@ -38,6 +38,7 @@ import ClearIcon from "@mui/icons-material/Clear";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SendIcon from "@mui/icons-material/Send";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import {
   CaptionPositionEnum,
   MusicMoodEnum,
@@ -62,8 +63,10 @@ import type {
   BusinessTemplateOption,
   CostEstimateData,
   PromptEnhanceResult,
+  ProviderItem,
   V2Brand,
 } from "./v2Types";
+import { withMediaAccessToken } from "../utils/auth";
 
 const EXAMPLE_PROMPTS = [
   {
@@ -99,6 +102,15 @@ const EXAMPLE_PROMPTS = [
 ];
 
 type SceneFormData = { text: string; searchTerms: string };
+type VoiceOption = {
+  id: string;
+  name: string;
+  provider: string;
+  language: string;
+  gender?: string;
+  voiceFamily?: string;
+  sampleRate?: number;
+};
 
 const defaultConfig: RenderConfig = {
   paddingBack: 1500,
@@ -145,6 +157,7 @@ const VideoCreator: React.FC = () => {
   const [visualMode, setVisualMode] = useState("auto");
   const [voiceProvider, setVoiceProvider] = useState("auto");
   const [voiceId, setVoiceId] = useState("af_heart");
+  const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
   const [captionStyle, setCaptionStyle] = useState<"none" | "clean" | "bold" | "minimal">("bold");
 
   // Enhancement & Preview states
@@ -155,6 +168,9 @@ const VideoCreator: React.FC = () => {
   const [previewing, setPreviewing] = useState(false);
   const [previewSpec, setPreviewSpec] = useState<any>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimateData | null>(null);
+  const [voicePreviewing, setVoicePreviewing] = useState(false);
+  const [voicePreview, setVoicePreview] = useState<any>(null);
+  const [providers, setProviders] = useState<ProviderItem[]>([]);
 
   // Template Mode States
   const [templateStep, setTemplateStep] = useState(0);
@@ -177,14 +193,16 @@ const VideoCreator: React.FC = () => {
       axios.get("/api/v2/templates"),
       axios.get("/api/v2/brands"),
       axios.get("/api/v2/settings"),
+      axios.get("/api/v2/providers").catch(() => ({ data: { providers: [] } })),
     ])
-      .then(([templateResponse, brandResponse, settingsResponse]) => {
+      .then(([templateResponse, brandResponse, settingsResponse, providerResponse]) => {
         const nextTemplates = templateResponse.data.templates || [];
         const nextBrands = brandResponse.data.brands || [];
         const appSettings = settingsResponse.data.settings || {};
 
         setTemplates(nextTemplates);
         setBrands(nextBrands);
+        setProviders(providerResponse.data.providers || []);
 
         // Apply settings defaults if present
         if (appSettings.defaultCreationMode === "template") {
@@ -215,6 +233,31 @@ const VideoCreator: React.FC = () => {
       .catch(() => setError("Failed to load V2 templates or configuration."))
       .finally(() => setLoading(false));
   }, [params]);
+
+  useEffect(() => {
+    const providerParam = voiceProvider === "auto" ? undefined : voiceProvider;
+    const languageParam =
+      voiceProvider === "google_cloud_tts"
+        ? "ar-XA"
+        : language === "auto"
+          ? undefined
+          : language;
+    axios
+      .get("/api/v2/voices", {
+        params: {
+          provider: providerParam,
+          language: languageParam,
+        },
+      })
+      .then((response) => {
+        const nextVoices: VoiceOption[] = response.data.voices || [];
+        setVoiceOptions(nextVoices);
+        if (providerParam && nextVoices.length > 0 && !nextVoices.some((voice) => voice.id === voiceId)) {
+          setVoiceId(nextVoices[0].id);
+        }
+      })
+      .catch(() => setVoiceOptions([]));
+  }, [language, voiceProvider, voiceId]);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId),
@@ -261,6 +304,29 @@ const VideoCreator: React.FC = () => {
       ...prev,
       brandKit: { ...prev.brandKit, [field]: value },
     }));
+  }
+
+  const selectedVoiceProvider = useMemo(() => {
+    if (voiceProvider === "auto") return null;
+    return providers.find(
+      (provider) =>
+        provider.id === voiceProvider ||
+        provider.name.toLowerCase().includes(voiceProvider.replaceAll("_", " ")),
+    );
+  }, [providers, voiceProvider]);
+
+  const selectedProviderUnavailable = Boolean(
+    selectedVoiceProvider &&
+      selectedVoiceProvider.configured === false &&
+      (voiceProvider === "google_cloud_tts" || voiceProvider === "elevenlabs"),
+  );
+
+  function voiceProviderGuidance(): string {
+    if (voiceProvider === "piper") return "Piper is the recommended local/free Arabic path for Egyptian Arabic.";
+    if (voiceProvider === "google_cloud_tts") return "Google Cloud provides Arabic MSA cloud voices. Billing may be required and credentials must be configured.";
+    if (voiceProvider === "kokoro") return "Kokoro is the local/free English path. It is not the production Arabic voice.";
+    if (voiceProvider === "elevenlabs") return "ElevenLabs is premium and only runs when credentials are configured and explicitly selected.";
+    return "Auto selects the safest configured local provider for the chosen language.";
   }
 
   async function handleEnhancePrompt() {
@@ -319,31 +385,66 @@ const VideoCreator: React.FC = () => {
     }
   }
 
+  async function handleVoicePreview() {
+    const sampleText = (previewSpec?.scenes?.[0]?.narration || prompt).trim().slice(0, 360);
+    if (!sampleText) return;
+    setVoicePreviewing(true);
+    setVoicePreview(null);
+    setError(null);
+    try {
+      const response = await axios.post("/api/voice-preview", {
+        text: sampleText,
+        language,
+        dialect: language === "ar" || language === "auto" ? dialect : "none",
+        qualityProfile: quality === "premium" || quality === "high" ? "premium" : quality === "draft" ? "fast" : "balanced",
+        provider: voiceProvider,
+        voiceId: voiceId || undefined,
+      });
+      setVoicePreview(response.data);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || "Voice preview failed.");
+    } finally {
+      setVoicePreviewing(false);
+    }
+  }
+
   async function submitPromptJob() {
     if (!prompt.trim()) {
       setError("Please write a video prompt.");
       return;
     }
+    if (selectedProviderUnavailable) {
+      setError("The selected voice provider is not configured. Choose a local provider or configure it in Providers first.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      const response = await axios.post("/api/v2/jobs", {
-        creationMode: "prompt",
-        prompt,
-        language,
-        dialect: language === "ar" || language === "auto" ? dialect : "none",
-        durationSeconds: duration,
-        aspectRatio,
-        quality,
-        resolution,
-        contentStyle,
-        visualMode,
-        voiceProvider,
-        voiceId,
-        brandId: selectedBrandId || undefined,
-        brandName: config.brandKit?.brandName,
-        productionSpec: previewSpec || undefined,
-      });
+      const response = await axios.post(
+        "/api/v2/jobs",
+        {
+          creationMode: "prompt",
+          prompt,
+          language,
+          dialect: language === "ar" || language === "auto" ? dialect : "none",
+          durationSeconds: duration,
+          aspectRatio,
+          quality,
+          resolution,
+          contentStyle,
+          visualMode,
+          voiceProvider,
+          voiceId,
+          brandId: selectedBrandId || undefined,
+          brandName: config.brandKit?.brandName,
+          productionSpec: previewSpec || undefined,
+        },
+        {
+          headers: {
+            "Idempotency-Key": `create-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`,
+          },
+        },
+      );
       navigate(`/jobs/${response.data.job.id}`);
     } catch (err: any) {
       setError(
@@ -398,8 +499,8 @@ const VideoCreator: React.FC = () => {
     <>
       <PageHeader
         title="Create Video"
-        eyebrow="AI Production Studio"
-        description="Write a natural-language creative prompt or choose a business template. Both modes resolve into one canonical Production Spec."
+        eyebrow="Production Studio"
+        description="Start with a prompt, choose the essential video settings, preview the voice, then create a production job."
         actions={
           <ButtonGroup variant="contained">
             <Button
@@ -517,7 +618,7 @@ const VideoCreator: React.FC = () => {
           <Accordion defaultExpanded>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="h6" fontWeight={800}>
-                Production Options & Settings
+                Video settings
               </Typography>
             </AccordionSummary>
             <AccordionDetails>
@@ -525,8 +626,8 @@ const VideoCreator: React.FC = () => {
                 {/* Language */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Language</InputLabel>
-                    <Select label="Language" value={language} onChange={(e) => setLanguage(e.target.value)}>
+                    <InputLabel id="language-select-label">Language</InputLabel>
+                    <Select labelId="language-select-label" id="language-select" label="Language" value={language} onChange={(e) => setLanguage(e.target.value)}>
                       <MenuItem value="auto">Auto Detect</MenuItem>
                       <MenuItem value="ar">Arabic (العربية)</MenuItem>
                       <MenuItem value="en">English</MenuItem>
@@ -538,8 +639,8 @@ const VideoCreator: React.FC = () => {
                 {(language === "ar" || language === "auto") && (
                   <Grid item xs={12} sm={6} md={3}>
                     <FormControl fullWidth>
-                      <InputLabel>Arabic Dialect</InputLabel>
-                      <Select label="Arabic Dialect" value={dialect} onChange={(e) => setDialect(e.target.value)}>
+                      <InputLabel id="dialect-select-label">Arabic Dialect</InputLabel>
+                      <Select labelId="dialect-select-label" id="dialect-select" label="Arabic Dialect" value={dialect} onChange={(e) => setDialect(e.target.value)}>
                         <MenuItem value="egyptian">Egyptian Arabic (المصرية)</MenuItem>
                         <MenuItem value="msa">Modern Standard Arabic (الفصحى)</MenuItem>
                         <MenuItem value="saudi">Saudi Arabic (السعودية)</MenuItem>
@@ -553,13 +654,13 @@ const VideoCreator: React.FC = () => {
                 {/* Duration */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Duration</InputLabel>
-                    <Select label="Duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
-                      <MenuItem value={15}>15 Seconds</MenuItem>
-                      <MenuItem value={20}>20 Seconds</MenuItem>
-                      <MenuItem value={30}>30 Seconds (Default)</MenuItem>
-                      <MenuItem value={45}>45 Seconds</MenuItem>
-                      <MenuItem value={60}>60 Seconds</MenuItem>
+                    <InputLabel id="duration-select-label">Duration</InputLabel>
+                    <Select labelId="duration-select-label" id="duration-select" label="Duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
+                      <MenuItem value={15}>15s</MenuItem>
+                      <MenuItem value={20}>20s</MenuItem>
+                      <MenuItem value={30}>30s</MenuItem>
+                      <MenuItem value={45}>45s</MenuItem>
+                      <MenuItem value={60}>60s</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -567,11 +668,11 @@ const VideoCreator: React.FC = () => {
                 {/* Aspect Ratio */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Aspect Ratio</InputLabel>
-                    <Select label="Aspect Ratio" value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)}>
-                      <MenuItem value="9:16">9:16 (Vertical Short · Canonical)</MenuItem>
-                      <MenuItem value="16:9">16:9 (Landscape · YouTube/Desktop)</MenuItem>
-                      <MenuItem value="1:1">1:1 (Square · Instagram/Feed)</MenuItem>
+                    <InputLabel id="aspect-ratio-select-label">Aspect Ratio</InputLabel>
+                    <Select labelId="aspect-ratio-select-label" id="aspect-ratio-select" label="Aspect Ratio" value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)}>
+                      <MenuItem value="9:16">9:16 - Shorts / Reels / TikTok</MenuItem>
+                      <MenuItem value="16:9">16:9 - YouTube / Landscape</MenuItem>
+                      <MenuItem value="1:1">1:1 - Square feed</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -579,12 +680,12 @@ const VideoCreator: React.FC = () => {
                 {/* Quality Profile */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Quality Profile</InputLabel>
-                    <Select label="Quality Profile" value={quality} onChange={(e) => setQuality(e.target.value)}>
-                      <MenuItem value="draft">Draft (Fastest / Local)</MenuItem>
-                      <MenuItem value="standard">Standard (1080p Balanced)</MenuItem>
-                      <MenuItem value="high">High (Multi-Asset / Fast Paced)</MenuItem>
-                      <MenuItem value="premium">Premium (AI Video + Voice)</MenuItem>
+                    <InputLabel id="quality-select-label">Quality Profile</InputLabel>
+                    <Select labelId="quality-select-label" id="quality-select" label="Quality Profile" value={quality} onChange={(e) => setQuality(e.target.value)}>
+                      <MenuItem value="draft">FAST - quick local production</MenuItem>
+                      <MenuItem value="standard">BALANCED - recommended quality/time balance</MenuItem>
+                      <MenuItem value="high">BALANCED+ - richer visual pacing</MenuItem>
+                      <MenuItem value="premium">PREMIUM - configured premium services only</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -592,8 +693,8 @@ const VideoCreator: React.FC = () => {
                 {/* Resolution */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Resolution</InputLabel>
-                    <Select label="Resolution" value={resolution} onChange={(e) => setResolution(e.target.value)}>
+                    <InputLabel id="resolution-select-label">Resolution</InputLabel>
+                    <Select labelId="resolution-select-label" id="resolution-select" label="Resolution" value={resolution} onChange={(e) => setResolution(e.target.value)}>
                       <MenuItem value="1080p">1080p (Full HD)</MenuItem>
                       <MenuItem value="720p">720p (HD)</MenuItem>
                     </Select>
@@ -603,8 +704,8 @@ const VideoCreator: React.FC = () => {
                 {/* Content Style */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Content Style</InputLabel>
-                    <Select label="Content Style" value={contentStyle} onChange={(e) => setContentStyle(e.target.value)}>
+                    <InputLabel id="content-style-select-label">Content Style</InputLabel>
+                    <Select labelId="content-style-select-label" id="content-style-select" label="Content Style" value={contentStyle} onChange={(e) => setContentStyle(e.target.value)}>
                       <MenuItem value="advertisement">Advertisement</MenuItem>
                       <MenuItem value="ugc">UGC (User Generated)</MenuItem>
                       <MenuItem value="cinematic">Cinematic</MenuItem>
@@ -620,8 +721,8 @@ const VideoCreator: React.FC = () => {
                 {/* Visual Mode */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Visual Mode</InputLabel>
-                    <Select label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
+                    <InputLabel id="visual-mode-select-label">Visual Mode</InputLabel>
+                    <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
                       <MenuItem value="auto">Auto (Smart Stock / AI)</MenuItem>
                       <MenuItem value="stock">Stock Only (Pexels - Free)</MenuItem>
                       <MenuItem value="ai">AI Video (Veo / Fal)</MenuItem>
@@ -633,11 +734,47 @@ const VideoCreator: React.FC = () => {
                 {/* Voice Provider */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Voice Provider</InputLabel>
-                    <Select label="Voice Provider" value={voiceProvider} onChange={(e) => setVoiceProvider(e.target.value)}>
-                      <MenuItem value="auto">Auto (Local / Free)</MenuItem>
-                      <MenuItem value="kokoro">Kokoro TTS (Local / Free)</MenuItem>
-                      <MenuItem value="elevenlabs">ElevenLabs (Premium Multilingual)</MenuItem>
+                    <InputLabel id="voice-provider-select-label">Voice Provider</InputLabel>
+                    <Select
+                      labelId="voice-provider-select-label"
+                      id="voice-provider-select"
+                      label="Voice Provider"
+                      value={voiceProvider}
+                      onChange={(e) => {
+                        const nextProvider = e.target.value;
+                        setVoiceProvider(nextProvider);
+                        if (nextProvider === "google_cloud_tts") setVoiceId("");
+                        if (nextProvider === "piper") setVoiceId("ar_JO-kareem-medium");
+                        if (nextProvider === "kokoro") setVoiceId("af_heart");
+                        if (nextProvider === "auto") setVoiceId("");
+                      }}
+                    >
+                      <MenuItem value="auto">Auto - safest local provider</MenuItem>
+                      <MenuItem value="piper">Piper - Arabic local / free / recommended</MenuItem>
+                      <MenuItem value="google_cloud_tts">Google Cloud - Arabic MSA / free tier available</MenuItem>
+                      <MenuItem value="kokoro">Kokoro - English local / free</MenuItem>
+                      <MenuItem value="elevenlabs">ElevenLabs - premium / requires configuration</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="voice-select-label">Voice</InputLabel>
+                    <Select labelId="voice-select-label" id="voice-select" label="Voice" value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
+                      <MenuItem value="">Auto-select</MenuItem>
+                      {voiceProvider === "google_cloud_tts" && voiceOptions.length === 0 && (
+                        <MenuItem value="" disabled>
+                          Configure Google credentials to load ar-XA voices
+                        </MenuItem>
+                      )}
+                      {voiceOptions.map((voice) => (
+                        <MenuItem key={`${voice.provider}-${voice.id}`} value={voice.id}>
+                          {voice.name}
+                          {voice.voiceFamily ? ` · ${voice.voiceFamily}` : ""}
+                          {voice.gender ? ` · ${voice.gender}` : ""}
+                        </MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -645,8 +782,8 @@ const VideoCreator: React.FC = () => {
                 {/* Captions Style */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Captions Style</InputLabel>
-                    <Select label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
+                    <InputLabel id="captions-style-select-label">Captions Style</InputLabel>
+                    <Select labelId="captions-style-select-label" id="captions-style-select" label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
                       <MenuItem value="bold">Bold (Cyan Pop · Active Scale)</MenuItem>
                       <MenuItem value="viral">Viral (Kinetic Yellow Glow)</MenuItem>
                       <MenuItem value="clean">Clean (Dark Box / Subtitle)</MenuItem>
@@ -660,8 +797,10 @@ const VideoCreator: React.FC = () => {
                 {/* Saved Brand */}
                 <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel>Brand Profile</InputLabel>
+                    <InputLabel id="brand-profile-select-label">Brand Profile</InputLabel>
                     <Select
+                      labelId="brand-profile-select-label"
+                      id="brand-profile-select"
                       label="Brand Profile"
                       value={selectedBrandId}
                       onChange={(e) => {
@@ -681,6 +820,62 @@ const VideoCreator: React.FC = () => {
               </Grid>
             </AccordionDetails>
           </Accordion>
+
+          <Alert severity={selectedProviderUnavailable ? "warning" : "info"}>
+            {voiceProviderGuidance()} {selectedProviderUnavailable ? "Configure it in Providers or choose Piper/Kokoro before creating a video." : ""}
+          </Alert>
+
+          <SectionCard
+            title="Voice Preview"
+            description="Generate a short narration sample before committing to a full render."
+            actions={
+              <Button
+                variant="outlined"
+                startIcon={<PlayArrowIcon />}
+                disabled={voicePreviewing || !prompt.trim() || selectedProviderUnavailable}
+                onClick={handleVoicePreview}
+              >
+                {voicePreviewing ? "Generating..." : "Preview Voice"}
+              </Button>
+            }
+          >
+            <Stack spacing={1.5}>
+              {voiceProvider === "google_cloud_tts" && (
+                <Alert severity="info">
+                  Google Cloud uses Arabic - Modern Standard Arabic (ar-XA). Billing may be required, and usage above Google's free monthly allowance may incur charges.
+                </Alert>
+              )}
+              {selectedProviderUnavailable && (
+                <Alert
+                  severity="warning"
+                  action={<Button size="small" onClick={() => navigate("/providers")}>Configure in Providers</Button>}
+                >
+                  This provider is not configured. Voice preview and full production will stay disabled until credentials are added.
+                </Alert>
+              )}
+              {voicePreview ? (
+                <>
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    <Chip label={`Provider: ${voicePreview.provider}`} />
+                    <Chip label={`Voice: ${voicePreview.voiceId}`} />
+                    <Chip label={`Duration: ${voicePreview.durationSeconds}s`} />
+                    {voicePreview.generationMs && <Chip label={`Generated: ${voicePreview.generationMs}ms`} />}
+                  </Stack>
+                  <Box component="audio" controls src={withMediaAccessToken(voicePreview.audioUrl)} sx={{ width: "100%" }} />
+                  <Typography variant="body2" color="text.secondary" dir={voicePreview.language === "ar" ? "rtl" : "ltr"}>
+                    {voicePreview.processedText}
+                  </Typography>
+                  {voicePreview.warnings?.length > 0 && (
+                    <Alert severity="warning">{voicePreview.warnings.join(" ")}</Alert>
+                  )}
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  The preview uses the current language, dialect, provider, voice, and quality settings.
+                </Typography>
+              )}
+            </Stack>
+          </SectionCard>
 
           {/* Cost Estimate & Live Spec Preview */}
           <SectionCard
@@ -773,7 +968,7 @@ const VideoCreator: React.FC = () => {
               </Stack>
             ) : (
               <Typography variant="body2" color="text.secondary">
-                Click "Preview Production Spec" to inspect the scene breakdown and narration before generating, or click "Create Video Job" to submit directly.
+                Preview the production plan before generating, or create the video directly with the choices above.
               </Typography>
             )}
           </SectionCard>
@@ -787,7 +982,7 @@ const VideoCreator: React.FC = () => {
               disabled={submitting || !prompt.trim()}
               onClick={submitPromptJob}
             >
-              {submitting ? "Starting Production..." : "Create Video Job"}
+              {submitting ? "Creating..." : "Create Video"}
             </Button>
           </Stack>
         </Stack>
