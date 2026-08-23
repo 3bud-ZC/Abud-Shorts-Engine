@@ -1,31 +1,29 @@
-import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState, useCallback } from "react";
 import axios from "axios";
-import { Alert, Button, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Grid, Stack, Typography } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { useNavigate } from "react-router-dom";
 import {
+  bidiProps,
+  isArabicText,
   ActionMenu,
   ConfirmDialog,
   EmptyState,
+  ErrorBoundary,
   FilterTabs,
-  LoadingState,
+  JobsListSkeleton,
   PageHeader,
-  ProgressDisplay,
+  RecentJobCard,
   SearchInput,
   SectionCard,
   StatusBadge,
 } from "../components/v2";
 import type { V2Job } from "./v2Types";
 
-const groups = ["all", "running", "completed", "failed", "canceled"];
+const groups = ["all", "running", "ready", "failed", "canceled"];
 
-function duration(job: V2Job) {
-  if (!job.startedAt) return "Not started";
-  const end = job.completedAt ? new Date(job.completedAt).getTime() : Date.now();
-  return `${Math.max(0, Math.round((end - new Date(job.startedAt).getTime()) / 1000))}s`;
-}
-
-const JobsPage: React.FC = () => {
+const JobsPageContent: React.FC = () => {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState<V2Job[]>([]);
   const [tab, setTab] = useState("all");
@@ -34,32 +32,32 @@ const JobsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ type: "cancel" | "retry"; job: V2Job } | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const response = await axios.get("/api/v2/jobs");
       setJobs(response.data.jobs || []);
       setError(null);
     } catch {
-      setError("Failed to load jobs.");
+      setError("Failed to load jobs from database.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     load();
     const timer = setInterval(load, 5000);
     return () => clearInterval(timer);
-  }, []);
+  }, [load]);
 
   const visibleJobs = useMemo(() => {
     return jobs.filter((job) => {
       const matchesTab =
         tab === "all" ||
         (tab === "running" && !["ready", "failed", "canceled"].includes(job.status)) ||
-        (tab === "completed" && job.status === "ready") ||
+        (tab === "ready" && job.status === "ready") ||
         job.status === tab;
-      const haystack = `${job.title} ${job.templateId} ${job.brandName} ${job.currentStage}`.toLowerCase();
+      const haystack = `${job.title || ""} ${job.templateId || ""} ${job.brandName || ""} ${job.currentStage || ""}`.toLowerCase();
       return matchesTab && haystack.includes(query.toLowerCase());
     });
   }, [jobs, tab, query]);
@@ -81,59 +79,63 @@ const JobsPage: React.FC = () => {
     }
   };
 
-  if (loading) return <LoadingState label="Loading jobs..." />;
+  if (loading && jobs.length === 0) {
+    return <JobsListSkeleton />;
+  }
 
   return (
     <>
       <PageHeader
         title="Jobs"
-        description="Track every V2 request from queue to rendered MP4."
-        actions={<Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate("/create")}>Create Video</Button>}
+        eyebrow="Pipeline Orchestration"
+        description="Track, inspect, and manage every video creation request from initial prompt to final rendered MP4."
+        actions={
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            <Button variant="outlined" startIcon={<RefreshIcon />} onClick={load}>
+              Refresh
+            </Button>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate("/create")}>
+              Create Video
+            </Button>
+          </Stack>
+        }
       />
+
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
       <SectionCard>
         <Stack spacing={2}>
           <FilterTabs value={tab} onChange={setTab} options={groups} />
-          <SearchInput value={query} onChange={setQuery} placeholder="Search by title, brand, template, or stage" />
+          <SearchInput value={query} onChange={setQuery} placeholder="Search by title, brand, template, or stage..." />
         </Stack>
       </SectionCard>
-      <Stack spacing={1.5} sx={{ mt: 2 }}>
+
+      <Stack spacing={1.5} sx={{ mt: 2.5 }}>
         {visibleJobs.map((job) => {
           const running = !["ready", "failed", "canceled"].includes(job.status);
           return (
-            <SectionCard key={job.id}>
-              <Stack spacing={1.25}>
-                <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={1.5}>
-                  <Stack spacing={0.5} minWidth={0}>
-                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                      <Typography variant="h6">{job.title || job.templateId || "Video job"}</Typography>
-                      <StatusBadge status={job.status} />
-                      {job.brandName && <StatusBadge status="default" label={job.brandName} />}
-                    </Stack>
-                    <Typography variant="body2" color="text.secondary">
-                      Template: {job.templateId || "Manual"} · Started: {job.startedAt ? new Date(job.startedAt).toLocaleString() : "Not started"} · Duration: {duration(job)}
-                    </Typography>
-                  </Stack>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Button size="small" variant="outlined" onClick={() => navigate(`/jobs/${job.id}`)}>View</Button>
-                    <ActionMenu
-                      items={[
-                        { label: "Cancel", disabled: !running, onClick: () => setConfirm({ type: "cancel", job }) },
-                        { label: "Retry", disabled: !["failed", "canceled"].includes(job.status), onClick: () => setConfirm({ type: "retry", job }) },
-                        { label: "Open Video", disabled: !job.output?.videoId, onClick: () => navigate(`/video/${job.output.videoId}`) },
-                      ]}
-                    />
-                  </Stack>
-                </Stack>
-                <ProgressDisplay stage={job.currentStage} progress={job.progress} timestamp={job.updatedAt} message={job.error || "Waiting for next update."} />
-              </Stack>
-            </SectionCard>
+            <Box key={job.id} sx={{ position: "relative" }}>
+              <RecentJobCard
+                job={job}
+                onClick={() => navigate(`/jobs/${job.id}`)}
+              />
+            </Box>
           );
         })}
+
         {visibleJobs.length === 0 && (
-          <EmptyState title="No jobs match this view" description="Use another filter or create a new video job." />
+          <EmptyState
+            title="No jobs match this filter"
+            description="Try selecting a different status tab or clearing your search term."
+            action={
+              <Button variant="outlined" onClick={() => { setTab("all"); setQuery(""); }}>
+                Reset Filters
+              </Button>
+            }
+          />
         )}
       </Stack>
+
       <ConfirmDialog
         open={Boolean(confirm)}
         title={confirm?.type === "cancel" ? "Cancel job?" : "Retry job?"}
@@ -147,6 +149,14 @@ const JobsPage: React.FC = () => {
         onConfirm={runConfirmed}
       />
     </>
+  );
+};
+
+export const JobsPage: React.FC = () => {
+  return (
+    <ErrorBoundary fallbackTitle="Jobs Page Error">
+      <JobsPageContent />
+    </ErrorBoundary>
   );
 };
 

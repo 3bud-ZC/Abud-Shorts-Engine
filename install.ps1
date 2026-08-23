@@ -1,6 +1,6 @@
 # ==============================================================================
 # ABUD Shorts Engine V2 — Production Installer (Windows PowerShell)
-# Version: 2.0.0
+# Version: 2.0.1
 # ==============================================================================
 
 [CmdletBinding()]
@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "  ABUD Shorts Engine V2 — One-Command Production Installer" -ForegroundColor Cyan
-Write-Host "  Version: 2.0.0" -ForegroundColor Cyan
+Write-Host "  Version: 2.0.1" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""
 

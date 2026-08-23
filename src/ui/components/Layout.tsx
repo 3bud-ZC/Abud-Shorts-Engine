@@ -126,7 +126,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </Stack>
       <Box sx={{ mt: "auto", px: 2, pb: 2 }}>
         <Typography variant="caption" color="text.secondary" display="block" fontWeight={700}>
-          ABUD Shorts Engine V2 · v2.0.0
+          ABUD Shorts Engine V2 · v2.0.1
         </Typography>
         <Typography variant="caption" color="text.secondary" display="block">
           Local &amp; Cloud Hybrid Pipeline

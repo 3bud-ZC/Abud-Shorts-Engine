@@ -159,7 +159,7 @@ describe("V2-05 Release-Gate Engine Suites", () => {
     expect(info.version).toBe(PRODUCT_VERSION);
     expect(info.stage).toBe("General Availability");
     expect(info.schemaVersion).toBe("2.5.0");
-    expect(PRODUCT_VERSION).toBe("2.0.0");
+    expect(PRODUCT_VERSION).toBe("2.0.1");
   });
 
   it("2. Local Admin Authentication & Password Security", async () => {

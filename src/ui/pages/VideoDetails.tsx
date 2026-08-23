@@ -28,6 +28,8 @@ import TelegramIcon from "@mui/icons-material/Telegram";
 import TwitterIcon from "@mui/icons-material/Twitter";
 import {
   ConfirmDialog,
+  EmptyState,
+  ErrorBoundary,
   LoadingState,
   PageHeader,
   SectionCard,
@@ -48,7 +50,7 @@ function formatDuration(seconds?: number): string {
   return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 }
 
-const VideoDetails: React.FC = () => {
+const VideoDetailsContent: React.FC = () => {
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
   const [video, setVideo] = useState<VideoItem | null>(null);
@@ -101,6 +103,22 @@ const VideoDetails: React.FC = () => {
   };
 
   if (loading) return <LoadingState label="Loading video details..." />;
+
+  if (!video && !loading) {
+    return (
+      <Box sx={{ py: 4 }}>
+        <EmptyState
+          title="Video Not Found"
+          description={`The requested video ID "${videoId || "unknown"}" could not be found or has been deleted.`}
+          action={
+            <Button variant="contained" onClick={() => navigate("/videos")}>
+              Back to Videos
+            </Button>
+          }
+        />
+      </Box>
+    );
+  }
 
   const title =
     video?.templateName ||
@@ -540,6 +558,14 @@ const VideoDetails: React.FC = () => {
         onConfirm={deleteVideo}
       />
     </>
+  );
+};
+
+export const VideoDetails: React.FC = () => {
+  return (
+    <ErrorBoundary fallbackTitle="Video Details Error">
+      <VideoDetailsContent />
+    </ErrorBoundary>
   );
 };
 
