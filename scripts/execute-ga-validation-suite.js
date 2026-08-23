@@ -309,18 +309,21 @@ async function runGAValidation() {
 
   // Trigger retry
   console.log(`Triggering retry on interrupted job ${intJobId}...`);
+  let retryJobId = intJobId;
   try {
-    await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/retry`, {});
+    const retryRes = await safePost(`${BASE_URL}/api/v2/jobs/${intJobId}/retry`, {});
+    if (retryRes.data?.job?.id) retryJobId = retryRes.data.job.id;
   } catch (e) {
     console.log('Retry response note:', e.response?.data || e.message);
   }
-  const recoveredJob = await waitForJob(intJobId, 450);
+  const recoveredJob = await waitForJob(retryJobId, 450);
 
-  const dlCheck = await safeGet(`${BASE_URL}/api/videos/${recoveredJob.output?.videoId || intJobId}/download`, { validateStatus: false });
-  const thumbCheck = await safeGet(`${BASE_URL}/api/videos/${recoveredJob.output?.videoId || intJobId}/thumbnail`, { validateStatus: false });
+  const dlCheck = await safeGet(`${BASE_URL}/api/videos/${recoveredJob.output?.videoId || retryJobId}/download`, { validateStatus: false });
+  const thumbCheck = await safeGet(`${BASE_URL}/api/videos/${recoveredJob.output?.videoId || retryJobId}/thumbnail`, { validateStatus: false });
 
   report.failureTests.workerInterruption = {
     jobId: intJobId,
+    retryJobId,
     stageAtInterruption: stageAtInterrupt,
     statusAfterWorkerLoss,
     recoveryAction: 'retry_dispatched',
