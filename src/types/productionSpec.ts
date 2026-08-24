@@ -89,7 +89,25 @@ export const voicePresetEnum = z.enum([
 ]);
 export type VoicePreset = z.infer<typeof voicePresetEnum>;
 
-export const captionStyleEnum = z.enum(["none", "cinematic", "viral_bold", "clean", "minimal", "product_ad", "educational", "bold", "viral", "brand"]);
+// V3 caption styles come first; the trailing values are the historical
+// vocabulary, kept so existing specs, brands and templates still validate.
+export const captionStyleEnum = z.enum([
+  "clean_professional",
+  "social_ad",
+  "minimal",
+  "kinetic_phrase",
+  "karaoke",
+  "legacy_cairo",
+  "none",
+  "cinematic",
+  "viral_bold",
+  "clean",
+  "product_ad",
+  "educational",
+  "bold",
+  "viral",
+  "brand",
+]);
 export type CaptionStyle = z.infer<typeof captionStyleEnum>;
 
 export const scenePurposeEnum = z.enum([

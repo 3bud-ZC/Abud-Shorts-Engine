@@ -451,6 +451,60 @@ export class FFMpeg {
     });
   }
 
+  /**
+   * Burns an ASS subtitle file onto a video with libass.
+   *
+   * The runtime's libass is linked against HarfBuzz and FriBidi, so Arabic
+   * shaping, ligatures and bidi ordering are done by the text engine. Nothing
+   * here reorders characters.
+   *
+   * `fontsdir` points at the bundled OFL pack so rendering never depends on
+   * system font luck or a network fetch.
+   */
+  public async burnAssSubtitles(
+    videoPath: string,
+    assPath: string,
+    outputPath: string,
+    fontsDir?: string,
+  ): Promise<string> {
+    if (!fs.existsSync(videoPath)) throw new Error(`Video not found for caption burn: ${videoPath}`);
+    if (!fs.existsSync(assPath)) throw new Error(`ASS subtitle not found: ${assPath}`);
+    fs.ensureDirSync(path.dirname(outputPath));
+
+    // FFmpeg filter arguments are colon-separated, so the path separators and
+    // drive colons have to be escaped rather than passed raw.
+    const escapeFilterPath = (value: string) =>
+      value.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+
+    const resolvedFontsDir = fontsDir || process.env.ABUD_FONT_DIR;
+    const filter = resolvedFontsDir
+      ? `ass='${escapeFilterPath(assPath)}':fontsdir='${escapeFilterPath(resolvedFontsDir)}'`
+      : `ass='${escapeFilterPath(assPath)}'`;
+
+    return new Promise((resolve, reject) => {
+      ffmpeg(videoPath)
+        .videoFilters(filter)
+        .outputOptions([
+          "-c:v libx264",
+          "-preset medium",
+          "-crf 18",
+          "-pix_fmt yuv420p",
+          // Audio is already mastered upstream; copying keeps it untouched.
+          "-c:a copy",
+        ])
+        .output(outputPath)
+        .on("end", () => {
+          logger.debug({ outputPath }, "libass caption burn completed");
+          resolve(outputPath);
+        })
+        .on("error", (err) => {
+          logger.error(err, "libass caption burn failed");
+          reject(err);
+        })
+        .run();
+    });
+  }
+
   public async createSolidVideo(
     outputPath: string,
     durationSeconds: number,

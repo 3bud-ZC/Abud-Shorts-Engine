@@ -114,6 +114,18 @@ export type VoiceAudioResult = {
   charactersBilled?: number;
   voiceSettings?: ElevenLabsVoiceSettings;
   wordTimings?: Array<{ word: string; startMs: number; endMs: number }>;
+  /**
+   * Per-character alignment returned by the same synthesis request. Present
+   * only for providers that document it; consumers must treat its absence as
+   * "fall back to Whisper", never as an error.
+   */
+  characterAlignment?: {
+    characters: string[];
+    startSeconds: number[];
+    endSeconds: number[];
+  };
+  /** The exact TTS string the alignment above describes. */
+  alignmentText?: string;
 };
 
 /**
@@ -190,6 +202,7 @@ export interface VoiceProvider {
       preset?: ElevenLabsVoicePreset;
       voiceSettings?: Partial<ElevenLabsVoiceSettings>;
       languageCode?: string;
+      requestAlignment?: boolean;
     },
   ): Promise<VoiceAudioResult>;
   listVoices(language?: string): Promise<VoiceOption[]>;
@@ -206,6 +219,8 @@ export type VoiceRouteRequest = {
   voicePreset?: ElevenLabsVoicePreset;
   voiceSettings?: Partial<ElevenLabsVoiceSettings>;
   modelId?: string;
+  /** Request native character alignment alongside the audio. */
+  requestAlignment?: boolean;
   rate?: string;
   pitch?: string;
   volume?: string;
@@ -226,4 +241,5 @@ export type VoiceRouteDecision = {
   voicePreset?: ElevenLabsVoicePreset;
   voiceSettings?: Partial<ElevenLabsVoiceSettings>;
   modelId?: string;
+  requestAlignment?: boolean;
 };

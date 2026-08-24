@@ -41,10 +41,56 @@ import {
 import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal";
 import type { V2Job, VideoItem, VideoPublishingStatus, VideoRevisionItem } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
+import { isFreeCost, videoCostLabel } from "../../types/costDisplay";
 
 function formatFileSize(bytes?: number): string {
   if (!bytes) return "Unknown";
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+/**
+ * Production evidence helpers. Each returns an empty string when the field is
+ * genuinely unknown so the row can be omitted rather than rendering "undefined".
+ */
+const CAPTION_TIMING_LABELS: Record<string, string> = {
+  elevenlabs_alignment: "ElevenLabs Alignment",
+  whisper: "Whisper",
+  synthetic: "Synthetic",
+};
+
+function captionTimingLabel(video: any): string {
+  const source =
+    video?.captionTimingSource ||
+    video?.voiceArtifacts?.[0]?.captionTimingSource ||
+    video?.voiceArtifacts?.[0]?.timingSource;
+  if (!source) return "N/A";
+  return CAPTION_TIMING_LABELS[source] || String(source);
+}
+
+function sourceBreakdown(video: any): string {
+  const counts = video?.sourceTypeCounts || video?.editDecisionList?.sourceTypeCounts;
+  if (!counts || typeof counts !== "object") return "";
+  const labels: Record<string, string> = {
+    stock: "Stock",
+    mockup: "Website Mockup",
+    motion: "Motion",
+    upload: "Upload",
+    image: "Image",
+  };
+  const parts = Object.entries(counts)
+    .filter(([, value]) => typeof value === "number" && value > 0)
+    .map(([key, value]) => `${labels[key] || key} ${value}`);
+  return parts.join(" · ");
+}
+
+function voiceEvidence(video: any): string {
+  const artifact = video?.voiceArtifacts?.[0];
+  if (!artifact?.provider) return "";
+  const parts = [artifact.provider === "elevenlabs" ? "ElevenLabs" : artifact.provider];
+  const name = video?.voiceName || artifact.voiceName;
+  if (name) parts.push(String(name));
+  if (artifact.voicePreset) parts.push(String(artifact.voicePreset).replaceAll("_", " "));
+  return parts.join(" · ");
 }
 
 function formatDuration(seconds?: number): string {
@@ -602,12 +648,8 @@ const VideoDetailsContent: React.FC = () => {
                     <Typography color="text.secondary">Estimated Cost</Typography>
                     <Chip
                       size="small"
-                      color={cost?.isFree || cost?.estimatedCost === 0 ? "success" : "warning"}
-                      label={
-                        cost?.isFree || cost?.estimatedCost === 0
-                          ? "Free ($0)"
-                          : `$${cost?.estimatedCost} USD`
-                      }
+                      color={isFreeCost(cost) ? "success" : "warning"}
+                      label={videoCostLabel(cost)}
                     />
                   </Stack>
                 </Stack>
@@ -622,8 +664,52 @@ const VideoDetailsContent: React.FC = () => {
                   </Stack>
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Caption Timing</Typography>
-                    <Typography fontWeight={700}>{video.voiceArtifacts?.[0]?.timingSource || "N/A"}</Typography>
+                    <Typography fontWeight={700}>{captionTimingLabel(video)}</Typography>
                   </Stack>
+                  {video.captionRenderer && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Caption Renderer</Typography>
+                      <Typography fontWeight={700}>
+                        {video.captionRenderer === "libass" ? "libass (FFmpeg)" : "Remotion"}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {video.captionFont && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Caption Font</Typography>
+                      <Typography fontWeight={700}>{video.captionFont}</Typography>
+                    </Stack>
+                  )}
+                  {typeof video.captionQa?.pass === "boolean" && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Caption QA</Typography>
+                      <Typography fontWeight={700}>{video.captionQa.pass ? "Passed" : "Issues found"}</Typography>
+                    </Stack>
+                  )}
+                  {typeof video.visualShotCount === "number" && video.visualShotCount > 0 && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Visual Shots</Typography>
+                      <Typography fontWeight={700}>{video.visualShotCount}</Typography>
+                    </Stack>
+                  )}
+                  {sourceBreakdown(video) && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Shot Sources</Typography>
+                      <Typography fontWeight={700}>{sourceBreakdown(video)}</Typography>
+                    </Stack>
+                  )}
+                  {video.editDecisionList?.averageShotSeconds ? (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Average Shot</Typography>
+                      <Typography fontWeight={700}>{video.editDecisionList.averageShotSeconds}s</Typography>
+                    </Stack>
+                  ) : null}
+                  {voiceEvidence(video) && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Voice</Typography>
+                      <Typography fontWeight={700}>{voiceEvidence(video)}</Typography>
+                    </Stack>
+                  )}
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Music Ducking</Typography>
                     <Typography fontWeight={700}>{video.audioQa?.duckingProfile || "N/A"}</Typography>

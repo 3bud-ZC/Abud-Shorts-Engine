@@ -13,6 +13,11 @@ import type {
   VoiceProvider,
   VoiceProviderValidationResult,
 } from "./types";
+import {
+  alignmentMatchesText,
+  parseElevenLabsAlignment,
+  type CharacterAlignment,
+} from "./elevenLabsAlignment";
 
 /**
  * Canonical production model for Arabic / Egyptian Arabic / MSA narration.
@@ -398,6 +403,56 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     return describeElevenLabsErrorDetail(detail);
   }
 
+  /**
+   * Requests audio AND per-character alignment in a single synthesis call.
+   *
+   * Returns null (rather than throwing) when the model does not document
+   * alignment support or the endpoint is unavailable, so the caller can fall
+   * back to the plain endpoint without losing the job.
+   */
+  private async requestWithTimestamps(
+    text: string,
+    resolvedVoiceId: string,
+    modelId: string,
+    voiceSettings: ElevenLabsVoiceSettings,
+    languageCode: string | undefined,
+    key: string | undefined,
+  ): Promise<{ audio: Buffer; alignment: CharacterAlignment | null } | null> {
+    if (!getElevenLabsModelCapabilities(modelId).supportsAlignment) return null;
+    const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}/with-timestamps`;
+    let response;
+    try {
+      response = await axios.post(
+        `${endpoint}?output_format=mp3_44100_128`,
+        this.buildRequestBody(text, modelId, voiceSettings, languageCode),
+        {
+          headers: { "xi-api-key": key, "Content-Type": "application/json" },
+          responseType: "json",
+          timeout: 60000,
+        },
+      );
+    } catch (err: any) {
+      // A missing or restricted timestamps endpoint must not fail the job; the
+      // caller retries on the plain endpoint and captions fall back to Whisper.
+      this.logUpstreamError(parseElevenLabsError(err, endpoint, "POST"));
+      return null;
+    }
+
+    const payload = response.data || {};
+    if (typeof payload.audio_base64 !== "string" || !payload.audio_base64) return null;
+    const audio = Buffer.from(payload.audio_base64, "base64");
+    const parsed = parseElevenLabsAlignment(payload, "alignment");
+    // Only trust an alignment that actually describes the string we sent.
+    const alignment = parsed && alignmentMatchesText(parsed, text) ? parsed : null;
+    if (parsed && !alignment) {
+      logger.warn(
+        { provider: "elevenlabs", reason: "alignment_text_mismatch" },
+        "ElevenLabs alignment did not match the submitted text; falling back to Whisper timing",
+      );
+    }
+    return { audio, alignment };
+  }
+
   public async generateVoice(
     text: string,
     voiceId?: string,
@@ -406,6 +461,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
       preset?: ElevenLabsVoicePreset;
       voiceSettings?: Partial<ElevenLabsVoiceSettings>;
       languageCode?: string;
+      /** Ask for native character alignment from the same synthesis request. */
+      requestAlignment?: boolean;
     } = {},
   ): Promise<VoiceAudioResult> {
     if (!this.isConfigured()) {
@@ -418,6 +475,45 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
 
     const isArabic = options.languageCode === "ar" || /[\u0600-\u06FF]/.test(text);
     const languageCode = options.languageCode || (isArabic ? "ar" : undefined);
+
+    if (options.requestAlignment) {
+      const startedWithTimestamps = Date.now();
+      const timestamped = await this.requestWithTimestamps(
+        text,
+        resolvedVoiceId,
+        modelId,
+        voiceSettings,
+        languageCode,
+        key,
+      );
+      if (timestamped) {
+        const stream = new Readable();
+        stream.push(timestamped.audio);
+        stream.push(null);
+        return {
+          audio: stream,
+          audioLength: timestamped.alignment
+            ? timestamped.alignment.endSeconds[timestamped.alignment.endSeconds.length - 1] || Math.max(text.length / 14, 1.5)
+            : Math.max(text.length / 14, 1.5),
+          // A native alignment carries the real spoken length, so this is a
+          // measurement rather than the usual pre-decode guess.
+          audioLengthEstimated: !timestamped.alignment,
+          sampleRate: 44100,
+          provider: "elevenlabs",
+          model: modelId,
+          modelId,
+          voiceId: resolvedVoiceId,
+          language: isArabic ? "ar" : "en",
+          voiceSettings,
+          characterAlignment: timestamped.alignment || undefined,
+          alignmentText: timestamped.alignment ? text : undefined,
+          generationMs: Date.now() - startedWithTimestamps,
+          estimatedCostTier: "premium",
+          usageBasedCost: true,
+          charactersBilled: text.length,
+        };
+      }
+    }
 
     const startedAt = Date.now();
     let response;

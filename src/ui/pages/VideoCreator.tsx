@@ -67,6 +67,7 @@ import type {
   V2Brand,
 } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
+import { externalCostLabel } from "../../types/costDisplay";
 
 const EXAMPLE_PROMPTS = [
   {
@@ -159,24 +160,10 @@ function resolvedVoiceLabel(spec: any): string {
 /**
  * A usage-based provider such as ElevenLabs must never be presented as a $0
  * external cost, and the engine does not invent a dollar figure it cannot
- * calculate reliably.
+ * calculate reliably. Shared with Video Details so both screens agree.
  */
 function costLabel(costEstimate: CostEstimateData | null): string {
-  if (!costEstimate) return "External API Cost: $0";
-  const voice = costEstimate.breakdown?.voice;
-  const usageBased =
-    costEstimate.usageBased ||
-    voice?.usageBased ||
-    voice?.estimatedCostTier === "premium" ||
-    voice?.estimatedCostTier === "cloud_free_tier";
-  if (usageBased) {
-    const providerLabel = voice?.provider === "elevenlabs" ? "ElevenLabs" : voice?.provider || "Cloud provider";
-    return `External API Cost: ${providerLabel} · Cloud / Usage Based`;
-  }
-  if (costEstimate.isFree || costEstimate.estimatedCost === 0) {
-    return "External API Cost: $0";
-  }
-  return `External API Cost: ${costEstimate.estimatedCost} USD`;
+  return externalCostLabel(costEstimate as any);
 }
 
 const VideoCreator: React.FC = () => {
@@ -203,7 +190,7 @@ const VideoCreator: React.FC = () => {
   const [resolvedVoiceProvider, setResolvedVoiceProvider] = useState<string>("auto");
   const [voiceWarnings, setVoiceWarnings] = useState<string[]>([]);
   const [arabicVoiceBlocked, setArabicVoiceBlocked] = useState(false);
-  const [captionStyle, setCaptionStyle] = useState<"none" | "cinematic" | "viral_bold" | "clean" | "minimal" | "product_ad" | "educational" | "bold" | "viral" | "brand">("viral_bold");
+  const [captionStyle, setCaptionStyle] = useState<string>("social_ad");
 
   // Enhancement & Preview states
   const [enhancing, setEnhancing] = useState(false);
@@ -953,12 +940,12 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="captions-style-select-label">Captions Style</InputLabel>
                     <Select labelId="captions-style-select-label" id="captions-style-select" label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
-                      <MenuItem value="cinematic">Cinematic</MenuItem>
-                      <MenuItem value="viral_bold">Viral Bold</MenuItem>
-                      <MenuItem value="clean">Clean</MenuItem>
-                      <MenuItem value="minimal">Minimal</MenuItem>
-                      <MenuItem value="product_ad">Product Ad</MenuItem>
-                      <MenuItem value="educational">Educational</MenuItem>
+                      <MenuItem value="social_ad">Social Ad — bold Kufi, karaoke highlight</MenuItem>
+                      <MenuItem value="clean_professional">Clean Professional — IBM Plex, subtle</MenuItem>
+                      <MenuItem value="minimal">Minimal — light, no highlight</MenuItem>
+                      <MenuItem value="kinetic_phrase">Kinetic Phrase — whole-phrase emphasis</MenuItem>
+                      <MenuItem value="karaoke">Karaoke — word-by-word fill</MenuItem>
+                      <MenuItem value="legacy_cairo">Legacy (Cairo)</MenuItem>
                       <MenuItem value="none">None</MenuItem>
                     </Select>
                   </FormControl>

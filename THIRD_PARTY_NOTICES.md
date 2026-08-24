@@ -18,6 +18,16 @@ release tag, GitHub release, and client package are not rewritten by this file.
 | kokoro-js | ^1.2.0 | npm `kokoro-js` | See package/model notices; used for English local TTS in this product |
 | google-auth-library | ^11.0.2 | npm `google-auth-library` | Apache-2.0; used only for optional server-side Google Cloud Text-to-Speech authentication |
 | @fontsource/cairo | 5.3.0 | npm `@fontsource/cairo` / Fontsource Cairo package | OFL-1.1; bundled locally for offline Arabic rendering |
+| IBM Plex Sans Arabic | Google Fonts release | `assets/fonts/IBMPlexSansArabic-*.ttf` (google/fonts `ofl/ibmplexsansarabic`) | OFL-1.1; bundled locally, no network fetch at render time |
+| Noto Kufi Arabic | Google Fonts release | `assets/fonts/NotoKufiArabic-Variable.ttf` (google/fonts `ofl/notokufiarabic`) | OFL-1.1; static Bold/ExtraBold instanced at build time from the variable source |
+| Noto Sans Arabic | Google Fonts release | `assets/fonts/NotoSansArabic-Variable.ttf` (google/fonts `ofl/notosansarabic`) | OFL-1.1; static Medium/SemiBold instanced at build time from the variable source |
+| Cairo (TTF) | Google Fonts release | `assets/fonts/Cairo-Variable.ttf` (google/fonts `ofl/cairo`) | OFL-1.1; legacy caption face, static Bold instanced at build time |
+| libass | system (Debian) | Arabic subtitle rendering via FFmpeg `ass` filter | ISC; linked with HarfBuzz, FriBidi, FreeType and Fontconfig |
+| PySceneDetect | 0.6.4 | Optional CPU quality runtime; shot-boundary detection | BSD-3-Clause |
+| librosa | 0.10.2.post1 | Optional CPU quality runtime; beat and energy analysis | ISC |
+| opencv-python-headless | 4.10.0.84 | Optional CPU quality runtime; frame metrics | Apache-2.0 |
+| fontTools | 4.53.1 | Build-time instancing of variable fonts into static weights | MIT |
+| Pixabay API | n/a | Optional second free stock source | Pixabay Content License; results cached 24h, assets downloaded to local storage |
 | piper-tts runtime | 1.7.0 | PyPI `piper-tts` | GPL-3.0-or-later runtime license |
 | Piper Arabic voice model | ar_JO-kareem-medium | `rhasspy/piper-voices` model tree | MIT model metadata recorded in V2.1 status |
 | whisper.cpp model | ggml-small.bin | whisper.cpp/Remotion installer path | Model/runtime notices apply; multilingual caption timing model |
@@ -72,3 +82,10 @@ server-side through Application Default Credentials, `GOOGLE_APPLICATION_CREDENT
 or equivalent deployment secret configuration. Google Cloud TTS is labeled
 `Cloud / Free Tier Available`; billing may be required and usage above Google's
 free monthly allowance may incur charges.
+
+### Font instancing note
+
+Static weights shipped in the runtime image are generated from the bundled OFL
+variable fonts with fontTools at build time (`scripts/instance_fonts.py`).
+Instances of an OFL font remain covered by OFL-1.1 and retain the upstream
+Reserved Font Name. No font is fetched over the network during rendering.

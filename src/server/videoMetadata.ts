@@ -30,6 +30,21 @@ export interface VideoMetadata {
   visualProvidersUsed?: string[];
   voiceProvider?: string;
   voiceProvidersUsed?: string[];
+  /** How caption word timings were produced for this video. */
+  captionTimingSource?: string;
+  captionTimingSources?: string[];
+  /** Which engine drew the spoken captions: libass or the Remotion layer. */
+  captionRenderer?: string;
+  captionFont?: string;
+  captionStyleId?: string;
+  captionQa?: Record<string, unknown>;
+  /** Canonical shot plan; see EditDecisionList. */
+  editDecisionList?: Record<string, unknown>;
+  visualShotCount?: number;
+  sourceTypeCounts?: Record<string, number>;
+  stockAttributions?: Array<Record<string, unknown>>;
+  /** Search terms replaced because code footage was off-message. */
+  visualIntentPolicy?: Array<Record<string, unknown>>;
   voiceArtifacts?: Array<Record<string, unknown>>;
   costEstimate?: Record<string, unknown>;
   productionSpec?: Record<string, unknown>;

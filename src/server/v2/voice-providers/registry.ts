@@ -104,6 +104,7 @@ export class VoiceRegistry {
       voicePreset: request.voicePreset,
       voiceSettings: request.voiceSettings,
       modelId: request.modelId,
+      requestAlignment: request.requestAlignment,
     });
 
     // FINAL ARABIC PRODUCTION POLICY: ELEVENLABS ONLY.
@@ -209,6 +210,7 @@ export class VoiceRegistry {
       preset: decision.voicePreset,
       voiceSettings: decision.voiceSettings,
       languageCode: decision.language === "ar" ? "ar" : undefined,
+      requestAlignment: decision.requestAlignment,
     });
     return {
       ...result,
@@ -231,6 +233,7 @@ export class VoiceRegistry {
       preset: decision.voicePreset,
       voiceSettings: decision.voiceSettings,
       languageCode: decision.language === "ar" ? "ar" : undefined,
+      requestAlignment: decision.requestAlignment,
     });
     const { provider, ...publicDecision } = decision;
     return {

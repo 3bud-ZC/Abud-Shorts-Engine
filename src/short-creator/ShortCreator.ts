@@ -9,6 +9,22 @@ import axios from "axios";
 import { Kokoro } from "./libraries/Kokoro";
 import { Remotion } from "./libraries/Remotion";
 import { Whisper } from "./libraries/Whisper";
+import {
+  isAlignmentConfident,
+  mapAlignmentToCaptionTokens,
+} from "../server/v2/voice-providers/elevenLabsAlignment";
+import { renderArabicCaptions } from "../server/v2/captions/arabicCaptionRendererV3";
+import { runCaptionQa } from "../server/v2/captions/captionQa";
+import { resolveCaptionStyle } from "../server/v2/captions/captionStyles";
+import {
+  buildEditDecisionList,
+  intentForPurpose,
+  type VisualShot,
+} from "../server/v2/editing/editDecisionList";
+import { composeVisualBed } from "../server/v2/editing/visualBedComposer";
+import { mockupForIntent } from "../server/v2/mockups/websiteMockupRenderer";
+import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
+import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
 import { PexelsAPI } from "./libraries/Pexels";
 import { Config } from "../config";
@@ -85,6 +101,12 @@ type RenderProgressEvent = {
 };
 
 type RenderProgressCallback = (event: RenderProgressEvent) => Promise<void> | void;
+
+/**
+ * Bottom band of a 9:16 frame commonly covered by TikTok / Reels UI. Captions
+ * are held above it so the platform chrome cannot sit on the words.
+ */
+const PLATFORM_SAFE_BOTTOM_RATIO = 0.14;
 
 export class ShortCreator {
   private queue: {
@@ -277,12 +299,66 @@ export class ShortCreator {
       "Rendering Production Spec video with Media Intelligence & Resolved Timeline",
     );
 
+    // Music and its beat map are resolved before the scene loop so the shot
+    // planner can use beats as cutting hints. Neither depends on scene work.
+    const selectedMusic = this.findMusic(
+      timeline.finalExpectedDurationSeconds,
+      mediaPlan.recommendedMusicMood as any,
+    );
+    let beatMap: any = null;
+    if (capabilityManager.isPythonQualityVenvInstalled() && selectedMusic?.file) {
+      try {
+        const musicPath = path.join(this.config.musicDirPath, selectedMusic.file);
+        if (fs.existsSync(musicPath) && fs.statSync(musicPath).size > 1024) {
+          beatMap = await qualityEngine.analyzeBeats(musicPath);
+        }
+      } catch (beatErr) {
+        logger.warn(beatErr, "Beat analysis notice; proceeding with standard timeline");
+      }
+    }
+    const beatTimestamps: number[] = Array.isArray(beatMap?.beats)
+      ? (beatMap.beats as number[])
+      : [];
+
+    /**
+     * True when the production is advertising websites or web design. Only then
+     * does a programmatic site mockup beat real footage; a generic coding clip
+     * is not what "modern website" means.
+     */
+    const websiteAdContext = (() => {
+      const haystack = [
+        spec.title,
+        spec.userPrompt,
+        ...(spec.scenes || []).map((scene: any) => scene.narration),
+        ...(spec.scenes || []).flatMap((scene: any) => scene.stockSearchTerms || []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return /website|web design|webdesign|landing page|موقع|مواقع|ويب/.test(haystack);
+    })();
+
+    // libass owns spoken captions whenever the bundled font pack is present.
+    // Without it we keep the Remotion caption layer rather than shipping a
+    // video with no captions at all. Decided before the scene loop because
+    // scene assembly must know which engine will draw the words.
+    const captionStyleSpec = resolveCaptionStyle(spec.captionStyle as string);
+    const fontsDir = process.env.ABUD_FONT_DIR || "";
+    const burnCaptionsWithLibass =
+      Boolean(fontsDir) && fs.existsSync(fontsDir) && spec.captionStyle !== "none";
+
     const scenes: any[] = [];
+    /** Caption words per scene, kept out of the Remotion payload when libass draws them. */
+    const sceneCaptionWords: Array<Array<{ text: string; startMs: number; endMs: number }>> = [];
     const excludeVideoIds: (string | number)[] = [];
     const previousVisualCandidates: any[] = [];
     const tempFiles: string[] = [];
     const visualProvidersUsed = new Set<string>();
     const voiceProvidersUsed = new Set<string>();
+    const captionTimingSources = new Set<string>();
+    const plannedShots: VisualShot[] = [];
+    const visualIntentPolicyLog: Array<Record<string, unknown>> = [];
+    const shotSourceCounts: Record<string, number> = {};
     const voiceArtifacts: any[] = [];
     // Single-speaker guarantee: the first synthesized scene pins the concrete
     // voice ID (ElevenLabs resolves account voices at generation time) and every
@@ -437,6 +513,8 @@ export class ShortCreator {
           voiceId: requestedVoiceId,
           voicePreset: requestedVoicePreset,
           modelId: requestedVoiceModelId,
+          // Native alignment rides along with the audio; no second billed call.
+          requestAlignment: true,
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
         });
@@ -470,6 +548,7 @@ export class ShortCreator {
               voiceId: pinnedVoiceId || requestedVoiceId,
               voicePreset: requestedVoicePreset,
               modelId: requestedVoiceModelId,
+              requestAlignment: true,
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
             });
@@ -618,7 +697,10 @@ export class ShortCreator {
         inputHashSource: { sceneIndex: index, audioDuration: actualVoiceDuration },
       });
       let rawCaptions: Caption[] = [];
-      let timingSource: "provider" | "whisper" | "synthetic_fallback" = "synthetic_fallback";
+      // Canonical vocabulary persisted as captionTimingSource.
+      let timingSource: "elevenlabs_alignment" | "whisper" | "synthetic" = "synthetic";
+      let alignmentConfidence: number | undefined;
+      let alignmentUnmapped: string[] | undefined;
       let captionArtifact: DurableSceneArtifact | undefined;
       const captionInputHash = createCaptionInputHash({
         voiceChecksum: voiceArtifact?.checksum || "",
@@ -635,14 +717,42 @@ export class ShortCreator {
         timingSource = payload.timingSource || "whisper";
         captionArtifact = reusableCaption;
         artifactReuse.reusedArtifacts.push(reusableCaption);
-      } else if (voiceAudio?.wordTimings && voiceAudio.wordTimings.length > 0) {
-        rawCaptions = voiceAudio.wordTimings.map((timing: any) => ({
-          text: timing.word,
-          startMs: timing.startMs,
-          endMs: timing.endMs,
-        }));
-        timingSource = "provider";
-      } else {
+      }
+
+      // 1. ElevenLabs native character alignment, mapped onto the DISPLAY
+      //    caption tokens. The alignment describes the TTS string, which may
+      //    contain pronunciation expansions the viewer must never see, so a
+      //    segment whose mapping is not confident falls through to Whisper
+      //    rather than showing a spoken form or a guessed time.
+      if (!captionArtifact && voiceAudio?.characterAlignment && voiceAudio.alignmentText) {
+        const displayText = String(
+          (originalSceneSpec as any).captionText || sceneTimeline.narration || "",
+        );
+        const displayTokens = displayText.trim().split(/\s+/).filter(Boolean);
+        const mapping = mapAlignmentToCaptionTokens(
+          voiceAudio.characterAlignment,
+          voiceAudio.alignmentText,
+          displayTokens,
+        );
+        alignmentConfidence = mapping.confidence;
+        alignmentUnmapped = mapping.unmappedTokens;
+        if (isAlignmentConfident(mapping)) {
+          rawCaptions = mapping.timings.map((timing) => ({
+            text: timing.word,
+            startMs: timing.startMs,
+            endMs: timing.endMs,
+          }));
+          timingSource = "elevenlabs_alignment";
+        } else {
+          logger.info(
+            { sceneIndex: index, confidence: mapping.confidence, unmapped: mapping.unmappedTokens },
+            "ElevenLabs alignment mapping below confidence threshold; using Whisper for this scene",
+          );
+        }
+      }
+
+      // 2. Whisper.
+      if (!captionArtifact && rawCaptions.length === 0) {
         try {
           artifactReuse.providerInvocations.whisper++;
           rawCaptions = await this.whisper.CreateCaption(
@@ -657,7 +767,9 @@ export class ShortCreator {
         }
       }
 
+      // 3. Deterministic synthetic fallback.
       if (!rawCaptions || rawCaptions.length === 0) {
+        timingSource = "synthetic";
         const captionText = String((originalSceneSpec as any).captionText || sceneTimeline.narration || "");
         const words = captionText.trim().split(/\s+/).filter(Boolean);
         if (words.length > 0) {
@@ -675,6 +787,12 @@ export class ShortCreator {
         }
       }
       voiceArtifacts[voiceArtifacts.length - 1].timingSource = timingSource;
+      voiceArtifacts[voiceArtifacts.length - 1].captionTimingSource = timingSource;
+      if (alignmentConfidence !== undefined) {
+        voiceArtifacts[voiceArtifacts.length - 1].alignmentConfidence = alignmentConfidence;
+        voiceArtifacts[voiceArtifacts.length - 1].alignmentUnmappedTokens = alignmentUnmapped;
+      }
+      captionTimingSources.add(timingSource);
 
       // Enforce caption boundaries strictly within the scene duration
       const maxSceneMs = Math.round(targetSceneDuration * 1000) + 100;
@@ -856,8 +974,16 @@ export class ShortCreator {
           });
         }
 
+        sceneCaptionWords[index] = captions.map((caption) => ({
+          text: String(caption.text || ""),
+          startMs: caption.startMs,
+          endMs: caption.endMs,
+        }));
         scenes.push({
-          captions,
+          // Remotion cannot draw captions it was never given. Passing an empty
+          // list is what actually prevents a second caption layer under the
+          // libass one; suppressing captionPreset alone did not.
+          captions: burnCaptionsWithLibass ? [] : captions,
           video: renderedSegments[0].video,
           motion: sceneMediaPlan.motion,
           transition: sceneMediaPlan.transitionToNext,
@@ -993,10 +1119,32 @@ export class ShortCreator {
           };
         } else {
           const reusedAsset = reusableMediaAssets.find((asset: any) => asset.sceneIndex === index && asset.segmentIndex === undefined);
+          // "Modern website" must not be illustrated with a screen of code.
+          // The policy only fires for website ads whose narration is not about
+          // engineering; everything else passes through unchanged.
+          const plannedTerms =
+            sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms || [];
+          const intentPolicy = applyVisualIntentPolicy({
+            terms: plannedTerms as string[],
+            narration: String(originalSceneSpec.narration || ""),
+            isWebsiteAd: websiteAdContext,
+            sceneIndex: index,
+          });
+          if (intentPolicy.applied) {
+            logger.info(
+              { sceneIndex: index, removed: intentPolicy.removed, substituted: intentPolicy.substituted },
+              "Visual intent policy replaced code-shop footage terms for a website advertisement",
+            );
+            visualIntentPolicyLog.push({
+              sceneIndex: index,
+              removed: intentPolicy.removed,
+              substituted: intentPolicy.substituted,
+            });
+          }
           visualAsset = reusedAsset || await this.visualRouter.resolveSceneVisual(
             {
               ...originalSceneSpec,
-              stockSearchTerms: sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms,
+              stockSearchTerms: intentPolicy.terms,
             } as any,
             spec,
             {
@@ -1093,6 +1241,100 @@ export class ShortCreator {
           reused: Boolean(reusableMediaArtifact),
         });
         const mediaDuration = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => 0);
+
+        // ------------------------------------------------------------------
+        // Multi-shot visual bed.
+        //
+        // One narration scene becomes several visual shots. The narration, its
+        // captions and its audio are untouched: only the picture is cut, so a
+        // three-scene script can still carry six or more shots.
+        // ------------------------------------------------------------------
+        if (!isProductAd && mediaDuration > 0) {
+          const sceneStartSeconds = sceneTimeline.startSeconds || 0;
+          const sceneEdl = buildEditDecisionList({
+            scenes: [{
+              sceneId: `scene${index}`,
+              sceneIndex: index,
+              purpose: String(originalSceneSpec.purpose || ""),
+              durationSeconds: targetSceneDuration,
+              startSeconds: sceneStartSeconds,
+              searchTerms: sceneMediaPlan.searchTerms,
+            }],
+            totalDurationSeconds: sceneStartSeconds + targetSceneDuration,
+            pacingProfile: "editorial_ad",
+            beats: beatTimestamps,
+            assignSource: (shot, indexInScene) => {
+              // A website-design ad is better served by a real mockup than by
+              // more generic footage, but only where the intent calls for it
+              // and never for every shot in the scene.
+              const template = websiteAdContext ? mockupForIntent(shot.intent) : null;
+              if (template && indexInScene > 0) {
+                return { sourceType: "mockup", provider: "abud_mockup", routingReason: `website_intent:${shot.intent}` };
+              }
+              return { sourceType: "stock", provider: visualAsset.provider, routingReason: "stock_footage_best_available" };
+            },
+          });
+
+          // Pick a clean window inside the downloaded clip rather than its
+          // first seconds, which are often a logo card or a fade.
+          const detection = await detectShots(tempVideoPath, { scriptDir: this.config.tempDirPath });
+          const shotInputs = sceneEdl.shots.map((shot, shotIndex) => {
+            if (shot.sourceType === "mockup") {
+              return {
+                shot,
+                mockupTemplate: mockupForIntent(shot.intent) || undefined,
+                mockupContent: {
+                  headline: String(originalSceneSpec.onScreenText || spec.title || ""),
+                  subheadline: String((originalSceneSpec as any).displayText || ""),
+                  ctaLabel: String(spec.cta?.text || "ابدأ دلوقتي"),
+                },
+              };
+            }
+            const window = selectBestWindow(detection, mediaDuration, shot.duration);
+            // Different shots from the same clip must not repeat the same
+            // seconds, so later shots step further into the source.
+            const offset = Math.min(
+              Math.max(0, mediaDuration - shot.duration),
+              window.startSeconds + shotIndex * shot.duration,
+            );
+            return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset };
+          });
+
+          if (shotInputs.length > 1) {
+            const bedPath = path.join(this.config.tempDirPath, `${tempId}.bed.mp4`);
+            const workDir = path.join(this.config.tempDirPath, `${tempId}_shots`);
+            const composed = await composeVisualBed({
+              shots: shotInputs,
+              outputPath: bedPath,
+              width: orientation === "portrait" ? 1080 : 1920,
+              height: orientation === "portrait" ? 1920 : 1080,
+              fps: 25,
+              workDir,
+              colorNormalize: true,
+            });
+            if (composed.composed && fs.existsSync(bedPath)) {
+              fs.moveSync(bedPath, tempVideoPath, { overwrite: true });
+              sceneEdl.shots.forEach((shot) => {
+                plannedShots.push(shot);
+                shotSourceCounts[shot.sourceType] = (shotSourceCounts[shot.sourceType] || 0) + 1;
+              });
+            } else {
+              // Composition declined or failed: the single clip still stands.
+              plannedShots.push({
+                ...sceneEdl.shots[0],
+                duration: targetSceneDuration,
+                sourceType: "stock",
+                routingReason: `single_clip:${composed.reason || "not_composed"}`,
+              });
+              shotSourceCounts.stock = (shotSourceCounts.stock || 0) + 1;
+            }
+            if (fs.existsSync(workDir)) fs.removeSync(workDir);
+            if (fs.existsSync(bedPath)) fs.removeSync(bedPath);
+          } else {
+            plannedShots.push({ ...sceneEdl.shots[0], duration: targetSceneDuration });
+            shotSourceCounts.stock = (shotSourceCounts.stock || 0) + 1;
+          }
+        }
         sceneQa.push({
           sceneIndex: index,
           assetExists: fs.existsSync(tempVideoPath),
@@ -1105,8 +1347,15 @@ export class ShortCreator {
           voiceDurationFit: actualVoiceDuration <= targetSceneDuration * 1.08,
         });
 
+        sceneCaptionWords[index] = captions.map((caption) => ({
+          text: String(caption.text || ""),
+          startMs: caption.startMs,
+          endMs: caption.endMs,
+        }));
         scenes.push({
-          captions,
+          // Remotion cannot draw captions it was never given; this is what
+          // actually prevents a second caption layer under the libass one.
+          captions: burnCaptionsWithLibass ? [] : captions,
           video: `http://localhost:${this.config.port}/api/tmp/${tempVideoFileName}`,
           motion: sceneMediaPlan.motion,
           transition: sceneMediaPlan.transitionToNext,
@@ -1147,25 +1396,15 @@ export class ShortCreator {
     }
 
     const totalDurationSeconds = timeline.finalExpectedDurationSeconds;
-    const selectedMusic = this.findMusic(totalDurationSeconds, mediaPlan.recommendedMusicMood as any);
 
-    let beatMap: any = null;
-    if (capabilityManager.isPythonQualityVenvInstalled() && selectedMusic?.file) {
-      try {
-        const musicPath = path.join(this.config.musicDirPath, selectedMusic.file);
-        if (fs.existsSync(musicPath) && fs.statSync(musicPath).size > 1024) {
-          beatMap = await qualityEngine.analyzeBeats(musicPath);
-        }
-      } catch (beatErr) {
-        logger.warn(beatErr, "Beat analysis notice; proceeding with standard timeline");
-      }
-    }
 
     await this.emitProgress(onProgress, {
       status: "rendering",
       progress: 82,
       currentStage: "Rendering",
-      message: "Rendering video with Remotion Motion Design and Advanced Captions.",
+      message: burnCaptionsWithLibass
+        ? "Rendering visuals and motion graphics with Remotion."
+        : "Rendering video with Remotion Motion Design and Advanced Captions.",
       stageKey: "render",
       checkpointStatus: "running",
       inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds },
@@ -1181,7 +1420,11 @@ export class ShortCreator {
           paddingBack: 0,
           captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
           captionPosition: "bottom" as any,
-          captionPreset: mediaPlan.captionPreset || spec.captionStyle || "bold",
+          // Remotion still draws motion graphics, CTA, titles and brand
+          // overlays. Spoken captions are burned afterwards by libass, which
+          // shapes Arabic correctly, so they are suppressed here to avoid two
+          // caption layers on the same frame.
+          captionPreset: burnCaptionsWithLibass ? ("none" as any) : (mediaPlan.captionPreset || spec.captionStyle || "bold"),
           ctaLayout: mediaPlan.ctaLayout || "centered",
           musicVolume: "medium" as any,
           musicDuckingProfile: "balanced",
@@ -1194,7 +1437,7 @@ export class ShortCreator {
     );
     await this.emitProgress(onProgress, {
       status: "rendering",
-      progress: 90,
+      progress: 88,
       currentStage: "Rendered",
       message: "Remotion render completed.",
       stageKey: "render",
@@ -1203,6 +1446,74 @@ export class ShortCreator {
       artifacts: { videoId, sceneCount: scenes.length },
       timingMs: Date.now() - renderStartedAt,
     });
+
+    let captionRenderer: "libass" | "remotion" = "remotion";
+    let captionFontFamily: string | undefined;
+    let captionQaResult: any = null;
+    if (burnCaptionsWithLibass) {
+      const burnStartedAt = Date.now();
+      await this.emitProgress(onProgress, {
+        status: "rendering",
+        progress: 90,
+        currentStage: "Captions",
+        message: "Burning Arabic captions with libass.",
+        stageKey: "render",
+        checkpointStatus: "running",
+      });
+      // Scene captions are scene-relative; shift them onto the video timeline.
+      const timelineWords = sceneCaptionWords.flatMap((words, sceneIndex) => {
+        const offsetMs = Math.round((timeline.scenes[sceneIndex]?.startSeconds || 0) * 1000);
+        return (words || [])
+          .map((word) => ({
+            text: word.text.trim(),
+            startMs: offsetMs + word.startMs,
+            endMs: offsetMs + word.endMs,
+          }))
+          .filter((word) => word.text.length > 0);
+      });
+
+      if (timelineWords.length > 0) {
+        const frame = { width: orientation === "portrait" ? 1080 : 1920, height: orientation === "portrait" ? 1920 : 1080 };
+        const built = renderArabicCaptions(
+          timelineWords,
+          spec.captionStyle as string,
+          frame,
+          // Keep clear of the TikTok/Reels bottom UI band.
+          PLATFORM_SAFE_BOTTOM_RATIO,
+        );
+        captionQaResult = runCaptionQa(built, {
+          style: captionStyleSpec,
+          frame,
+          platformSafeBottomRatio: PLATFORM_SAFE_BOTTOM_RATIO,
+        });
+        const assPath = path.join(this.config.tempDirPath, `${videoId}.captions.ass`);
+        fs.writeFileSync(assPath, built.content, "utf8");
+        const renderedPath = this.getVideoPath(videoId);
+        const burnedPath = path.join(this.config.tempDirPath, `${videoId}.captioned.mp4`);
+        try {
+          await this.ffmpeg.burnAssSubtitles(renderedPath, assPath, burnedPath, fontsDir);
+          fs.moveSync(burnedPath, renderedPath, { overwrite: true });
+          captionRenderer = "libass";
+          captionFontFamily = built.fontFamily;
+        } catch (burnErr) {
+          // A failed burn must not lose the video; keep the Remotion output.
+          logger.error(burnErr, "libass caption burn failed; keeping the uncaptioned Remotion render");
+        } finally {
+          if (fs.existsSync(burnedPath)) fs.removeSync(burnedPath);
+          if (fs.existsSync(assPath)) fs.removeSync(assPath);
+        }
+      }
+      await this.emitProgress(onProgress, {
+        status: "rendering",
+        progress: 92,
+        currentStage: "Captions",
+        message: captionRenderer === "libass" ? "Arabic captions burned." : "Caption burn skipped.",
+        stageKey: "render",
+        checkpointStatus: "completed",
+        provider: captionRenderer,
+        timingMs: Date.now() - burnStartedAt,
+      });
+    }
 
     const validationStartedAt = Date.now();
     await this.emitProgress(onProgress, {
@@ -1293,6 +1604,25 @@ export class ShortCreator {
         watermarkText: spec.brandKit?.watermarkText,
         captionStyle: spec.captionStyle,
         captionProfileUsed: mediaPlan.captionPreset || spec.captionStyle || "bold",
+        captionRenderer,
+        // Canonical shot plan: what the viewer actually looks at, and why.
+        editDecisionList: {
+          version: 'edl.v1',
+          totalDurationSeconds,
+          shots: plannedShots,
+          averageShotSeconds: plannedShots.length
+            ? Number((totalDurationSeconds / plannedShots.length).toFixed(2))
+            : 0,
+          sourceTypeCounts: shotSourceCounts,
+          beatMapUsed: beatTimestamps.length > 0,
+          pacingProfile: 'editorial_ad',
+        },
+        visualShotCount: plannedShots.length,
+        visualIntentPolicy: visualIntentPolicyLog.length > 0 ? visualIntentPolicyLog : undefined,
+        sourceTypeCounts: shotSourceCounts,
+        captionFont: captionFontFamily,
+        captionStyleId: captionStyleSpec.id,
+        captionQa: captionQaResult || undefined,
         musicTrack: selectedMusic.file,
         musicMood: selectedMusic.mood,
         motionPresetsUsed,
@@ -1308,6 +1638,12 @@ export class ShortCreator {
         visualProvidersUsed: Array.from(visualProvidersUsed),
         voiceProvider: spec.voiceProvider,
         voiceProvidersUsed: Array.from(voiceProvidersUsed) as any,
+        // Caption timing provenance, so Video Details can state how the words
+        // were timed rather than implying Whisper for every production.
+        captionTimingSource: captionTimingSources.size === 1
+          ? Array.from(captionTimingSources)[0]
+          : Array.from(captionTimingSources).join('+') || 'synthetic',
+        captionTimingSources: Array.from(captionTimingSources),
         voiceArtifacts,
         costEstimate: spec.costEstimate as any,
         productionSpec: spec as any,
