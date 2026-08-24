@@ -97,7 +97,7 @@ export const LoginPage: React.FC = () => {
               Sign in
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              ABUD Shorts Engine V2
+              ABUD Shorts
             </Typography>
           </Box>
 
