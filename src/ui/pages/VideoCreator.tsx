@@ -406,7 +406,9 @@ const VideoCreator: React.FC = () => {
         watermarkText: brand.watermarkText || brand.name,
         primaryColor: brand.primaryColor || "#24545a",
         accentColor: brand.accentColor || "#d28b4c",
-        captionStyle: brand.captionStyle || "bold",
+        // A brand set to "none" has no caption-style override to contribute;
+        // the production spec's own captionStyle governs that case.
+        captionStyle: brand.captionStyle && brand.captionStyle !== "none" ? brand.captionStyle : "bold",
         includeOutro: brand.includeOutro ?? true,
         outroText: brand.outroText || "",
         contactText: brand.contactText || "",

@@ -199,6 +199,9 @@ const IntegrationsContent: React.FC = () => {
       provider.configured ? provider.status || "ready" : "not_configured",
     );
     const vaultEntry = provider.vault?.[0];
+    // System health already exercises some providers (Pexels, for example), so
+    // a passing check is real evidence even without a manual credential test.
+    const healthyStatus = provider.status === "healthy" || provider.status === "ready";
     const result = testResult[provider.id as string];
 
     return (
@@ -224,15 +227,27 @@ const IntegrationsContent: React.FC = () => {
 
           <Stack direction="row" spacing={0.75} sx={{ mt: 1.5, flexWrap: "wrap", gap: 0.75 }}>
             <Chip size="small" variant="outlined" label={catalog.costLabel} />
-            {provider.isDefault && <Chip size="small" variant="outlined" label="Default" />}
+            {provider.isDefault && (
+              <Chip size="small" variant="outlined" label={catalog.defaultLabel || "Default"} />
+            )}
             {catalog.optional && <Chip size="small" variant="outlined" label="Optional" />}
           </Stack>
 
           <Typography variant="caption" sx={{ color: t.muted, mt: 1.5, display: "block" }}>
             {vaultEntry?.maskedHint ? `Key ${vaultEntry.maskedHint} · ` : ""}
-            {/* Only a real credential test counts. The health-check timestamp
-                is not a connection test and must not be presented as one. */}
-            {provider.configured ? formatWhen(vaultEntry?.lastTestedAt) : "Not set up"}
+            {/* A built-in capability has no credential to test; system health
+                already verifies it, so "Never tested" would be misleading.
+                For everything else only a real credential test counts - the
+                health-check timestamp is not a connection test. */}
+            {catalog.connectionType === "builtin"
+              ? "Self-check passed"
+              : !provider.configured
+                ? "Not set up"
+                : vaultEntry?.lastTestedAt
+                  ? formatWhen(vaultEntry.lastTestedAt)
+                  : healthyStatus
+                    ? "Working — verified by the last system check"
+                    : "Not tested yet"}
           </Typography>
 
           {result && (

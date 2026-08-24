@@ -1,0 +1,25 @@
+{
+  // Canonical type-check configuration for the React/TSX dashboard.
+  //
+  // src/ui is excluded from tsconfig.build.json because it is bundled by Vite
+  // rather than emitted by tsc, and Vite only transpiles - it never type-checks.
+  // That left the entire UI unchecked, which is how a missing import once
+  // reached a production build. This config closes that gap: it emits nothing
+  // and exists purely so `pnpm typecheck:ui` can fail on a real UI type error.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "allowImportingTsExtensions": false,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src/ui/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -28,6 +28,8 @@ export const CLIENT_CATEGORY_ORDER: ClientCategory[] = [
 export type ConnectionType = "key" | "oauth" | "builtin";
 
 export type IntegrationEntry = {
+  /** Shown instead of a bare "Default" chip, e.g. "Arabic Default". */
+  defaultLabel?: string;
   label: string;
   shortName: string;
   category: ClientCategory;
@@ -44,6 +46,7 @@ export const INTEGRATION_CATALOG: Record<string, IntegrationEntry> = {
   local_ai: {
     label: "Built-in Creative Director",
     shortName: "Built-in AI",
+    defaultLabel: "Script Default",
     category: "AI & Script",
     purpose: "Writes the script and scene plan on your own machine.",
     costLabel: "Free · Local",
@@ -74,6 +77,7 @@ export const INTEGRATION_CATALOG: Record<string, IntegrationEntry> = {
   elevenlabs: {
     label: "ElevenLabs",
     shortName: "ElevenLabs",
+    defaultLabel: "Arabic Default",
     category: "Voice",
     purpose: "Required for Arabic narration. Also used for premium English voices.",
     costLabel: "Usage Based",
@@ -84,6 +88,7 @@ export const INTEGRATION_CATALOG: Record<string, IntegrationEntry> = {
   kokoro: {
     label: "Built-in English Voice",
     shortName: "Kokoro",
+    defaultLabel: "English Default",
     category: "Voice",
     purpose: "Free English narration that runs on your own machine.",
     costLabel: "Free · Local",
@@ -123,6 +128,7 @@ export const INTEGRATION_CATALOG: Record<string, IntegrationEntry> = {
   pexels: {
     label: "Pexels",
     shortName: "Pexels",
+    defaultLabel: "Stock Default",
     category: "Visuals & Stock",
     purpose: "Free stock footage library used for most B-roll.",
     costLabel: "Free",
@@ -206,6 +212,7 @@ export const INTEGRATION_CATALOG: Record<string, IntegrationEntry> = {
   upload_post: {
     label: "Upload-Post",
     shortName: "Upload-Post",
+    defaultLabel: "Publishing Default",
     category: "Publishing",
     purpose: "Publish to several platforms through one service.",
     costLabel: "Cloud",

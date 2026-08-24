@@ -2818,6 +2818,43 @@ export function createV2PublicRouter(
     res.status(200).json({ products });
   });
 
+  router.delete("/media/products/:id", async (req, res) => {
+    try {
+      const deleted = await mediaUploadService.deleteProductImage(req.params.id);
+      if (!deleted) {
+        res.status(404).json({ error: "Media item not found." });
+        return;
+      }
+      res.status(200).json({ deleted: true });
+    } catch (error) {
+      res.status(500).json({
+        error: "Could not delete this media item.",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  router.patch("/media/products/:id", async (req, res) => {
+    const name = typeof req.body?.originalName === "string" ? req.body.originalName.trim() : "";
+    if (!name) {
+      res.status(400).json({ error: "A name is required." });
+      return;
+    }
+    try {
+      const record = await mediaUploadService.renameProductImage(req.params.id, name);
+      if (!record) {
+        res.status(404).json({ error: "Media item not found." });
+        return;
+      }
+      res.status(200).json({ media: record });
+    } catch (error) {
+      res.status(500).json({
+        error: "Could not rename this media item.",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   router.get("/media/products/:id", async (req, res) => {
     const product = await mediaUploadService.getProductImage(req.params.id);
     if (!product) {

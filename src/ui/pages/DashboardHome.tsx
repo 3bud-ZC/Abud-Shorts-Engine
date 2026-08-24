@@ -20,6 +20,7 @@ import {
   StatCard,
   StatusBadge,
 } from "../components/v2";
+import { ClientHealthSummary } from "../components/ClientHealthSummary";
 import type { V2HealthComponent, V2Job, VideoItem } from "./v2Types";
 import { buildDashboardMetrics, formatDashboardBytes, summarizeDashboardFailures } from "../utils/dashboardMetrics";
 
@@ -143,29 +144,13 @@ const DashboardHomeContent: React.FC = () => {
             {/* System Health Panel */}
             <SectionCard
               title="System Health"
-              description="Core services required for video production."
+              description="Everything needed to make videos."
               actions={<StatusBadge status={health?.status || "healthy"} />}
             >
               <Stack spacing={1}>
-                {(health?.components || []).map((component) => (
-                  <Stack
-                    key={component.name}
-                    direction="row"
-                    justifyContent="space-between"
-                    alignItems="center"
-                    sx={{
-                      py: 0.75,
-                      px: 1,
-                      borderRadius: 1,
-                      "&:hover": { bgcolor: "rgba(0,0,0,0.02)" },
-                    }}
-                  >
-                    <Typography variant="body2" fontWeight={600}>
-                      {component.name}
-                    </Typography>
-                    <StatusBadge status={component.status} />
-                  </Stack>
-                ))}
+                {/* Grouped into what a customer can act on. The technical
+                    component list stays under System Health → Advanced Details. */}
+                <ClientHealthSummary components={health?.components || []} />
               </Stack>
             </SectionCard>
 

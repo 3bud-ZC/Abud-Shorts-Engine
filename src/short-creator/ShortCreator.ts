@@ -1843,6 +1843,49 @@ export class ShortCreator {
     writeMetadata(this.config.videosDirPath, metadata);
   }
 
+  public getThumbnailPath(videoId: string): string {
+    return path.join(this.config.videosDirPath, `${videoId}.thumb.jpg`);
+  }
+
+  /**
+   * Produces the cover image for an already-rendered video.
+   *
+   * Videos made before cover generation existed have a valid MP4 but no
+   * thumbnail, so the library used to show a broken image for them. This is
+   * called on demand for those, and the result is cached on disk so the work
+   * happens once rather than on every request.
+   *
+   * Writes to a temporary file and renames it into place, so a concurrent
+   * request can never observe a half-written JPEG.
+   */
+  public async ensureThumbnail(videoId: string): Promise<string | null> {
+    const thumbnailPath = this.getThumbnailPath(videoId);
+    if (fs.existsSync(thumbnailPath) && fs.statSync(thumbnailPath).size > 0) {
+      return thumbnailPath;
+    }
+
+    const videoPath = this.getVideoPath(videoId);
+    if (!fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) return null;
+
+    const pendingPath = path.join(
+      this.config.videosDirPath,
+      `${videoId}.thumb.pending-${process.pid}.jpg`,
+    );
+    try {
+      await this.ffmpeg.generateThumbnail(videoPath, pendingPath, 1.5);
+      if (!fs.existsSync(pendingPath) || fs.statSync(pendingPath).size === 0) return null;
+      fs.moveSync(pendingPath, thumbnailPath, { overwrite: true });
+      return thumbnailPath;
+    } catch (error) {
+      logger.warn({ err: String(error), videoId }, "On-demand thumbnail generation failed");
+      return null;
+    } finally {
+      if (fs.existsSync(pendingPath)) {
+        try { fs.removeSync(pendingPath); } catch { /* best effort */ }
+      }
+    }
+  }
+
   public getVideoPath(videoId: string): string {
     return path.join(this.config.videosDirPath, `${videoId}.mp4`);
   }

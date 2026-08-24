@@ -6,7 +6,7 @@ Product: ABUD Shorts Engine V2
 
 Current milestone: V2.2 — Creative Quality Engine & Provider Vault
 
-Milestone completion: V2.2 development. Arabic voice APPROVED and wired into routing; creative editing and Arabic typography pass complete; F1 product shell and no-code client UX complete
+Milestone completion: V2.2 development. Arabic voice APPROVED and wired into routing; creative editing and Arabic typography pass complete; F1 product shell and no-code client UX complete; F1.5 client safety gate complete
 
 Overall project completion: V2.1 GA complete; V2.2 development in progress
 
@@ -16,7 +16,9 @@ Version: 2.1.0 stable baseline (Build 2026.08.23.4, Schema 2.10.0 in development
 
 Target release: 2.1.0 ACHIEVED; V2.2 in development on branch `v2.2-finalization`
 
-Finalization track: F1 (product UI, ABUD design system, no-code client experience) COMPLETE; F2 (creative & animation engine finalization) NOT STARTED
+Finalization track: F1 (product UI, ABUD design system, no-code client experience) COMPLETE; F1.5 (product polish & client safety gate) COMPLETE; F2 (creative & animation engine finalization) NOT STARTED
+
+Final complete-product / client acceptance: PENDING
 
 Human Arabic voice selection: APPROVED — ElevenLabs / Mamdoh (`68MRVrnQAt8vLbu0FCzw`) / Energetic Ad / `eleven_multilingual_v2`, persisted in `app_settings.arabic_voice_default` with `selectedBy: human`
 
@@ -2521,3 +2523,195 @@ V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release.
 Historical development data - including old publications and Piper-era records -
 was preserved. A release package must contain zero developer/test publications;
 that cleanup is still outstanding.
+
+---
+
+## Milestone V2.2-F1.5: Product Polish & Client Safety Gate (2026-08-24)
+
+F1.5 closed the product-experience and client-safety defects left after F1. The
+creative engine was not touched: Mamdoh routing, ElevenLabs synthesis, caption
+alignment, the libass renderer, shot planning, PySceneDetect and the website
+mockups are all F2's scope. **No video was generated and no provider quota was
+spent.**
+
+### 1. The UI was never type-checked (release blocker)
+
+`src/ui` was excluded from **both** `tsconfig.json` and `tsconfig.build.json`,
+and Vite only transpiles. No dashboard file had ever been type-checked, which is
+how a missing import once reached a production bundle.
+
+Added `tsconfig.ui.json` (emits nothing; exists purely to check the UI) and:
+
+| Command | Covers |
+|---------|--------|
+| `pnpm typecheck:server` | server, worker, shared code |
+| `pnpm typecheck:ui` | React/TSX dashboard |
+| `pnpm typecheck` | both — the canonical gate |
+
+`pnpm build` now runs `typecheck` first, so a UI type error cannot reach a
+bundle. **Verified by deliberately breaking a UI file: the build exited 2 and
+named the file and line.** The probe was then removed.
+
+**All 21 pre-existing UI type errors were fixed properly — no `any`, no
+`@ts-ignore`, no `@ts-nocheck`:**
+
+- `VideoItem` was missing fields the server really returns (title, thumbnailUrl,
+  qualityScore, caption provenance, shot planning). The type was completed to
+  match `VideoMetadata` rather than the reads being cast away.
+- Provider `details` was `Record<string, unknown>`, so every field access
+  produced `unknown` and could not be rendered. Replaced with a typed
+  `ProviderDetails` shape that keeps an index signature for forward
+  compatibility.
+- A brand set to "none" captions was being forced onto a brandKit union that has
+  no such member; the override is now omitted in that case, which is what it
+  means.
+
+Current result: **0 UI type errors, 0 server type errors.**
+
+### 2. Media library — root cause established, not assumed
+
+The five "luxury_smartwatch.png" entries were **not** broken files, bad
+metadata or a rendering fault. Inspected on disk: each is a genuine PNG
+(`89 50 4e 47` header) that `ffprobe` decodes as **`png, 1x1`, 70 bytes** —
+1×1 transparent placeholder images from development testing. The cards were
+blank because there was nothing to draw.
+
+A pre-existing unit test had **enshrined that behaviour**, uploading a 1×1 PNG
+and asserting success. That test is why the defect existed; it now asserts the
+corrected behaviour and a companion test covers the accept path with a real
+image.
+
+Validation added (`media/imageInspection.ts`), all from the file's own bytes:
+
+- magic-byte detection for PNG/JPEG/WEBP — extensions are never trusted
+- **real** dimension parsing: PNG IHDR, JPEG SOF walk, WEBP VP8/VP8L/VP8X.
+  Previously JPEG and WEBP returned a hardcoded 1080×1080 — a size the engine
+  had never measured.
+- a minimum usable edge (32 px), so degenerate placeholders are refused
+- duplicate detection via the checksum that was already computed but unused
+
+Existing assets are **never deleted**. The listing re-inspects each file, so the
+five legacy placeholders now show **Invalid Media** with the reason
+"only 1x1 pixels, too small to appear in a video", four of them additionally
+labelled **Duplicate**, each offering Replace or Remove. Valid media shows a
+real preview, dimensions, size, type and date with Preview / Use in video /
+Rename / Delete, deletion behind a confirmation.
+
+### 3. On-demand thumbnails
+
+Videos rendered before cover generation existed had a valid MP4 but no
+thumbnail, so the library requested an image that 404'd.
+
+`ShortCreator.ensureThumbnail()` now derives one with FFmpeg on first request
+and caches it. It encodes to a separate pending file and renames it into place,
+so no request can observe a half-written JPEG, and the pending file is cleaned
+up either way.
+
+Measured on a real historical video: **first request 200, 77,652 bytes, 222 ms;
+second request 200, identical bytes, 7.9 ms** — cached, not regenerated.
+
+Security is unchanged and was verified: no credential → **401**; encoded
+traversal (`..%2F..%2Fetc%2Fpasswd`) → **400**; raw traversal with
+`--path-as-is` → **404**. The path is composed from the configured videos
+directory and the id passes `isSafeVideoId` first, so no arbitrary file is
+reachable.
+
+### 4. Publishing connections
+
+The single generic form asked every customer for
+"Account ID / Handle / Chat ID" and an "API Key / Access Token / Bot Token
+(Optional if set in environment)" — developer vocabulary that also told the
+customer to edit a file they must never touch.
+
+Replaced with a destination picker and per-provider forms:
+
+| Destination | Flow | Verified live |
+|-------------|------|---------------|
+| YouTube | **Connect with Google** (OAuth) | shows OAuth button, **no token input at all** |
+| Instagram & Facebook | **Connect Meta Account** (OAuth) | OAuth only |
+| TikTok | **Connect TikTok** (OAuth) | OAuth only |
+| Telegram | Display name · Channel or chat · Bot token + **Test bot** | exactly those three fields |
+| Upload-Post | Display name · API key + Test connection | no unrelated fields |
+
+Validation is per destination, so a YouTube connection never asks for a Telegram
+chat id. **No OAuth connection was performed and none is claimed.**
+
+### 5. Dashboard and System Health
+
+The dashboard listed Database, n8n, Render Worker, Remotion, FFmpeg, Kokoro,
+Whisper and Pexels by name. It now rolls them into Application, Video Engine,
+Storage, Automation, Voice, Media Sources and Publishing, keeping the **worst**
+status in each group so a failure is never hidden behind a healthy sibling. The
+underlying checks are unchanged; the technical list stays under System Health →
+Advanced Details.
+
+**Verified live: zero occurrences of Database, n8n, Render Worker, Remotion,
+FFmpeg, Kokoro, Whisper, Pexels or PostgreSQL in the dashboard text.**
+
+### 6. Integrations language
+
+- built-in capabilities read **Self-check passed**, not "Never tested"
+- a configured provider whose last health check passed reads
+  **"Working — verified by the last system check"**
+- bare "Default" replaced with Arabic Default, English Default, Script Default,
+  Stock Default and Publishing Default
+
+Verified live: 0 "Never tested", 0 bare "Default", all five contextual labels
+present.
+
+### 7. Debug overlays
+
+The reported "FPS N/A" overlay **does not exist in the current build**. The whole
+`src/` tree was searched and every System Health tab was opened live; the only
+FPS references are Remotion composition constants in `Root.tsx`, which never
+render in the dashboard. A regression test now fails if an FPS or debug overlay
+is ever introduced into a client page.
+
+### 8. Browser QA
+
+Real existing records only — no job was created.
+
+Dashboard, Create Video, Productions, Video Library, Media, Brands, Templates,
+Publishing, Integrations, Settings, System Health, Login and Setup at
+**1920×1080, 1366×768 and 390×844**:
+
+- **0 horizontal overflow** on every page at every viewport
+- **0 occurrences** of undefined / NaN / $undefined / Control Plane / FPS
+- **0 broken images** for valid media
+- **0 unexpected 401** — the publishing SSE stream now authenticates
+- **0 thumbnail 404s** — historical covers are generated on demand
+- mobile collapses to a labelled hamburger drawer with all eleven destinations
+
+The only console entries remaining are two `ERR_INCOMPLETE_CHUNKED_ENCODING`
+from the publishing event stream being torn down on navigation, which is normal
+for SSE and non-fatal.
+
+### 9. No-code audit
+
+Setup, provider configuration, media upload, video creation, revision, download,
+publishing connection, scheduling, backup, restore and diagnostics are all
+reachable from the browser. **No remaining customer workflow requires a
+terminal, source edit, `.env` edit, SQL or a Docker command after
+installation.** No missing capability is papered over with a documented terminal
+workaround.
+
+One operator-level exception, unchanged and correctly outside the customer
+workflow: installing the stack itself.
+
+### 10. Verification
+
+- `pnpm typecheck` — **PASS** (server + UI, 0 errors)
+- `pnpm vitest run` — **39 files, 423 tests, 0 failures** (baseline 38 / 403)
+- `pnpm build` — PASS, now gated on typecheck
+- Docker: app, render-worker, n8n and PostgreSQL all healthy
+
+Note: the Docker daemon stopped partway through this session (an environment
+event, not a change made here). It was restarted and all four services returned
+healthy before QA continued.
+
+### 11. Release state
+
+V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release. Historical
+data — old publications, Piper-era records and the legacy media placeholders —
+was preserved. A release package must still contain zero developer/test
+publications; that cleanup remains outstanding.
