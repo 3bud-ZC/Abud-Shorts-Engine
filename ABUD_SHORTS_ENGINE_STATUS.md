@@ -6,7 +6,7 @@ Product: ABUD Shorts Engine V2
 
 Current milestone: V2.2 — Creative Quality Engine & Provider Vault
 
-Milestone completion: V2.2 foundational development slice complete; Arabic voice APPROVED and wired into production routing; creative editing and Arabic typography quality pass complete
+Milestone completion: V2.2 development. Arabic voice APPROVED and wired into routing; creative editing and Arabic typography pass complete; F1 product shell and no-code client UX complete
 
 Overall project completion: V2.1 GA complete; V2.2 development in progress
 
@@ -14,7 +14,9 @@ Release status: V2.1 GENERAL AVAILABILITY; V2.2 NOT RELEASED
 
 Version: 2.1.0 stable baseline (Build 2026.08.23.4, Schema 2.10.0 in development source)
 
-Target release: 2.1.0 ACHIEVED; V2.2 development started
+Target release: 2.1.0 ACHIEVED; V2.2 in development on branch `v2.2-finalization`
+
+Finalization track: F1 (product UI, ABUD design system, no-code client experience) COMPLETE; F2 (creative & animation engine finalization) NOT STARTED
 
 Human Arabic voice selection: APPROVED — ElevenLabs / Mamdoh (`68MRVrnQAt8vLbu0FCzw`) / Energetic Ad / `eleven_multilingual_v2`, persisted in `app_settings.arabic_voice_default` with `selectedBy: human`
 
@@ -2340,3 +2342,182 @@ plays; no console errors.
 
 V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release.
 Human complete-video acceptance is **PENDING**.
+
+---
+
+## Milestone V2.2-F1: ABUD Product Shell & No-Code Client Experience (2026-08-24)
+
+F1 is the product-experience layer. **No creative-engine behaviour was changed**:
+Mamdoh routing, ElevenLabs synthesis, caption alignment, the libass renderer,
+shot planning, PySceneDetect and the website mockups are all untouched and are
+F2's scope. No video was generated and no ElevenLabs credit was spent.
+
+Branch: `v2.2-finalization`, created at `a51bf3a`. `main` was not reset and
+`v2.1.0` was not rewritten.
+
+### 1. Canonical design system
+
+`src/ui/theme/tokens.ts` is the single source of colour, radius and typography.
+Dark is canonical: near-black surfaces (#07070C), a violet primary (#8B5CF6), a
+restrained cyan accent (#22D3EE) and a green success state. An optional light
+palette is retained because the architecture supports it cleanly.
+
+`abudTheme.ts` derives the whole MUI theme from those tokens, so components no
+longer carry literal colours. The hardcoded `#ffffff` surfaces and teal
+accents in the shared component kit, Job Details and Login were removed. The
+teal that remains in Brands and Create Video is the customer's own default brand
+colour for generated videos - content, not chrome.
+
+Glow is used only behind the shell and the identity mark, never behind body
+text.
+
+### 2. Typography
+
+IBM Plex Sans Arabic is bundled locally in four weights and serves both Arabic
+and Latin, so mixed text stays consistent. Verified: `fc-list` reports both
+`ar` and `en` coverage, and the build emits the four .ttf files into
+`dist/ui/assets`. **The dashboard makes no font request to any network host.**
+
+### 3. Identity and navigation
+
+An ABUD lightning mark is drawn as inline SVG from primitives - nothing was
+downloaded or traced from third-party branding. The shell reads
+**ABUD Shorts / Video Production Engine**; "Control Plane V2" is gone.
+
+Navigation is grouped the way a customer thinks:
+
+| Group | Items |
+|-------|-------|
+| — | Dashboard |
+| Create | Create Video · Productions · Video Library |
+| Content | Brands · Templates · Media |
+| Distribute | Publishing |
+| Configure | Integrations · Settings |
+| System | System Health |
+
+n8n, PostgreSQL, the render worker and the internal service token are not
+navigation destinations and are not named anywhere in normal UX.
+
+### 4. Integrations
+
+`/integrations` replaces the technical Providers page (which survives at
+`/providers/technical`; `/providers` redirects). Integrations are grouped as
+AI & Script, Voice, Visuals & Stock, Publishing, and Optional & Advanced -
+the last collapsed by default.
+
+Each card states purpose in plain language, a cost label, one of the five
+canonical statuses, whether it was really tested, and offers Configure /
+Test connection / Disconnect. Secrets are entered masked, stored through the
+existing encrypted `ProviderCredentialsVault`, and never returned or displayed
+again.
+
+Pixabay was added to the provider listing so the second stock source is
+configurable from the browser; it was implemented in the previous pass but had
+no UI.
+
+The catalog only describes providers the engine really implements - a test
+asserts that no integration is invented and that infrastructure never appears
+as one.
+
+### 5. Canonical status vocabulary
+
+`statusModel.ts` maps every backend spelling onto five states: **Connected,
+Ready, Not Configured, Needs Attention, Unavailable**. An unrecognised state
+becomes "Needs Attention" - never success. Status always carries a label, so it
+is never communicated by colour alone.
+
+### 6. Create Video: Simple and Advanced
+
+Simple is the default and shows eight friendly video types over the existing
+canonical production modes, plus Language, Duration, Aspect Ratio, Quality and
+Brand. Advanced reveals Production Mode, Content Style, Visual Mode, Voice
+Provider, Voice, Caption Style and Resolution.
+
+Verified live: Simple renders exactly five fields and all eight types; toggling
+Advanced reveals all seven additional controls.
+
+A resolved-production summary states, before the job is created, which voice,
+captions, visuals, quality and cost will be used - reading the server's own
+contract, omitting anything it did not resolve, and never printing undefined.
+
+### 7. Setup wizard
+
+Steps renamed for a non-technical customer (Welcome, System Check, Sign-in,
+Storage, Stock Footage, Voice & AI, Publishing, Video Defaults, Review, Ready)
+and the wizard finishes on **Ready to Create Your First Video**, leading
+straight into Create Video. It never asks about Docker, database URLs, n8n or
+service tokens.
+
+**Defect fixed:** the wizard collected Pexels and Gemini keys and then discarded
+them, leaving the customer believing a provider was configured when it was not.
+Keys typed during setup are now saved into the encrypted vault, and ElevenLabs
+was added because Arabic narration needs it.
+
+### 8. System Health
+
+Rolls up into six groups a non-technical operator understands - Application,
+Video Engine, Storage, Database, Automation, Integrations - with the worst
+status in a group winning so a problem is never hidden. Tabs renamed to
+Services, Optional Features, Storage, Activity, Support, Advanced Details.
+
+Two backend health messages named their implementation ("PostgreSQL connection
+is healthy", "n8n health endpoint responded") and leaked into the customer view;
+they now read "Database" and "Automation service". **Verified: no occurrence of
+n8n, PostgreSQL, Docker or container anywhere in the System Health page text.**
+
+### 9. Other fixes found while doing F1
+
+- **Publishing live updates never worked.** The page opened an `EventSource`,
+  which cannot send an Authorization header, so the stream 401'd permanently.
+  It now passes the session token as the `access_token` query parameter the API
+  already accepts, and returns 200.
+- Page titles disagreed with the navigation (Jobs vs Productions, Videos vs
+  Video Library); they now match.
+- Integrations showed a "Tested" timestamp for providers that were never set
+  up, because it fell back to the health-check time. A health check is not a
+  connection test and is no longer presented as one.
+- `ConfirmDialog` was given wrong prop names on the new page - caught by
+  type-checking the UI (see below).
+
+### 10. Known gap: the UI is excluded from type checking
+
+`src/ui` is excluded in **both** `tsconfig.json` and `tsconfig.build.json`,
+and Vite only transpiles, so no UI file has ever been type-checked in this
+repository. This was discovered when a missing import compiled cleanly.
+
+Every file F1 added or substantially rewrote was type-checked explicitly and is
+clean. Pre-existing type errors remain in DashboardHome, ProvidersPage,
+VideoCreator (brand kit caption style) and VideoDetails; they were not
+introduced here and were not fixed in this pass.
+
+### 11. Browser QA
+
+Pages verified against real existing records - no job was created.
+
+Desktop 1920x1080, laptop 1366x768 and mobile 390x844: Dashboard, Create Video,
+Productions, Video Library, Media, Brands, Templates, Publishing, Integrations,
+Settings, System Health. **No horizontal overflow at any breakpoint.** On mobile
+the sidebar collapses to a drawer behind a labelled hamburger and opens with all
+eleven destinations.
+
+No occurrence of "Control Plane", "undefined", "NaN", "$undefined", "worker
+lease" or "service token" in any page's rendered text.
+
+**Remaining console noise:** historical videos produced before cover generation
+existed have no thumbnail file, so the library requests return 404 and the card
+falls back to a placeholder. These are non-fatal and are a property of old
+development records; historical data was not deleted. Serving a generated cover
+for those videos is a small follow-up.
+
+### 12. Verification
+
+- `pnpm vitest run` — **38 files, 403 tests, 0 failures** (baseline 37 / 381)
+- `pnpm build` — PASS
+- Docker: app, render-worker, n8n, PostgreSQL all healthy; no new public ports
+
+### 13. Release state
+
+V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release.
+Historical development data - including old publications and Piper-era records -
+was preserved. A release package must contain zero developer/test publications;
+that cleanup is still outstanding.

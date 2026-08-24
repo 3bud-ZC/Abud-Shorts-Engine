@@ -456,8 +456,9 @@ const JobDetailsContent: React.FC = () => {
                   sx={{
                     p: 2,
                     borderRadius: 1.5,
-                    bgcolor: "rgba(36, 84, 90, 0.04)",
-                    border: "1px solid rgba(36, 84, 90, 0.12)",
+                    bgcolor: "action.hover",
+                    border: "1px solid",
+                    borderColor: "divider",
                     fontStyle: "italic",
                     whiteSpace: "pre-wrap",
                     fontSize: "0.95rem",
@@ -635,7 +636,7 @@ const JobDetailsContent: React.FC = () => {
             )}
 
             {/* 3. Technical Details Accordion */}
-            <Accordion variant="outlined" sx={{ borderRadius: 2, bgcolor: "#ffffff" }}>
+            <Accordion variant="outlined" sx={{ borderRadius: 2 }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Typography variant="subtitle2" fontWeight={800}>
                   Advanced technical details

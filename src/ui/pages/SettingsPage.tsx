@@ -70,9 +70,9 @@ const SettingsPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Settings & Production Defaults"
+        title="Settings"
         eyebrow="Configuration"
-        description="Configure default creation modes, language preferences, AI providers, and Brand Kit defaults. Secrets are masked and stored securely."
+        description="Defaults for new videos, your brand, publishing, security and backups."
         actions={
           <Button
             variant="contained"
@@ -234,8 +234,8 @@ const SettingsPage: React.FC = () => {
         {/* Secure Provider Credentials Summary */}
         <Grid item xs={12} lg={5}>
           <SectionCard
-            title="Provider Credentials (Masked)"
-            description="Credentials are securely injected via environment variables. Plaintext secrets are never transmitted to the browser."
+            title="Integrations"
+            description="Keys are stored encrypted and are never shown again after saving. Add or replace them on the Integrations page."
           >
             <Stack spacing={1.5}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -294,7 +294,7 @@ const SettingsPage: React.FC = () => {
         {/* Publishing & Distribution Defaults */}
         <Grid item xs={12}>
           <SectionCard
-            title="Publishing & Distribution Defaults"
+            title="Publishing"
             description="Control default publication modes, privacy, and scheduling timezone."
           >
             <Grid container spacing={2}>
@@ -351,8 +351,8 @@ const SettingsPage: React.FC = () => {
         {/* Backup & Restore Management */}
         <Grid item xs={12}>
           <SectionCard
-            title="API Tokens"
-            description="Create scoped server API tokens for production jobs, read-only job access, video reads, and publishing."
+            title="Security"
+            description="Access tokens for connecting other tools to ABUD Shorts. Not needed for normal use."
           >
             <ApiTokenManager />
           </SectionCard>
@@ -360,8 +360,8 @@ const SettingsPage: React.FC = () => {
 
         <Grid item xs={12}>
           <SectionCard
-            title="Backup & Disaster Recovery"
-            description="Create backups of configuration, brand profiles, templates, production records, and rendered media."
+            title="Backup & Restore"
+            description="Save a copy of your settings, brands, templates and videos - and restore them later."
             actions={
               <Button
                 variant="outlined"

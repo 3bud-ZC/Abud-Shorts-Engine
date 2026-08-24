@@ -246,7 +246,7 @@ export function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: "#ffffff" }}>
+    <Card variant="outlined" sx={{ borderRadius: 3 }}>
       {(title || description || actions) && (
         <>
           <Stack
@@ -296,7 +296,6 @@ export function StatCard({
         height: "100%",
         minHeight: 110,
         borderRadius: 2,
-        bgcolor: "#ffffff",
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",
@@ -486,12 +485,12 @@ export function RecentJobCard({
         borderRadius: 2,
         cursor: onClick ? "pointer" : "default",
         transition: "all 0.15s ease",
-        borderColor: "rgba(31, 41, 51, 0.12)",
+        borderColor: "divider",
         "&:hover": onClick
           ? {
               boxShadow: "0 3px 12px rgba(0,0,0,0.06)",
               borderColor: "primary.main",
-              bgcolor: "rgba(36, 84, 90, 0.02)",
+              bgcolor: "action.hover",
             }
           : {},
       }}

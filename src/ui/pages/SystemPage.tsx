@@ -42,11 +42,59 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
+/**
+ * Client vocabulary for infrastructure. A customer should read "Automation"
+ * rather than "n8n" and "Storage" rather than a container name; the technical
+ * identity is still available in Advanced Details.
+ */
+const CLIENT_SERVICE_NAMES: Record<string, string> = {
+  n8n: "Automation",
+  database: "Database",
+  postgres: "Database",
+  postgresql: "Database",
+  app: "Application",
+  api: "Application",
+  storage: "Storage",
+  disk: "Storage",
+  remotion: "Video Engine",
+  ffmpeg: "Video Engine",
+  worker: "Video Engine",
+  "render worker": "Video Engine",
+  pexels: "Integrations",
+  elevenlabs: "Integrations",
+};
+
 function serviceDisplayName(name: string): string {
-  if (name.toLowerCase() === "n8n") return "Automation engine";
-  if (name.toLowerCase() === "database") return "Database";
-  if (name.toLowerCase().includes("render worker")) return "Render worker";
-  return name;
+  const key = (name || "").toLowerCase().trim();
+  if (CLIENT_SERVICE_NAMES[key]) return CLIENT_SERVICE_NAMES[key];
+  const partial = Object.keys(CLIENT_SERVICE_NAMES).find((candidate) => key.includes(candidate));
+  return partial ? CLIENT_SERVICE_NAMES[partial] : name;
+}
+
+/** The six groups a non-technical operator actually cares about. */
+const CLIENT_HEALTH_GROUPS = [
+  "Application",
+  "Video Engine",
+  "Storage",
+  "Database",
+  "Automation",
+  "Integrations",
+] as const;
+
+/**
+ * Rolls the raw component list up into those groups. The worst status in a
+ * group wins, so a problem is never hidden behind a healthy sibling.
+ */
+function groupHealth(components: Array<{ name: string; status: string; message?: string }> = []) {
+  const severity: Record<string, number> = { healthy: 0, degraded: 1, unhealthy: 2 };
+  return CLIENT_HEALTH_GROUPS.map((group) => {
+    const members = components.filter((component) => serviceDisplayName(component.name) === group);
+    if (members.length === 0) return { group, status: "unknown", members: [] as typeof members };
+    const worst = members.reduce((a, b) =>
+      (severity[b.status] ?? 1) > (severity[a.status] ?? 1) ? b : a,
+    );
+    return { group, status: worst.status, members };
+  }).filter((entry) => entry.members.length > 0);
 }
 
 export const SystemPage: React.FC = () => {
@@ -130,9 +178,9 @@ export const SystemPage: React.FC = () => {
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="System"
-        eyebrow="Operations"
-        description="Check production readiness, storage usage, workers, and sanitized diagnostics without exposing credentials."
+        title="System Health"
+        eyebrow="System"
+        description="A quick check that everything needed to make videos is running."
         actions={
           <Stack direction="row" spacing={1}>
             <Button
@@ -141,7 +189,7 @@ export const SystemPage: React.FC = () => {
               onClick={downloadBundle}
               disabled={downloadingBundle}
             >
-              {downloadingBundle ? "Generating..." : "Download Diagnostic Bundle"}
+              {downloadingBundle ? "Generating..." : "Download support file"}
             </Button>
             <Button variant="contained" startIcon={<RefreshIcon />} onClick={load} disabled={loading}>
               Refresh
@@ -202,13 +250,36 @@ export const SystemPage: React.FC = () => {
       </Grid>
 
       {/* Navigation Tabs */}
-      <Tabs value={tab} onChange={(_, val) => setTab(val)} sx={{ borderBottom: 1, borderColor: "divider" }}>
-        <Tab label="Health" />
-        <Tab label="Capability Packs" />
-        <Tab label="Storage Breakdown" />
-        <Tab label="Logs" />
-        <Tab label="Support Bundle" />
-        <Tab label="Observability" />
+      {/* Plain-language rollup. Technical component identity stays in the
+          tabs below, which are for support rather than daily use. */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        {groupHealth(health?.components as any).map((entry) => (
+          <Grid item xs={12} sm={6} md={4} lg={2} key={entry.group}>
+            <SectionCard>
+              <Stack spacing={1}>
+                <Typography variant="body2" fontWeight={650}>
+                  {entry.group}
+                </Typography>
+                <StatusBadge status={entry.status} />
+              </Stack>
+            </SectionCard>
+          </Grid>
+        ))}
+      </Grid>
+
+      <Tabs
+        value={tab}
+        onChange={(_, val) => setTab(val)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ borderBottom: 1, borderColor: "divider" }}
+      >
+        <Tab label="Services" />
+        <Tab label="Optional Features" />
+        <Tab label="Storage" />
+        <Tab label="Activity" />
+        <Tab label="Support" />
+        <Tab label="Advanced Details" />
       </Tabs>
 
       {/* Tab 0: Services & Health */}

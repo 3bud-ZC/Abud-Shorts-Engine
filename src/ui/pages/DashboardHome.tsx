@@ -69,7 +69,7 @@ const DashboardHomeContent: React.FC = () => {
     <>
       <PageHeader
         title="Dashboard"
-        eyebrow="Production Overview"
+        eyebrow="Overview"
         description="Create videos, watch production progress, review completed outputs, and prepare publishing from one workspace."
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -105,7 +105,7 @@ const DashboardHomeContent: React.FC = () => {
         {/* Left Column: Recent Jobs */}
         <Grid item xs={12} lg={8}>
           <SectionCard
-            title="Recent Video Jobs"
+            title="Recent Productions"
             description="Latest video production requests and their current progress."
             actions={
               <Button size="small" endIcon={<ArrowForwardIcon />} onClick={() => navigate("/jobs")}>
@@ -124,7 +124,7 @@ const DashboardHomeContent: React.FC = () => {
 
               {jobs.length === 0 && (
                 <EmptyState
-                  title="No video jobs yet"
+                  title="No productions yet"
                   description="Create your first video using Prompt Studio or pre-built Business Templates."
                   action={
                     <Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate("/create")}>

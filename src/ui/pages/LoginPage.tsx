@@ -84,7 +84,7 @@ export const LoginPage: React.FC = () => {
                 width: 48,
                 height: 48,
                 borderRadius: "50%",
-                bgcolor: "rgba(36, 84, 90, 0.1)",
+                bgcolor: "action.selected",
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",

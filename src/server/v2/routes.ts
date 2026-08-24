@@ -1705,6 +1705,20 @@ export function createV2PublicRouter(
         checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
       },
       {
+        // Optional second free stock source. Absence never blocks readiness, so
+        // this reports not_configured rather than a problem state.
+        id: "pixabay",
+        name: "Pixabay",
+        category: "Visuals",
+        tier: "stock",
+        status: vaultByProvider.has("pixabay") || process.env.PIXABAY_API_KEY ? "healthy" : "not_configured",
+        configured: vaultByProvider.has("pixabay") || Boolean(process.env.PIXABAY_API_KEY),
+        isDefault: false,
+        message:
+          "Optional second free stock library. Adding it gives the shot planner more footage to choose between.",
+        checkedAt: new Date().toISOString(),
+      },
+      {
         id: "veo",
         name: "Google Veo",
         category: "Visuals",

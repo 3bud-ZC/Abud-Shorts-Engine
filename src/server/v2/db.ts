@@ -67,7 +67,7 @@ export class V2Database {
       return {
         ok: true,
         latencyMs: Date.now() - started,
-        message: "PostgreSQL connection is healthy.",
+        message: "Database connection is healthy.",
       };
     } catch (error) {
       return {

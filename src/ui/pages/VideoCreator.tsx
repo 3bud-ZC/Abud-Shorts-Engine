@@ -27,6 +27,8 @@ import {
   MenuItem,
   Select,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Step,
   StepLabel,
   Stepper,
@@ -68,6 +70,8 @@ import type {
 } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
 import { externalCostLabel } from "../../types/costDisplay";
+import { ProductionSummary } from "../components/ProductionSummary";
+import { VIDEO_TYPES, videoTypeById, videoTypeByMode } from "./videoTypes";
 
 const EXAMPLE_PROMPTS = [
   {
@@ -183,6 +187,21 @@ const VideoCreator: React.FC = () => {
   const [resolution, setResolution] = useState("1080p");
   const [contentStyle, setContentStyle] = useState("advertisement");
   const [productionMode, setProductionMode] = useState("auto_hybrid");
+  // Simple is the default: a customer should be able to produce a video from a
+  // prompt and a handful of obvious choices. Advanced reveals the full control
+  // surface without changing any underlying contract.
+  const [uiMode, setUiMode] = useState<"simple" | "advanced">("simple");
+  const [videoTypeId, setVideoTypeId] = useState<string>("social_ad");
+
+  /** Applies the friendly type's canonical mode and companion defaults. */
+  function applyVideoType(nextId: string) {
+    const entry = videoTypeById(nextId);
+    if (!entry) return;
+    setVideoTypeId(nextId);
+    setProductionMode(entry.mode);
+    if (entry.suggestedVisualMode) setVisualMode(entry.suggestedVisualMode as any);
+    if (entry.suggestedCaptionStyle) setCaptionStyle(entry.suggestedCaptionStyle as any);
+  }
   const [visualMode, setVisualMode] = useState("auto");
   const [voiceProvider, setVoiceProvider] = useState("auto");
   const [voiceId, setVoiceId] = useState("");
@@ -744,12 +763,77 @@ const VideoCreator: React.FC = () => {
             </Stack>
           </SectionCard>
 
+          {/* Video type: friendly labels over the canonical production modes. */}
+          <SectionCard
+            title="What kind of video?"
+            description="Pick the closest match. You can fine-tune everything under Advanced."
+          >
+            <Grid container spacing={1.5}>
+              {VIDEO_TYPES.map((entry) => {
+                const selected = videoTypeId === entry.id;
+                return (
+                  <Grid item xs={12} sm={6} md={3} key={entry.id}>
+                    <Card
+                      onClick={() => applyVideoType(entry.id)}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={selected}
+                      onKeyDown={(event: React.KeyboardEvent) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          applyVideoType(entry.id);
+                        }
+                      }}
+                      sx={{
+                        p: 1.75,
+                        height: "100%",
+                        cursor: "pointer",
+                        borderColor: selected ? "primary.main" : "divider",
+                        bgcolor: selected ? "action.selected" : "transparent",
+                        transition: "border-color 120ms, background-color 120ms",
+                        "&:hover": { borderColor: "primary.main" },
+                      }}
+                    >
+                      <Typography variant="body2" fontWeight={650}>
+                        {entry.label}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                        {entry.description}
+                      </Typography>
+                    </Card>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          </SectionCard>
+
           {/* Progressive Disclosure: Production Options */}
           <Accordion defaultExpanded>
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-              <Typography variant="h6" fontWeight={800}>
-                Video settings
-              </Typography>
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                sx={{ width: "100%", pr: 1 }}
+              >
+                <Typography variant="h6" fontWeight={700}>
+                  Video settings
+                </Typography>
+                <ToggleButtonGroup
+                  size="small"
+                  exclusive
+                  value={uiMode}
+                  onChange={(event, next) => {
+                    event.stopPropagation();
+                    if (next) setUiMode(next);
+                  }}
+                  onClick={(event) => event.stopPropagation()}
+                  aria-label="Settings detail level"
+                >
+                  <ToggleButton value="simple" aria-label="Simple settings">Simple</ToggleButton>
+                  <ToggleButton value="advanced" aria-label="Advanced settings">Advanced</ToggleButton>
+                </ToggleButtonGroup>
+              </Stack>
             </AccordionSummary>
             <AccordionDetails>
               <Grid container spacing={2}>
@@ -808,7 +892,8 @@ const VideoCreator: React.FC = () => {
                 </Grid>
 
                 {/* Production Mode */}
-                <Grid item xs={12} sm={6} md={3}>
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="production-mode-select-label">Production Mode</InputLabel>
                     <Select labelId="production-mode-select-label" id="production-mode-select" label="Production Mode" value={productionMode} onChange={(e) => setProductionMode(e.target.value)}>
@@ -824,6 +909,7 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
                 {/* Quality Profile */}
                 <Grid item xs={12} sm={6} md={3}>
@@ -840,7 +926,8 @@ const VideoCreator: React.FC = () => {
                 </Grid>
 
                 {/* Resolution */}
-                <Grid item xs={12} sm={6} md={3}>
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="resolution-select-label">Resolution</InputLabel>
                     <Select labelId="resolution-select-label" id="resolution-select" label="Resolution" value={resolution} onChange={(e) => setResolution(e.target.value)}>
@@ -849,9 +936,11 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
                 {/* Content Style */}
-                <Grid item xs={12} sm={6} md={3}>
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="content-style-select-label">Content Style</InputLabel>
                     <Select labelId="content-style-select-label" id="content-style-select" label="Content Style" value={contentStyle} onChange={(e) => setContentStyle(e.target.value)}>
@@ -866,9 +955,11 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
                 {/* Visual Mode */}
-                <Grid item xs={12} sm={6} md={3}>
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="visual-mode-select-label">Visual Mode</InputLabel>
                     <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
@@ -884,9 +975,11 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
                 {/* Voice Provider */}
-                <Grid item xs={12} sm={6} md={3}>
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="voice-provider-select-label">Voice Provider</InputLabel>
                     <Select
@@ -911,8 +1004,11 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
-                <Grid item xs={12} sm={6} md={3}>
+                {/* Voice */}
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="voice-select-label">Voice</InputLabel>
                     <Select labelId="voice-select-label" id="voice-select" label="Voice" value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
@@ -934,9 +1030,11 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
                 {/* Captions Style */}
-                <Grid item xs={12} sm={6} md={3}>
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
                     <InputLabel id="captions-style-select-label">Captions Style</InputLabel>
                     <Select labelId="captions-style-select-label" id="captions-style-select" label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
@@ -950,6 +1048,7 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
 
                 {/* Saved Brand */}
                 <Grid item xs={12} sm={6} md={3}>
@@ -1223,22 +1322,9 @@ const VideoCreator: React.FC = () => {
                   </Grid>
                 </Card>
 
-                <Stack direction="row" spacing={2} flexWrap="wrap" alignItems="center">
-                  <StatusBadge status="ready" label={`Target: ${previewSpec.durationSeconds}s`} />
-                  <StatusBadge status="ready" label={`Dialect: ${previewSpec.dialect || "none"}`} />
-                  {/* Shows what Auto actually resolved to, so a saved Voice Lab
-                      default is visible before the job is created. */}
-                  <StatusBadge
-                    status="ready"
-                    label={`Voice: ${resolvedVoiceLabel(previewSpec) || "provider default"}`}
-                  />
-                  <Chip
-                    color={costEstimate?.isFree ? "success" : "warning"}
-                    label={
-                      costLabel(costEstimate)
-                    }
-                  />
-                </Stack>
+                {/* One canonical summary of what the engine resolved: voice,
+                    captions, visuals, quality and cost, in plain language. */}
+                <ProductionSummary spec={previewSpec} costEstimate={costEstimate as any} />
 
                 <Grid container spacing={1.5}>
                   {previewSpec.scenes?.map((scene: any, idx: number) => (
@@ -1536,7 +1622,7 @@ const VideoCreator: React.FC = () => {
           )}
 
           {templateStep === 4 && (
-            <FormSection title="Review & Submit" description="Submitting creates a Production Spec job persisted in PostgreSQL.">
+            <FormSection title="Review & Submit" description="Creating the video starts production. You can follow progress on the Productions page.">
               <Grid container spacing={2}>
                 <Grid item xs={12} md={6}>
                   <SectionCard title="Request Overview">

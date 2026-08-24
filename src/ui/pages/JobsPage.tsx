@@ -86,7 +86,7 @@ const JobsPageContent: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Jobs"
+        title="Productions"
         eyebrow="Pipeline Orchestration"
         description="Track, inspect, and manage every video creation request from prompt to completed video."
         actions={

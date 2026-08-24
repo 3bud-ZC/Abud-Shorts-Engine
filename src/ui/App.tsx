@@ -9,6 +9,8 @@ import JobsPage from "./pages/JobsPage";
 import JobDetails from "./pages/JobDetails";
 import SystemPage from "./pages/SystemPage";
 import ProvidersPage from "./pages/ProvidersPage";
+import IntegrationsPage from "./pages/IntegrationsPage";
+import MediaPage from "./pages/MediaPage";
 import BrandsPage from "./pages/BrandsPage";
 import TemplatesPage from "./pages/TemplatesPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -55,7 +57,11 @@ const App: React.FC = () => {
             <Route path="/publishing" element={<ProtectedRoute><PublishingPage /></ProtectedRoute>} />
             <Route path="/brands" element={<ProtectedRoute><BrandsPage /></ProtectedRoute>} />
             <Route path="/templates" element={<ProtectedRoute><TemplatesPage /></ProtectedRoute>} />
-            <Route path="/providers" element={<ProtectedRoute><ProvidersPage /></ProtectedRoute>} />
+            <Route path="/media" element={<ProtectedRoute><MediaPage /></ProtectedRoute>} />
+            <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
+            {/* Legacy path kept so old links and bookmarks still resolve. */}
+            <Route path="/providers" element={<Navigate to="/integrations" replace />} />
+            <Route path="/providers/technical" element={<ProtectedRoute><ProvidersPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
             <Route path="/system" element={<ProtectedRoute><SystemPage /></ProtectedRoute>} />
           </Routes>

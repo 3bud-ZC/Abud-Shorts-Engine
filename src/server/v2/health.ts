@@ -242,7 +242,7 @@ export async function getV2Health(
       });
       return {
         ok: response.status >= 200 && response.status < 300,
-        message: "n8n health endpoint responded.",
+        message: "Automation service responded.",
       };
     }),
     timedCheck("Render Worker", async () => {

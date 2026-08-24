@@ -32,14 +32,14 @@ import axios from "axios";
 const steps = [
   "Welcome",
   "System Check",
-  "Admin Access",
+  "Sign-in",
   "Storage",
-  "Local Providers",
-  "Optional Cloud",
+  "Stock Footage",
+  "Voice & AI",
   "Publishing",
-  "Defaults",
-  "Verification",
-  "Finish",
+  "Video Defaults",
+  "Review",
+  "Ready",
 ];
 
 export const SetupWizard: React.FC = () => {
@@ -55,6 +55,7 @@ export const SetupWizard: React.FC = () => {
   const [pexelsKey, setPexelsKey] = useState("");
   const [telegramToken, setTelegramToken] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
+  const [elevenLabsKey, setElevenLabsKey] = useState("");
   const [defaultLanguage, setDefaultLanguage] = useState("ar");
   const [defaultDialect, setDefaultDialect] = useState("egyptian");
   const [defaultAspectRatio, setDefaultAspectRatio] = useState("9:16");
@@ -121,6 +122,30 @@ export const SetupWizard: React.FC = () => {
     if (activeStep === steps.length - 2) {
       setLoading(true);
       try {
+        // Keys typed during setup are saved into the encrypted vault here.
+        // Before this they were collected and silently discarded, which left a
+        // customer believing they had configured a provider when they had not.
+        const keyEntries: Array<{ provider: string; value: string }> = [
+          { provider: "pexels", value: pexelsKey },
+          { provider: "gemini", value: geminiKey },
+          { provider: "elevenlabs", value: elevenLabsKey },
+        ].filter((entry) => entry.value.trim().length > 0);
+
+        for (const entry of keyEntries) {
+          try {
+            await axios.put(`/api/v2/providers/${entry.provider}/credentials`, {
+              credentialType: "api_key",
+              value: entry.value.trim(),
+            });
+          } catch {
+            // One key failing must not block finishing setup; the customer can
+            // add or correct it on the Integrations page.
+            setError(
+              `Setup finished, but the ${entry.provider} key could not be saved. Add it again under Integrations.`,
+            );
+          }
+        }
+
         await axios.post("/api/v2/setup/complete", {
           language: defaultLanguage,
           dialect: defaultDialect,
@@ -305,22 +330,23 @@ export const SetupWizard: React.FC = () => {
           {activeStep === 4 && (
             <Stack spacing={2}>
               <Typography variant="h6" fontWeight={700}>
-                Local and free providers
+                Stock footage
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Required production can run locally for voice/captions/rendering. Pexels is recommended for stock footage.
+                Pexels gives your videos real footage to work with. It is free — creating a key takes about a minute.
+                You can skip this and add it later on the Integrations page.
               </Typography>
               <TextField
-                label="Pexels API Key (Recommended for stock footage)"
+                label="Pexels API key (recommended)"
                 value={pexelsKey}
                 onChange={(e) => setPexelsKey(e.target.value)}
                 placeholder="e.g. 563492ad6f91700001000001..."
                 fullWidth
                 size="small"
-                helperText="If omitted, stock footage search will be unavailable until configured."
+                helperText="Skip this if you prefer — you can add it any time from Integrations."
               />
               <Alert severity="info">
-                Piper Arabic, Kokoro English, Whisper small captions, Remotion, and FFmpeg run locally. They do not require paid API calls.
+                English narration, captions and video rendering all run on this machine. Nothing here costs money.
               </Alert>
             </Stack>
           )}
@@ -329,22 +355,32 @@ export const SetupWizard: React.FC = () => {
           {activeStep === 5 && (
             <Stack spacing={2}>
               <Typography variant="h6" fontWeight={700}>
-                Optional cloud providers
+                Voice &amp; AI
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Configure optional cloud providers now or later. They are not required for the local pipeline.
+                ElevenLabs is required for Arabic narration. Everything on this step is optional and can be added
+                later from Integrations.
               </Typography>
               <TextField
-                label="Google Gemini API Key (Optional)"
+                label="ElevenLabs API key (required for Arabic narration)"
+                value={elevenLabsKey}
+                onChange={(e) => setElevenLabsKey(e.target.value)}
+                type="password"
+                fullWidth
+                size="small"
+                helperText="Stored encrypted. Skip if you only produce English videos."
+              />
+              <TextField
+                label="Google Gemini API key (optional)"
                 value={geminiKey}
                 onChange={(e) => setGeminiKey(e.target.value)}
                 type="password"
                 fullWidth
                 size="small"
-                helperText="Optional. Used only when explicitly configured for enhanced planning."
+                helperText="Optional. Adds more variety to generated scripts."
               />
               <Typography variant="caption" color="text.secondary">
-                Google Cloud TTS can provide Arabic MSA voices with free-tier availability. ElevenLabs is premium. Both require server-side credentials before use.
+                Both are optional. You can finish setup without either and add them whenever you want.
               </Typography>
             </Stack>
           )}
@@ -409,10 +445,10 @@ export const SetupWizard: React.FC = () => {
             <Stack spacing={2} textAlign="center" alignItems="center">
               <CheckCircleIcon sx={{ fontSize: 60, color: "success.main" }} />
               <Typography variant="h5" fontWeight={700}>
-                Configuration Verified
+Everything checks out
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 500 }}>
-                All configuration choices are ready. Clicking <strong>Complete Setup</strong> saves the setup and opens the dashboard.
+                Your choices are ready. Select <strong>Finish setup</strong> to save them.
               </Typography>
             </Stack>
           )}
@@ -421,14 +457,14 @@ export const SetupWizard: React.FC = () => {
           {activeStep === 9 && (
             <Stack spacing={3} textAlign="center" alignItems="center">
               <RocketLaunchIcon sx={{ fontSize: 70, color: "primary.main" }} />
-              <Typography variant="h4" fontWeight={800} color="primary.main">
-                ABUD Shorts Engine is Ready!
+              <Typography variant="h4" fontWeight={700} color="primary.main">
+                Ready to Create Your First Video
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 600 }}>
-                Your video production engine is fully configured. You can start creating high-converting short-form videos immediately using Prompt Studio or Business Templates.
+                Everything is set up. Describe the video you want and ABUD Shorts will produce it.
               </Typography>
-              <Button variant="contained" size="large" onClick={() => navigate("/")} sx={{ px: 4, py: 1.5 }}>
-                Launch Production Dashboard
+              <Button variant="contained" size="large" onClick={() => navigate("/create")} sx={{ px: 4, py: 1.5 }}>
+                Create your first video
               </Button>
             </Stack>
           )}
@@ -442,7 +478,7 @@ export const SetupWizard: React.FC = () => {
           </Button>
           {activeStep < steps.length - 1 && (
             <Button variant="contained" onClick={handleNext} disabled={loading}>
-              {loading ? <CircularProgress size={24} color="inherit" /> : activeStep === steps.length - 2 ? "Complete Setup" : "Next"}
+              {loading ? <CircularProgress size={24} color="inherit" /> : activeStep === steps.length - 2 ? "Finish setup" : "Next"}
             </Button>
           )}
         </Box>
