@@ -1,7 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import nock from "nock";
 import { KokoroVoiceProvider } from "./voice-providers/kokoroVoiceProvider";
-import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvider";
 import { VoiceRegistry } from "./voice-providers/registry";
 import { preprocessArabicSpeech } from "./voice-providers/arabicSpeechPreprocessor";
 import {
@@ -11,7 +10,16 @@ import {
   parseGoogleVoiceFamily,
 } from "./voice-providers/googleCloudTtsProvider";
 import { EdgeTtsProvider } from "./voice-providers/edgeTtsProvider";
-import { normalizeElevenLabsVoice, ELEVENLABS_PRESETS, ELEVENLABS_DEFAULT_MODEL_ID } from "./voice-providers/elevenlabsVoiceProvider";
+import {
+  categorizeElevenLabsError,
+  describeElevenLabsErrorDetail,
+  ELEVENLABS_DEFAULT_MODEL_ID,
+  ELEVENLABS_PRESETS,
+  ElevenLabsVoiceProvider,
+  getElevenLabsModelCapabilities,
+  normalizeElevenLabsVoice,
+  parseElevenLabsError,
+} from "./voice-providers/elevenlabsVoiceProvider";
 import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
 
 const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
@@ -152,7 +160,9 @@ describe("Voice Providers & Registry", () => {
     expect(decision.voiceId).toBe("acct_voice_1");
   });
 
-  it("sends language_code ar and the multilingual model for Arabic narration", async () => {
+  it("never sends language_code for eleven_multilingual_v2 and infers Arabic from the text instead", async () => {
+    // ElevenLabs' current API documentation states language_code is not an
+    // accepted field for eleven_multilingual_v2; sending it causes a 400.
     let capturedBody: any = null;
     nock("https://api.elevenlabs.io")
       .post(/\/v1\/text-to-speech\/.*/, (body) => {
@@ -163,10 +173,13 @@ describe("Voice Providers & Registry", () => {
       .reply(200, Buffer.from("mp3-bytes"));
 
     const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
-    const result = await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc");
+    const result = await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", { languageCode: "ar" });
 
-    expect(capturedBody.language_code).toBe("ar");
+    expect(capturedBody.language_code).toBeUndefined();
     expect(capturedBody.model_id).toBe(ELEVENLABS_DEFAULT_MODEL_ID);
+    // ABUD's own metadata still records the request as Arabic even though the
+    // field was never forwarded to ElevenLabs.
+    expect(result.language).toBe("ar");
     expect(result.voiceId).toBe("voice_abc");
     expect(result.estimatedCostTier).toBe("premium");
     // Cost is usage based; the engine must not invent a dollar amount.
@@ -204,6 +217,61 @@ describe("Voice Providers & Registry", () => {
     expect(new Set(bodies.map((body) => JSON.stringify(body.voice_settings))).size).toBe(1);
   });
 
+  it("synthesizes with the selected preset's settings, not the natural default", async () => {
+    const bodies: any[] = [];
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/.*/, (body) => {
+        bodies.push(body);
+        return true;
+      })
+      .query(true)
+      .reply(200, Buffer.from("mp3-bytes"));
+
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+    await registry.synthesize({
+      text: EGYPTIAN_TEST_SCRIPT,
+      language: "ar",
+      dialect: "egyptian",
+      requestedProvider: "auto",
+      voiceId: "voice_abc",
+      voicePreset: "energetic_ad",
+    });
+
+    // Persisting a preset is worthless if synthesis silently uses another one.
+    expect(bodies[0].voice_settings).toEqual(ELEVENLABS_PRESETS.energetic_ad);
+    expect(bodies[0].voice_settings).not.toEqual(ELEVENLABS_PRESETS.natural);
+  });
+
+  it("keeps one preset across every scene and across a shortened retry", async () => {
+    const bodies: any[] = [];
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/.*/, (body) => {
+        bodies.push(body);
+        return true;
+      })
+      .query(true)
+      .times(3)
+      .reply(200, Buffer.from("mp3-bytes"));
+
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+    // Two scenes plus the compaction retry the render path issues when
+    // narration overruns its scene budget.
+    for (const sceneText of ["المشهد الاول", "المشهد التاني", "المشهد التاني اقصر"]) {
+      await registry.synthesize({
+        text: sceneText,
+        language: "ar",
+        dialect: "egyptian",
+        requestedProvider: "auto",
+        voiceId: "voice_abc",
+        voicePreset: "energetic_ad",
+      });
+    }
+
+    expect(bodies.length).toBe(3);
+    expect(new Set(bodies.map((body) => JSON.stringify(body.voice_settings))).size).toBe(1);
+    expect(bodies.every((body) => body.voice_settings.style === ELEVENLABS_PRESETS.energetic_ad.style)).toBe(true);
+  });
+
   it("normalizes discovered ElevenLabs voices without inventing metadata", () => {
     const arabicVoice = normalizeElevenLabsVoice({
       voice_id: "abc123",
@@ -232,6 +300,255 @@ describe("Voice Providers & Registry", () => {
   it("returns no voices and never a hardcoded catalogue when ElevenLabs is unconfigured", async () => {
     const provider = new ElevenLabsVoiceProvider("");
     expect(await provider.listVoices("ar")).toEqual([]);
+  });
+
+  it("declares eleven_multilingual_v2 capabilities without assuming language_code support", () => {
+    const capabilities = getElevenLabsModelCapabilities(ELEVENLABS_DEFAULT_MODEL_ID);
+    expect(capabilities.supportsLanguageCode).toBe(false);
+    expect(capabilities.supportsTTS).toBe(true);
+    expect(capabilities.supportsVoiceSettings).toBe(true);
+
+    // An undocumented model is treated conservatively: never send a field we
+    // have not confirmed the model accepts.
+    const unknownModel = getElevenLabsModelCapabilities("eleven_future_model_v9");
+    expect(unknownModel.supportsLanguageCode).toBe(false);
+  });
+
+  it("pages through GET /v2/voices until has_more is false", async () => {
+    nock("https://api.elevenlabs.io")
+      .get("/v2/voices")
+      .query({ page_size: "100" })
+      .reply(200, {
+        voices: [{ voice_id: "p1", name: "Page One" }],
+        has_more: true,
+        next_page_token: "token-2",
+      });
+    nock("https://api.elevenlabs.io")
+      .get("/v2/voices")
+      .query({ page_size: "100", next_page_token: "token-2" })
+      .reply(200, {
+        voices: [{ voice_id: "p2", name: "Page Two" }],
+        has_more: false,
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const voices = await provider.listVoices();
+    expect(voices.map((v) => v.id)).toEqual(["p1", "p2"]);
+  });
+
+  it("falls back to the legacy /v1/voices list only when /v2/voices 404s", async () => {
+    nock("https://api.elevenlabs.io").get("/v2/voices").query(true).reply(404, {
+      detail: { status: "not_found", message: "not found" },
+    });
+    nock("https://api.elevenlabs.io")
+      .get("/v1/voices")
+      .reply(200, { voices: [{ voice_id: "legacy1", name: "Legacy Voice" }] });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const voices = await provider.listVoices();
+    expect(voices.map((v) => v.id)).toEqual(["legacy1"]);
+  });
+
+  it("categorizes ElevenLabs upstream errors without ever reading request headers", () => {
+    expect(categorizeElevenLabsError(400, "api_key_id_used_as_api_key", "")).toBe("api_key_id_used_as_api_key");
+    expect(categorizeElevenLabsError(401, "invalid_api_key", "Invalid API key")).toBe("invalid_api_key");
+    expect(categorizeElevenLabsError(403, "missing_permissions", "missing permission voices_read")).toBe(
+      "missing_permissions",
+    );
+    expect(categorizeElevenLabsError(400, "quota_exceeded", "")).toBe("quota_exceeded");
+    expect(categorizeElevenLabsError(429, "", "")).toBe("rate_limited");
+    expect(categorizeElevenLabsError(500, "", "")).toBe("server_error");
+    expect(categorizeElevenLabsError(400, "", "some unrecognized validation error")).toBe("unsupported_request");
+    // A free-tier account trying to use a professional/library voice: distinct
+    // from an invalid key or a spent quota, and observed for real from the
+    // live API as { detail: { status: "payment_required", code: "paid_plan_required" } }.
+    expect(
+      categorizeElevenLabsError(
+        402,
+        "payment_required",
+        "Free users cannot use library voices via the API. Please upgrade your subscription to use this voice.",
+      ),
+    ).toBe("plan_upgrade_required");
+  });
+
+  it("maps a free-tier plan restriction on a library/professional voice to an actionable, distinct message", () => {
+    const detail = parseElevenLabsError(
+      {
+        response: {
+          status: 402,
+          data: {
+            detail: {
+              type: "payment_required",
+              code: "paid_plan_required",
+              message: "Free users cannot use library voices via the API. Please upgrade your subscription to use this voice.",
+              status: "payment_required",
+              request_id: "req_402",
+            },
+          },
+        },
+      },
+      "https://api.elevenlabs.io/v1/text-to-speech/voice_1",
+      "POST",
+    );
+    expect(detail.category).toBe("plan_upgrade_required");
+    expect(describeElevenLabsErrorDetail(detail)).toContain("paid subscription plan");
+    expect(describeElevenLabsErrorDetail(detail)).not.toContain("Invalid");
+  });
+
+  it("maps a scoped/permission-restricted API key to an actionable message distinct from an invalid key", () => {
+    const detail = parseElevenLabsError(
+      {
+        response: {
+          status: 403,
+          data: { detail: { status: "missing_permissions", message: "missing_permissions: voices_read", request_id: "req_1" } },
+        },
+      },
+      "https://api.elevenlabs.io/v2/voices",
+      "GET",
+    );
+    expect(detail.category).toBe("missing_permissions");
+    expect(detail.requestId).toBe("req_1");
+    expect(describeElevenLabsErrorDetail(detail)).toContain("does not have the required Text-to-Speech / voice access permissions");
+    expect(describeElevenLabsErrorDetail(detail)).not.toContain("Invalid");
+  });
+
+  it("maps a quota/credit exhaustion error distinctly from an invalid key", () => {
+    const detail = parseElevenLabsError(
+      { response: { status: 400, data: { detail: { status: "quota_exceeded", message: "Not enough credits" } } } },
+      "https://api.elevenlabs.io/v1/text-to-speech/voice_1",
+      "POST",
+    );
+    expect(detail.category).toBe("quota_exceeded");
+    expect(describeElevenLabsErrorDetail(detail)).toContain("credits");
+  });
+
+  it("produces a sanitized error detail with no API key anywhere in it", () => {
+    const secretKey = "sk_super_secret_do_not_leak_1234567890";
+    const detail = parseElevenLabsError(
+      {
+        config: { headers: { "xi-api-key": secretKey } },
+        response: {
+          status: 401,
+          data: { detail: { status: "invalid_api_key", message: "Invalid API key", request_id: "req_2" } },
+        },
+      },
+      "https://api.elevenlabs.io/v1/user",
+      "GET",
+    );
+    const serialized = JSON.stringify(detail);
+    expect(serialized).not.toContain(secretKey);
+    expect(serialized).not.toContain("xi-api-key");
+    expect(detail.category).toBe("invalid_api_key");
+    expect(detail.requestId).toBe("req_2");
+  });
+
+  it("Test Connection reports granular sub-states without spending TTS quota", async () => {
+    const userScope = nock("https://api.elevenlabs.io")
+      .get("/v1/user")
+      .reply(200, { subscription: { tier: "starter", character_limit: 30000, character_count: 120 } });
+    const voicesScope = nock("https://api.elevenlabs.io")
+      .get("/v2/voices")
+      .query(true)
+      .reply(200, { voices: [{ voice_id: "v1", name: "Nour" }], has_more: false, total_count: 1 });
+    // Neither endpoint is a text-to-speech call, so no /v1/text-to-speech
+    // interceptor is registered - the test fails if the provider ever calls it.
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.validate();
+
+    expect(userScope.isDone()).toBe(true);
+    expect(voicesScope.isDone()).toBe(true);
+    expect(result.status).toBe("healthy");
+    expect(result.authenticated).toBe(true);
+    expect(result.voiceDiscoveryAvailable).toBe(true);
+    expect(result.ttsReady).toBe(true);
+    expect(result.voicesDiscovered).toBe(1);
+    expect(result.accountTier).toBe("starter");
+  });
+
+  it("Test Connection reports missing_permissions distinctly from invalid_credentials", async () => {
+    nock("https://api.elevenlabs.io").get("/v1/user").reply(200, { subscription: {} });
+    nock("https://api.elevenlabs.io")
+      .get("/v2/voices")
+      .query(true)
+      .reply(403, { detail: { status: "missing_permissions", message: "missing_permissions: voices_read" } });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.validate();
+
+    expect(result.status).toBe("missing_permissions");
+    expect(result.authenticated).toBe(true);
+    expect(result.voiceDiscoveryAvailable).toBe(false);
+    expect(result.healthy).toBe(false);
+    expect(result.message).toContain("Edit the key permissions in ElevenLabs");
+  });
+
+  it("Test Connection reports the exact api_key_id_used_as_api_key diagnosis, not a generic HTTP 400", async () => {
+    nock("https://api.elevenlabs.io")
+      .get("/v1/user")
+      .reply(400, {
+        detail: {
+          status: "api_key_id_used_as_api_key",
+          message: "API key ID used as API key - only valid API keys can be used.",
+          request_id: "req_400",
+        },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.validate();
+
+    expect(result.status).toBe("invalid_credentials");
+    expect(result.authenticated).toBe(false);
+    expect(result.errorDetail?.category).toBe("api_key_id_used_as_api_key");
+    expect(result.errorDetail?.requestId).toBe("req_400");
+    expect(result.message).not.toBe("ElevenLabs returned HTTP 400.");
+    expect(result.message).toContain("API Key ID");
+  });
+
+  it("does not claim TTS is ready when the account has zero voices, but still reports it healthy/authenticated", async () => {
+    nock("https://api.elevenlabs.io").get("/v1/user").reply(200, { subscription: {} });
+    nock("https://api.elevenlabs.io")
+      .get("/v2/voices")
+      .query(true)
+      .reply(200, { voices: [], has_more: false, total_count: 0 });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.validate();
+
+    expect(result.authenticated).toBe(true);
+    expect(result.voiceDiscoveryAvailable).toBe(true);
+    expect(result.ttsReady).toBe(false);
+    expect(result.voicesDiscovered).toBe(0);
+  });
+
+  it("populates Voice Lab entries from discovered voices without fabricating Egyptian metadata", async () => {
+    nock("https://api.elevenlabs.io")
+      .get("/v2/voices")
+      .query(true)
+      .reply(200, {
+        voices: [
+          {
+            voice_id: "vlab1",
+            name: "Nour",
+            category: "premade",
+            labels: { accent: "egyptian", gender: "female" },
+            preview_url: "https://example.com/nour.mp3",
+          },
+          { voice_id: "vlab2", name: "Generic Voice" },
+        ],
+        has_more: false,
+        total_count: 2,
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const voices = await provider.listVoices("ar");
+
+    expect(voices.map((v) => v.id)).toEqual(["vlab1", "vlab2"]);
+    expect(voices[0].dialect).toBe("egyptian");
+    expect(voices[0].previewUrl).toBe("https://example.com/nour.mp3");
+    // No dialect/accent is invented for a voice ElevenLabs returned no metadata for.
+    expect(voices[1].dialect).toBeUndefined();
+    expect(voices[1].language).toBe("multilingual");
   });
 
   it("maps voice presets only onto documented ElevenLabs settings", () => {
@@ -317,12 +634,15 @@ describe("Voice Providers & Registry", () => {
   it("resolves Arabic voice listing to ElevenLabs and English Auto to Kokoro", async () => {
     stubPiperConfigured();
     nock("https://api.elevenlabs.io")
-      .get("/v1/voices")
+      .get("/v2/voices")
+      .query(true)
       .reply(200, {
         voices: [
           { voice_id: "v1", name: "Nour", category: "premade", labels: { accent: "egyptian" } },
           { voice_id: "v2", name: "Sam", category: "premade", labels: {} },
         ],
+        has_more: false,
+        total_count: 2,
       });
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
 

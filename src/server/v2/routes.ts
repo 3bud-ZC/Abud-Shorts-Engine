@@ -69,6 +69,14 @@ import {
   ELEVENLABS_PRESETS,
   ELEVENLABS_PRESET_IDS,
 } from "./voice-providers/elevenlabsVoiceProvider";
+import {
+  readArabicVoiceDefault,
+  resolveArabicVoiceSelection,
+  writeArabicVoiceDefault,
+  type PersistedArabicVoiceDefault,
+  type ResolvedArabicVoice,
+} from "./voice-providers/arabicVoiceDefault";
+import { voicePresetEnum, type VoicePreset } from "../../types/productionSpec";
 import { BackupService } from "./backup/backupService";
 import { DiagnosticsService } from "./diagnostics/diagnosticsService";
 import { WebhookService } from "./webhooks/webhookService";
@@ -165,54 +173,6 @@ async function writeAppSettings(db: V2Database, value: Record<string, unknown>) 
   return rows[0]?.value || value;
 }
 
-const ARABIC_VOICE_SETTINGS_KEY = "arabic_voice_default";
-
-/**
- * The default Arabic voice is only ever set by an explicit human selection in
- * the Voice Lab. The engine never auto-promotes a voice or labels one as the
- * best or most Egyptian sounding.
- */
-async function readArabicVoiceDefault(db: V2Database): Promise<{
-  voiceId?: string;
-  voiceName?: string;
-  preset?: string;
-  selectedAt?: string;
-  selectedBy: "human";
-} | null> {
-  const rows = await db.query<SettingRow>(
-    "SELECT key, value, updated_at FROM app_settings WHERE key = $1",
-    [ARABIC_VOICE_SETTINGS_KEY],
-  );
-  const value = rows[0]?.value as Record<string, unknown> | undefined;
-  if (!value || !value.voiceId) return null;
-  return {
-    voiceId: String(value.voiceId),
-    voiceName: value.voiceName ? String(value.voiceName) : undefined,
-    preset: value.preset ? String(value.preset) : undefined,
-    selectedAt: value.selectedAt ? String(value.selectedAt) : undefined,
-    selectedBy: "human",
-  };
-}
-
-async function writeArabicVoiceDefault(
-  db: V2Database,
-  value: { voiceId: string; voiceName?: string; preset?: string },
-) {
-  const payload = {
-    ...value,
-    selectedAt: new Date().toISOString(),
-    selectedBy: "human",
-    provider: "elevenlabs",
-  };
-  await db.query(
-    `INSERT INTO app_settings (key, value, updated_at)
-     VALUES ($1, $2, now())
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-    [ARABIC_VOICE_SETTINGS_KEY, payload],
-  );
-  return payload;
-}
-
 function metadataArtifacts(metadata: any): DurableSceneArtifact[] {
   return filterReusableArtifacts({
     artifacts: Array.isArray(metadata?.durableArtifacts) ? metadata.durableArtifacts as DurableSceneArtifact[] : [],
@@ -268,16 +228,34 @@ function inferResolvedVoiceProvider(input: {
 }
 
 function defaultVoiceForResolvedProvider(provider: VoiceProviderId): string {
-  // ElevenLabs voice IDs belong to the customer's account and are resolved
-  // through live voice discovery, never hardcoded here.
-  if (provider === "elevenlabs") return process.env.ELEVENLABS_DEFAULT_VOICE_ID || "";
+  // ElevenLabs is deliberately absent here: an Arabic voice is a human decision
+  // resolved through resolveArabicVoiceSelection, never an environment guess.
   if (provider === "piper") return process.env.PIPER_AR_VOICE_ID || "ar_JO-kareem-medium";
   if (provider === "edge_tts") return process.env.EDGE_TTS_DEFAULT_VOICE || "ar-EG-SalmaNeural";
   if (provider === "google_cloud_tts") return process.env.GOOGLE_CLOUD_TTS_DEFAULT_VOICE || "";
   return "af_heart";
 }
 
-export function canonicalizeProductionSpecContract(spec: any, controls: any) {
+/**
+ * Resolved defaults handed to canonicalization by the request layer.
+ *
+ * Canonicalization stays pure and synchronous: everything that needs the
+ * database is read once per request *before* the spec is canonicalized.
+ */
+export type ProductionSpecDefaults = {
+  arabicVoice?: PersistedArabicVoiceDefault | null;
+};
+
+function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
+  const parsed = voicePresetEnum.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function canonicalizeProductionSpecContract(
+  spec: any,
+  controls: any,
+  defaults: ProductionSpecDefaults = {},
+) {
   const language = controls.language || spec.language || "auto";
   const dialect = language === "ar" || language === "auto"
     ? (controls.dialect || spec.dialect || "egyptian")
@@ -292,11 +270,25 @@ export function canonicalizeProductionSpecContract(spec: any, controls: any) {
     : undefined;
   const canReuseSpecVoice = previousVoiceProvider === resolvedVoiceProvider && spec.voiceId;
   const requestedVoiceId = controls.voiceId || canReuseSpecVoice || "";
-  // Historical Arabic jobs carry Piper model names. Never forward one to ElevenLabs.
-  const voiceId =
-    resolvedVoiceProvider === ARABIC_PRODUCTION_PROVIDER && isLegacyPiperVoiceId(requestedVoiceId)
-      ? defaultVoiceForResolvedProvider(resolvedVoiceProvider)
-      : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
+  // Historical Arabic jobs carry Piper model names. Never forward one to
+  // ElevenLabs; resolveArabicVoiceSelection discards them for us.
+  const arabicVoice: ResolvedArabicVoice | null =
+    resolvedVoiceProvider === ARABIC_PRODUCTION_PROVIDER
+      ? resolveArabicVoiceSelection({
+          requestedVoiceId,
+          requestedPreset:
+            coerceRequestedPreset(controls.voicePreset) ??
+            (canReuseSpecVoice ? coerceRequestedPreset(spec.voicePreset) : undefined),
+          persisted: defaults.arabicVoice,
+          envVoiceId: process.env.ELEVENLABS_DEFAULT_VOICE_ID,
+          defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
+        })
+      : null;
+  const voiceId = arabicVoice
+    ? arabicVoice.voiceId
+    : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
+  const voicePreset = arabicVoice ? arabicVoice.preset : coerceRequestedPreset(controls.voicePreset);
+  const voiceModelId = arabicVoice ? arabicVoice.modelId : undefined;
   return validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -309,6 +301,8 @@ export function canonicalizeProductionSpecContract(spec: any, controls: any) {
     visualMode: controls.visualMode || spec.visualMode,
     voiceProvider: resolvedVoiceProvider,
     voiceId,
+    voicePreset,
+    voiceModelId,
     captionStyle: controls.captionStyle || spec.captionStyle,
     metadata: {
       ...(spec.metadata || {}),
@@ -323,9 +317,31 @@ export function canonicalizeProductionSpecContract(spec: any, controls: any) {
         requestedVoiceProvider: controls.voiceProvider || spec.voiceProvider || "auto",
         resolvedVoiceProvider,
         voiceId,
+        voicePreset,
+        voiceModelId,
+        // How the voice was chosen, so the UI and job metadata can prove the
+        // persisted human selection - not an environment value - was used.
+        voiceSource: arabicVoice?.source,
+        voiceName: arabicVoice?.voiceName,
       },
     },
   });
+}
+
+/**
+ * Request-layer canonicalization.
+ *
+ * Reads the persisted human Arabic default once, then hands it to the pure
+ * canonicalizer. Every route that builds a ProductionSpec goes through here so
+ * no path can silently fall back to the legacy environment voice.
+ */
+async function canonicalizeProductionSpecForRequest(
+  db: V2Database,
+  spec: any,
+  controls: any,
+) {
+  const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
+  return canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
 }
 
 /**
@@ -339,15 +355,29 @@ export function canonicalizeProductionSpecContract(spec: any, controls: any) {
 async function arabicProductionBlocker(spec: {
   language?: string;
   dialect?: string;
+  voiceId?: string;
 }): Promise<{ error: string; message: string; action: { label: string; href: string } } | null> {
   if (!isArabicLanguage(spec.language, spec.dialect as any)) return null;
   await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
-  if (new ElevenLabsVoiceProvider().isConfigured()) return null;
-  return {
-    error: "elevenlabs_not_configured",
-    message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
-    action: { label: "Configure ElevenLabs", href: "/providers" },
-  };
+  if (!new ElevenLabsVoiceProvider().isConfigured()) {
+    return {
+      error: "elevenlabs_not_configured",
+      message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+      action: { label: "Configure ElevenLabs", href: "/providers" },
+    };
+  }
+  // Nothing resolved a speaker: no explicit voice, no persisted human default
+  // and no legacy environment value. Refuse rather than narrate the job with an
+  // arbitrary account voice nobody chose.
+  if (!spec.voiceId) {
+    return {
+      error: "arabic_default_voice_not_selected",
+      message:
+        "No default Arabic voice has been selected. Open Voice Lab, audition the account voices and save a default.",
+      action: { label: "Open Voice Lab", href: "/voice-lab" },
+    };
+  }
+  return null;
 }
 
 function hasCommandHint(envKey: string): boolean {
@@ -980,7 +1010,7 @@ export function createV2PublicRouter(
     try {
       const provider = contentAIRegistry.getProvider();
       const generatedSpec = await provider.generateProductionSpec(parsed.data);
-      const spec = canonicalizeProductionSpecContract(generatedSpec, parsed.data);
+      const spec = await canonicalizeProductionSpecForRequest(db, generatedSpec, parsed.data);
       const costEstimate = estimateProductionCost(spec, {
         voiceProvider: spec.voiceProvider as any,
         visualMode: spec.visualMode,
@@ -1121,16 +1151,12 @@ export function createV2PublicRouter(
           voiceId: parsed.data.voice,
           brandId: parsed.data.brandId,
         } as any);
-      const canonicalSpec = canonicalizeProductionSpecContract(spec, {
+      const canonicalSpec = await canonicalizeProductionSpecForRequest(db, spec, {
         ...parsed.data,
         quality: qualityMap[parsed.data.qualityProfile],
         voiceProvider: "auto",
         voiceId: parsed.data.voice,
       });
-      if (isArabicLanguage(canonicalSpec.language, canonicalSpec.dialect as any) && !canonicalSpec.voiceId) {
-        const storedDefault = await readArabicVoiceDefault(db).catch(() => null);
-        if (storedDefault?.voiceId) canonicalSpec.voiceId = storedDefault.voiceId;
-      }
       const arabicBlock = await arabicProductionBlocker(canonicalSpec);
       if (arabicBlock) {
         res.status(409).json(arabicBlock);
@@ -1243,7 +1269,7 @@ export function createV2PublicRouter(
       if ((rawPayload as any).prompt && !(rawPayload as any).productionSpec) {
         const provider = contentAIRegistry.getProvider();
         const generatedSpec = await provider.generateProductionSpec(rawPayload as any);
-        const canonicalSpec = canonicalizeProductionSpecContract(generatedSpec, rawPayload);
+        const canonicalSpec = await canonicalizeProductionSpecForRequest(db, generatedSpec, rawPayload);
         resolvedPayload = {
           type: "video",
           creationMode: "prompt",
@@ -1252,7 +1278,11 @@ export function createV2PublicRouter(
           idempotencyKey: resolvedPayload.idempotencyKey,
         } as any;
       } else if ((rawPayload as any).productionSpec) {
-        const canonicalSpec = canonicalizeProductionSpecContract((rawPayload as any).productionSpec, rawPayload);
+        const canonicalSpec = await canonicalizeProductionSpecForRequest(
+          db,
+          (rawPayload as any).productionSpec,
+          rawPayload,
+        );
         resolvedPayload = {
           ...resolvedPayload,
           title: (rawPayload as any).title || canonicalSpec.title,
@@ -1280,7 +1310,11 @@ export function createV2PublicRouter(
       }
 
       const arabicBlock = await arabicProductionBlocker(
-        ((resolvedPayload as any).productionSpec || {}) as { language?: string; dialect?: string },
+        ((resolvedPayload as any).productionSpec || {}) as {
+          language?: string;
+          dialect?: string;
+          voiceId?: string;
+        },
       );
       if (arabicBlock) {
         res.status(409).json(arabicBlock);
@@ -1507,6 +1541,12 @@ export function createV2PublicRouter(
         preset,
         languageCode: language,
       });
+      if (providerVault.isAvailable()) {
+        // A preview is a real, successful ElevenLabs round trip: this is the
+        // only place "Live Verified" is earned, since Test Connection itself
+        // must never spend synthesis quota.
+        await providerVault.markTested("elevenlabs", "live_verified").catch(() => undefined);
+      }
       res.status(200).json({
         ...preview,
         language,
@@ -1545,6 +1585,12 @@ export function createV2PublicRouter(
         voiceId,
         voiceName: typeof req.body?.voiceName === "string" ? req.body.voiceName : undefined,
         preset: ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : undefined,
+        // The model the preset was auditioned under travels with the selection
+        // so a later model default cannot silently change the approved voice.
+        modelId:
+          typeof req.body?.modelId === "string" && req.body.modelId.trim()
+            ? req.body.modelId.trim()
+            : ELEVENLABS_DEFAULT_MODEL_ID,
       });
       res.status(200).json({ default: saved });
     } catch (error) {
@@ -1557,6 +1603,7 @@ export function createV2PublicRouter(
 
   router.get("/providers/:provider/voices", async (req, res) => {
     try {
+      await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
       const language = typeof req.query.language === "string" ? req.query.language : undefined;
       const dialect = typeof req.query.dialect === "string" ? req.query.dialect : undefined;
       const registry = new VoiceRegistry({
@@ -1820,10 +1867,24 @@ export function createV2PublicRouter(
           implemented: true,
           configured: elevenLabsConfigured,
           healthy: Boolean(elevenLabsValidation?.healthy),
-          // Live verification is only claimed after a real API round trip.
-          liveVerified: Boolean(elevenLabsValidation?.healthy),
+          // "Live Verified" is only claimed after a real, successful preview
+          // synthesis round trip (see /voice-lab/preview) - never inferred
+          // from Test Connection, which must not spend TTS quota.
+          liveVerified: vaultByProvider.get("elevenlabs")?.health === "live_verified",
+          // Granular Test Connection sub-states (section 7/8 of the ElevenLabs
+          // integration policy): credential stored, authenticated, voice
+          // discovery available, and TTS-ready are reported separately so the
+          // UI never collapses them into one ambiguous "Provider Unavailable".
+          credentialStored: elevenLabsConfigured,
+          authenticated: elevenLabsValidation?.authenticated,
+          voiceDiscoveryAvailable: elevenLabsValidation?.voiceDiscoveryAvailable,
+          ttsReady: elevenLabsValidation?.ttsReady,
+          voicesDiscovered: elevenLabsValidation?.voicesDiscovered,
+          errorDetail: elevenLabsValidation?.errorDetail,
           lastTestedAt: vaultByProvider.get("elevenlabs")?.lastTestedAt || undefined,
           accountTier: elevenLabsValidation?.accountTier,
+          characterLimit: elevenLabsValidation?.characterLimit,
+          charactersUsed: elevenLabsValidation?.charactersUsed,
           latencyMs: elevenLabsValidation?.latencyMs,
           languages: ["multilingual", "ar", "en"],
           model: ELEVENLABS_DEFAULT_MODEL_ID,
@@ -1833,6 +1894,10 @@ export function createV2PublicRouter(
           egyptianSupport: "human_listening_required",
           voicePresets: ELEVENLABS_PRESET_IDS,
           supportsVoiceLab: true,
+          // The ElevenLabs shared Voice Library is a separate, optional
+          // feature this engine never calls or requires: production TTS only
+          // depends on the account's own voice catalogue (GET /v2/voices).
+          sharedVoiceLibrary: "not_required",
           local: false,
           costTier: "premium",
           costLabel: "Cloud / Usage Based",
@@ -2099,8 +2164,12 @@ export function createV2PublicRouter(
       return;
     }
     if (target === "elevenlabs") {
+      await providerSecrets.refreshElevenLabsApiKey();
       const el = new ElevenLabsVoiceProvider();
       const val = await el.validate();
+      if (providerVault.isAvailable()) {
+        await providerVault.markTested("elevenlabs", val.status).catch(() => undefined);
+      }
       res.status(200).json(val);
       return;
     }

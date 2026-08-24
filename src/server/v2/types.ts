@@ -13,6 +13,7 @@ import {
   videoLanguageEnum,
   visualModeEnum,
   voiceProviderEnum,
+  voicePresetEnum,
   type ProductionSpec,
 } from "../../types/productionSpec";
 
@@ -82,6 +83,7 @@ export const promptJobInputSchema = z.preprocess(
     visualMode: visualModeEnum.optional().default("auto"),
     voiceProvider: voiceProviderEnum.optional().default("auto"),
     voiceId: z.string().trim().max(80).optional(),
+    voicePreset: voicePresetEnum.optional(),
     captionStyle: captionStyleEnum.optional().default("viral_bold"),
     brandId: z.string().trim().max(140).optional(),
     brandName: z.string().trim().max(140).optional(),
@@ -149,6 +151,7 @@ export const productionSpecPreviewSchema = z.preprocess(
     visualMode: visualModeEnum.optional().default("auto"),
     voiceProvider: voiceProviderEnum.optional().default("auto"),
     voiceId: z.string().trim().max(80).optional(),
+    voicePreset: voicePresetEnum.optional(),
     captionStyle: captionStyleEnum.optional().default("viral_bold"),
     brandId: z.string().trim().max(140).optional(),
     brandName: z.string().trim().max(140).optional(),
@@ -213,6 +216,7 @@ export const voiceRevisionSchema = z.object({
   spokenNarration: z.string().trim().min(1).max(4000).optional(),
   voiceProvider: voiceProviderEnum.optional(),
   voiceId: z.string().trim().max(120).optional(),
+  voicePreset: voicePresetEnum.optional(),
   reason: z.string().trim().max(240).optional(),
   captionProfile: z.string().trim().max(60).optional(),
 });

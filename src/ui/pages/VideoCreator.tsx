@@ -141,6 +141,22 @@ function fieldGridSize(field: BusinessTemplateField) {
 }
 
 /**
+ * Describes the voice the canonical spec actually resolved, using only what the
+ * server reported. Nothing is inferred locally, so the badge cannot disagree
+ * with the spec that will be rendered.
+ */
+function resolvedVoiceLabel(spec: any): string {
+  const contract = spec?.metadata?.uiContract || {};
+  const provider = contract.resolvedVoiceProvider || spec?.voiceProvider;
+  if (!provider) return "";
+  const parts = [provider === "elevenlabs" ? "ElevenLabs" : provider];
+  if (contract.voiceName) parts.push(contract.voiceName);
+  const preset = contract.voicePreset || spec?.voicePreset;
+  if (preset) parts.push(String(preset).replaceAll("_", " "));
+  return parts.join(" · ");
+}
+
+/**
  * A usage-based provider such as ElevenLabs must never be presented as a $0
  * external cost, and the engine does not invent a dollar figure it cannot
  * calculate reliably.
@@ -338,9 +354,11 @@ const VideoCreator: React.FC = () => {
         setResolvedVoiceProvider(response.data.resolvedProvider || voiceProvider);
         setVoiceWarnings(response.data.warnings || []);
         setArabicVoiceBlocked(Boolean(response.data.blocked));
-        if (nextVoices.length > 0 && !nextVoices.some((voice) => voice.id === voiceId)) {
-          setVoiceId(nextVoices[0].id);
-        } else if (nextVoices.length === 0) {
+        // Auto-select deliberately stays empty. An empty voice ID is what lets
+        // the server apply the persisted human default from the Voice Lab;
+        // pinning the first voice in the account list would send an explicit
+        // choice nobody made and quietly bypass that default.
+        if (voiceId && !nextVoices.some((voice) => voice.id === voiceId)) {
           setVoiceId("");
         }
       })
@@ -1221,6 +1239,12 @@ const VideoCreator: React.FC = () => {
                 <Stack direction="row" spacing={2} flexWrap="wrap" alignItems="center">
                   <StatusBadge status="ready" label={`Target: ${previewSpec.durationSeconds}s`} />
                   <StatusBadge status="ready" label={`Dialect: ${previewSpec.dialect || "none"}`} />
+                  {/* Shows what Auto actually resolved to, so a saved Voice Lab
+                      default is visible before the job is created. */}
+                  <StatusBadge
+                    status="ready"
+                    label={`Voice: ${resolvedVoiceLabel(previewSpec) || "provider default"}`}
+                  />
                   <Chip
                     color={costEstimate?.isFree ? "success" : "warning"}
                     label={

@@ -368,6 +368,53 @@ const ProvidersPage: React.FC = () => {
                                 Families: {provider.details.voiceFamilies.join(", ")}
                               </Typography>
                             )}
+                            {provider.id === "elevenlabs" && (
+                              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  label={`Credential: ${provider.details.credentialStored ? "Stored" : "Not stored"}`}
+                                  color={provider.details.credentialStored ? "success" : "default"}
+                                />
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  label={`Connection: ${provider.details.authenticated === undefined ? "Not tested" : provider.details.authenticated ? "Authenticated" : "Failed"}`}
+                                  color={provider.details.authenticated ? "success" : provider.details.authenticated === false ? "error" : "default"}
+                                />
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  label={`Voices: ${provider.details.voiceDiscoveryAvailable === undefined ? "Not tested" : provider.details.voiceDiscoveryAvailable ? `${provider.details.voicesDiscovered ?? 0} found` : "Restricted"}`}
+                                  color={provider.details.voiceDiscoveryAvailable ? "success" : provider.details.voiceDiscoveryAvailable === false ? "error" : "default"}
+                                />
+                                <Chip
+                                  size="small"
+                                  variant="outlined"
+                                  label={`TTS: ${provider.details.ttsReady === undefined ? "Not tested" : provider.details.ttsReady ? "Ready" : "Not ready"}`}
+                                  color={provider.details.ttsReady ? "success" : provider.details.ttsReady === false ? "warning" : "default"}
+                                />
+                                <Chip
+                                  size="small"
+                                  variant={provider.details.liveVerified ? "filled" : "outlined"}
+                                  label={provider.details.liveVerified ? "Live Verified" : "Not live-verified"}
+                                  color={provider.details.liveVerified ? "success" : "default"}
+                                />
+                              </Stack>
+                            )}
+                            {provider.id === "elevenlabs" && provider.details.errorDetail && (() => {
+                              const errorDetail = provider.details.errorDetail as {
+                                category?: string;
+                                upstreamMessage?: string;
+                                requestId?: string;
+                              };
+                              return (
+                                <Typography variant="caption" color="error.main">
+                                  {String(errorDetail.upstreamMessage || errorDetail.category)}
+                                  {errorDetail.requestId ? ` (request ${errorDetail.requestId})` : ""}
+                                </Typography>
+                              );
+                            })()}
                           </Stack>
                         )}
                         <Divider />

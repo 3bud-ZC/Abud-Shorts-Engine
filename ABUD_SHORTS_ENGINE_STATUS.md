@@ -6,7 +6,7 @@ Product: ABUD Shorts Engine V2
 
 Current milestone: V2.2 — Creative Quality Engine & Provider Vault
 
-Milestone completion: V2.2 foundational development slice complete; Arabic voice policy migrated to ElevenLabs-only; human voice selection remains the outstanding blocker
+Milestone completion: V2.2 foundational development slice complete; Arabic voice policy migrated to ElevenLabs-only; human Arabic voice selection APPROVED and now wired into production routing
 
 Overall project completion: V2.1 GA complete; V2.2 development in progress
 
@@ -16,9 +16,11 @@ Version: 2.1.0 stable baseline (Build 2026.08.23.4, Schema 2.10.0 in development
 
 Target release: 2.1.0 ACHIEVED; V2.2 development started
 
-Human Arabic voice acceptance: PENDING — ElevenLabs must be configured, then the user auditions voices in the Voice Lab and selects the default Arabic voice
+Human Arabic voice selection: APPROVED — ElevenLabs / Mamdoh (`68MRVrnQAt8vLbu0FCzw`) / Energetic Ad / `eleven_multilingual_v2`, persisted in `app_settings.arabic_voice_default` with `selectedBy: human`
 
-Final acceptance testing: PASS WITH HUMAN VOICE REVIEW DEFERRED
+Final complete-video acceptance: PENDING USER REVIEW — acceptance video `cmt6vgxfb000308sbakaebzkm` generated and awaiting the product owner's viewing
+
+Final acceptance testing: ENGINE-SIDE PASS; complete-video acceptance pending user review
 
 Canonical URL: http://localhost:3130
 
@@ -1544,3 +1546,586 @@ No full production video was generated during this work.
 
 Until step 1 is done, Arabic production correctly reports NOT READY and Arabic jobs are refused
 with an actionable message.
+
+---
+
+## V2.2 — ElevenLabs HTTP 400 Diagnosis & Provider-State Hardening
+
+**Date**: 2026-08-23
+**Release status**: V2.2 NOT RELEASED. `v2.1.0` remains the stable immutable release and is untouched.
+**Git**: development checkpoint commit `1448d16` exists on `main`; this work is a follow-up, uncommitted at time of writing.
+
+### 1. ElevenLabs HTTP 400 — Root Cause
+
+An ElevenLabs API key was stored in `ProviderCredentialsVault`, but every upstream call (Test
+Connection, Browse Voices) returned a generic `ElevenLabs returned HTTP 400.` with no further
+detail. The real cause was captured by decrypting the vault credential in-process (inside the
+running `abud-shorts-app` container, never logged or printed) and probing the live ElevenLabs API
+directly:
+
+```
+GET /v1/user   -> 400 { detail: { status: "api_key_id_used_as_api_key", message: "API key ID used
+                        as API key - only valid API keys can be used. API keys start with 'sk_' and
+                        are shown when the key is created or rotated." } }
+GET /v1/voices -> same 400 / same detail.status
+GET /v2/voices -> same 400 / same detail.status
+```
+
+**Root cause: the stored credential is an ElevenLabs API Key ID, not the API key secret.**
+ElevenLabs distinguishes the two: the *key ID* is shown in the dashboard's key list; the *secret
+key* (starts with `sk_`) is only shown once, at creation or rotation. This is not a permission-scope
+problem, not an endpoint problem, and not a code bug in the sense of "wrong logic" — the value
+currently in the vault simply is not usable as a bearer credential. **No new key was requested or
+created, and the existing key was not replaced, per instruction.** The fix here is entirely on the
+engine side: turn this exact upstream response into an actionable diagnosis instead of a bare
+HTTP 400, and remove the unrelated bugs discovered while investigating (see below). Re-entering the
+correct secret value remains a pending human step (see §7).
+
+### 2. Sanitized Error Mapping
+
+`elevenlabsVoiceProvider.ts` now parses ElevenLabs' documented error envelope
+(`{ detail: { status, message, request_id } }`) into a `ProviderErrorDetail`
+(`category, httpStatus, upstreamStatus, upstreamMessage, requestId, endpoint, method`) and a
+human-facing message, for every call site (Test Connection, voice discovery, preview/generation).
+Categories: `invalid_api_key`, `api_key_id_used_as_api_key`, `missing_permissions`,
+`quota_exceeded`, `voice_not_found`, `character_limit_exceeded`, `unsupported_request`,
+`rate_limited`, `server_error`, `unknown`. Only the upstream response body is ever read — request
+headers (which carry the API key) are never inspected or logged, and this is covered by a test that
+asserts a real key never appears in a serialized error detail.
+
+### 3. Voice Discovery Endpoint
+
+Migrated from `GET /v1/voices` to `GET /v2/voices` with `page_size` + `next_page_token`
+pagination (capped at 20 pages / ~2000 voices as a safety bound). `GET /v1/voices` is kept as a
+compatibility fallback used only if `/v2/voices` itself 404s. Nothing is hardcoded; empty account
+catalogues return an empty list, never a placeholder.
+
+### 4. Shared Voice Library vs Account Voices
+
+The engine has never called ElevenLabs' shared Voice Library endpoints — voice discovery only ever
+reads the customer's own account catalogue (`GET /v2/voices`). The provider card now explicitly
+labels this (`sharedVoiceLibrary: "not_required"`) so it is clear account-tier restrictions on the
+shared library (a separate, optional ElevenLabs feature) can never gate this engine's Arabic
+production readiness.
+
+### 5. `eleven_multilingual_v2` Request Fix
+
+`language_code` is **no longer sent** for `eleven_multilingual_v2` — current ElevenLabs API
+documentation does not list it as an accepted field for this model, and sending it is a plausible
+source of upstream 400s independent of the credential problem above. A per-model capability table
+(`ELEVENLABS_MODEL_CAPABILITIES`, `supportsLanguageCode` / `supportsTTS` / `supportsVoiceSettings` /
+`supportsAlignment`) now gates every optional field by model instead of assuming one model's rules
+apply to all. ABUD's own `requestedLanguage: "ar"` / `requestedDialect: "egyptian"` metadata is
+unchanged in `ProductionSpec` — only the outbound ElevenLabs request body changed.
+
+### 6. Test Connection & Provider Card
+
+`validate()` no longer collapses everything into one `healthy` boolean. It makes two read-only
+calls — `GET /v1/user` (auth) then `GET /v2/voices?page_size=1` (discovery probe) — **neither of
+which spends Text-to-Speech quota or credits**; live TTS is only ever exercised by an explicit
+preview or render. It now reports `authenticated`, `voiceDiscoveryAvailable`, `ttsReady`,
+`voicesDiscovered`, and a structured `errorDetail`, mapped to distinct statuses: `not_configured`,
+`invalid_credentials`, `missing_permissions`, `voice_discovery_restricted`, `healthy`. `Live
+Verified` is a separate, persisted flag set only by a real successful `/voice-lab/preview` call
+(`providerVault.markTested("elevenlabs", "live_verified")`) — Test Connection can never claim it.
+The vault's `health` / `last_tested_at` columns are now actually written on every Test Connection
+and every preview (previously `markTested` was defined but never called anywhere, so those columns
+never left their defaults). The Providers UI renders five distinct chips per the ElevenLabs card —
+Credential, Connection, Voices, TTS, Live Verified — plus the sanitized upstream message and request
+ID when an error is present, replacing the old "Provider Unavailable / HTTP 400" pair.
+
+### 7. Current Live State (re-verified after the fixes above, same stored credential)
+
+| Item | State |
+| --- | --- |
+| Credential stored in vault | **YES** (`d79a••••1dce`) |
+| Authenticated (`GET /v1/user`) | **NO** — `api_key_id_used_as_api_key` |
+| Voice discovery available | **NO** (blocked by authentication) |
+| Voices discovered | **0** |
+| TTS ready | **NO** |
+| Live Verified | **NO** |
+| Preview generated | **0** — attempted once for verification, failed with the same sanitized diagnosis, no quota spent |
+
+The HTTP 400 is now fully explained end-to-end (Test Connection, Browse Voices, and Providers card
+all show the same precise diagnosis with request ID) instead of a bare status code. Nothing about
+the account tier, permissions, or voice catalogue was fabricated — every field above reflects a real
+API round trip.
+
+### 8. Tests, Build, Docker
+
+- **Tests**: `pnpm vitest run` — **35 files, 281 tests, 0 failures** (269 baseline + 12 new:
+  model capability lookup, `/v2/voices` pagination, legacy `/v1/voices` fallback on 404, error
+  categorization for `api_key_id_used_as_api_key` / `missing_permissions` / `quota_exceeded` /
+  `rate_limited` / `server_error`, no-key-leakage assertion on a serialized error detail, granular
+  Test Connection sub-states including the zero-voices case, the exact `api_key_id_used_as_api_key`
+  diagnosis surfacing instead of a generic HTTP 400, `eleven_multilingual_v2` never sending
+  `language_code`, and Voice Lab population without fabricated Egyptian metadata).
+- **Build**: `pnpm build` — clean (TypeScript + Vite, no new errors).
+- **Docker**: `abud-shorts-app` and `abud-shorts-render-worker` images rebuilt from the new `dist`
+  and recreated; `abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n`, and
+  `abud-shorts-postgres` all report **healthy**.
+
+### 9. Remaining Blocker (unchanged in kind, more precise now)
+
+**Human action required**, per the standing instruction not to replace the key or request a new one
+during this session: in ElevenLabs, open **Profile → API Keys**, copy the actual **secret** key
+(starts with `sk_` — not the key ID shown in the list), and re-enter it in **Providers → ElevenLabs
+→ Replace Credentials**. Once that is done, Test Connection is expected to report `healthy` with a
+non-zero `voicesDiscovered`, at which point Voice Lab auditioning, default-voice selection, and one
+verified preview become possible — the same next steps as §12 of the previous entry, now blocked on
+one precisely-identified re-entry rather than an unexplained HTTP 400.
+
+---
+
+## V2.2 — ElevenLabs Live Voice Acceptance (Real Credential, Real Voices)
+
+**Date**: 2026-08-24
+**Release status**: V2.2 NOT RELEASED. `v2.1.0` remains the stable immutable release and is untouched.
+**Git**: uncommitted follow-up to development checkpoint commit `1448d16` on `main`.
+
+### 1. Credential State (live, re-verified)
+
+The user replaced the vault credential through the Providers UI with the actual ElevenLabs secret
+key. `POST /api/v2/providers/elevenlabs/validate` against the live account now returns:
+
+| Item | Result |
+| --- | --- |
+| Configured | **YES** |
+| Authenticated (`GET /v1/user`) | **YES** |
+| Voice discovery available (`GET /v2/voices`) | **YES** |
+| TTS Ready | **YES** |
+| Account tier | `free` |
+| Character limit / used | 10,000 / 0 (at time of Test Connection) |
+
+The `api_key_id_used_as_api_key` failure from the previous entry is fully resolved with the real
+secret key.
+
+### 2. Voice Discovery
+
+`GET /v2/voices` (paginated, current endpoint) returned **26 real voices** for this account — none
+hardcoded or fabricated. Two carry explicit Egyptian Arabic metadata:
+
+- `amSNjVC0vWYiE8iGimVb` — "Maged Magdy - Calm, Natural and Balanced" (category: professional, accent: egyptian, dialect: egyptian)
+- `68MRVrnQAt8vLbu0FCzw` — "Mamdoh - Deep Egyptian Arabic Male voice" (category: professional, accent: egyptian, dialect: egyptian)
+
+The remaining 24 are ElevenLabs' standard premade/professional library voices (American/British/
+Australian accent labels) that ElevenLabs' own `verified_languages` metadata lists as Arabic-capable
+under `eleven_multilingual_v2` — 13 of the 26 carry an "ar" verified-language entry, 13 are
+multilingual-only with no Arabic verification. Dialect is asserted as `egyptian` only for the two
+voices above; nothing else is labeled Egyptian, matching the no-fabrication requirement.
+
+### 3. Real Finding: Free-Tier Voices Are Restricted, Including Both Egyptian Voices
+
+Attempting a preview on any **professional**-category voice on this `free`-tier account returns a
+real, reproducible upstream error — not a bug in this engine:
+
+```
+HTTP 402 { detail: { status: "payment_required", code: "paid_plan_required",
+  message: "Free users cannot use library voices via the API. Please upgrade your
+  subscription to use this voice." } }
+```
+
+This affects **both explicitly Egyptian voices** (Maged Magdy, Mamdoh) and one premade-labeled
+voice that is actually professional-category (Christopher). **Premade**-category voices are
+unaffected and generate normally on the free tier. This is a genuine ElevenLabs account/plan
+restriction, discovered by real API calls — not fabricated, and not something this engine can work
+around. `categorizeElevenLabsError` / `describeElevenLabsErrorDetail` were extended with a new
+`plan_upgrade_required` category so the UI now shows this exact reason instead of a generic
+`ElevenLabs returned HTTP 402.` (covered by 2 new tests; see §6).
+
+**Practical implication for Egyptian-accent selection**: neither Egyptian-labeled voice can be
+previewed or used for TTS on the current free-tier plan. The 6 successful previews below are all
+premade voices ElevenLabs has verified for Arabic, but none carries an Egyptian-specific accent
+label — accent quality is unverified and remains for the human listener to judge, same policy as
+before.
+
+### 4. Successful Previews (6, technical data only, no quality score)
+
+Text: the exact Egyptian comparison script from this task. Model: `eleven_multilingual_v2`.
+`language_code` was **not sent** (confirmed by the same code path fixed in the previous entry).
+Preset: `natural`. All measurements below are real, taken with `ffprobe`/`ffmpeg loudnorm` on the
+actual generated MP3 bytes inside the `abud-shorts-app` container — no value is estimated or invented.
+
+| # | Voice | Voice ID | Gen time | Duration | Sample rate | Channels | LUFS (integrated) | True peak |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Sarah - Mature, Reassuring, Confident | `EXAVITQu4vr4xnSDxMaL` | 2215 ms | 17.45 s | 44100 Hz | mono | -17.34 LUFS | -1.29 dBTP |
+| 2 | Alice - Clear, Engaging Educator | `Xb7hH8MSUJpSbSDYk0k2` | 2558 ms | 19.17 s | 44100 Hz | mono | -22.21 LUFS | -3.15 dBTP |
+| 3 | Jessica - Playful, Bright, Warm | `cgSgspJ2msm6clMCkdW9` | 2116 ms | 15.46 s | 44100 Hz | mono | -24.06 LUFS | -3.45 dBTP |
+| 4 | George - Warm, Captivating Storyteller | `JBFqnCBsd6RMkjVDRZzb` | 2632 ms | 16.12 s | 44100 Hz | mono | -24.16 LUFS | -5.11 dBTP |
+| 5 | Chris - Charming, Down-to-Earth | `iP95p4xoKVk53GoZ742B` | 1960 ms | 14.58 s | 44100 Hz | mono | -22.54 LUFS | -2.60 dBTP |
+| 6 | Bill - Wise, Mature, Balanced | `pqHfZKP75CvOlQylNhV4` | 3380 ms | 21.58 s | 44100 Hz | mono | -24.19 LUFS | -6.72 dBTP |
+
+No voice was labeled Best, Egyptian, Human, or Recommended — none of the six carries factual
+Egyptian-accent metadata, so none is presented as such.
+
+### 5. Blocked Previews (3, real account restriction, not a code failure)
+
+| Voice | Voice ID | Category | Result |
+| --- | --- | --- | --- |
+| Maged Magdy - Calm, Natural and Balanced | `amSNjVC0vWYiE8iGimVb` | professional | `plan_upgrade_required` (HTTP 402) |
+| Mamdoh - Deep Egyptian Arabic Male voice | `68MRVrnQAt8vLbu0FCzw` | professional | `plan_upgrade_required` (HTTP 402) |
+| Christopher - Smooth, Deep and Engaging | `SSfU0eLfP3qeuR4j2bwD` | professional | `plan_upgrade_required` (HTTP 402) |
+
+### 6. Mixed-Language Pronunciation Sample
+
+Text: the AI/SaaS/product/customer mixed-language line from this task, generated for 3 of the 6
+technically successful voices (selected for gender/accent coverage, not a quality ranking) —
+Sarah, George, Chris. All 3 generated successfully (`eleven_multilingual_v2`, no `language_code`,
+`natural` preset). This is for pronunciation comparison only; no score was computed.
+
+### 7. Voice Lab
+
+`GET /api/v2/voice-lab/config` confirms `configured: true`, `model: eleven_multilingual_v2`, and the
+exact reference script from this task. `defaultArabicVoice` and `GET /api/v2/voice-lab/default-voice`
+both confirm **no default voice is set** — none was selected automatically, per instruction. Voice
+Lab is populated from the same live discovery call as §2/§4 (no separate or stale data path).
+
+### 8. Tests, Build, Docker
+
+- **Tests**: `pnpm vitest run` — **35 files, 282 tests, 0 failures** (281 prior baseline + 1 new:
+  `plan_upgrade_required` categorization/message, discovered directly from the real HTTP 402 above).
+- **Build**: `pnpm build` — clean (TypeScript + Vite).
+- **Docker**: `abud-shorts-app` and `abud-shorts-render-worker` images rebuilt (once for the
+  `plan_upgrade_required` fix) and recreated; all four services (`app`, `render-worker`, `n8n`,
+  `postgres`) report **healthy**.
+
+### 9. Human Arabic Voice Acceptance
+
+**Still PENDING.** No default voice was selected by the engine. The human listening/selection step
+is now unblocked (real credential works, 6 real previews exist to listen to), but the choice itself
+remains outstanding, and the two candidates with genuine Egyptian-accent metadata are currently
+blocked by the account's free-tier plan restriction (§3) — upgrading the ElevenLabs plan, or
+accepting a non-Egyptian-labeled premade voice, are both product decisions for the user to make, not
+this engine.
+
+---
+
+## V2.2 — Final Egyptian Arabic Voice Selection Pass (Paid Account)
+
+**Date**: 2026-08-24
+**Release status**: V2.2 NOT RELEASED. `v2.1.0` remains the stable immutable release and is untouched.
+**Git**: uncommitted follow-up to development checkpoint commit `1448d16` on `main`.
+
+### 1. Credential State (live, re-verified — account upgraded to paid)
+
+The user upgraded the ElevenLabs account to a paid plan. `POST /api/v2/providers/elevenlabs/validate`
+now returns:
+
+| Item | Result |
+| --- | --- |
+| Configured | **YES** |
+| Authenticated | **YES** |
+| Voice discovery available | **YES** |
+| TTS Ready | **YES** |
+| Account tier | `starter` (was `free` in the previous entry) |
+| Character limit / used | 40,000 / 712 (real, from ElevenLabs' own subscription data — not estimated) |
+| Voices discovered | **27** |
+
+### 2. Egyptian Voices Found
+
+Filtered from the live `GET /v2/voices` response by actual returned metadata
+(`dialect: "egyptian"` / `accent: "egyptian"` / `locale: "ar-EG"`) — **exactly 2 of the 27 voices**
+qualify:
+
+| Voice | Voice ID | Category | Accent | Gender | Locale |
+| --- | --- | --- | --- | --- | --- |
+| Mamdoh - Deep Egyptian Arabic Male voice | `68MRVrnQAt8vLbu0FCzw` | professional | egyptian | male | ar-EG |
+| Maged Magdy - Calm, Natural and Balanced | `amSNjVC0vWYiE8iGimVb` | professional | egyptian | male | ar-EG |
+
+Both were searched for by name and confirmed present and usable (the earlier free-tier
+`plan_upgrade_required` restriction on professional-category voices, documented in the previous
+status entry, no longer applies now that the account is paid). No other voice in the 27 carries
+Egyptian metadata; nothing was fabricated.
+
+### 3. Mamdoh — 3 Presets, Egyptian Script
+
+Text: the exact required Egyptian comparison script. Model `eleven_multilingual_v2`, no
+`language_code` sent (verified in code, §7 of the prior entry). All 3 generated successfully.
+
+| Preset | Result | Gen time | Duration | Sample rate | LUFS | True peak | Leading silence | Trailing silence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Natural | OK | 5463 ms | 14.86 s | 44100 Hz | -12.99 | -1.11 dBTP | 0.00 s | ~0.35 s |
+| Energetic Ad | OK | 2273 ms | 15.73 s | 44100 Hz | -12.77 | -1.17 dBTP | 0.00 s | ~0.36 s |
+| Professional | OK | 2132 ms | 15.36 s | 44100 Hz | -12.94 | -1.24 dBTP | 0.00 s | ~0.36 s |
+
+### 4. Maged Magdy — 3 Presets, Same Script
+
+Found and usable on the paid account (not substituted — this is the real Maged Magdy voice). All 3
+generated successfully with the same model/preset/text policy as Mamdoh.
+
+| Preset | Result | Gen time | Duration | Sample rate | LUFS | True peak | Leading silence | Trailing silence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Natural | OK | 5120 ms | 20.19 s | 44100 Hz | -36.36 | -17.45 dBTP | 0.00 s | ~0.43 s |
+| Energetic Ad | OK | 2841 ms | 18.83 s | 44100 Hz | -36.93 | -17.16 dBTP | 0.00 s | ~0.45 s |
+| Professional | OK | 2563 ms | 18.57 s | 44100 Hz | -36.87 | -16.75 dBTP | 0.00 s | ~0.37 s |
+
+**Objective measurement flag (not a quality judgment):** Maged Magdy's raw output measures roughly
+**24 dB quieter** (integrated LUFS) than Mamdoh's across all three presets, with a much lower true
+peak. This is a real, `ffmpeg loudnorm`-measured difference in the actual generated audio, not an
+estimate. It is reported here as data only — the render pipeline's existing loudness normalization
+(§6 of the ElevenLabs-migration entry) would compensate for this at render time, and no claim is
+made about which voice "sounds better"; that judgment is reserved for the human listener.
+
+### 5. Voice Lab
+
+Both voices' successful samples are immediately playable through the existing
+`POST /api/v2/voice-lab/preview` → Voice Lab flow (same endpoint used for every sample above, no
+separate code path). For each: Voice, Preset, Accent, Gender, Category, audio duration and
+generation time are available from the same response payload documented in the previous entries.
+`GET /api/v2/voice-lab/default-voice` still returns `default: null` — **no default was auto-selected**.
+
+### 6. Mixed Arabic/English Pronunciation Sample
+
+Generated for both Egyptian voices only, using the AI/SaaS/product/customer line from this task
+(`natural` preset, no `language_code`):
+
+| Voice | Result | Gen time | Duration | LUFS | True peak | Leading silence | Trailing silence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Mamdoh | OK | 1629 ms | 8.02 s | -13.16 | -0.83 dBTP | 0.00 s | ~0.29 s |
+| Maged Magdy | OK | 1430 ms | 8.72 s | -37.02 | -20.57 dBTP | 0.00 s | ~0.46 s |
+
+For pronunciation comparison only — no score computed.
+
+### 7. Egyptian Text Preservation (verified on the exact script used for these previews)
+
+Ran `preprocessArabicSpeech` on the exact Egyptian script sent to ElevenLabs above and checked the
+`ttsNormalizedText` (the text actually transmitted to the API):
+
+| Word | Present in this script | Survived into TTS text |
+| --- | --- | --- |
+| إنت | yes | **yes** |
+| مش | yes | **yes** |
+| لسه | yes | **yes** |
+| دلوقتي | yes | **yes** |
+| عندك | yes | **yes** |
+| معاك | yes | **yes** |
+| علشان | **no** (does not appear in this particular script) | n/a |
+
+No MSA conversion occurred; every Egyptian word present in the script survived verbatim. `علشان`
+simply is not part of this specific script — its general preservation is already covered by the
+persistent `arabicSpeechPreprocessor` test suite (part of the 282 passing tests below).
+
+### 8. Cost / Credit Control
+
+Only the required comparison samples were generated: 6 Egyptian-script previews (2 voices × 3
+presets) + 2 mixed-language samples = 8 total ElevenLabs calls this session, no repeated identical
+combinations, no full video render. ElevenLabs' own account data (real, not estimated):
+**712 / 40,000 characters used** on the `starter` plan after this entire session. No dollar cost is
+stated — ElevenLabs bills by character allowance on a subscription, not a per-request price this
+engine can observe.
+
+### 9. Tests, Build, Docker
+
+- **Focused**: `pnpm vitest run src/server/v2/voiceProviders.test.ts` — 39/39 passed.
+- **Full suite**: `pnpm vitest run` — **35 files, 282 tests, 0 failures** (no regressions; no new
+  tests were needed this pass, since no engine code changed — this run only exercised existing
+  discovery/preview/error-mapping code against the live paid account).
+- **Build**: `pnpm build` — clean (TypeScript + Vite).
+- **Docker**: no rebuild required (no source changed this pass); `abud-shorts-app`,
+  `abud-shorts-render-worker`, `abud-shorts-n8n`, `abud-shorts-postgres` all remained **healthy**
+  throughout.
+
+### 10. Human Arabic Voice Acceptance
+
+**Still PENDING.** Both real Egyptian voices are now fully auditionable (8/8 samples generated
+successfully, zero fabricated). No default voice or preset was selected by the engine. The next step
+is entirely the user's: listen to Mamdoh and Maged Magdy across all three presets in Voice Lab,
+optionally weigh the objective loudness difference noted in §4, pick a voice + preset, click "Set as
+Default Arabic Voice", and only then request the one final V2.2 acceptance video.
+
+---
+
+## Milestone V2.2-B: Persisted Arabic Voice Default Wired Into Production Routing (2026-08-24)
+
+### 1. The routing defect
+
+The Voice Lab has always written the human's Arabic voice selection into
+`app_settings.arabic_voice_default`. **Nothing on the video-creation path ever
+read it.**
+
+`canonicalizeProductionSpecContract()` resolved the ElevenLabs voice through
+`defaultVoiceForResolvedProvider("elevenlabs")`, which returned
+`process.env.ELEVENLABS_DEFAULT_VOICE_ID`. Consequences:
+
+- With the variable set, every Arabic "Auto" job used the environment voice and
+  silently ignored the approved human selection.
+- With the variable empty (the actual state of this installation), the spec
+  carried `voiceId: ""` and `ElevenLabsVoiceProvider.resolveVoiceId()` fell
+  through to `voices[0]` — **whatever voice happened to be first in the
+  account**. Mamdoh being first was a coincidence of list order, not a decision.
+
+A partial patch at the production-job route read the stored default, but only
+when `!canonicalSpec.voiceId`, so it was dead code whenever the environment
+variable was set. It also never applied the persisted **preset**.
+
+A second instance of the same class of bug lived in the UI: `VideoCreator`
+auto-selected `nextVoices[0].id`, so the Create Video screen always sent an
+explicit `voiceId` and never exercised the Auto path at all.
+
+### 2. The fix
+
+New module `src/server/v2/voice-providers/arabicVoiceDefault.ts` owns the whole
+concern — the `app_settings` accessor, payload parsing, and a pure
+`resolveArabicVoiceSelection()` precedence function.
+
+Canonicalization stays **pure and synchronous**. It gained an optional third
+`defaults` argument; the request layer reads the persisted default once per
+request in `canonicalizeProductionSpecForRequest(db, spec, controls)` and hands
+it in. All four call sites (spec preview, production job, prompt-mode job,
+spec-mode job) now go through that wrapper.
+
+`defaultVoiceForResolvedProvider()` no longer knows about ElevenLabs at all —
+an Arabic voice is a human decision, never an environment guess.
+
+Additional wiring:
+
+- `ProductionSpec` gained `voicePreset` and `voiceModelId`, so the approved
+  delivery settings and model travel with the job through PostgreSQL into the
+  render worker.
+- `ShortCreator` forwards `voicePreset`/`voiceModelId` into
+  `VoiceRegistry.synthesize()` for both the first synthesis and the compaction
+  retry, and records the preset in the voice artifact, reuse key and input hash.
+  A preset change now invalidates a cached voice artifact; hashes recorded
+  before presets existed still match, so historical artifacts stay reusable.
+- `VideoCreator` no longer pins the first account voice. "Auto-select" stays
+  empty so the server applies the persisted default, and the preview panel shows
+  a `Voice: ElevenLabs · Mamdoh · energetic ad` badge sourced from the server's
+  own contract.
+
+### 3. Precedence
+
+| # | Source | Behaviour |
+|---|--------|-----------|
+| 1 | Explicit request `voiceId` (+ explicit preset) | Wins over everything. Mamdoh is the default, not a lock. |
+| 2 | Persisted human default in `app_settings` | Applies when no explicit voice was named. |
+| 3 | Legacy `ELEVENLABS_DEFAULT_VOICE_ID` | Only when no human selection exists. |
+| 4 | Nothing resolvable | Controlled `409 arabic_default_voice_not_selected` pointing at the Voice Lab. |
+
+A legacy Piper model name is never treated as an explicit ElevenLabs voice. The
+persisted preset applies only while the persisted *voice* is in effect, so
+choosing another speaker cannot silently inherit settings auditioned elsewhere.
+
+Arabic production still never falls back to Piper, Kokoro, Edge-TTS or Google
+Cloud TTS. Historical Piper jobs and their metadata remain readable.
+
+### 4. Approved Arabic production default
+
+| Field | Value |
+|-------|-------|
+| Provider | `elevenlabs` |
+| Voice ID | `68MRVrnQAt8vLbu0FCzw` |
+| Voice name | Mamdoh — Deep Egyptian Arabic Male voice |
+| Preset | `energetic_ad` |
+| Model | `eleven_multilingual_v2` |
+| Selected by | `human` |
+| Selected at | 2026-08-24T06:44:30.420Z |
+
+Resolved from live ElevenLabs discovery against the configured account — no
+voice ID was guessed. Persisted through `PUT /api/v2/voice-lab/default-voice`
+and confirmed in PostgreSQL.
+
+`language_code` is still never sent for `eleven_multilingual_v2`; ABUD's own
+metadata retains `language: ar` / `dialect: egyptian`.
+
+### 5. Live Auto-resolution evidence
+
+`POST /api/v2/production-spec/preview` — Arabic, Egyptian, `voiceProvider: auto`,
+**no** `voiceId`:
+
+```
+voiceProvider : elevenlabs
+voiceId       : 68MRVrnQAt8vLbu0FCzw
+voicePreset   : energetic_ad
+voiceModelId  : eleven_multilingual_v2
+uiContract.voiceSource : persisted_human_default
+uiContract.voiceName   : Mamdoh
+```
+
+The UI Create Video screen, with Voice left on "Auto-select", renders
+`Voice: ElevenLabs · Mamdoh · energetic ad`.
+
+### 6. Regression coverage
+
+New `src/server/v2/arabicVoiceDefaultRouting.test.ts` (18 tests). The
+load-bearing case persists Mamdoh, calls the normal Arabic Auto route with no
+explicit voice, and asserts the resolved provider/voice/preset — with
+`ELEVENLABS_DEFAULT_VOICE_ID` stubbed to a decoy so any remaining environment
+read fails loudly.
+
+**Verified against the pre-fix code**: the test fails with
+`expected 'env_legacy_voice_should_not_win' to be '68MRVrnQAt8vLbu0FCzw'`, and
+passes after the fix.
+
+Also covered: explicit override; explicit preset; persisted-over-env precedence;
+job spec reaching the `jobs` table and the worker input; controlled error when
+nothing resolves; English Auto unaffected; historical Piper readability; no
+plaintext secret exposure; preset stability across scenes and retries; and that
+canonicalization does not mutate the persisted selection.
+
+### 7. V2.2 acceptance video (PENDING USER REVIEW)
+
+| Field | Value |
+|-------|-------|
+| Job ID | `cmt6vgxfb000308sbakaebzkm` |
+| Video ID | `cmt6vgxfb000308sbakaebzkm` |
+| Mode | Prompt Studio · `auto_hybrid` · visual `auto` |
+| Explicit `voiceId` supplied | **NO** — resolved through the persisted human default |
+| Requested duration | 20s |
+| Actual duration | 20.054s (variance 0.3%) |
+| Resolution | 1080x1920, h264, 25fps |
+| Audio | aac, 48 kHz, stereo |
+| File size | 17.05 MB |
+| Generation time | 1m 41s (06:45:52 → 06:47:34 UTC) |
+| Technical score | 100 / 100 |
+| Media plan score | 92 / 100 |
+
+Voice, per scene, all three identical:
+
+```
+provider: elevenlabs   model: eleven_multilingual_v2
+voiceId : 68MRVrnQAt8vLbu0FCzw   preset: energetic_ad
+settings: stability 0.35 · similarity_boost 0.8 · style 0.45 · speaker_boost true
+```
+
+The settings above are the `energetic_ad` bundle, proving the preset reached
+synthesis rather than only persistence.
+
+Audio: raw narration −12.69 / −11.38 / −11.24 LUFS; mastered −18.29 / −15.02 /
+−15.33 LUFS; final mix −16.47 LUFS; true peak −4.33 dBTP; no clipping; ducking
+`balanced`; audio QA passed with no issues. ElevenLabs was called exactly three
+times — once per scene, no regeneration.
+
+Visuals: Pexels stock, 3 segments, motion presets `punch_in`/`zoom_out`,
+transitions `whip`/`zoom`, ArabicCaptionEngine V2 + Remotion caption
+composition, FFmpeg audio mastering. Optional Python packs (PySceneDetect,
+MediaPipe, rembg, Real-ESRGAN, librosa beat analysis) are not installed in this
+runtime and were skipped by their documented fallback policies — no AI GPU video
+generation and no paid visual provider was used.
+
+Captions: Arabic RTL logical order correct, connected letterforms, at most two
+lines, inside safe margins, no clipping and no CTA collision on inspected frames
+at 2s / 9s / 16s. `captionSafeLayout: true` on all three scenes.
+
+Delivery: thumbnail `200` (image/jpeg), preview `200` and `206` on range
+request (video/mp4), download `200`. Browser QA on Job Details and Video
+Details: voice metadata reads `elevenlabs`, preview plays (readyState 4,
+1080x1920), Arabic title and narration render correctly, no console errors.
+
+**Known cosmetic defect (not fixed, out of this change's scope):** Video Details
+renders `Estimated Cost: $undefined USD` for usage-based providers. ElevenLabs
+bills by credit, so no dollar figure exists; the field should read
+"Usage Based" instead of interpolating an undefined value.
+
+### 8. Verification summary
+
+- `pnpm vitest run` — **36 files, 302 tests, 0 failures** (baseline was 35 / 282)
+- `pnpm build` — PASS (tsc + vite)
+- Docker: `abud-shorts-app` healthy, `abud-shorts-render-worker` healthy,
+  `abud-shorts-n8n` healthy, `abud-shorts-postgres` healthy
+- App and worker images rebuilt and recreated so the live runtime carries the fix
+
+### 9. Release state
+
+V2.2 is **NOT RELEASED**. No `v2.2.0` tag, no package, no GitHub Release.
+A development checkpoint commit only. Final complete-video acceptance is
+**PENDING USER REVIEW**.

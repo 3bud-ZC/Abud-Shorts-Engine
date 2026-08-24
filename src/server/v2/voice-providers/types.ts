@@ -116,19 +116,62 @@ export type VoiceAudioResult = {
   wordTimings?: Array<{ word: string; startMs: number; endMs: number }>;
 };
 
+/**
+ * Sanitized upstream-error categories. These are derived only from the
+ * response body ElevenLabs itself returns (detail.status / detail.message /
+ * detail.request_id) - never from headers, and never including the
+ * credential value.
+ */
+export type ProviderErrorCategory =
+  | "invalid_api_key"
+  | "api_key_id_used_as_api_key"
+  | "missing_permissions"
+  | "quota_exceeded"
+  | "voice_not_found"
+  | "character_limit_exceeded"
+  | "unsupported_request"
+  | "rate_limited"
+  | "server_error"
+  | "plan_upgrade_required"
+  | "unknown";
+
+export type ProviderErrorDetail = {
+  category: ProviderErrorCategory;
+  httpStatus?: number;
+  upstreamStatus?: string;
+  upstreamMessage?: string;
+  requestId?: string;
+  endpoint: string;
+  method: string;
+};
+
 export type VoiceProviderValidationResult = {
   provider: string;
   category: "Voice";
   tier: VoiceTier;
   configured: boolean;
   healthy: boolean;
-  status: "healthy" | "not_configured" | "invalid_credentials" | "rate_limited" | "timeout" | "provider_unavailable";
+  status:
+    | "healthy"
+    | "not_configured"
+    | "invalid_credentials"
+    | "missing_permissions"
+    | "voice_discovery_restricted"
+    | "rate_limited"
+    | "timeout"
+    | "provider_unavailable";
   message: string;
   checkedAt: string;
   latencyMs?: number;
   accountTier?: string;
   characterLimit?: number;
   charactersUsed?: number;
+  /** Granular Test Connection sub-states (never inferred from a spent-quota call). */
+  authenticated?: boolean;
+  voiceDiscoveryAvailable?: boolean;
+  ttsReady?: boolean;
+  voicesDiscovered?: number;
+  errorDetail?: ProviderErrorDetail;
 };
 
 export interface VoiceProvider {

@@ -74,6 +74,21 @@ export type VisualMode = z.infer<typeof visualModeEnum>;
 export const voiceProviderEnum = z.enum(["auto", "kokoro", "piper", "edge_tts", "google_cloud_tts", "elevenlabs"]);
 export type VoiceProvider = z.infer<typeof voiceProviderEnum>;
 
+/**
+ * Narration delivery presets. These are the ElevenLabs voice-setting bundles a
+ * human can pick in the Voice Lab; the spec carries the chosen preset so the
+ * render worker synthesizes with the settings the human actually approved
+ * instead of silently falling back to "natural".
+ */
+export const voicePresetEnum = z.enum([
+  "natural",
+  "energetic_ad",
+  "professional",
+  "storytelling",
+  "calm",
+]);
+export type VoicePreset = z.infer<typeof voicePresetEnum>;
+
 export const captionStyleEnum = z.enum(["none", "cinematic", "viral_bold", "clean", "minimal", "product_ad", "educational", "bold", "viral", "brand"]);
 export type CaptionStyle = z.infer<typeof captionStyleEnum>;
 
@@ -178,6 +193,8 @@ export const productionSpecSchema = z.object({
   visualMode: visualModeEnum.default("auto"),
   voiceProvider: voiceProviderEnum.default("auto"),
   voiceId: z.string().trim().max(120).default(""),
+  voicePreset: voicePresetEnum.optional(),
+  voiceModelId: z.string().trim().max(80).optional(),
   captionStyle: captionStyleEnum.default("bold"),
   brandId: z.string().trim().max(140).optional(),
   templateId: z.string().trim().max(80).optional(),

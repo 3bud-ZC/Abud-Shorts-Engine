@@ -77,6 +77,12 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   ready: "Completed",
   failed: "Failed",
   canceled: "Canceled",
+  invalid_credentials: "Invalid Credentials",
+  missing_permissions: "Missing Permissions",
+  voice_discovery_restricted: "Voice Discovery Restricted",
+  provider_unavailable: "Provider Unavailable",
+  not_configured: "Not Configured",
+  live_verified: "Live Verified",
 };
 
 export const STAGE_LABELS: Record<string, string> = {
@@ -326,8 +332,21 @@ export function StatCard({
 export function statusColor(status: string): "success" | "warning" | "error" | "info" | "default" {
   if (!status) return "default";
   const s = status.toLowerCase();
-  if (["ready", "healthy", "valid", "configured", "completed"].includes(s)) return "success";
-  if (["degraded", "rate_limited", "timeout", "planning", "rendering", "generating_voice", "generating_captions", "collecting_media"].includes(s)) return "warning";
+  if (["ready", "healthy", "valid", "configured", "completed", "live_verified"].includes(s)) return "success";
+  if (
+    [
+      "degraded",
+      "rate_limited",
+      "timeout",
+      "planning",
+      "rendering",
+      "generating_voice",
+      "generating_captions",
+      "collecting_media",
+      "missing_permissions",
+      "voice_discovery_restricted",
+    ].includes(s)
+  ) return "warning";
   if (
     [
       "failed",

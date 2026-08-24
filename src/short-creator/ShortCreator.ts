@@ -370,6 +370,11 @@ export class ShortCreator {
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
       const requestedVoiceProvider = ((brandVoiceProfile?.provider || spec.voiceProvider || "auto") as VoiceProviderId | "auto");
       const requestedVoiceId = pinnedVoiceId || brandVoiceProfile?.voiceId || spec.voiceId || undefined;
+      // The preset is the delivery setting a human approved in the Voice Lab.
+      // It travels on the spec so every scene narrates identically and a retry
+      // cannot quietly drop back to the provider's "natural" default.
+      const requestedVoicePreset = spec.voicePreset || undefined;
+      const requestedVoiceModelId = spec.voiceModelId || undefined;
 
       const tempId = cuid();
       const tempWavFileName = `${tempId}.wav`;
@@ -401,6 +406,7 @@ export class ShortCreator {
           key.dialect === (brandVoiceProfile?.dialect || spec.dialect) &&
           key.qualityProfile === requestedVoiceQuality &&
           (!requestedVoiceId || key.voiceId === requestedVoiceId) &&
+          (key.voicePreset || undefined) === requestedVoicePreset &&
           providerCompatible
         );
       });
@@ -429,6 +435,8 @@ export class ShortCreator {
           qualityProfile: requestedVoiceQuality,
           requestedProvider: requestedVoiceProvider,
           voiceId: requestedVoiceId,
+          voicePreset: requestedVoicePreset,
+          modelId: requestedVoiceModelId,
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
         });
@@ -458,8 +466,10 @@ export class ShortCreator {
               dialect: (brandVoiceProfile?.dialect || spec.dialect) as any,
               qualityProfile: requestedVoiceQuality,
               requestedProvider: requestedVoiceProvider,
-              // Retries must never change the speaker.
+              // Retries must never change the speaker or the delivery settings.
               voiceId: pinnedVoiceId || requestedVoiceId,
+              voicePreset: requestedVoicePreset,
+              modelId: requestedVoiceModelId,
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
             });
@@ -507,6 +517,7 @@ export class ShortCreator {
           provider: voiceAudio.provider || voiceAudio.decision.providerId,
           model: voiceAudio.model,
           voiceId: voiceAudio.voiceId,
+          voicePreset: requestedVoicePreset,
           language: voiceAudio.language,
           dialect: voiceAudio.dialect,
           qualityProfile: requestedVoiceQuality,
@@ -525,6 +536,7 @@ export class ShortCreator {
           usageBasedCost: Boolean(voiceAudio.usageBasedCost),
           charactersBilled: voiceAudio.charactersBilled,
           modelId: voiceAudio.modelId,
+          voicePreset: requestedVoicePreset,
           voiceSettings: voiceAudio.voiceSettings,
           generationMs: voiceAudio.generationMs,
           sampleRate: voiceAudio.sampleRate,
@@ -556,6 +568,7 @@ export class ShortCreator {
             voiceArtifact: voiceArtifactDetails,
             reuseKey: {
               spokenNarration: requestedSpokenNarration,
+              voicePreset: requestedVoicePreset,
               provider: voiceArtifactDetails.provider,
               model: voiceArtifactDetails.model,
               voiceId: voiceArtifactDetails.voiceId,

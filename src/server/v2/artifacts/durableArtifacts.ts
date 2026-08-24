@@ -57,6 +57,8 @@ export function createVoiceInputHash(input: {
   qualityProfile?: string;
   pace?: string;
   style?: string;
+  /** ElevenLabs delivery preset, when one was selected. */
+  voicePreset?: string;
   preprocessingVersion?: string;
 }): string {
   return sha256Text({
@@ -71,6 +73,9 @@ export function createVoiceInputHash(input: {
     pace: input.pace || "normal",
     style: input.style || "default",
     preprocessingVersion: input.preprocessingVersion || "arabic-preprocessor-v2",
+    // Only hashed when a preset is actually in play, so hashes recorded before
+    // presets existed keep matching and historical artifacts stay reusable.
+    ...(input.voicePreset ? { voicePreset: input.voicePreset } : {}),
   });
 }
 
