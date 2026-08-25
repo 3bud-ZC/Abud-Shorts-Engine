@@ -57,7 +57,7 @@ $AbudInstallFile = Join-Path $AbudShared "installation.json"
 # Read by the application to populate Settings -> Updates. It lives in the data
 # directory because that is the only path both the host and the container see.
 $AbudUpdateStateFile = Join-Path $AbudDataDir "updates\update-state.json"
-$ComposeProject  = "abud-shorts"
+$ComposeProject  = if ($env:ABUD_COMPOSE_PROJECT) { $env:ABUD_COMPOSE_PROJECT } else { "abud-shorts" }
 $DefaultManifestUrl = "https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/latest/download/update-manifest.json"
 
 function Write-Step { param([string]$Text) Write-Host $Text -ForegroundColor Cyan }
@@ -110,6 +110,15 @@ function Get-EnvValue {
     return $line.Line.Substring($Key.Length + 1)
 }
 
+function Get-ComposeProject {
+    return (Get-EnvValue "ABUD_COMPOSE_PROJECT" (Get-EnvValue "ABUD_CONTAINER_PREFIX" $ComposeProject))
+}
+
+function Get-ContainerName {
+    param([string]$Role)
+    return "$(Get-EnvValue "ABUD_CONTAINER_PREFIX" (Get-ComposeProject))-$Role"
+}
+
 function Set-EnvValue {
     param([string]$Key, [string]$Value)
     $lines = @()
@@ -142,9 +151,11 @@ function Invoke-Compose {
     if (-not (Test-Path $composeFile)) {
         Stop-WithMessage "This installation is incomplete: docker-compose.prod.yml is missing."
     }
+    $project = Get-ComposeProject
     $env:ABUD_DATA_DIR = $AbudDataDir
     $env:ABUD_RELEASE_DIR = $releaseDir
-    $composeArgs = @("compose", "--project-name", $ComposeProject, "--env-file", $AbudEnvFile, "--file", $composeFile) + $Arguments
+    $env:ABUD_CONTAINER_PREFIX = Get-EnvValue "ABUD_CONTAINER_PREFIX" $project
+    $composeArgs = @("compose", "--project-name", $project, "--env-file", $AbudEnvFile, "--file", $composeFile) + $Arguments
     & docker @composeArgs
 }
 
@@ -156,10 +167,10 @@ function Get-ContainerHealth {
 }
 
 function Show-HealthSummary {
-    $app        = Get-ContainerHealth "abud-shorts-app"
-    $worker     = Get-ContainerHealth "abud-shorts-render-worker"
-    $db         = Get-ContainerHealth "abud-shorts-postgres"
-    $automation = Get-ContainerHealth "abud-shorts-n8n"
+    $app        = Get-ContainerHealth (Get-ContainerName "app")
+    $worker     = Get-ContainerHealth (Get-ContainerName "render-worker")
+    $db         = Get-ContainerHealth (Get-ContainerName "postgres")
+    $automation = Get-ContainerHealth (Get-ContainerName "n8n")
 
     function Friendly([string]$s) {
         switch ($s) {
@@ -350,7 +361,7 @@ function New-PreUpgradeBackup {
     $pgUser = Get-EnvValue "POSTGRES_USER" "abud_shorts"
     $pgDb   = Get-EnvValue "POSTGRES_DB" "abud_shorts"
 
-    & docker exec abud-shorts-postgres pg_dump -U $pgUser -d $pgDb 2>$null |
+    & docker exec (Get-ContainerName "postgres") pg_dump -U $pgUser -d $pgDb 2>$null |
         Out-File -FilePath $target -Encoding utf8
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $target) -or (Get-Item $target).Length -eq 0) {
         Remove-Item $target -Force -ErrorAction SilentlyContinue
@@ -368,7 +379,7 @@ function Restore-PreUpgradeBackup {
     if (-not (Test-Path $source)) { return $false }
     $pgUser = Get-EnvValue "POSTGRES_USER" "abud_shorts"
     $pgDb   = Get-EnvValue "POSTGRES_DB" "abud_shorts"
-    Get-Content $source | & docker exec -i abud-shorts-postgres psql -U $pgUser -d $pgDb 2>$null | Out-Null
+    Get-Content $source | & docker exec -i (Get-ContainerName "postgres") psql -U $pgUser -d $pgDb 2>$null | Out-Null
     return $true
 }
 
@@ -457,10 +468,10 @@ function Invoke-Diagnostics {
             installedVersion = (Read-InstallationRecord).currentVersion
             note             = "The application was not reachable; container status only."
             containers       = [ordered]@{
-                app          = Get-ContainerHealth "abud-shorts-app"
-                renderWorker = Get-ContainerHealth "abud-shorts-render-worker"
-                database     = Get-ContainerHealth "abud-shorts-postgres"
-                automation   = Get-ContainerHealth "abud-shorts-n8n"
+                app          = Get-ContainerHealth (Get-ContainerName "app")
+                renderWorker = Get-ContainerHealth (Get-ContainerName "render-worker")
+                database     = Get-ContainerHealth (Get-ContainerName "postgres")
+                automation   = Get-ContainerHealth (Get-ContainerName "n8n")
             }
         }
         $reduced | ConvertTo-Json -Depth 6 | Out-File -FilePath $out -Encoding utf8
@@ -799,7 +810,7 @@ function Invoke-Update {
         Write-Step "[9/9] Verifying the video engine..."
         $workerHealthy = $false
         for ($i = 0; $i -lt 45; $i++) {
-            $state = Get-ContainerHealth "abud-shorts-render-worker"
+            $state = Get-ContainerHealth (Get-ContainerName "render-worker")
             if ($state -eq "healthy") { $workerHealthy = $true; break }
             if ($state -eq "missing") { & $rollback "The video engine is not running after the update." }
             Start-Sleep -Seconds 2

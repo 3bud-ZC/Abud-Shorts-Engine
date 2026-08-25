@@ -30,6 +30,7 @@ HOST_PORT=3130
 PUBLIC_URL=""
 IMAGE_OVERRIDE=""
 TRUSTED_PROXY_VALUE=""
+ABUD_COMPOSE_PROJECT="${ABUD_COMPOSE_PROJECT:-abud-shorts}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,6 +42,8 @@ while [ $# -gt 0 ]; do
     --home=*) ABUD_HOME="${1#*=}"; shift ;;
     --image) IMAGE_OVERRIDE="${2:-}"; shift 2 ;;
     --image=*) IMAGE_OVERRIDE="${1#*=}"; shift ;;
+    --compose-project) ABUD_COMPOSE_PROJECT="${2:-}"; shift 2 ;;
+    --compose-project=*) ABUD_COMPOSE_PROJECT="${1#*=}"; shift ;;
     --behind-proxy) TRUSTED_PROXY_VALUE="1"; shift ;;
     -h|--help)
       sed -n '2,25p' "${BASH_SOURCE[0]}"
@@ -231,6 +234,8 @@ ABUD_IMAGE=$RELEASE_IMAGE
 ABUD_RELEASE_CHANNEL=$RELEASE_CHANNEL
 ABUD_HOST_PLATFORM=linux
 ABUD_INSTALL_TYPE=docker_linux
+ABUD_COMPOSE_PROJECT=$ABUD_COMPOSE_PROJECT
+ABUD_CONTAINER_PREFIX=$ABUD_COMPOSE_PROJECT
 
 NODE_ENV=production
 V2_ENABLED=true
@@ -270,6 +275,8 @@ else
   }
   update_env ABUD_IMAGE "$RELEASE_IMAGE"
   update_env ABUD_RELEASE_CHANNEL "$RELEASE_CHANNEL"
+  update_env ABUD_COMPOSE_PROJECT "$ABUD_COMPOSE_PROJECT"
+  update_env ABUD_CONTAINER_PREFIX "$ABUD_COMPOSE_PROJECT"
   echo "      Existing configuration kept; secrets and data untouched."
 fi
 
@@ -289,9 +296,9 @@ chmod 600 "$ABUD_SHARED/installation.json"
 # 8. Start
 # ---------------------------------------------------------------------------
 echo "[8/9] Starting ABUD Shorts..."
-ABUD_DATA_DIR="$ABUD_DATA_DIR" ABUD_RELEASE_DIR="$RELEASE_DIR" \
+ABUD_DATA_DIR="$ABUD_DATA_DIR" ABUD_RELEASE_DIR="$RELEASE_DIR" ABUD_CONTAINER_PREFIX="$ABUD_COMPOSE_PROJECT" \
 docker compose \
-  --project-name abud-shorts \
+  --project-name "$ABUD_COMPOSE_PROJECT" \
   --env-file "$ABUD_ENV_FILE" \
   --file "$RELEASE_DIR/docker-compose.prod.yml" \
   up -d --remove-orphans
@@ -332,10 +339,10 @@ fi
 echo "================================================================="
 echo ""
 echo "  ABUD Shorts:   $([ "$READY" = true ] && echo Healthy || echo "Still starting")"
-echo "  Application:   $(friendly "$(health abud-shorts-app)")"
-echo "  Video Engine:  $(friendly "$(health abud-shorts-render-worker)")"
-echo "  Database:      $(friendly "$(health abud-shorts-postgres)")"
-echo "  Automation:    $(friendly "$(health abud-shorts-n8n)")"
+echo "  Application:   $(friendly "$(health "$ABUD_COMPOSE_PROJECT-app")")"
+echo "  Video Engine:  $(friendly "$(health "$ABUD_COMPOSE_PROJECT-render-worker")")"
+echo "  Database:      $(friendly "$(health "$ABUD_COMPOSE_PROJECT-postgres")")"
+echo "  Automation:    $(friendly "$(health "$ABUD_COMPOSE_PROJECT-n8n")")"
 echo "  URL:           $PUBLIC_URL"
 echo ""
 echo "  Next step - open this address and create your administrator account:"

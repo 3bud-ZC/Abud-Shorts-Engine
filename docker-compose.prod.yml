@@ -21,7 +21,7 @@ services:
     # Pinned to an exact patch release. A floating tag would let an unrelated
     # PostgreSQL upgrade ride along with an application update.
     image: postgres:16.10-alpine
-    container_name: abud-shorts-postgres
+    container_name: ${ABUD_CONTAINER_PREFIX:-abud-shorts}-postgres
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -50,7 +50,7 @@ services:
     # Pinned. n8n changes workflow semantics between minor versions, so a
     # floating tag could break the control plane without any ABUD release.
     image: n8nio/n8n:1.76.1
-    container_name: abud-shorts-n8n
+    container_name: ${ABUD_CONTAINER_PREFIX:-abud-shorts}-n8n
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -92,7 +92,7 @@ services:
   # one digest to verify, one thing to roll back.
   abud-shorts-render-worker:
     image: ${ABUD_IMAGE:?ABUD_IMAGE must be set by the installer or updater}
-    container_name: abud-shorts-render-worker
+    container_name: ${ABUD_CONTAINER_PREFIX:-abud-shorts}-render-worker
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -139,7 +139,7 @@ services:
 
   abud-shorts-app:
     image: ${ABUD_IMAGE:?ABUD_IMAGE must be set by the installer or updater}
-    container_name: abud-shorts-app
+    container_name: ${ABUD_CONTAINER_PREFIX:-abud-shorts}-app
     restart: unless-stopped
     logging:
       driver: "json-file"

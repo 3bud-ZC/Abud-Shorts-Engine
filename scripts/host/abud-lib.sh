@@ -41,6 +41,7 @@ ABUD_LOCK_FILE="$ABUD_STATE_DIR/update.lock"
 # container can see.
 ABUD_UPDATE_STATE_FILE="$ABUD_DATA_DIR/updates/update-state.json"
 ABUD_COMPOSE_PROJECT="${ABUD_COMPOSE_PROJECT:-abud-shorts}"
+ABUD_CONTAINER_PREFIX="${ABUD_CONTAINER_PREFIX:-$ABUD_COMPOSE_PROJECT}"
 
 DEFAULT_MANIFEST_URL="https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/latest/download/update-manifest.json"
 
@@ -151,11 +152,16 @@ compose() {
   [ -f "$file" ] || die "This installation is incomplete: $file is missing."
   ABUD_DATA_DIR="$ABUD_DATA_DIR" \
   ABUD_RELEASE_DIR="$(readlink -f "$ABUD_CURRENT")" \
+  ABUD_CONTAINER_PREFIX="$ABUD_CONTAINER_PREFIX" \
   docker compose \
     --project-name "$ABUD_COMPOSE_PROJECT" \
     --env-file "$ABUD_ENV_FILE" \
     --file "$file" \
     "$@"
+}
+
+container_name() {
+  printf '%s-%s\n' "$ABUD_CONTAINER_PREFIX" "$1"
 }
 
 host_port() {
@@ -195,10 +201,10 @@ container_health() {
 # The customer-facing summary. Never dumps raw Docker JSON.
 print_health_summary() {
   local app worker db automation overall url
-  app="$(container_health abud-shorts-app)"
-  worker="$(container_health abud-shorts-render-worker)"
-  db="$(container_health abud-shorts-postgres)"
-  automation="$(container_health abud-shorts-n8n)"
+  app="$(container_health "$(container_name app)")"
+  worker="$(container_health "$(container_name render-worker)")"
+  db="$(container_health "$(container_name postgres)")"
+  automation="$(container_health "$(container_name n8n)")"
 
   friendly() {
     case "$1" in
@@ -397,7 +403,7 @@ create_pre_upgrade_backup() {
   pg_user="${pg_user:-abud_shorts}"
   pg_db="${pg_db:-abud_shorts}"
 
-  if ! docker exec abud-shorts-postgres pg_dump -U "$pg_user" -d "$pg_db" 2>/dev/null | gzip > "$target"; then
+  if ! docker exec "$(container_name postgres)" pg_dump -U "$pg_user" -d "$pg_db" 2>/dev/null | gzip > "$target"; then
     rm -f "$target"
     return 1
   fi
@@ -422,7 +428,7 @@ restore_pre_upgrade_backup() {
   pg_user="${pg_user:-abud_shorts}"
   pg_db="${pg_db:-abud_shorts}"
 
-  gunzip -c "$source" | docker exec -i abud-shorts-postgres psql -U "$pg_user" -d "$pg_db" -v ON_ERROR_STOP=0 >/dev/null 2>&1
+  gunzip -c "$source" | docker exec -i "$(container_name postgres)" psql -U "$pg_user" -d "$pg_db" -v ON_ERROR_STOP=0 >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------

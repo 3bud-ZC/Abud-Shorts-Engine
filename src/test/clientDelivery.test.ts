@@ -49,6 +49,7 @@ describe("F4 - client package hygiene", () => {
       "scripts/host/abud-update.sh",
       "scripts/host/abud-shorts.ps1",
       "CLIENT_QUICK_START.md",
+      "CLIENT_HANDOFF.md",
       "docs/UPDATING.md",
     ]) {
       expect(PACKAGE_INCLUDE).toContain(required);
@@ -152,7 +153,23 @@ describe("F4 - installation and update never destroy customer data", () => {
       // ever detached while the version is switched.
       expect(source).toMatch(/abud-shorts-app.*abud-shorts-render-worker/s);
       expect(source).not.toMatch(/stop\s+abud-shorts-postgres/);
+      expect(source).not.toMatch(/stop["'\s,()]+(?:Get-ContainerName\s*)?["']?postgres/);
     }
+  });
+
+  it("allows isolated client installs to run beside the primary stack", () => {
+    const compose = read("docker-compose.prod.yml");
+    expect(compose).toMatch(/container_name:\s*\$\{ABUD_CONTAINER_PREFIX:-abud-shorts\}-app/);
+    expect(compose).toMatch(/container_name:\s*\$\{ABUD_CONTAINER_PREFIX:-abud-shorts\}-postgres/);
+
+    const shellInstaller = read("install.sh");
+    expect(shellInstaller).toMatch(/ABUD_COMPOSE_PROJECT=.*abud-shorts/);
+    expect(shellInstaller).toMatch(/ABUD_CONTAINER_PREFIX=\$ABUD_COMPOSE_PROJECT/);
+    expect(shellInstaller).toMatch(/--project-name "\$ABUD_COMPOSE_PROJECT"/);
+
+    const windowsInstaller = read("install.ps1");
+    expect(windowsInstaller).toMatch(/\[string\]\$ComposeProject = "abud-shorts"/);
+    expect(windowsInstaller).toMatch(/ABUD_CONTAINER_PREFIX=\$ComposeProject/);
   });
 
   it("keeps customer data outside every release directory", () => {

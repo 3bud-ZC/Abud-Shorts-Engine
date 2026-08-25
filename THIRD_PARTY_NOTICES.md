@@ -1,14 +1,14 @@
 # ABUD Shorts Engine Third-Party Notices
 
-This file records third-party notices for ABUD Shorts Engine V2.1.0 General
-Availability plus V2.2 development-source additions. The immutable V2.1.0
-release tag, GitHub release, and client package are not rewritten by this file.
+This file records third-party notices for ABUD Shorts Engine V2.2.0 stable.
+The immutable V2.1.0 release tag, GitHub release, and client package were not
+rewritten during V2.2 finalization.
 
 ## Application Runtime Dependencies
 
 | Component | Version | Source | License / Notice |
 | :--- | :--- | :--- | :--- |
-| ABUD Shorts Engine package | 2.1.0 | Local repository package metadata | MIT declared by package metadata |
+| ABUD Shorts Engine package | 2.2.0 | Local repository package metadata | MIT declared by package metadata |
 | Express | ^4.18.2 | npm `express` | MIT |
 | React | ^19.1.0 | npm `react`, `react-dom` | MIT |
 | Material UI | ^5.15.x | npm `@mui/*` | MIT |

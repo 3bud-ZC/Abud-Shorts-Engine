@@ -12,8 +12,8 @@ type a Docker command or touch source code.
 1. **Install Docker Desktop** from
    [docker.com](https://www.docker.com/products/docker-desktop/) and start it.
    Wait for the whale icon in the system tray to stop animating.
-2. **Extract** the `ABUD-Shorts-Engine-<version>.zip` package to a folder, for
-   example `C:\ABUD-Shorts-Engine`.
+2. **Extract** the `ABUD-Shorts-Engine-<version>.tar.gz` package to a folder,
+   for example `C:\ABUD-Shorts-Engine`.
 3. **Right-click `install.ps1` → Run with PowerShell.**
 4. Wait. The installer checks Docker, generates this machine's own secrets,
    creates the storage folders, downloads the application and starts it.

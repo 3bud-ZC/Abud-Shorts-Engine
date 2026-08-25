@@ -212,6 +212,8 @@ ABUD_IMAGE=$ReleaseImage
 ABUD_RELEASE_CHANNEL=$ReleaseChannel
 ABUD_HOST_PLATFORM=windows
 ABUD_INSTALL_TYPE=docker_windows
+ABUD_COMPOSE_PROJECT=$ComposeProject
+ABUD_CONTAINER_PREFIX=$ComposeProject
 
 NODE_ENV=production
 V2_ENABLED=true
@@ -253,6 +255,8 @@ PEXELS_API_KEY=
     }
     $lines = Update-EnvLine $lines "ABUD_IMAGE" $ReleaseImage
     $lines = Update-EnvLine $lines "ABUD_RELEASE_CHANNEL" $ReleaseChannel
+    $lines = Update-EnvLine $lines "ABUD_COMPOSE_PROJECT" $ComposeProject
+    $lines = Update-EnvLine $lines "ABUD_CONTAINER_PREFIX" $ComposeProject
     $lines | Out-File -FilePath $AbudEnvFile -Encoding utf8
     Write-Host "      Existing configuration kept; secrets and data untouched." -ForegroundColor Green
 }
@@ -274,6 +278,7 @@ PEXELS_API_KEY=
 Write-Host "[8/9] Starting ABUD Shorts..." -ForegroundColor Yellow
 $env:ABUD_DATA_DIR = $AbudDataDir
 $env:ABUD_RELEASE_DIR = $ReleaseDir
+$env:ABUD_CONTAINER_PREFIX = $ComposeProject
 $composeFile = Join-Path $ReleaseDir "docker-compose.prod.yml"
 & docker compose --project-name $ComposeProject --env-file $AbudEnvFile --file $composeFile up -d --remove-orphans
 if ($LASTEXITCODE -ne 0) { Fail "The system could not be started. Check that Docker Desktop has enough memory assigned." }
@@ -341,10 +346,10 @@ if ($ready) {
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  ABUD Shorts:   $(if ($ready) { 'Healthy' } else { 'Still starting' })"
-Write-Host "  Application:   $(Friendly (Get-Health 'abud-shorts-app'))"
-Write-Host "  Video Engine:  $(Friendly (Get-Health 'abud-shorts-render-worker'))"
-Write-Host "  Database:      $(Friendly (Get-Health 'abud-shorts-postgres'))"
-Write-Host "  Automation:    $(Friendly (Get-Health 'abud-shorts-n8n'))"
+Write-Host "  Application:   $(Friendly (Get-Health "$ComposeProject-app"))"
+Write-Host "  Video Engine:  $(Friendly (Get-Health "$ComposeProject-render-worker"))"
+Write-Host "  Database:      $(Friendly (Get-Health "$ComposeProject-postgres"))"
+Write-Host "  Automation:    $(Friendly (Get-Health "$ComposeProject-n8n"))"
 Write-Host "  URL:           $PublicUrl"
 Write-Host ""
 Write-Host "  Next step - open this address and create your administrator account:" -ForegroundColor Yellow

@@ -431,13 +431,13 @@ step "[9/9] Verifying the video engine..."
 WORKER_ATTEMPTS=0
 while [ "$WORKER_ATTEMPTS" -lt 45 ]; do
   WORKER_ATTEMPTS=$((WORKER_ATTEMPTS + 1))
-  case "$(container_health abud-shorts-render-worker)" in
+  case "$(container_health "$(container_name render-worker)")" in
     healthy) break ;;
     missing) rollback "The video engine is not running after the update." ;;
   esac
   sleep 2
 done
-[ "$(container_health abud-shorts-render-worker)" = "healthy" ] ||
+[ "$(container_health "$(container_name render-worker)")" = "healthy" ] ||
   rollback "The video engine did not become healthy after the update."
 ok "Video engine healthy."
 
