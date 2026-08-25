@@ -15,6 +15,11 @@ on:
         description: "Full commit SHA that this run must build or promote"
         required: true
         type: string
+      source_ref:
+        description: "Git ref to check out before building or promoting"
+        required: true
+        default: v2.2-finalization
+        type: string
       mode:
         description: "Build candidate image or promote an accepted digest"
         required: true
@@ -41,6 +46,8 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - name: Resolve candidate identity
         id: identity
