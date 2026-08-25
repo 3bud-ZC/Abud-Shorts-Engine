@@ -64,7 +64,7 @@ class MemoryVaultDb {
 describe("Arabic voice policy (V2.2)", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
-    providerSecrets.invalidate();
+    providerSecrets.unregisterResolver();
   });
 
   it("names ElevenLabs as the single Arabic production provider", () => {

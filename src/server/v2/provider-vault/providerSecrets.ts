@@ -34,6 +34,12 @@ class ProviderSecrets {
     this.cache.clear();
   }
 
+  /** Test-only: drops the resolver so a fixture bound to one test cannot be consulted by another. */
+  public unregisterResolver(): void {
+    this.resolver = undefined;
+    this.cache.clear();
+  }
+
   public hasResolver(): boolean {
     return Boolean(this.resolver);
   }
