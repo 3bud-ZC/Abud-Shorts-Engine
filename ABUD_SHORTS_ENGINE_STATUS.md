@@ -21,7 +21,7 @@ Target: **v2.2.0**
 
 Branch: **`v2.2-finalization`**
 
-V2.2: **NOT RELEASED** — not merged, not tagged, not packaged
+V2.2: **NOT RELEASED** — not merged, not tagged, not officially packaged or published
 
 Schema: **2.12.0**
 
@@ -38,6 +38,7 @@ Finalization track:
 | F2 | Creative and animation engine finalization | **PASS / CLOSED** |
 | F3 | Integrations and real publishing closure | **PASS / CLOSED** |
 | F4 | Client installation, operations and delivery closure | **PASS** |
+| F5 | Final audit, release candidate packaging and release ceremony | **PARTIAL / BLOCKED** |
 
 Final complete-product / client acceptance: PENDING
 
@@ -55,6 +56,75 @@ Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
 metadata and videos stay readable and playable. It is not a production Arabic
 route and is not a required runtime. The Piper evidence in the milestone
 sections below is historical and is deliberately left unchanged.
+
+---
+
+## F5 — Final Audit, Release Candidate Packaging & Release Ceremony
+
+Date: 2026-08-25. Branch `v2.2-finalization`. Stable remains `v2.1.0`;
+target remains `v2.2.0`.
+
+F5 is **PARTIAL / BLOCKED**. The release ceremony was not completed: no merge to
+`main`, no `v2.2.0` tag, no GitHub Release and no official GHCR production
+image. GHCR publication is blocked because the current GitHub CLI token does not
+have the package-write permission needed for `ghcr.io`.
+
+Release-only fixes completed in F5:
+
+- Hardened client packaging with allow-list packaging and verification scripts.
+- Kept `scripts/release/` tracked while preserving release/package exclusions.
+- Fixed Windows installer/updater Docker stderr handling and BOM-free file
+  writes.
+- Fixed registry-port image parsing for digest-pinned update pulls.
+- Added update-state BOM tolerance for host-written JSON.
+- Added host diagnostics bundle access through the internal service-token route.
+- Masked package checksum and image digest from normal Update Center views unless
+  advanced details are requested.
+- Made Docker startup use lazy Kokoro loading so health endpoints bind before a
+  heavyweight local TTS model loads.
+- Kept trusted proxy explicit: `--url` sets the canonical address only;
+  `--behind-proxy`/`-BehindProxy` is required before forwarded headers are
+  trusted.
+
+Verification completed:
+
+- Targeted delivery/update tests: 3 files, 90 tests, PASS.
+- Full tests: 47 files, 715 tests, PASS.
+- `pnpm typecheck`: PASS.
+- `pnpm build`: PASS.
+- Local release-layer image built from the existing verified base with current
+  `dist`: `ghcr.io/3bud-zc/abud-shorts-engine:sha-f8e37ad-f5local`, local image
+  digest `sha256:29d4b895c37059e051a1964d1a4b0363313f6725fc328b7993228ce244d76757`.
+- Fresh base-image rebuild was stopped after it hung in runtime asset install;
+  no success was claimed for that path.
+- Local client package generated and verified:
+  `ABUD-Shorts-Engine-2.2.0.tar.gz`,
+  SHA-256 `b8ee9d6db9fab471f64135aaa4f061cf9fc2e3626a3d783ee2d4782177b04b9b`.
+- Package verifier confirmed checksum, manifest consistency, required
+  installer/updater/compose/docs, and no secrets, source, dependencies or
+  developer data.
+- Primary Docker stack remained healthy: app public on `localhost:3130`; render
+  worker, n8n and PostgreSQL internal only.
+
+Isolated Windows update evidence completed before this status update:
+
+- Isolated install/status/backup/diagnostics succeeded.
+- Local mock manifest update from fixture `2.1.0` to `2.2.0` succeeded with
+  checksum verification, image digest verification, pre-update backup, live/readiness
+  health, version/schema verification and data preservation.
+- Manual rollback to fixture `2.1.0` succeeded.
+- Broken `2.2.1` candidate failed version verification, triggered automatic
+  rollback to `2.1.0`, returned non-zero, and left the isolated stack healthy.
+
+Release blockers remaining:
+
+- GHCR push/pull verification requires a GitHub token with package-write scope.
+- No GitHub Release/tag/assets were published.
+- No final live Golden Path video was produced in F5.
+- Linux/VPS was not live-native verified in F5; Linux evidence remains static
+  script/container-oriented, not VPS-native.
+
+**V2.2 remains NOT RELEASED.**
 
 ---
 

@@ -38,7 +38,9 @@ async function main() {
   logger.debug("initializing remotion");
   const remotion = await Remotion.init(config);
   logger.debug("initializing kokoro");
-  const kokoro = await Kokoro.init(config.kokoroModelPrecision);
+  const kokoro = config.runningInDocker
+    ? Kokoro.lazy(config.kokoroModelPrecision)
+    : await Kokoro.init(config.kokoroModelPrecision);
   logger.debug("initializing whisper");
   const whisper = await Whisper.init(config);
   logger.debug("initializing ffmpeg");

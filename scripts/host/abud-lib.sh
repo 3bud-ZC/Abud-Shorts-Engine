@@ -198,6 +198,22 @@ container_health() {
   echo "$state"
 }
 
+# Waits, briefly, for the application container health to settle.
+#
+# The app answers /health/ready as soon as it is up, but Docker only re-runs its
+# own healthcheck on an interval. Without this pause the summary printed straight
+# after a state change reports "ABUD Shorts: Problem" on an installation that is
+# in fact healthy, which reads as a failed update to the operator.
+wait_for_container_settle() {
+  local attempts="${1:-20}" i=0
+  while [ "$i" -lt "$attempts" ]; do
+    i=$((i + 1))
+    [ "$(container_health "$(container_name app)")" = "healthy" ] && return 0
+    sleep 2
+  done
+  return 0
+}
+
 # The customer-facing summary. Never dumps raw Docker JSON.
 print_health_summary() {
   local app worker db automation overall url
@@ -288,6 +304,11 @@ release_update_lock() {
 # Kept as a JSON document so each phase adds to the record rather than replacing
 # what an earlier phase already established.
 ABUD_TXN_EXTRA='{}'
+# Whether this transaction is an update or an administrator asking to go back.
+# Both can end in ROLLED_BACK, but only one of them is a failure, and the Update
+# Center must not describe a deliberate rollback as an update that did not
+# complete.
+ABUD_TXN_KIND="${ABUD_TXN_KIND:-update}"
 
 txn_set() {
   # txn_set <key> <value>  - records a string field on the transaction
@@ -313,6 +334,7 @@ write_transaction() {
   txn="$(jq -c -n \
     --arg transactionId "$ABUD_TXN_ID" \
     --arg state "$state" \
+    --arg kind "$ABUD_TXN_KIND" \
     --arg channel "$ABUD_TXN_CHANNEL" \
     --arg fromVersion "$ABUD_TXN_FROM" \
     --arg toVersion "$ABUD_TXN_TO" \
@@ -320,7 +342,7 @@ write_transaction() {
     --arg updatedAt "$now" \
     --argjson extra "$ABUD_TXN_EXTRA" \
     --argjson terminal "$terminal" \
-    '{transactionId: $transactionId, state: $state, channel: $channel,
+    '{transactionId: $transactionId, state: $state, kind: $kind, channel: $channel,
       fromVersion: $fromVersion, toVersion: $toVersion,
       startedAt: $startedAt, updatedAt: $updatedAt}
      + $extra

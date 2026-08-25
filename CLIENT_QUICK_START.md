@@ -25,7 +25,7 @@ type a Docker command or touch source code.
 See `docs/SERVER_INSTALL.md`. In short:
 
 ```bash
-sudo ./install.sh --url https://shorts.yourdomain.com
+sudo ./install.sh --url https://shorts.yourdomain.com --behind-proxy
 ```
 
 ---

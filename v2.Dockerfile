@@ -24,13 +24,6 @@ RUN apt-get update \
        librosa==0.10.2.post1 \
        fonttools==4.53.1
 
-RUN mkdir -p /tmp/pg-install \
-  && cd /tmp/pg-install \
-  && npm init -y \
-  && npm install pg@8.23.0 google-auth-library@11.0.2 @fontsource/cairo@5.3.0 --omit=dev \
-  && cp -R node_modules/* /app/node_modules/ \
-  && rm -rf /tmp/pg-install
-
 # Bundled OFL Arabic caption fonts. Installed into the system font path so
 # fontconfig - and therefore libass - resolves them by family name. No font is
 # ever fetched over the network at render time.

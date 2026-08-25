@@ -18,7 +18,7 @@ For a Linux VPS reached at a real domain. For a Windows workstation, see
 ```bash
 tar -xzf ABUD-Shorts-Engine-2.2.0.tar.gz
 cd ABUD-Shorts-Engine-2.2.0
-sudo ./install.sh --url https://shorts.example.com
+sudo ./install.sh --url https://shorts.example.com --behind-proxy
 ```
 
 That is the whole installation. There is no repository to clone, no compose file
@@ -69,8 +69,8 @@ HTTPS, the proxy headers the application needs, server-sent events for live job
 progress, byte-range requests for video playback, large uploads and the OAuth
 callback path.
 
-After the proxy is in front, tell the application so it will trust the forwarded
-protocol and host:
+After the proxy is in front, install with `--behind-proxy`, or tell the
+application so it will trust the forwarded protocol and host:
 
 ```
 TRUSTED_PROXY=1
@@ -78,8 +78,10 @@ TRUSTED_PROXY=1
 
 in `/opt/abud-shorts/shared/config/.env`, then `sudo abud-shorts restart`.
 
-`--url` sets this automatically at install time. Without it, forwarded headers
-are ignored, which is the right default for a server reached directly.
+`--url` only sets the canonical public address used for OAuth callbacks and
+shared links. Forwarded headers are ignored unless `--behind-proxy` or
+`TRUSTED_PROXY` is explicitly configured, which is the right default for a
+server reached directly.
 
 This also works behind Cloudflare. Cloudflare terminates TLS and forwards
 `X-Forwarded-Proto: https`, which the application honours once `TRUSTED_PROXY`

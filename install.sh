@@ -127,9 +127,19 @@ echo "      ${AVAILABLE_GB} GB available."
 # ---------------------------------------------------------------------------
 echo "[3/9] Checking the address this installation will serve..."
 if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$HOST_PORT" >/dev/null 2>&1; then
-  echo "Error: port $HOST_PORT is already in use on this machine." >&2
-  echo "Choose another one: sudo ./install.sh --port 3131" >&2
-  exit 1
+  # The port being busy is only a problem if something ELSE has it. Re-running
+  # the installer over an existing ABUD Shorts installation - to repair it, or
+  # to move it to a newer package - is a legitimate action, and it must not be
+  # refused just because that installation is currently running.
+  if curl -fsS --max-time 5 "http://127.0.0.1:$HOST_PORT/api/v2/system/info" 2>/dev/null |
+       grep -q "ABUD Shorts Engine"; then
+    echo "      Port $HOST_PORT is serving an existing ABUD Shorts installation; reinstalling over it."
+    echo "      Your videos, settings and backups are not touched."
+  else
+    echo "Error: port $HOST_PORT is already in use by another program on this machine." >&2
+    echo "Choose another one: sudo ./install.sh --port 3131" >&2
+    exit 1
+  fi
 fi
 if [ -z "$PUBLIC_URL" ]; then
   PUBLIC_URL="http://localhost:$HOST_PORT"
@@ -142,9 +152,9 @@ else
   esac
   PUBLIC_URL="${PUBLIC_URL%/}"
   echo "      Public address: $PUBLIC_URL"
-  # A public address almost always means a reverse proxy in front, and the
-  # application must be told before it will believe any forwarded header.
-  [ -n "$TRUSTED_PROXY_VALUE" ] || TRUSTED_PROXY_VALUE="1"
+  if [ -z "$TRUSTED_PROXY_VALUE" ]; then
+    echo "      Forwarded proxy headers will stay ignored. Add --behind-proxy only when a trusted reverse proxy is in front."
+  fi
 fi
 
 # ---------------------------------------------------------------------------

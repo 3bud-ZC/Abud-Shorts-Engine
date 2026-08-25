@@ -94,17 +94,43 @@ cmd_diagnostics() {
   mkdir -p "$(dirname "$out")"
 
   step "Running diagnostics..."
-  # The application already builds the support bundle, with secrets redacted.
-  # Reusing it here means the terminal and the browser produce the same file.
-  if curl -fsS --max-time 60 "$url/api/v2/system/diagnostics/bundle" -o "$out" 2>/dev/null; then
-    ok "Support bundle written to: $out"
+  # The application already builds the support bundle, with secrets redacted, so
+  # the terminal and the browser produce the same file. It is fetched over the
+  # internal route with this installation's own service token: the browser route
+  # needs an administrator session, and a freshly installed system has none yet.
+  local token status reason
+  token="$(grep -E '^INTERNAL_SERVICE_TOKEN=' "$ABUD_ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+  reason="The application could not be reached"
+
+  if [ -z "$token" ]; then
+    reason="This installation's configuration has no service token"
+    status=""
   else
-    warn "The application could not be reached, so a reduced bundle was written instead."
-    {
+    status="$(curl -sS --max-time 60 -o "$out" -w '%{http_code}' \
+      -H "x-internal-token: $token" \
+      "$url/internal/v1/system/diagnostics/bundle" 2>/dev/null || true)"
+  fi
+
+  if [ "$status" = "200" ]; then
+    ok "Support bundle written to: $out"
+    print_health_summary || true
+    return 0
+  fi
+
+  # Say what actually happened rather than blaming the network for what may be
+  # a rejected token.
+  case "$status" in
+    401|403) reason="The application rejected this installation's service token" ;;
+    "" ) : ;;
+    *) reason="The application answered with HTTP $status" ;;
+  esac
+
+  warn "$reason, so a reduced bundle was written instead."
+  {
       echo "{"
       echo "  \"generatedAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
       echo "  \"installedVersion\": \"$(installed_version)\","
-      echo "  \"note\": \"The application was not reachable; container status only.\","
+      echo "  \"note\": \"$reason; container status only.\","
       echo "  \"containers\": {"
       echo "    \"app\": \"$(container_health "$(container_name app)")\","
       echo "    \"renderWorker\": \"$(container_health "$(container_name render-worker)")\","
@@ -112,9 +138,8 @@ cmd_diagnostics() {
       echo "    \"automation\": \"$(container_health "$(container_name n8n)")\""
       echo "  }"
       echo "}"
-    } > "$out"
-    ok "Reduced bundle written to: $out"
-  fi
+  } > "$out"
+  ok "Reduced bundle written to: $out"
   print_health_summary || true
 }
 
@@ -124,6 +149,7 @@ cmd_start() {
   step "Starting ABUD Shorts..."
   compose up -d
   wait_for_endpoint "$(app_base_url)/health/ready" 90 "ABUD Shorts" || true
+  wait_for_container_settle
   print_health_summary
 }
 
@@ -143,6 +169,7 @@ cmd_restart() {
   step "Restarting ABUD Shorts..."
   compose restart
   wait_for_endpoint "$(app_base_url)/health/ready" 90 "ABUD Shorts" || true
+  wait_for_container_settle
   print_health_summary
 }
 
@@ -173,7 +200,8 @@ cmd_rollback() {
 
   acquire_update_lock
 
-  ABUD_TXN_ID="rbk_$(date -u +%Y%m%d%H%M%S)_$$"
+  ABUD_TXN_ID="rbk_$(date -u +%Y%m%d%H%M%S)_$"
+  ABUD_TXN_KIND="rollback"
   ABUD_TXN_CHANNEL="$(installation_field channel)"
   ABUD_TXN_CHANNEL="${ABUD_TXN_CHANNEL:-stable}"
   ABUD_TXN_FROM="$current"
@@ -202,6 +230,7 @@ cmd_rollback() {
       '{attempted: true, result: "succeeded", restoredVersion: $v, databaseRestored: false,
         message: "Manual rollback requested by the administrator."}')"
     write_transaction ROLLED_BACK
+    wait_for_container_settle
     ok "Returned to version $previous."
   else
     txn_set_json rollback "$(jq -c -n --arg v "$previous" \

@@ -57,6 +57,7 @@ import { PublishingScheduler } from "./publishing/scheduler";
 import { publishingRegistry } from "./publishing/registry";
 import { getProductInfo } from "../../version";
 import { UpdateService, type UpdateCenterState } from "./updates/updateService";
+import type { UpdateTransaction } from "./updates/updateState";
 import {
   OAUTH_CALLBACK_PROVIDERS,
   oauthCallbackUrl,
@@ -194,7 +195,25 @@ function clientSafeUpdateState(
   includeAdvanced: boolean,
 ): UpdateCenterState | Omit<UpdateCenterState, "advanced"> {
   if (includeAdvanced) return state;
+
+  // The `advanced` block is not the only place a digest appears: the host
+  // updater records the image digest and the package checksum on each
+  // transaction, and those records are what the ordinary view renders as
+  // "last update". They belong behind Advanced Technical Details too.
   const { advanced: _advanced, ...rest } = state;
+  return {
+    ...rest,
+    lastAttempt: withoutTechnicalFields(rest.lastAttempt),
+    lastSuccessful: withoutTechnicalFields(rest.lastSuccessful),
+    lastRollback: withoutTechnicalFields(rest.lastRollback),
+  };
+}
+
+function withoutTechnicalFields(
+  transaction: UpdateTransaction | null,
+): UpdateTransaction | null {
+  if (!transaction) return null;
+  const { imageDigest: _digest, packageSha256: _checksum, ...rest } = transaction;
   return rest;
 }
 
@@ -2986,6 +3005,32 @@ export function createV2InternalRouter(
     }, delayMs);
     timer.unref?.();
   };
+
+  /**
+   * The support bundle, for the host-side `abud-shorts diagnostics` command.
+   *
+   * It lives on the internal router because the operator running that command
+   * has the installation's own INTERNAL_SERVICE_TOKEN, whereas the public
+   * bundle route needs an administrator session that a fresh installation does
+   * not yet have. This is one narrowly-scoped, read-only endpoint - it returns
+   * exactly the same redacted bundle as the browser does, and it executes
+   * nothing.
+   */
+  router.get("/system/diagnostics/bundle", async (req, res) => {
+    if (!db) {
+      res.status(503).json({ error: "Diagnostics are unavailable without a database." });
+      return;
+    }
+    try {
+      const bundle = await new DiagnosticsService(db, config).generateBundle();
+      res.setHeader("Content-Disposition", `attachment; filename="${bundle.filename}"`);
+      res.setHeader("Content-Type", "application/json");
+      res.status(200).send(bundle.jsonContent);
+    } catch (error) {
+      logger.warn({ error }, "Internal diagnostics bundle failed");
+      res.status(500).json({ error: "Failed to generate the diagnostics bundle." });
+    }
+  });
 
   router.post("/jobs/:id/start", async (req, res) => {
     if (!jobs) {

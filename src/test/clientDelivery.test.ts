@@ -276,8 +276,12 @@ describe("F4 - update security posture", () => {
       expect(source, `${script} must build a digest-pinned image reference`).toMatch(
         /@(?:\$\{REL_DIGEST\}|\$\(\$release\.imageDigest\))/,
       );
+      // On Windows the pull goes through Invoke-Docker, which keeps docker's
+      // stderr progress from aborting the run under $ErrorActionPreference =
+      // 'Stop'. Either form is accepted; what matters is that the argument is
+      // the digest-pinned reference and never the tag.
       expect(source, `${script} must pull the digest-pinned image`).toMatch(
-        /docker pull(?: --quiet)? ["']?\$(?:PINNED_IMAGE|pinnedImage)/,
+        /(?:docker pull(?: --quiet)? ["']?\$PINNED_IMAGE|Invoke-Docker @\("pull", \$pinnedImage\))/,
       );
     }
   });
@@ -291,6 +295,22 @@ describe("F4 - update security posture", () => {
   it("prevents two updates running at once", () => {
     expect(read("scripts/host/abud-lib.sh")).toMatch(/Update already in progress/);
     expect(read("scripts/host/abud-shorts.ps1")).toMatch(/Update already in progress/);
+  });
+
+  it("requires an explicit proxy flag before trusting forwarded headers", () => {
+    const windowsInstaller = read("install.ps1");
+    const linuxInstaller = read("install.sh");
+
+    expect(windowsInstaller).toMatch(/\[switch\]\$BehindProxy/);
+    expect(windowsInstaller).toMatch(/if \(\$BehindProxy\) \{ \$TrustedProxyValue = "1" \}/);
+    expect(windowsInstaller).not.toMatch(/if \(-not \$TrustedProxyValue\) \{ \$TrustedProxyValue = "1" \}/);
+
+    expect(linuxInstaller).toMatch(/--behind-proxy\) TRUSTED_PROXY_VALUE="1"/);
+    expect(linuxInstaller).not.toMatch(/\[ -n "\$TRUSTED_PROXY_VALUE" \] \|\| TRUSTED_PROXY_VALUE="1"/);
+
+    const serverInstall = read("docs/SERVER_INSTALL.md");
+    expect(serverInstall).toMatch(/--url https:\/\/shorts\.example\.com --behind-proxy/);
+    expect(serverInstall).toMatch(/Forwarded headers are ignored unless `--behind-proxy`/);
   });
 });
 
@@ -316,5 +336,47 @@ describe("F4 - client-facing language", () => {
     }
     const quickStart = read("CLIENT_QUICK_START.md");
     expect(quickStart).toMatch(/no default password/i);
+  });
+});
+
+describe("F4 - image reference parsing", () => {
+  /**
+   * Mirrors `image_repository` in abud-update.sh and `Get-ImageRepository` in
+   * abud-shorts.ps1. Both originally cut at the FIRST colon, which turned
+   * `registry.example.com:5000/abud/app:2.2.1` into `registry.example.com` and
+   * made the digest pull fail. The isolated F4 rehearsal ran against a registry
+   * on a port and caught it.
+   */
+  const imageRepository = (reference: string): string => {
+    const lastColon = reference.lastIndexOf(":");
+    if (lastColon < 0) return reference;
+    const suffix = reference.slice(lastColon + 1);
+    if (suffix.includes("/")) return reference;
+    return reference.slice(0, lastColon);
+  };
+
+  it("strips the tag from a registry reference", () => {
+    expect(imageRepository("ghcr.io/3bud-zc/abud-shorts-engine:2.2.0")).toBe(
+      "ghcr.io/3bud-zc/abud-shorts-engine",
+    );
+  });
+
+  it("keeps a registry port, which is not a tag separator", () => {
+    expect(imageRepository("localhost:5001/abud-f4:2.2.1")).toBe("localhost:5001/abud-f4");
+    expect(imageRepository("registry.example.com:5000/abud/app:2.2.1")).toBe(
+      "registry.example.com:5000/abud/app",
+    );
+  });
+
+  it("leaves an untagged reference alone", () => {
+    expect(imageRepository("ghcr.io/3bud-zc/abud-shorts-engine")).toBe(
+      "ghcr.io/3bud-zc/abud-shorts-engine",
+    );
+    expect(imageRepository("localhost:5001/abud-f4")).toBe("localhost:5001/abud-f4");
+  });
+
+  it("is implemented in both updaters, not just one", () => {
+    expect(read("scripts/host/abud-update.sh")).toMatch(/image_repository/);
+    expect(read("scripts/host/abud-shorts.ps1")).toMatch(/Get-ImageRepository/);
   });
 });

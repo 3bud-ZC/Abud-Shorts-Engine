@@ -39,6 +39,14 @@ export function isTerminalUpdateState(state: UpdateState): boolean {
 export const updateTransactionSchema = z.object({
   transactionId: z.string().min(1),
   state: z.enum(UPDATE_STATES),
+  /**
+   * Whether this transaction was an update or an administrator asking to go
+   * back. Both end in ROLLED_BACK, but only one of them is a failure, and the
+   * Update Center must not describe a deliberate rollback as an update that
+   * "did not complete". Optional so records written before this field existed
+   * still parse.
+   */
+  kind: z.enum(["update", "rollback"]).optional(),
   channel: z.enum(["stable", "development"]),
   fromVersion: z.string().min(1),
   toVersion: z.string().min(1),
@@ -90,12 +98,23 @@ export function readUpdateState(dataDir: string): UpdateStateFile {
   try {
     if (!fs.existsSync(file)) return EMPTY_STATE;
     const parsed = updateStateFileSchema.safeParse(
-      JSON.parse(fs.readFileSync(file, "utf-8")),
+      JSON.parse(stripByteOrderMark(fs.readFileSync(file, "utf-8"))),
     );
     return parsed.success ? parsed.data : EMPTY_STATE;
   } catch {
     return EMPTY_STATE;
   }
+}
+
+/**
+ * This file is written by the host updater, not by the application, and on
+ * Windows that means PowerShell - which writes UTF-8 with a byte order mark.
+ * JSON.parse rejects a leading BOM outright, so without this the Update Center
+ * would silently report "no update has ever run here" on every Windows
+ * installation that had in fact just updated.
+ */
+export function stripByteOrderMark(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 /**

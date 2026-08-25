@@ -15,6 +15,7 @@ import {
   hasIncompleteTransaction,
   isTerminalUpdateState,
   readUpdateState,
+  stripByteOrderMark,
   updateStatePath,
 } from "./updateState";
 import { UpdateService } from "./updateService";
@@ -411,5 +412,153 @@ describe("F4 - version endpoint", () => {
     for (const forbidden of ["password", "secret", "token", "apikey", "api_key"]) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+});
+
+describe("F4 - host updater record written by PowerShell", () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "abud-bom-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const record = {
+    lastSuccessful: {
+      transactionId: "upd_1",
+      state: "SUCCESS",
+      channel: "stable",
+      fromVersion: "2.2.0",
+      toVersion: "2.2.1",
+      startedAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:05:00.000Z",
+    },
+    history: [],
+  };
+
+  it("reads a record that carries a UTF-8 byte order mark", () => {
+    // Windows PowerShell writes UTF-8 with a BOM, and JSON.parse rejects a
+    // leading BOM outright. Without stripping it the Update Center reported
+    // "no update has ever run here" on every Windows installation that had in
+    // fact just updated successfully.
+    const file = updateStatePath(dataDir);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `\ufeff${JSON.stringify(record)}`, "utf-8");
+
+    const state = readUpdateState(dataDir);
+    expect(state.lastSuccessful?.toVersion).toBe("2.2.1");
+    expect(state.lastSuccessful?.state).toBe("SUCCESS");
+  });
+
+  it("still reads a record with no byte order mark", () => {
+    const file = updateStatePath(dataDir);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(record), "utf-8");
+    expect(readUpdateState(dataDir).lastSuccessful?.toVersion).toBe("2.2.1");
+  });
+
+  it("strips only a leading mark, and only when present", () => {
+    expect(stripByteOrderMark("\ufeff{}")).toBe("{}");
+    expect(stripByteOrderMark("{}")).toBe("{}");
+    expect(stripByteOrderMark("")).toBe("");
+  });
+
+  it("keeps every host-written file free of a byte order mark", () => {
+    // The other half of the fix: the updater writes UTF-8 without a BOM in the
+    // first place, so nothing downstream has to compensate.
+    const repoRoot = path.resolve(__dirname, "..", "..", "..", "..");
+    for (const script of ["install.ps1", "scripts/host/abud-shorts.ps1"]) {
+      const source = fs.readFileSync(path.join(repoRoot, script), "utf-8");
+      expect(source, `${script} must write BOM-free UTF-8`).toMatch(/UTF8Encoding\(\$false\)/);
+      expect(source, `${script} must not write files with Out-File -Encoding utf8`).not.toMatch(
+        /Out-File -FilePath \$Abud\w+ -Encoding utf8/,
+      );
+    }
+  });
+});
+
+describe("F4 - technical detail stays out of the ordinary client view", () => {
+  /**
+   * Mirrors `clientSafeUpdateState` in routes.ts. The `advanced` block was
+   * stripped from the start, but the host updater also records the image
+   * digest and the package checksum on each transaction, and those records ARE
+   * rendered in the ordinary view as "last update" - so a digest reached the
+   * customer-facing panel through the back door.
+   */
+  const clientSafe = (state: Record<string, any>, includeAdvanced: boolean) => {
+    if (includeAdvanced) return state;
+    const withoutTechnical = (t: Record<string, any> | null) => {
+      if (!t) return null;
+      const { imageDigest, packageSha256, ...rest } = t;
+      return rest;
+    };
+    const { advanced, ...rest } = state;
+    return {
+      ...rest,
+      lastAttempt: withoutTechnical(rest.lastAttempt),
+      lastSuccessful: withoutTechnical(rest.lastSuccessful),
+      lastRollback: withoutTechnical(rest.lastRollback),
+    };
+  };
+
+  const transaction = {
+    transactionId: "upd_1",
+    state: "SUCCESS",
+    channel: "stable",
+    fromVersion: "2.2.0",
+    toVersion: "2.2.1",
+    startedAt: "2026-08-25T00:00:00.000Z",
+    updatedAt: "2026-08-25T00:05:00.000Z",
+    backupId: "pre-upgrade-2.2.0-to-2.2.1",
+    imageDigest: DIGEST,
+    packageSha256: CHECKSUM,
+  };
+
+  const state = {
+    status: "UPDATE_AVAILABLE",
+    currentVersion: "2.2.0",
+    latestVersion: "2.2.1",
+    advanced: { imageDigest: DIGEST, packageSha256: CHECKSUM },
+    lastAttempt: { ...transaction },
+    lastSuccessful: { ...transaction },
+    lastRollback: null,
+  };
+
+  it("shows no digest or checksum anywhere in the ordinary view", () => {
+    const serialized = JSON.stringify(clientSafe(state, false));
+    expect(serialized).not.toContain(DIGEST);
+    expect(serialized).not.toContain(CHECKSUM);
+    expect(serialized).not.toContain("imageDigest");
+    expect(serialized).not.toContain("packageSha256");
+  });
+
+  it("keeps the facts a customer does need", () => {
+    const safe = clientSafe(state, false) as Record<string, any>;
+    expect(safe.currentVersion).toBe("2.2.0");
+    expect(safe.latestVersion).toBe("2.2.1");
+    // Which versions were involved, and that a backup exists, are client-facing.
+    expect(safe.lastSuccessful.fromVersion).toBe("2.2.0");
+    expect(safe.lastSuccessful.toVersion).toBe("2.2.1");
+    expect(safe.lastSuccessful.backupId).toBe("pre-upgrade-2.2.0-to-2.2.1");
+  });
+
+  it("returns the technical detail when the advanced panel asks for it", () => {
+    const serialized = JSON.stringify(clientSafe(state, true));
+    expect(serialized).toContain(DIGEST);
+    expect(serialized).toContain(CHECKSUM);
+  });
+
+  it("is what the route actually does", () => {
+    const routes = fs.readFileSync(
+      path.resolve(__dirname, "..", "routes.ts"),
+      "utf-8",
+    );
+    expect(routes).toMatch(/withoutTechnicalFields/);
+    expect(routes).toMatch(/lastAttempt: withoutTechnicalFields/);
+    expect(routes).toMatch(/lastSuccessful: withoutTechnicalFields/);
+    expect(routes).toMatch(/lastRollback: withoutTechnicalFields/);
   });
 });

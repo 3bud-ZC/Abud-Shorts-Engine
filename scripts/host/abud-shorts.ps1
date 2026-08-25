@@ -74,6 +74,25 @@ function Stop-WithMessage {
     exit 1
 }
 
+<#
+Writes UTF-8 WITHOUT a byte order mark.
+
+Windows PowerShell 5.1 emits a BOM from both Out-File -Encoding utf8 and
+Set-Content -Encoding utf8. Everything that reads these files afterwards is
+not PowerShell: the application parses the update record with JSON.parse,
+which rejects a leading BOM outright, and docker compose reads the .env file,
+where a BOM would corrupt the first variable name. So every file this script
+produces is written through here.
+#>
+function Write-TextFile {
+    param([string]$Path, [string]$Content)
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 function Get-CurrentReleaseDir {
     if (Test-Path $AbudCurrentFile) { return (Get-Content $AbudCurrentFile -Raw).Trim() }
     return ""
@@ -99,7 +118,7 @@ function Write-InstallationRecord {
         updatedAt       = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
     New-Item -ItemType Directory -Path (Split-Path $AbudInstallFile) -Force | Out-Null
-    $record | ConvertTo-Json -Depth 6 | Out-File -FilePath $AbudInstallFile -Encoding utf8
+    Write-TextFile $AbudInstallFile ($record | ConvertTo-Json -Depth 6)
 }
 
 function Get-EnvValue {
@@ -128,17 +147,42 @@ function Set-EnvValue {
         if ($line -match "^$([regex]::Escape($Key))=") { $found = $true; "$Key=$Value" } else { $line }
     }
     if (-not $found) { $out = @($out) + "$Key=$Value" }
-    $out | Out-File -FilePath $AbudEnvFile -Encoding utf8
+    Write-TextFile $AbudEnvFile (($out -join "`r`n") + "`r`n")
 }
 
 function Get-HostPort { return (Get-EnvValue "HOST_PORT" "3130") }
 function Get-AppBaseUrl { return "http://127.0.0.1:$(Get-HostPort)" }
 
+<#
+Runs docker and returns its exit code in $LASTEXITCODE.
+
+Windows PowerShell wraps anything a native program writes to stderr in an
+ErrorRecord, and with $ErrorActionPreference = 'Stop' that aborts the script.
+Docker writes all of its normal progress - "Pulling", "Waiting", layer
+progress - to stderr, so without this a successful pull would abort an update
+halfway through, leaving the installation between versions. The exit code is
+the only thing that actually says whether docker succeeded, and every caller
+checks it.
+#>
+function Invoke-Docker {
+    # A single array, not ValueFromRemainingArguments: PowerShell would try to
+    # bind tokens like -f, -i and --project-name as parameters of this function
+    # instead of passing them through to docker.
+    param([Parameter(Mandatory = $true, Position = 0)][string[]]$DockerArgs)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker @DockerArgs 2>&1 | ForEach-Object { "$_" }
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 function Assert-Docker {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         Stop-WithMessage "Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ and try again."
     }
-    docker info 2>$null | Out-Null
+    Invoke-Docker @("info") | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Stop-WithMessage "Docker Desktop is not running. Start it, wait for the whale icon to settle, then try again."
     }
@@ -156,14 +200,30 @@ function Invoke-Compose {
     $env:ABUD_RELEASE_DIR = $releaseDir
     $env:ABUD_CONTAINER_PREFIX = Get-EnvValue "ABUD_CONTAINER_PREFIX" $project
     $composeArgs = @("compose", "--project-name", $project, "--env-file", $AbudEnvFile, "--file", $composeFile) + $Arguments
-    & docker @composeArgs
+    Invoke-Docker $composeArgs
 }
 
 function Get-ContainerHealth {
     param([string]$Name)
-    $state = & docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $Name 2>$null
+    $state = Invoke-Docker @("inspect", "-f", '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}', $Name)
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($state)) { return "missing" }
     return $state.Trim()
+}
+
+<#
+Waits, briefly, for the application container health to settle.
+
+The app answers /health/ready as soon as it is up, but Docker only re-runs its
+own healthcheck on an interval. Without this pause the summary printed straight
+after a state change reports "ABUD Shorts: Problem" on an installation that is
+in fact healthy, which reads as a failed update to the operator.
+#>
+function Wait-ForContainerSettle {
+    param([int]$Attempts = 20)
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        if ((Get-ContainerHealth (Get-ContainerName "app")) -eq "healthy") { return }
+        Start-Sleep -Seconds 2
+    }
 }
 
 function Show-HealthSummary {
@@ -252,10 +312,16 @@ function Exit-UpdateLock {
 $script:Txn = $null
 
 function Initialize-Transaction {
-    param([string]$From, [string]$To, [string]$Channel)
+    # $Kind distinguishes an update from an administrator asking to go back.
+    # Both can end in ROLLED_BACK, but only one of them is a failure, and the
+    # Update Center must not describe a deliberate rollback as an update that
+    # did not complete.
+    param([string]$From, [string]$To, [string]$Channel, [string]$Kind = "update")
+    $prefix = if ($Kind -eq "rollback") { "rbk_" } else { "upd_" }
     $script:Txn = [ordered]@{
-        transactionId = "upd_" + (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss") + "_" + $PID
+        transactionId = $prefix + (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss") + "_" + $PID
         state         = "PREPARING"
+        kind          = $Kind
         channel       = $Channel
         fromVersion   = $From
         toVersion     = $To
@@ -294,7 +360,7 @@ function Save-Transaction {
 
     New-Item -ItemType Directory -Path (Split-Path $AbudUpdateStateFile) -Force | Out-Null
     try {
-        $out | ConvertTo-Json -Depth 8 | Out-File -FilePath $AbudUpdateStateFile -Encoding utf8
+        Write-TextFile $AbudUpdateStateFile ($out | ConvertTo-Json -Depth 8)
     } catch {
         # Never fabricate a record; say so and carry on with the update itself.
         Write-Warn "Could not write the update transaction record."
@@ -333,6 +399,19 @@ function Compare-SemVer {
     return $(if ($aPre -gt $bPre) { 1 } else { -1 })
 }
 
+# Strips the tag, and only the tag. A registry host may carry a port
+# (registry.example.com:5000/abud/app:2.2.1), and that colon does not introduce
+# a tag - cutting at the first colon would turn the reference into the bare
+# hostname and the pull would fail.
+function Get-ImageRepository {
+    param([string]$Reference)
+    $lastColon = $Reference.LastIndexOf(":")
+    if ($lastColon -lt 0) { return $Reference }
+    $suffix = $Reference.Substring($lastColon + 1)
+    if ($suffix.Contains("/")) { return $Reference }
+    return $Reference.Substring(0, $lastColon)
+}
+
 function Get-FileSha256 {
     param([string]$Path)
     if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
@@ -361,8 +440,17 @@ function New-PreUpgradeBackup {
     $pgUser = Get-EnvValue "POSTGRES_USER" "abud_shorts"
     $pgDb   = Get-EnvValue "POSTGRES_DB" "abud_shorts"
 
-    & docker exec (Get-ContainerName "postgres") pg_dump -U $pgUser -d $pgDb 2>$null |
-        Out-File -FilePath $target -Encoding utf8
+    # Not routed through Invoke-Docker: that merges stderr into the output
+    # stream, which would corrupt the dump. stderr is discarded instead, and
+    # the preference is relaxed so a warning on it cannot abort the run.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker exec (Get-ContainerName "postgres") pg_dump -U $pgUser -d $pgDb 2>$null |
+            Out-File -FilePath $target -Encoding utf8
+    } finally {
+        $ErrorActionPreference = $previous
+    }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $target) -or (Get-Item $target).Length -eq 0) {
         Remove-Item $target -Force -ErrorAction SilentlyContinue
         return $null
@@ -379,7 +467,14 @@ function Restore-PreUpgradeBackup {
     if (-not (Test-Path $source)) { return $false }
     $pgUser = Get-EnvValue "POSTGRES_USER" "abud_shorts"
     $pgDb   = Get-EnvValue "POSTGRES_DB" "abud_shorts"
-    Get-Content $source | & docker exec -i (Get-ContainerName "postgres") psql -U $pgUser -d $pgDb 2>$null | Out-Null
+    # As above: psql reads the dump on stdin, so stderr must not be folded in.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        Get-Content $source | & docker exec -i (Get-ContainerName "postgres") psql -U $pgUser -d $pgDb 2>$null | Out-Null
+    } finally {
+        $ErrorActionPreference = $previous
+    }
     return $true
 }
 
@@ -412,6 +507,7 @@ function Invoke-Start {
     Write-Step "Starting ABUD Shorts..."
     Invoke-Compose @("up", "-d")
     Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90 | Out-Null
+    Wait-ForContainerSettle
     Show-HealthSummary | Out-Null
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
@@ -431,6 +527,7 @@ function Invoke-Restart {
     Write-Step "Restarting ABUD Shorts..."
     Invoke-Compose @("restart")
     Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90 | Out-Null
+    Wait-ForContainerSettle
     Show-HealthSummary | Out-Null
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
@@ -455,18 +552,42 @@ function Invoke-Diagnostics {
     Write-Step "Running diagnostics..."
     $out = Join-Path (Join-Path $AbudShared "logs") ("abud-support-bundle-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss") + ".json")
     New-Item -ItemType Directory -Path (Split-Path $out) -Force | Out-Null
-    try {
-        # The application already builds the bundle with secrets redacted, so
-        # the terminal and the browser produce the same file.
-        Invoke-WebRequest -Uri "$(Get-AppBaseUrl)/api/v2/system/diagnostics/bundle" `
-            -OutFile $out -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
-        Write-Ok "Support bundle written to: $out"
-    } catch {
-        Write-Warn "The application could not be reached, so a reduced bundle was written instead."
+    # The application already builds the bundle with secrets redacted, so the
+    # terminal and the browser produce the same file. It is fetched over the
+    # internal route with this installation's own service token, because the
+    # browser route needs an administrator session and a freshly installed
+    # system does not have one yet.
+    $internalToken = Get-EnvValue "INTERNAL_SERVICE_TOKEN"
+    $reason = "The application could not be reached"
+    $written = $false
+    if ($internalToken) {
+        try {
+            Invoke-WebRequest -Uri "$(Get-AppBaseUrl)/internal/v1/system/diagnostics/bundle" `
+                -Headers @{ "x-internal-token" = $internalToken } `
+                -OutFile $out -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
+            Write-Ok "Support bundle written to: $out"
+            $written = $true
+        } catch {
+            # Say what actually happened rather than blaming the network for
+            # what may be a rejected token.
+            $status = $null
+            if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+            if ($status -eq 401 -or $status -eq 403) {
+                $reason = "The application rejected this installation's service token"
+            } elseif ($status) {
+                $reason = "The application answered with HTTP $status"
+            }
+        }
+    } else {
+        $reason = "This installation's configuration has no service token"
+    }
+
+    if (-not $written) {
+        Write-Warn "$reason, so a reduced bundle was written instead."
         $reduced = [ordered]@{
             generatedAt      = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             installedVersion = (Read-InstallationRecord).currentVersion
-            note             = "The application was not reachable; container status only."
+            note             = "$reason; container status only."
             containers       = [ordered]@{
                 app          = Get-ContainerHealth (Get-ContainerName "app")
                 renderWorker = Get-ContainerHealth (Get-ContainerName "render-worker")
@@ -474,7 +595,7 @@ function Invoke-Diagnostics {
                 automation   = Get-ContainerHealth (Get-ContainerName "n8n")
             }
         }
-        $reduced | ConvertTo-Json -Depth 6 | Out-File -FilePath $out -Encoding utf8
+        Write-TextFile $out ($reduced | ConvertTo-Json -Depth 6)
         Write-Ok "Reduced bundle written to: $out"
     }
     Show-HealthSummary | Out-Null
@@ -504,7 +625,7 @@ function Invoke-Rollback {
 
     Enter-UpdateLock
     try {
-        Initialize-Transaction $record.currentVersion $previous $record.channel
+        Initialize-Transaction $record.currentVersion $previous $record.channel "rollback"
         Save-Transaction "ROLLING_BACK"
 
         $previousImage = ""
@@ -515,7 +636,7 @@ function Invoke-Rollback {
 
         Invoke-Compose @("stop", "abud-shorts-app", "abud-shorts-render-worker") 2>$null | Out-Null
         if ($previousImage) { Set-EnvValue "ABUD_IMAGE" $previousImage }
-        Set-Content -Path $AbudCurrentFile -Value $previousDir -Encoding utf8
+        Write-TextFile $AbudCurrentFile $previousDir
         Write-InstallationRecord $previous "" $previousImage $record.channel $record.publicUrl
 
         Invoke-Compose @("up", "-d") 2>$null | Out-Null
@@ -527,6 +648,7 @@ function Invoke-Rollback {
                 message = "Manual rollback requested by the administrator."
             }
             Save-Transaction "ROLLED_BACK"
+            Wait-ForContainerSettle
             Write-Ok "Returned to version $previous."
         } else {
             $script:Txn.rollback = [ordered]@{
@@ -660,15 +782,15 @@ function Invoke-Update {
         Write-Ok "Checksum verified."
 
         # Pulling by digest rather than tag is what makes the image immutable.
-        $imageRepo = ($release.image -split ":")[0]
+        $imageRepo = Get-ImageRepository $release.image
         $pinnedImage = "$imageRepo@$($release.imageDigest)"
-        & docker pull $pinnedImage 2>$null | Out-Null
+        Invoke-Docker @("pull", $pinnedImage) | Out-Null
         if ($LASTEXITCODE -ne 0) {
             $script:Txn.error = "The application image could not be downloaded."
             Save-Transaction "FAILED"
             Stop-WithMessage "The application image could not be downloaded. Nothing has been changed."
         }
-        & docker image inspect $pinnedImage 2>$null | Out-Null
+        Invoke-Docker @("image", "inspect", $pinnedImage) | Out-Null
         if ($LASTEXITCODE -ne 0) {
             $script:Txn.error = "The downloaded image could not be verified."
             Save-Transaction "FAILED"
@@ -727,7 +849,7 @@ function Invoke-Update {
             schemaVersion = $release.schemaVersion; channel = $channel
             installedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             schemaBackwardsCompatible = [bool]$release.schemaBackwardsCompatible
-        } | ConvertTo-Json -Depth 6 | Out-File -FilePath (Join-Path $newReleaseDir "release.json") -Encoding utf8
+        } | ConvertTo-Json -Depth 6 | ForEach-Object { Write-TextFile (Join-Path $newReleaseDir "release.json") $_ }
 
         Save-Transaction "APPLYING"
 
@@ -736,7 +858,7 @@ function Invoke-Update {
         Invoke-Compose @("stop", "abud-shorts-app", "abud-shorts-render-worker") 2>$null | Out-Null
 
         Set-EnvValue "ABUD_IMAGE" $pinnedImage
-        Set-Content -Path $AbudCurrentFile -Value $newReleaseDir -Encoding utf8
+        Write-TextFile $AbudCurrentFile $newReleaseDir
         Write-InstallationRecord $release.version $currentVersion $pinnedImage $channel $record.publicUrl
 
         # --- rollback closure ---------------------------------------------
@@ -747,9 +869,13 @@ function Invoke-Update {
             Save-Transaction "ROLLING_BACK"
 
             $databaseRestored = $false
-            if ($previousReleaseDir) { Set-Content -Path $AbudCurrentFile -Value $previousReleaseDir -Encoding utf8 }
+            if ($previousReleaseDir) { Write-TextFile $AbudCurrentFile $previousReleaseDir }
             if ($previousImage) { Set-EnvValue "ABUD_IMAGE" $previousImage }
-            Write-InstallationRecord $currentVersion "" $previousImage $channel $record.publicUrl
+            # Restore the record exactly as it was before this attempt, keeping
+            # the version that preceded $currentVersion. Clearing it would leave
+            # `abud-shorts rollback` with no target even though that release is
+            # still on disk.
+            Write-InstallationRecord $currentVersion $record.previousVersion $previousImage $channel $record.publicUrl
 
             # A release whose migrations are not backwards compatible cannot be
             # undone by restoring code alone: the old application would meet a
@@ -771,6 +897,7 @@ function Invoke-Update {
             if (Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 60) {
                 $result = "succeeded"
                 Write-Ok "Rolled back to version $currentVersion and the system is healthy again."
+                Wait-ForContainerSettle
             } else {
                 Write-Bad "Rollback finished but the system is not reporting healthy."
             }
@@ -817,6 +944,8 @@ function Invoke-Update {
         }
         if (-not $workerHealthy) { & $rollback "The video engine did not become healthy after the update." }
         Write-Ok "Video engine healthy."
+
+        Wait-ForContainerSettle
 
         $script:Txn.rollback = [ordered]@{ attempted = $false; result = "not_required" }
         Save-Transaction "SUCCESS"

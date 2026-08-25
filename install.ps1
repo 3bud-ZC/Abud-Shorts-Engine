@@ -55,6 +55,49 @@ function Fail([string]$Message) {
     exit 1
 }
 
+<#
+Writes UTF-8 WITHOUT a byte order mark.
+
+Windows PowerShell 5.1 emits a BOM from both Out-File -Encoding utf8 and
+Set-Content -Encoding utf8. Everything that reads these files afterwards is
+not PowerShell: the application parses the update record with JSON.parse,
+which rejects a leading BOM outright, and docker compose reads the .env file,
+where a BOM would corrupt the first variable name. So every file this script
+produces is written through here.
+#>
+function Write-TextFile {
+    param([string]$Path, [string]$Content)
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+<#
+Runs docker and returns its exit code in $LASTEXITCODE.
+
+Windows PowerShell wraps anything a native program writes to stderr in an
+ErrorRecord, and with $ErrorActionPreference = 'Stop' that aborts the script.
+Docker writes all of its normal progress - "Pulling", "Waiting", layer
+progress - to stderr, so without this every successful image pull would kill
+the installer partway through. The exit code is the only thing that actually
+says whether docker succeeded, and each caller checks it.
+#>
+function Invoke-Docker {
+    # A single array, not ValueFromRemainingArguments: PowerShell would try to
+    # bind tokens like -f, -i and --project-name as parameters of this function
+    # instead of passing them through to docker.
+    param([Parameter(Mandatory = $true, Position = 0)][string[]]$DockerArgs)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker @DockerArgs 2>&1 | ForEach-Object { "$_" }
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 # ---------------------------------------------------------------------------
 # 1. Docker
 # ---------------------------------------------------------------------------
@@ -62,11 +105,11 @@ Write-Host "[1/9] Checking Docker..." -ForegroundColor Yellow
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Fail "Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ and run this installer again."
 }
-docker info 2>$null | Out-Null
+Invoke-Docker @("info") | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Fail "Docker Desktop is not running. Start it, wait for the whale icon to settle, then run this installer again."
 }
-docker compose version 2>$null | Out-Null
+Invoke-Docker @("compose", "version") | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "The Docker Compose plugin is missing from this Docker Desktop installation." }
 Write-Host "      Docker is running." -ForegroundColor Green
 
@@ -91,7 +134,24 @@ try {
     $probe.Close()
     $portBusy = $true
 } catch { $portBusy = $false }
-if ($portBusy) { Fail "Port $Port is already in use on this machine. Choose another one: .\install.ps1 -Port 3131" }
+if ($portBusy) {
+    # The port being busy is only a problem if something ELSE has it. Re-running
+    # the installer over an existing ABUD Shorts installation - to repair it, or
+    # to move it to a newer package - is a legitimate action, and it must not be
+    # refused just because that installation is currently running.
+    $ownedByUs = $false
+    try {
+        $probe = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v2/system/info" -TimeoutSec 5 -ErrorAction Stop
+        $ownedByUs = ($probe.name -like "ABUD Shorts Engine*")
+    } catch { $ownedByUs = $false }
+
+    if ($ownedByUs) {
+        Write-Host "      Port $Port is serving an existing ABUD Shorts installation; reinstalling over it." -ForegroundColor Yellow
+        Write-Host "      Your videos, settings and backups are not touched."
+    } else {
+        Fail "Port $Port is already in use by another program on this machine. Choose another one: .\install.ps1 -Port 3131"
+    }
+}
 
 $TrustedProxyValue = ""
 if ($BehindProxy) { $TrustedProxyValue = "1" }
@@ -102,10 +162,10 @@ if (-not $PublicUrl) {
 } else {
     if ($PublicUrl -notmatch '^https?://') { Fail "-PublicUrl must start with http:// or https://" }
     $PublicUrl = $PublicUrl.TrimEnd("/")
-    # A public address almost always means a reverse proxy in front, and the
-    # application must be told before it will believe any forwarded header.
-    if (-not $TrustedProxyValue) { $TrustedProxyValue = "1" }
     Write-Host "      Public address: $PublicUrl" -ForegroundColor Green
+    if (-not $BehindProxy) {
+        Write-Host "      Forwarded proxy headers will stay ignored. Add -BehindProxy only when a trusted reverse proxy is in front." -ForegroundColor Yellow
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -135,13 +195,13 @@ if (Test-Path $imagesDir) {
 }
 $imageAlreadyLocal = $false
 if ($ReleaseImage) {
-    & docker image inspect $ReleaseImage 2>$null | Out-Null
+    Invoke-Docker @("image", "inspect", $ReleaseImage) | Out-Null
     $imageAlreadyLocal = ($LASTEXITCODE -eq 0)
 }
 
 if ($offlineArchive) {
     Write-Host "      Offline package: loading the bundled image (this takes a few minutes)..."
-    & docker load -i $offlineArchive.FullName | Out-Null
+    Invoke-Docker @("load", "-i", $offlineArchive.FullName) | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "The bundled application image could not be loaded." }
     Write-Host "      Image loaded from the package." -ForegroundColor Green
 } elseif ($imageAlreadyLocal) {
@@ -156,7 +216,7 @@ if ($offlineArchive) {
         $pullRef = "$(($ReleaseImage -split ':')[0])@$ReleaseDigest"
     }
     Write-Host "      Downloading the application (this takes a few minutes)..."
-    & docker pull $pullRef | Out-Null
+    Invoke-Docker @("pull", $pullRef) | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Fail "The application image could not be downloaded. Check this machine's internet connection and try again."
     }
@@ -183,7 +243,7 @@ New-Item -ItemType Directory -Path "$ReleaseDir.incoming" -Force | Out-Null
 Get-ChildItem $PackageDir -Exclude "images" | Copy-Item -Destination "$ReleaseDir.incoming" -Recurse -Force
 if (Test-Path $ReleaseDir) { Remove-Item $ReleaseDir -Recurse -Force }
 Move-Item "$ReleaseDir.incoming" $ReleaseDir
-Set-Content -Path $AbudCurrentFile -Value $ReleaseDir -Encoding utf8
+Write-TextFile $AbudCurrentFile $ReleaseDir
 Write-Host "      Installed to $ReleaseDir" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
@@ -239,7 +299,7 @@ ELEVENLABS_API_KEY=
 ELEVENLABS_DEFAULT_VOICE_ID=
 PEXELS_API_KEY=
 "@
-    Set-Content -Path $AbudEnvFile -Value $envContent -Encoding utf8
+    Write-TextFile $AbudEnvFile $envContent
     Write-Host "      Generated a unique configuration with fresh secrets." -ForegroundColor Green
 } else {
     # An existing installation keeps its secrets and its data. Only the version
@@ -257,7 +317,7 @@ PEXELS_API_KEY=
     $lines = Update-EnvLine $lines "ABUD_RELEASE_CHANNEL" $ReleaseChannel
     $lines = Update-EnvLine $lines "ABUD_COMPOSE_PROJECT" $ComposeProject
     $lines = Update-EnvLine $lines "ABUD_CONTAINER_PREFIX" $ComposeProject
-    $lines | Out-File -FilePath $AbudEnvFile -Encoding utf8
+    Write-TextFile $AbudEnvFile (($lines -join "`r`n") + "`r`n")
     Write-Host "      Existing configuration kept; secrets and data untouched." -ForegroundColor Green
 }
 
@@ -270,7 +330,7 @@ PEXELS_API_KEY=
     publicUrl       = $PublicUrl
     installRoot     = $InstallRoot
     updatedAt       = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-} | ConvertTo-Json -Depth 6 | Out-File -FilePath (Join-Path $AbudShared "installation.json") -Encoding utf8
+} | ConvertTo-Json -Depth 6 | ForEach-Object { Write-TextFile (Join-Path $AbudShared "installation.json") $_ }
 
 # ---------------------------------------------------------------------------
 # 8. Start
@@ -280,7 +340,7 @@ $env:ABUD_DATA_DIR = $AbudDataDir
 $env:ABUD_RELEASE_DIR = $ReleaseDir
 $env:ABUD_CONTAINER_PREFIX = $ComposeProject
 $composeFile = Join-Path $ReleaseDir "docker-compose.prod.yml"
-& docker compose --project-name $ComposeProject --env-file $AbudEnvFile --file $composeFile up -d --remove-orphans
+Invoke-Docker @("compose", "--project-name", $ComposeProject, "--env-file", $AbudEnvFile, "--file", $composeFile, "up", "-d", "--remove-orphans")
 if ($LASTEXITCODE -ne 0) { Fail "The system could not be started. Check that Docker Desktop has enough memory assigned." }
 
 # Start Menu shortcuts, so the customer never types a Docker command.
@@ -326,7 +386,7 @@ for ($attempt = 0; $attempt -lt 90; $attempt++) {
 # Health summary
 # ---------------------------------------------------------------------------
 function Get-Health([string]$Name) {
-    $state = & docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $Name 2>$null
+    $state = Invoke-Docker @("inspect", "-f", '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}', $Name)
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($state)) { return "missing" }
     return $state.Trim()
 }

@@ -228,7 +228,23 @@ ok "Checksum verified."
 
 # Pulling by digest rather than by tag is what makes the image immutable: a tag
 # can be moved, a digest cannot.
-IMAGE_REPO="${REL_IMAGE%%:*}"
+# Strip the tag, and only the tag. A registry host may carry a port
+# (registry.example.com:5000/abud/app:2.2.1), and that colon does not introduce
+# a tag - cutting at the first colon would turn the reference into the bare
+# hostname and the pull would fail.
+image_repository() {
+  local reference="$1"
+  local suffix="${reference##*:}"
+  if [ "$suffix" = "$reference" ]; then
+    printf '%s' "$reference"          # no colon at all
+  elif [ "${suffix#*/}" != "$suffix" ]; then
+    printf '%s' "$reference"          # the colon was a port, not a tag
+  else
+    printf '%s' "${reference%:*}"
+  fi
+}
+
+IMAGE_REPO="$(image_repository "$REL_IMAGE")"
 PINNED_IMAGE="${IMAGE_REPO}@${REL_DIGEST}"
 docker pull --quiet "$PINNED_IMAGE" >/dev/null || {
   txn_set error "The application image could not be downloaded."
@@ -287,6 +303,10 @@ fi
 step "[5/9] Installing version $REL_VERSION..."
 PREVIOUS_RELEASE_DIR="$(readlink -f "$ABUD_CURRENT" 2>/dev/null || true)"
 PREVIOUS_IMAGE="$(installation_field image)"
+# The version that preceded the one running now. Kept so a rollback can restore
+# the record exactly as it was, rather than leaving `abud-shorts rollback` with
+# no target even though that release is still on disk.
+PRIOR_VERSION="$(previous_version)"
 NEW_RELEASE_DIR="$ABUD_RELEASES/$REL_VERSION"
 
 rm -rf "$NEW_RELEASE_DIR.incoming"
@@ -349,7 +369,7 @@ rollback() {
   if [ -n "$PREVIOUS_IMAGE" ]; then
     set_env_value ABUD_IMAGE "$PREVIOUS_IMAGE"
   fi
-  write_installation_record "$CURRENT_VERSION" "" "${PREVIOUS_IMAGE:-}" "$CHANNEL"
+  write_installation_record "$CURRENT_VERSION" "${PRIOR_VERSION:-}" "${PREVIOUS_IMAGE:-}" "$CHANNEL"
 
   # A release whose migrations are not backwards compatible cannot be undone by
   # putting the old code back: the old application would meet a schema it does
@@ -372,6 +392,11 @@ rollback() {
   if wait_for_endpoint "$(app_base_url)/health/ready" 60 "ABUD Shorts"; then
     rollback_result="succeeded"
     ok "Rolled back to version $CURRENT_VERSION and the system is healthy again."
+    # Same reason as after a successful update: Docker re-runs its own
+    # healthcheck on an interval, so without this the summary below can report a
+    # Problem on an installation that has in fact just been restored and
+    # answered /health/ready.
+    wait_for_container_settle
   else
     fail "Rollback finished but the system is not reporting healthy."
   fi
@@ -440,6 +465,13 @@ done
 [ "$(container_health "$(container_name render-worker)")" = "healthy" ] ||
   rollback "The video engine did not become healthy after the update."
 ok "Video engine healthy."
+
+# The application answered /health/ready several steps ago, but Docker only
+# re-runs its own healthcheck on an interval, so the container can still be
+# marked "starting" here. Without this wait the success banner prints
+# "ABUD Shorts: Problem" immediately after a verified successful update, which
+# reads as a failure to the operator.
+wait_for_container_settle
 
 # ---------------------------------------------------------------------------
 # 19-20. Success

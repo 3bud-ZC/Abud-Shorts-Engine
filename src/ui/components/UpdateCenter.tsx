@@ -35,6 +35,7 @@ type UpdateStatus = "UP_TO_DATE" | "UPDATE_AVAILABLE" | "CHECK_FAILED" | "UNSUPP
 interface UpdateTransaction {
   transactionId: string;
   state: string;
+  kind?: "update" | "rollback";
   fromVersion: string;
   toVersion: string;
   startedAt: string;
@@ -314,16 +315,31 @@ const UpdateCenter: React.FC = () => {
       </Grid>
 
       {state.lastAttempt && state.lastAttempt.state !== "SUCCESS" && (
-        <Alert severity={state.lastAttempt.rollback?.result === "succeeded" ? "info" : "warning"}>
+        // A deliberate rollback and a failed update both end in ROLLED_BACK,
+        // but only one of them is a failure. Describing an administrator's own
+        // rollback as an update that "did not complete" would send them looking
+        // for a problem that does not exist.
+        <Alert
+          severity={
+            state.lastAttempt.kind === "rollback" ||
+            state.lastAttempt.rollback?.result === "succeeded"
+              ? "info"
+              : "warning"
+          }
+        >
           <Typography variant="body2" fontWeight={700}>
-            The last update attempt did not complete
+            {state.lastAttempt.kind === "rollback"
+              ? "This system was returned to an earlier version"
+              : "The last update attempt did not complete"}
           </Typography>
           <Typography variant="body2">
             {state.lastAttempt.fromVersion} → {state.lastAttempt.toVersion} on{" "}
             {formatMoment(state.lastAttempt.updatedAt)}.
-            {state.lastAttempt.error ? ` ${state.lastAttempt.error}` : ""}
+            {state.lastAttempt.kind !== "rollback" && state.lastAttempt.error
+              ? ` ${state.lastAttempt.error}`
+              : ""}
           </Typography>
-          {state.lastAttempt.rollback?.attempted && (
+          {state.lastAttempt.kind !== "rollback" && state.lastAttempt.rollback?.attempted && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               {state.lastAttempt.rollback.result === "succeeded"
                 ? `The system was returned to version ${state.lastAttempt.rollback.restoredVersion}.`
@@ -335,7 +351,7 @@ const UpdateCenter: React.FC = () => {
           )}
           {state.lastAttempt.backupId && (
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-              A backup from before that attempt is kept.
+              A backup from before that {state.lastAttempt.kind === "rollback" ? "change" : "attempt"} is kept.
             </Typography>
           )}
         </Alert>
