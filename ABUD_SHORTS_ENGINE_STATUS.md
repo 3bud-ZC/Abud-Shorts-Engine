@@ -15,19 +15,29 @@
 
 Product: ABUD Shorts Engine V2
 
-Stable: **v2.1.0**
+Version: **2.2.0**
 
-Target: **v2.2.0**
-
-Branch: **`v2.2-finalization`**
-
-V2.2: **NOT RELEASED** — not merged, not tagged, not officially packaged or published
+Release: **GENERAL AVAILABILITY**
 
 Schema: **2.12.0**
 
-Arabic voice: **ElevenLabs / Mamdoh / Energetic Ad / APPROVED**
+Release commit: `80b5a1301b756aae73b816153280a12d33ef6d94`
+Tag: `v2.2.0` · Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.2.0
+
+Image: `ghcr.io/3bud-zc/abud-shorts-engine:2.2.0` (also `stable`)
+Digest: `sha256:d1b6ff81eb214b63d8dd36bf3723ce462d4535bbbb0a592f63d148450d0fd85b`
+The image is public, so a client installation needs no registry credentials, and
+both installers and the updater pull it by digest rather than by a movable tag.
+
+Arabic Production: **ElevenLabs**
+Voice: **Mamdoh**
+Preset: **Energetic Ad**
+Human Voice Acceptance: **APPROVED**
 (`68MRVrnQAt8vLbu0FCzw`, model `eleven_multilingual_v2`, persisted in
-`app_settings.arabic_voice_default` with `selectedBy: human`; unchanged by F3)
+`app_settings.arabic_voice_default` with `selectedBy: human`; unchanged by F5)
+
+Client Delivery: **READY**
+Online Update: **READY**
 
 Finalization track:
 
@@ -35,14 +45,10 @@ Finalization track:
 | --- | --- | --- |
 | F1 | Product UI, ABUD design system, no-code client experience | **PASS** |
 | F1.5 | Product polish and client safety gate | **PASS** |
-| F2 | Creative and animation engine finalization | **PASS / CLOSED** |
-| F3 | Integrations and real publishing closure | **PASS / CLOSED** |
+| F2 | Creative and animation engine finalization | **PASS** |
+| F3 | Integrations and real publishing closure | **PASS** |
 | F4 | Client installation, operations and delivery closure | **PASS** |
-| F5 | Final audit, release candidate packaging and release ceremony | **PARTIAL / BLOCKED** |
-
-Final complete-product / client acceptance: PENDING
-
-Final complete-video acceptance: PENDING USER REVIEW
+| F5 | Final audit, release candidate packaging and release ceremony | **PASS** |
 
 Canonical URL: http://localhost:3130
 
@@ -51,6 +57,22 @@ Canonical Docker services:
 - `abud-shorts-render-worker` — healthy, internal only
 - `abud-shorts-n8n` — healthy, internal only on Docker DNS alias `n8n`
 - `abud-shorts-postgres` — healthy, internal only on Docker DNS alias `postgres`
+
+Release verification (v2.2.0, on an isolated clean installation of the published
+image, pulled by digest, running beside the primary stack without touching it):
+the Setup Wizard completed from a fresh database, the n8n control plane imported
+and activated itself with no manual step, and one production run reached Ready
+with a real 1080x1920 H.264 / AAC MP4 (20.05s) serving thumbnail 200,
+preview 206 and download 200. The published manifest was accepted by the real
+host updater, which reported 2.2.0 as the latest stable release.
+
+Two release blockers were found and fixed during F5. The GHCR workflow built its
+base image into the daemon while the runtime build ran on the buildx container
+driver, so the runtime build could not see the base image and resolved FROM
+against Docker Hub. And a fresh installation imported no n8n workflows at all,
+because n8n's importer calls .map() on its input and every import step was
+`|| true`, so a single-workflow object failed silently and every video job then
+died on a 404 from the orchestration webhook.
 
 Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
 metadata and videos stay readable and playable. It is not a production Arabic
