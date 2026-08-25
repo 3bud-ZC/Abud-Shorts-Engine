@@ -8,6 +8,7 @@ import {
   MusicVolumeEnum,
 } from "../types/shorts";
 import { AvailableComponentsEnum, type OrientationConfig } from "./types";
+import { arabicCaptionEngine, containsArabic, type ArabicCaptionStyle } from "./arabicCaptionEngine";
 
 export const sceneSegmentSchema = z.object({
   video: z.string(),
@@ -36,6 +37,14 @@ export const shortVideoSchema = z.object({
           }),
         )
         .optional(),
+      productNobgUrl: z.string().optional(),
+      productImageUrl: z.string().optional(),
+      productHeadline: z.string().optional(),
+      productOffer: z.string().optional(),
+      productPrice: z.string().optional(),
+      productCta: z.string().optional(),
+      productPlacement: z.enum(["center", "left", "right"]).optional(),
+      visualSource: z.string().optional(),
     }),
   ),
   config: z.object({
@@ -64,12 +73,24 @@ export function createCaptionPages({
   lineMaxLength,
   lineCount,
   maxDistanceMs,
+  captionPreset,
+  isPortrait,
 }: {
   captions: Caption[];
   lineMaxLength: number;
   lineCount: number;
   maxDistanceMs: number;
+  captionPreset?: string;
+  isPortrait?: boolean;
 }) {
+  if (captions.some((caption) => containsArabic(caption.text))) {
+    return arabicCaptionEngine.group(captions, {
+      style: (captionPreset as ArabicCaptionStyle) || "viral_bold",
+      isPortrait,
+      maxDistanceMs,
+    });
+  }
+
   const pages = [];
   let currentPage: CaptionPage = {
     startMs: 0,

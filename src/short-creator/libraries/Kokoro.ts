@@ -7,7 +7,12 @@ import {
 import { KOKORO_MODEL, logger } from "../../config";
 
 export class Kokoro {
-  constructor(private tts: KokoroTTS) {}
+  private loading?: Promise<KokoroTTS>;
+
+  constructor(
+    private tts?: KokoroTTS,
+    private dtype?: kokoroModelPrecision,
+  ) {}
 
   async generate(
     text: string,
@@ -16,8 +21,9 @@ export class Kokoro {
     audio: ArrayBuffer;
     audioLength: number;
   }> {
+    const tts = await this.getTts();
     const splitter = new TextSplitterStream();
-    const stream = this.tts.stream(splitter, {
+    const stream = tts.stream(splitter, {
       voice,
     });
     splitter.push(text);
@@ -68,6 +74,28 @@ export class Kokoro {
     });
 
     return new Kokoro(tts);
+  }
+
+  /**
+   * Production Docker containers must bind their HTTP health endpoint before a
+   * heavyweight local TTS model finishes loading. English local voice renders
+   * still use Kokoro, but the model is loaded on first use instead of blocking
+   * the whole app and render worker from becoming healthy.
+   */
+  static lazy(dtype: kokoroModelPrecision): Kokoro {
+    return new Kokoro(undefined, dtype);
+  }
+
+  private async getTts(): Promise<KokoroTTS> {
+    if (this.tts) return this.tts;
+    if (!this.loading) {
+      this.loading = KokoroTTS.from_pretrained(KOKORO_MODEL, {
+        dtype: this.dtype || "fp32",
+        device: "cpu",
+      });
+    }
+    this.tts = await this.loading;
+    return this.tts;
   }
 
   listAvailableVoices(): Voices[] {

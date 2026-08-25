@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import {
@@ -41,8 +42,9 @@ import InstagramIcon from "@mui/icons-material/Instagram";
 import FacebookIcon from "@mui/icons-material/Facebook";
 import TelegramIcon from "@mui/icons-material/Telegram";
 import TwitterIcon from "@mui/icons-material/Twitter";
-import { LoadingState, PageHeader, SectionCard, StatusBadge } from "../components/v2";
+import { EmptyState, LoadingState, PageHeader, SectionCard, StatusBadge } from "../components/v2";
 import { AccountConnectModal } from "../components/publishing/AccountConnectModal";
+import { withMediaAccessToken } from "../utils/auth";
 import type {
   Publication,
   PublishingPlatform,
@@ -71,6 +73,7 @@ function getPlatformIcon(platform: PublishingPlatform) {
 }
 
 export const PublishingPage: React.FC = () => {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<"overview" | "scheduled" | "published" | "failed" | "accounts">("overview");
   const [summary, setSummary] = useState<PublishingSummary | null>(null);
   const [publications, setPublications] = useState<Publication[]>([]);
@@ -107,7 +110,10 @@ export const PublishingPage: React.FC = () => {
     fetchData();
 
     // SSE connection for live updates
-    const eventSource = new EventSource("/api/v2/publishing/events");
+    // EventSource cannot send an Authorization header, so the session token
+    // travels as the access_token query parameter the API already accepts.
+    // Without this the live publishing stream silently 401s forever.
+    const eventSource = new EventSource(withMediaAccessToken("/api/v2/publishing/events"));
     eventSource.onmessage = () => {
       fetchData();
     };
@@ -195,8 +201,8 @@ export const PublishingPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Publishing & Distribution"
-        eyebrow="Social Control Plane V2"
+        title="Publishing"
+        eyebrow="Distribute"
         description="Unified multi-platform distribution, scheduling engine, automated retries, and social accounts."
         actions={
           <Stack direction="row" spacing={1}>
@@ -324,9 +330,16 @@ export const PublishingPage: React.FC = () => {
       </Grid>
 
       {/* Tabs */}
+      {/* Five tab labels need about 560px. Left as the default fixed variant
+          they pushed the whole page to 450px wide inside a 390px phone frame,
+          which is the one horizontal overflow in the client. Every other Tabs
+          in the app is already scrollable. */}
       <Tabs
         value={tab}
         onChange={(_, val) => setTab(val)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
         sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
       >
         <Tab value="overview" label="Overview" />
@@ -336,21 +349,28 @@ export const PublishingPage: React.FC = () => {
         <Tab value="accounts" label={`Social Accounts (${accounts.length})`} />
       </Tabs>
 
-      {/* Filter Bar */}
+      {/* Filter Bar. A 280px search box beside a platform select cannot sit on
+          one row in a 390px phone frame; as a nowrap row it pushed the page 60px
+          wide. It stacks on small screens and sits side by side from `sm` up. */}
       {tab !== "accounts" && (
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          sx={{ mb: 2, flexWrap: "wrap" }}
+        >
           <TextField
             size="small"
             placeholder="Search by title, prompt, or video ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            sx={{ minWidth: 280 }}
+            sx={{ minWidth: { xs: 0, sm: 280 }, width: { xs: "100%", sm: "auto" } }}
           />
           <Select
             size="small"
             displayEmpty
             value={filterPlatform}
             onChange={(e) => setFilterPlatform(e.target.value)}
+            sx={{ width: { xs: "100%", sm: "auto" } }}
           >
             <MenuItem value="">All Platforms</MenuItem>
             <MenuItem value="youtube">YouTube</MenuItem>
@@ -373,9 +393,15 @@ export const PublishingPage: React.FC = () => {
             description="Live distribution activity across connected channels."
           >
             {publications.length === 0 ? (
-              <Typography color="text.secondary" sx={{ py: 3, textAlign: "center" }}>
-                No publications recorded yet. Generate a video and click "Publish / Schedule" to distribute.
-              </Typography>
+              <EmptyState
+                title="Nothing published yet"
+                description="Open a finished video and choose Publish to send it to your connected accounts."
+                action={
+                  <Button variant="contained" onClick={() => navigate("/videos")}>
+                    Go to Video Library
+                  </Button>
+                }
+              />
             ) : (
               <TableContainer>
                 <Table size="small">
@@ -468,9 +494,15 @@ export const PublishingPage: React.FC = () => {
           description="Scheduled posts are saved safely and continue after application restarts."
         >
           {scheduledList.length === 0 ? (
-            <Typography color="text.secondary" sx={{ py: 3, textAlign: "center" }}>
-              No scheduled publications in queue.
-            </Typography>
+            <EmptyState
+              title="Nothing scheduled"
+              description="Schedule a post from any finished video and it will appear here until it goes out."
+              action={
+                <Button variant="contained" onClick={() => navigate("/videos")}>
+                  Go to Video Library
+                </Button>
+              }
+            />
           ) : (
             <Stack spacing={1.5}>
               {scheduledList.map((pub) => (

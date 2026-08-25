@@ -14,6 +14,8 @@ import { Server } from "./server/server";
 import { MusicManager } from "./short-creator/music";
 import { V2Database } from "./server/v2/db";
 import { JobService } from "./server/v2/jobs";
+import { ProviderCredentialsVault } from "./server/v2/provider-vault/providerCredentialsVault";
+import { providerSecrets } from "./server/v2/provider-vault/providerSecrets";
 
 async function main() {
   const config = new Config();
@@ -36,7 +38,9 @@ async function main() {
   logger.debug("initializing remotion");
   const remotion = await Remotion.init(config);
   logger.debug("initializing kokoro");
-  const kokoro = await Kokoro.init(config.kokoroModelPrecision);
+  const kokoro = config.runningInDocker
+    ? Kokoro.lazy(config.kokoroModelPrecision)
+    : await Kokoro.init(config.kokoroModelPrecision);
   logger.debug("initializing whisper");
   const whisper = await Whisper.init(config);
   logger.debug("initializing ffmpeg");
@@ -65,6 +69,20 @@ async function main() {
       logger.error(error, "V2 database migration failed; API will start degraded");
     }
     jobService = new JobService(v2Database);
+  }
+
+  // Both the API and the render worker read provider credentials from the
+  // encrypted vault so a customer never has to edit .env by hand. Secrets are
+  // decrypted into process memory only and are never logged or returned.
+  // The render worker gets a credentials-only connection: it must not pick up
+  // the app-role publishing and lease routes that a full db handle enables.
+  if (process.env.V2_ENABLED === "true" && config.databaseUrl && config.providerVaultMasterKey) {
+    const credentialsDb = v2Database || new V2Database(config);
+    const vault = new ProviderCredentialsVault(credentialsDb, config);
+    providerSecrets.registerResolver((providerId, credentialType) =>
+      vault.readPlaintext(providerId, credentialType),
+    );
+    await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
   }
 
   if (!config.runningInDocker) {

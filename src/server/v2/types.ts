@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalPublicUrlSchema } from "./system/publicUrl";
 import { createShortInput, renderConfig } from "../../types/shorts";
 import {
   arabicDialectEnum,
@@ -6,12 +7,14 @@ import {
   captionStyleEnum,
   contentStyleEnum,
   creationModeEnum,
+  productionModeEnum,
   productionSpecSchema,
   qualityProfileEnum,
   resolutionEnum,
   videoLanguageEnum,
   visualModeEnum,
   voiceProviderEnum,
+  voicePresetEnum,
   type ProductionSpec,
 } from "../../types/productionSpec";
 
@@ -71,6 +74,23 @@ export const promptJobInputSchema = z.preprocess(
     language: videoLanguageEnum.optional().default("auto"),
     dialect: arabicDialectEnum.optional().default("none"),
     contentStyle: contentStyleEnum.optional().default("advertisement"),
+    productionMode: productionModeEnum.optional().default("auto_hybrid"),
+    // Client-facing creative controls. Plain-language on the surface, and the
+    // only creative knobs the client sends; treatment names and EDL detail stay
+    // internal.
+    creativeStyle: z
+      .enum([
+        "auto",
+        "clean_professional",
+        "viral_social",
+        "cinematic",
+        "motion_explainer",
+        "product_showcase",
+        "tech_saas",
+        "educational",
+      ])
+      .optional(),
+    animationIntensity: z.enum(["low", "balanced", "high"]).optional(),
     requestedDurationSeconds: z.number().min(5).max(120).optional(),
     durationSeconds: z.number().min(5).max(120).optional(),
     duration: z.number().min(5).max(120).optional(),
@@ -80,6 +100,8 @@ export const promptJobInputSchema = z.preprocess(
     visualMode: visualModeEnum.optional().default("auto"),
     voiceProvider: voiceProviderEnum.optional().default("auto"),
     voiceId: z.string().trim().max(80).optional(),
+    voicePreset: voicePresetEnum.optional(),
+    captionStyle: captionStyleEnum.optional().default("viral_bold"),
     brandId: z.string().trim().max(140).optional(),
     brandName: z.string().trim().max(140).optional(),
     productionSpec: productionSpecSchema.optional(),
@@ -136,6 +158,23 @@ export const productionSpecPreviewSchema = z.preprocess(
     language: videoLanguageEnum.optional().default("auto"),
     dialect: arabicDialectEnum.optional().default("none"),
     contentStyle: contentStyleEnum.optional().default("advertisement"),
+    productionMode: productionModeEnum.optional().default("auto_hybrid"),
+    // Client-facing creative controls. Plain-language on the surface, and the
+    // only creative knobs the client sends; treatment names and EDL detail stay
+    // internal.
+    creativeStyle: z
+      .enum([
+        "auto",
+        "clean_professional",
+        "viral_social",
+        "cinematic",
+        "motion_explainer",
+        "product_showcase",
+        "tech_saas",
+        "educational",
+      ])
+      .optional(),
+    animationIntensity: z.enum(["low", "balanced", "high"]).optional(),
     requestedDurationSeconds: z.number().min(5).max(120).optional(),
     durationSeconds: z.number().min(5).max(120).optional(),
     duration: z.number().min(5).max(120).optional(),
@@ -145,6 +184,8 @@ export const productionSpecPreviewSchema = z.preprocess(
     visualMode: visualModeEnum.optional().default("auto"),
     voiceProvider: voiceProviderEnum.optional().default("auto"),
     voiceId: z.string().trim().max(80).optional(),
+    voicePreset: voicePresetEnum.optional(),
+    captionStyle: captionStyleEnum.optional().default("viral_bold"),
     brandId: z.string().trim().max(140).optional(),
     brandName: z.string().trim().max(140).optional(),
   }),
@@ -194,7 +235,7 @@ export const productionJobSchema = z.preprocess(
     dialect: arabicDialectEnum.optional().default("none"),
     brandId: z.string().trim().max(140).optional(),
     voice: z.string().trim().max(120).optional(),
-    qualityProfile: z.enum(["fast", "balanced", "premium"]).optional().default("balanced"),
+    qualityProfile: z.enum(["fast", "balanced", "premium", "max_quality_local"]).optional().default("balanced"),
     visualMode: visualModeEnum.optional().default("stock"),
     publishIntent: z.record(z.unknown()).optional(),
   }),
@@ -208,6 +249,7 @@ export const voiceRevisionSchema = z.object({
   spokenNarration: z.string().trim().min(1).max(4000).optional(),
   voiceProvider: voiceProviderEnum.optional(),
   voiceId: z.string().trim().max(120).optional(),
+  voicePreset: voicePresetEnum.optional(),
   reason: z.string().trim().max(240).optional(),
   captionProfile: z.string().trim().max(60).optional(),
 });
@@ -286,7 +328,13 @@ export const brandProfileSchema = z.object({
   name: z.string().trim().min(1).max(120),
   watermarkText: z.string().trim().max(120).optional().default(""),
   primaryColor: z.string().trim().min(1).max(40).optional().default("#24545a"),
+  // Optional so an existing brand keeps validating; the style resolver derives a
+  // neutral companion rather than inventing a colour the customer never gave.
+  secondaryColor: z.string().trim().max(40).optional(),
   accentColor: z.string().trim().min(1).max(40).optional().default("#d28b4c"),
+  logoUrl: z.string().trim().max(500).optional(),
+  websiteUrl: z.string().trim().max(300).optional(),
+  socialHandle: z.string().trim().max(120).optional(),
   captionStyle: z.enum(["clean", "bold", "minimal"]).optional().default("bold"),
   includeOutro: z.boolean().optional().default(true),
   outroText: z.string().trim().max(220).optional().default(""),
@@ -314,7 +362,7 @@ export const appSettingsSchema = z.object({
   defaultVisualMode: visualModeEnum.optional().default("auto"),
   defaultContentAI: z.string().trim().max(80).optional().default("local_ai"),
   defaultVisualProvider: z.string().trim().max(80).optional().default("pexels"),
-  defaultVoiceProvider: z.string().trim().max(80).optional().default("piper"),
+  defaultVoiceProvider: z.string().trim().max(80).optional().default("elevenlabs"),
   defaultBrandId: z.string().trim().max(140).nullable().optional(),
   defaultTemplateId: z.string().trim().max(80).nullable().optional(),
   defaultMusic: z.string().trim().max(80).nullable().optional(),
@@ -330,6 +378,10 @@ export const appSettingsSchema = z.object({
   uploadPostApiKey: z.string().trim().max(256).optional(),
   telegramBotToken: z.string().trim().max(256).optional(),
   telegramChatId: z.string().trim().max(120).optional(),
+  // The address this installation is reached on. A VPS install sets its own
+  // domain here and every OAuth callback URL follows, with no source edit.
+  // Null clears it and falls back to the installer's V2_PUBLIC_URL.
+  canonicalPublicUrl: canonicalPublicUrlSchema.nullable().optional(),
 });
 
 export type BrandProfileRecord = z.infer<typeof brandProfileSchema> & {

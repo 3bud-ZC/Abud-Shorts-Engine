@@ -120,7 +120,15 @@ export type SceneMediaPlan = {
   visualIntent: VisualIntent;
   targetDurationSeconds: number;
   segments: SceneSegmentPlan[];
-  preferredVisualSource: "stock" | "ai" | "uploaded";
+  preferredVisualSource:
+    | "stock"
+    | "ai"
+    | "uploaded"
+    | "uploaded_media"
+    | "motion_graphics"
+    | "product_composition"
+    | "ai_generated_video"
+    | "image_animation";
   motion: MotionPreset;
   transitionToNext: TransitionStyle;
   needsTextOverlay: boolean;

@@ -1,0 +1,199 @@
+# ==============================================================================
+# ABUD Shorts Engine - release workflow
+# ==============================================================================
+# Publishes the immutable application image to GitHub Container Registry and
+# attaches the client package plus the update manifest to a GitHub Release.
+#
+# This workflow is PREPARED but not yet exercised: F4 does not publish anything.
+# F5 runs the release ceremony, and that is the first time an image is pushed.
+#
+# The registry owner is derived from ${{ github.repository }} rather than typed
+# in, so the image name always matches wherever this repository actually lives.
+#
+# Platform: linux/amd64 only. The base image compiles whisper.cpp and installs a
+# CPU quality runtime, neither of which has been built or tested on arm64 here.
+# Claiming arm64 support without building it would be a lie in the manifest.
+# ==============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v (e.g. 2.2.0)"
+        required: true
+        type: string
+      channel:
+        description: "Release channel"
+        required: true
+        default: stable
+        type: choice
+        options: [stable, development]
+      publish:
+        description: "Push the image to GHCR and create the release"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release identity
+        id: identity
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            CHANNEL="stable"
+            PUBLISH="true"
+          else
+            VERSION="${{ inputs.version }}"
+            CHANNEL="${{ inputs.channel }}"
+            PUBLISH="${{ inputs.publish }}"
+          fi
+
+          # The canonical image name, derived from this repository.
+          IMAGE_NAME="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+
+          # The version in the source must match the version being released, or
+          # the running application would report a version nobody published.
+          SOURCE_VERSION="$(grep -oP 'PRODUCT_VERSION\s*=\s*"\K[^"]+' src/version.ts)"
+          SCHEMA_VERSION="$(grep -oP 'DATABASE_SCHEMA_VERSION\s*=\s*"\K[^"]+' src/version.ts)"
+          if [ "$SOURCE_VERSION" != "$VERSION" ]; then
+            echo "::error::src/version.ts declares $SOURCE_VERSION but this release is $VERSION."
+            exit 1
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "channel=$CHANNEL"
+            echo "publish=$PUBLISH"
+            echo "image=${{ env.REGISTRY }}/$IMAGE_NAME"
+            echo "schema=$SCHEMA_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up the CPU quality runtime the test suite shells out to
+        run: bash scripts/install-quality-pack.sh
+
+      - name: Typecheck, test and build
+        run: |
+          pnpm typecheck
+          pnpm vitest run
+          pnpm build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: steps.identity.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The application image is built in two stages, exactly as it is locally:
+      # a base with the whisper build and the runtime dependencies, then the
+      # ABUD layer on top. BASE_IMAGE keeps the second stage reproducible in CI.
+      - name: Build the base image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --file main-tiny.Dockerfile \
+            --tag abud-shorts-engine-base:${{ steps.identity.outputs.version }} \
+            --load \
+            .
+
+      - name: Build the application image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --file v2.Dockerfile \
+            --build-arg BASE_IMAGE=abud-shorts-engine-base:${{ steps.identity.outputs.version }} \
+            --tag ${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.version }} \
+            --label "org.opencontainers.image.title=ABUD Shorts Engine" \
+            --label "org.opencontainers.image.description=Client-installed short-video production system" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.version=${{ steps.identity.outputs.version }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "org.opencontainers.image.licenses=MIT" \
+            --load \
+            .
+
+      - name: Push the application image
+        id: push
+        if: steps.identity.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.version }}"
+          docker push "$IMAGE"
+          # The digest the registry actually stored. This, not the tag, is what
+          # every installer and updater pulls: a tag can be moved, a digest
+          # cannot.
+          DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" | sed 's/.*@//')"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Published $IMAGE@$DIGEST"
+
+      - name: Build the client package and update manifest
+        run: |
+          node scripts/release/package-client.mjs \
+            --version ${{ steps.identity.outputs.version }} \
+            --channel ${{ steps.identity.outputs.channel }} \
+            --image ${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.version }} \
+            --digest "${{ steps.push.outputs.digest }}" \
+            --out "${{ runner.temp }}/dist-release"
+
+      - name: Verify the package excludes secrets and source
+        run: node scripts/release/verify-package.mjs "${{ runner.temp }}/dist-release"
+
+      - name: Upload the artifacts for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: abud-shorts-client-${{ steps.identity.outputs.version }}
+          path: |
+            ${{ runner.temp }}/dist-release/*.tar.gz
+            ${{ runner.temp }}/dist-release/*.sha256
+            ${{ runner.temp }}/dist-release/update-manifest.json
+
+      - name: Publish the GitHub Release
+        if: steps.identity.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.identity.outputs.version }}
+          name: ABUD Shorts Engine ${{ steps.identity.outputs.version }}
+          draft: true
+          files: |
+            ${{ runner.temp }}/dist-release/*.tar.gz
+            ${{ runner.temp }}/dist-release/*.sha256
+            ${{ runner.temp }}/dist-release/update-manifest.json

@@ -77,6 +77,12 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
   ready: "Completed",
   failed: "Failed",
   canceled: "Canceled",
+  invalid_credentials: "Invalid Credentials",
+  missing_permissions: "Missing Permissions",
+  voice_discovery_restricted: "Voice Discovery Restricted",
+  provider_unavailable: "Provider Unavailable",
+  not_configured: "Not Configured",
+  live_verified: "Live Verified",
 };
 
 export const STAGE_LABELS: Record<string, string> = {
@@ -240,7 +246,7 @@ export function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card variant="outlined" sx={{ borderRadius: 2, bgcolor: "#ffffff" }}>
+    <Card variant="outlined" sx={{ borderRadius: 3 }}>
       {(title || description || actions) && (
         <>
           <Stack
@@ -290,7 +296,6 @@ export function StatCard({
         height: "100%",
         minHeight: 110,
         borderRadius: 2,
-        bgcolor: "#ffffff",
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",
@@ -326,8 +331,21 @@ export function StatCard({
 export function statusColor(status: string): "success" | "warning" | "error" | "info" | "default" {
   if (!status) return "default";
   const s = status.toLowerCase();
-  if (["ready", "healthy", "valid", "configured", "completed"].includes(s)) return "success";
-  if (["degraded", "rate_limited", "timeout", "planning", "rendering", "generating_voice", "generating_captions", "collecting_media"].includes(s)) return "warning";
+  if (["ready", "healthy", "valid", "configured", "completed", "live_verified"].includes(s)) return "success";
+  if (
+    [
+      "degraded",
+      "rate_limited",
+      "timeout",
+      "planning",
+      "rendering",
+      "generating_voice",
+      "generating_captions",
+      "collecting_media",
+      "missing_permissions",
+      "voice_discovery_restricted",
+    ].includes(s)
+  ) return "warning";
   if (
     [
       "failed",
@@ -467,12 +485,12 @@ export function RecentJobCard({
         borderRadius: 2,
         cursor: onClick ? "pointer" : "default",
         transition: "all 0.15s ease",
-        borderColor: "rgba(31, 41, 51, 0.12)",
+        borderColor: "divider",
         "&:hover": onClick
           ? {
               boxShadow: "0 3px 12px rgba(0,0,0,0.06)",
               borderColor: "primary.main",
-              bgcolor: "rgba(36, 84, 90, 0.02)",
+              bgcolor: "action.hover",
             }
           : {},
       }}
@@ -547,12 +565,20 @@ export function LoadingState({ label = "Loading..." }: { label?: string }) {
   );
 }
 
+/**
+ * Loading placeholders.
+ *
+ * Widths are capped at the container rather than set in fixed pixels: a 380px
+ * text skeleton inside a 390px phone frame pushed the whole document 6px wide,
+ * so the dashboard showed a horizontal scrollbar for the first second of every
+ * load. Browser QA caught it as a transient overflow.
+ */
 export function DashboardSkeleton() {
   return (
     <Stack spacing={3}>
       <Stack spacing={1}>
-        <Skeleton variant="text" width={220} height={36} />
-        <Skeleton variant="text" width={380} height={20} />
+        <Skeleton variant="text" height={36} sx={{ width: "min(220px, 100%)" }} />
+        <Skeleton variant="text" height={20} sx={{ width: "min(380px, 100%)" }} />
       </Stack>
       <Grid container spacing={2}>
         {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -578,10 +604,10 @@ export function JobDetailsSkeleton() {
     <Stack spacing={3}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
-          <Skeleton variant="text" width={300} height={40} />
-          <Skeleton variant="text" width={200} height={20} />
+          <Skeleton variant="text" height={40} sx={{ width: "min(300px, 100%)" }} />
+          <Skeleton variant="text" height={20} sx={{ width: "min(200px, 100%)" }} />
         </Box>
-        <Skeleton variant="rectangular" width={120} height={36} sx={{ borderRadius: 1 }} />
+        <Skeleton variant="rectangular" height={36} sx={{ borderRadius: 1, width: "min(120px, 100%)" }} />
       </Stack>
       <Grid container spacing={2}>
         <Grid item xs={12} lg={7}>
@@ -604,7 +630,7 @@ export function JobDetailsSkeleton() {
 export function JobsListSkeleton() {
   return (
     <Stack spacing={2}>
-      <Skeleton variant="text" width={200} height={36} />
+      <Skeleton variant="text" height={36} sx={{ width: "min(200px, 100%)" }} />
       <Skeleton variant="rectangular" height={60} sx={{ borderRadius: 2 }} />
       {[1, 2, 3, 4].map((i) => (
         <Skeleton key={i} variant="rectangular" height={120} sx={{ borderRadius: 2 }} />

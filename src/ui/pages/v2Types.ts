@@ -44,13 +44,54 @@ export type V2JobEvent = {
   createdAt: string;
 };
 
+/**
+ * Detail payload a provider health check may attach.
+ *
+ * Typed rather than `Record<string, unknown>` so the dashboard can render these
+ * fields directly; the index signature keeps forward compatibility with detail
+ * keys the UI does not know about yet.
+ */
+export type ProviderDetails = {
+  languages?: string[];
+  voiceFamilies?: string[];
+  arabicSupport?: string | boolean;
+  egyptianSupport?: string | boolean;
+  license?: string;
+  authentication?: string;
+  freeTierLabel?: string;
+  billingNotice?: string;
+  accountTier?: string;
+  local?: boolean;
+  credentialStored?: boolean;
+  authenticated?: boolean;
+  voiceDiscoveryAvailable?: boolean;
+  voicesDiscovered?: number;
+  ttsReady?: boolean;
+  liveVerified?: boolean;
+  lastTestedAt?: string;
+  errorDetail?: { category?: string; upstreamMessage?: string; httpStatus?: number };
+  configured?: boolean;
+  providerStatus?: string;
+  implemented?: boolean;
+  [key: string]: unknown;
+};
+
 export type V2HealthComponent = {
   name: string;
   status: "healthy" | "degraded" | "unhealthy";
   message: string;
   checkedAt: string;
   latencyMs?: number;
-  details?: Record<string, unknown>;
+  details?: ProviderDetails;
+  credentialTypes?: string[];
+  vaultConfigured?: boolean;
+  vault?: Array<{
+    credentialType: string;
+    maskedHint?: string;
+    health: string;
+    configuredAt: string;
+    lastTestedAt?: string;
+  }>;
 };
 
 export type BusinessTemplateField = {
@@ -86,7 +127,11 @@ export type V2Brand = {
   name: string;
   watermarkText?: string;
   primaryColor?: string;
+  secondaryColor?: string;
   accentColor?: string;
+  logoUrl?: string;
+  websiteUrl?: string;
+  socialHandle?: string;
   captionStyle?: "none" | "clean" | "bold" | "minimal";
   includeOutro?: boolean;
   outroText?: string;
@@ -160,6 +205,63 @@ export type VideoItem = {
   containerPath?: string;
   hostPathHint?: string;
   error?: string;
+
+  /** Display title for the production. */
+  title?: string;
+  /** Cover image URL, when a thumbnail has been generated. */
+  thumbnailUrl?: string;
+  /** Legacy single quality score; qualityScoreV2 supersedes it. */
+  qualityScore?: number;
+
+  // Caption provenance (V2.2 creative quality pass).
+  captionRenderer?: string;
+  captionFont?: string;
+  captionStyleId?: string;
+  captionQa?: {
+    pass?: boolean;
+    issues?: Array<{ code?: string; severity?: string; message?: string }>;
+    checkedPhrases?: number;
+    minPhraseMs?: number;
+  };
+  captionTimingSource?: string;
+  captionTimingSources?: string[];
+
+  // Shot planning (V2.2 creative quality pass).
+  visualShotCount?: number;
+  sourceTypeCounts?: Record<string, number>;
+  editDecisionList?: {
+    version?: string;
+    totalDurationSeconds?: number;
+    shots?: Array<Record<string, unknown>>;
+    averageShotSeconds?: number;
+    sourceTypeCounts?: Record<string, number>;
+    beatMapUsed?: boolean;
+    beatAlignedCutCount?: number;
+    beatCount?: number;
+    bpm?: number;
+    pacingProfile?: string;
+  };
+  /** Resolved creative intent, summarised in the Creative card. */
+  creativePlan?: {
+    stylePreset?: string;
+    pacing?: string;
+    motionIntensity?: string;
+    treatmentCounts?: Record<string, number>;
+    runtimeCounts?: Record<string, number>;
+  };
+  /** What the Brand Profile actually contributed, field by field. */
+  brandStyle?: {
+    hasBrand?: boolean;
+    presence?: string;
+    palette?: Record<string, string>;
+    sources?: Record<string, string>;
+    contrast?: Array<{ pair: string; ratio: number; passes: boolean }>;
+  };
+  stockQueryPlan?: Array<Record<string, unknown>>;
+  visualIntentPolicy?: Array<Record<string, unknown>>;
+  stockAttributions?: Array<Record<string, unknown>>;
+  /** Resolved narration voice name, when the engine reported one. */
+  voiceName?: string;
 };
 
 export type ApiTokenItem = {
@@ -218,7 +320,16 @@ export type ProviderItem = {
   isDefault?: boolean;
   message: string;
   checkedAt?: string;
-  details?: Record<string, unknown>;
+  details?: ProviderDetails;
+  credentialTypes?: string[];
+  vaultConfigured?: boolean;
+  vault?: Array<{
+    credentialType: string;
+    maskedHint?: string;
+    health: string;
+    configuredAt: string;
+    lastTestedAt?: string;
+  }>;
 };
 
 export type PromptEnhanceResult = {
@@ -231,6 +342,8 @@ export type CostEstimateData = {
   estimatedCost: number;
   currency: "USD";
   isFree: boolean;
+  usageBased?: boolean;
+  costLabel?: string;
   breakdown: {
     contentAI: number;
     visualAssets: {
@@ -243,6 +356,9 @@ export type CostEstimateData = {
       provider: string;
       charCount: number;
       cost: number;
+      estimatedCostTier?: string;
+      usageBased?: boolean;
+      costLabel?: string;
     };
     rendering: number;
   };

@@ -11,7 +11,7 @@ export interface VideoMetadata {
   templateName?: string;
   brandName?: string;
   watermarkText?: string;
-  captionStyle?: "none" | "clean" | "bold" | "minimal";
+  captionStyle?: string;
   captionProfileUsed?: string;
   musicTrack?: string;
   musicMood?: string;
@@ -30,11 +30,39 @@ export interface VideoMetadata {
   visualProvidersUsed?: string[];
   voiceProvider?: string;
   voiceProvidersUsed?: string[];
+  /** How caption word timings were produced for this video. */
+  /** Resolved creative intent for this production (creative.v1). */
+  creativePlan?: Record<string, unknown>;
+  /** Objective facts about the creative plan - never a self-awarded score. */
+  creativeFacts?: Record<string, unknown>;
+  captionTimingSource?: string;
+  captionTimingSources?: string[];
+  /** Which engine drew the spoken captions: libass or the Remotion layer. */
+  captionRenderer?: string;
+  captionFont?: string;
+  captionStyleId?: string;
+  captionQa?: Record<string, unknown>;
+  /** Canonical shot plan; see EditDecisionList. */
+  editDecisionList?: Record<string, unknown>;
+  visualShotCount?: number;
+  sourceTypeCounts?: Record<string, number>;
+  /** Query families asked per scene, the winning clip and any fallback reason. */
+  stockQueryPlan?: Array<Record<string, unknown>>;
+  /**
+   * Resolved brand system for the generated graphics, including which fields
+   * the customer really supplied and which were derived or defaulted.
+   */
+  brandStyle?: Record<string, unknown>;
+  stockAttributions?: Array<Record<string, unknown>>;
+  /** Search terms replaced because code footage was off-message. */
+  visualIntentPolicy?: Array<Record<string, unknown>>;
   voiceArtifacts?: Array<Record<string, unknown>>;
   costEstimate?: Record<string, unknown>;
   productionSpec?: Record<string, unknown>;
   timeline?: Record<string, unknown>;
   mediaPlan?: Record<string, unknown>;
+  sceneSourceDecisions?: Array<Record<string, unknown>>;
+  postProductionProcessors?: Array<Record<string, unknown>>;
   selectedVisuals?: Array<Record<string, unknown>>;
   sceneQa?: Array<Record<string, unknown>>;
   durableArtifacts?: Array<Record<string, unknown>>;
@@ -67,6 +95,7 @@ export interface VideoMetadata {
   downloadFilename?: string;
   containerPath?: string;
   hostPathHint?: string;
+  beatMap?: Record<string, unknown>;
   error?: string;
 }
 

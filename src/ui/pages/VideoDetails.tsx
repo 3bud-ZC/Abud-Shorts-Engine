@@ -41,10 +41,136 @@ import {
 import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal";
 import type { V2Job, VideoItem, VideoPublishingStatus, VideoRevisionItem } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
+import { isFreeCost, videoCostLabel } from "../../types/costDisplay";
 
 function formatFileSize(bytes?: number): string {
   if (!bytes) return "Unknown";
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+/**
+ * Production evidence helpers. Each returns an empty string when the field is
+ * genuinely unknown so the row can be omitted rather than rendering "undefined".
+ */
+const CAPTION_TIMING_LABELS: Record<string, string> = {
+  elevenlabs_alignment: "ElevenLabs Alignment",
+  whisper: "Whisper",
+  synthetic: "Synthetic",
+};
+
+function captionTimingLabel(video: any): string {
+  const source =
+    video?.captionTimingSource ||
+    video?.voiceArtifacts?.[0]?.captionTimingSource ||
+    video?.voiceArtifacts?.[0]?.timingSource;
+  if (!source) return "N/A";
+  return CAPTION_TIMING_LABELS[source] || String(source);
+}
+
+/**
+ * Internal identifiers are how the engine talks to itself; a customer reading
+ * Video Details should not meet them. Browser QA found `motion_canvas`,
+ * `punch_in`, `zoom_out` and `clean_professional` rendered verbatim in the
+ * normal (non-collapsed) view. Anything not in a map degrades to a
+ * de-underscored, capitalised form rather than being dropped.
+ */
+const PROVIDER_LABELS: Record<string, string> = {
+  motion_canvas: "ABUD Motion",
+  abud_motion: "ABUD Motion",
+  abud_mockup: "ABUD Mockup",
+  pexels: "Pexels",
+  pixabay: "Pixabay",
+  uploaded_media: "Your uploads",
+  product_composition: "Product composition",
+  local_image: "Local image",
+};
+
+const MOTION_LABELS: Record<string, string> = {
+  punch_in: "Punch in",
+  slow_zoom: "Slow zoom",
+  zoom_in: "Zoom in",
+  zoom_out: "Zoom out",
+  drift_out: "Drift out",
+  drift_left: "Drift left",
+  drift_right: "Drift right",
+  pan_left: "Pan left",
+  pan_right: "Pan right",
+  whip_in: "Whip in",
+  static: "Hold",
+};
+
+const CAPTION_LABELS: Record<string, string> = {
+  social_ad: "Social Ad",
+  clean_professional: "Clean Professional",
+  kinetic_phrase: "Kinetic Phrase",
+  minimal: "Minimal",
+  bold: "Bold",
+  clean: "Clean",
+  none: "None",
+};
+
+function humanise(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+function labelWith(map: Record<string, string>, value?: string): string {
+  if (!value) return "";
+  const key = String(value).toLowerCase();
+  return map[key] || humanise(String(value));
+}
+
+function labelList(map: Record<string, string>, values?: string[]): string {
+  return (values || []).map((v) => labelWith(map, v)).filter(Boolean).join(", ");
+}
+
+/** Distinct visual treatments the plan actually used, most used first. */
+function creativeTreatments(video: any): string {
+  const counts = video?.creativePlan?.treatmentCounts as Record<string, number> | undefined;
+  if (!counts || Object.keys(counts).length === 0) return "";
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([treatment, count]) => `${treatment.replace(/_/g, " ").toLowerCase()} x${count}`)
+    .join(", ");
+}
+
+/** Only the brand fields the customer really supplied; never the derived ones. */
+function suppliedBrandFields(video: any): string {
+  const sources = video?.brandStyle?.sources as Record<string, string> | undefined;
+  if (!sources) return "";
+  return Object.entries(sources)
+    .filter(([, source]) => source === "customer")
+    .map(([field]) => field.replace(/([A-Z])/g, " $1").toLowerCase().trim())
+    .join(", ");
+}
+
+function sourceBreakdown(video: any): string {
+  const counts = video?.sourceTypeCounts || video?.editDecisionList?.sourceTypeCounts;
+  if (!counts || typeof counts !== "object") return "";
+  const labels: Record<string, string> = {
+    stock: "Stock",
+    mockup: "Website Mockup",
+    motion: "Motion",
+    upload: "Upload",
+    image: "Image",
+  };
+  const parts = Object.entries(counts)
+    .filter(([, value]) => typeof value === "number" && value > 0)
+    .map(([key, value]) => `${labels[key] || key} ${value}`);
+  return parts.join(" · ");
+}
+
+function voiceEvidence(video: any): string {
+  const artifact = video?.voiceArtifacts?.[0];
+  if (!artifact?.provider) return "";
+  const parts = [artifact.provider === "elevenlabs" ? "ElevenLabs" : artifact.provider];
+  const name = video?.voiceName || artifact.voiceName;
+  if (name) parts.push(String(name));
+  if (artifact.voicePreset) parts.push(String(artifact.voicePreset).replaceAll("_", " "));
+  return parts.join(" · ");
 }
 
 function formatDuration(seconds?: number): string {
@@ -594,7 +720,7 @@ const VideoDetailsContent: React.FC = () => {
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Visual Provider</Typography>
                     <Typography fontWeight={700}>
-                      {video.visualProvidersUsed?.join(", ") || "Pexels"}
+                      {labelList(PROVIDER_LABELS, video.visualProvidersUsed) || "Pexels"}
                     </Typography>
                   </Stack>
                   <Divider />
@@ -602,12 +728,8 @@ const VideoDetailsContent: React.FC = () => {
                     <Typography color="text.secondary">Estimated Cost</Typography>
                     <Chip
                       size="small"
-                      color={cost?.isFree || cost?.estimatedCost === 0 ? "success" : "warning"}
-                      label={
-                        cost?.isFree || cost?.estimatedCost === 0
-                          ? "Free ($0)"
-                          : `$${cost?.estimatedCost} USD`
-                      }
+                      color={isFreeCost(cost) ? "success" : "warning"}
+                      label={videoCostLabel(cost)}
                     />
                   </Stack>
                 </Stack>
@@ -622,8 +744,52 @@ const VideoDetailsContent: React.FC = () => {
                   </Stack>
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Caption Timing</Typography>
-                    <Typography fontWeight={700}>{video.voiceArtifacts?.[0]?.timingSource || "N/A"}</Typography>
+                    <Typography fontWeight={700}>{captionTimingLabel(video)}</Typography>
                   </Stack>
+                  {video.captionRenderer && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Caption Renderer</Typography>
+                      <Typography fontWeight={700}>
+                        {video.captionRenderer === "libass" ? "libass (FFmpeg)" : "Remotion"}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {video.captionFont && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Caption Font</Typography>
+                      <Typography fontWeight={700}>{video.captionFont}</Typography>
+                    </Stack>
+                  )}
+                  {typeof video.captionQa?.pass === "boolean" && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Caption QA</Typography>
+                      <Typography fontWeight={700}>{video.captionQa.pass ? "Passed" : "Issues found"}</Typography>
+                    </Stack>
+                  )}
+                  {typeof video.visualShotCount === "number" && video.visualShotCount > 0 && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Visual Shots</Typography>
+                      <Typography fontWeight={700}>{video.visualShotCount}</Typography>
+                    </Stack>
+                  )}
+                  {sourceBreakdown(video) && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Shot Sources</Typography>
+                      <Typography fontWeight={700}>{sourceBreakdown(video)}</Typography>
+                    </Stack>
+                  )}
+                  {video.editDecisionList?.averageShotSeconds ? (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Average Shot</Typography>
+                      <Typography fontWeight={700}>{video.editDecisionList.averageShotSeconds}s</Typography>
+                    </Stack>
+                  ) : null}
+                  {voiceEvidence(video) && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Voice</Typography>
+                      <Typography fontWeight={700}>{voiceEvidence(video)}</Typography>
+                    </Stack>
+                  )}
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Music Ducking</Typography>
                     <Typography fontWeight={700}>{video.audioQa?.duckingProfile || "N/A"}</Typography>
@@ -635,8 +801,8 @@ const VideoDetailsContent: React.FC = () => {
                   <Divider />
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Caption Preset</Typography>
-                    <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
-                      {video.captionProfileUsed || video.captionStyle || "Bold"}
+                    <Typography fontWeight={700}>
+                      {labelWith(CAPTION_LABELS, video.captionProfileUsed || video.captionStyle) || "Bold"}
                     </Typography>
                   </Stack>
                   {video.musicTrack && (
@@ -651,7 +817,7 @@ const VideoDetailsContent: React.FC = () => {
                     <Stack direction="row" justifyContent="space-between">
                       <Typography color="text.secondary">Motion Presets</Typography>
                       <Typography fontWeight={700}>
-                        {video.motionPresetsUsed.join(", ")}
+                        {labelList(MOTION_LABELS, video.motionPresetsUsed)}
                       </Typography>
                     </Stack>
                   )}
@@ -659,7 +825,7 @@ const VideoDetailsContent: React.FC = () => {
                     <Stack direction="row" justifyContent="space-between">
                       <Typography color="text.secondary">Transitions</Typography>
                       <Typography fontWeight={700}>
-                        {video.transitionPresetsUsed.join(", ")}
+                        {labelList(MOTION_LABELS, video.transitionPresetsUsed)}
                       </Typography>
                     </Stack>
                   )}
@@ -674,12 +840,68 @@ const VideoDetailsContent: React.FC = () => {
                 </Stack>
               </SectionCard>
 
+              {/* Creative summary. Readable evidence of what the engine chose
+                  and why; the raw plan stays in the collapsed technical block. */}
+              {video.creativePlan && (
+                <SectionCard title="Creative">
+                  <Stack spacing={1.25}>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Creative Style</Typography>
+                      <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                        {String(video.creativePlan.stylePreset || "auto").replace(/_/g, " ")}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Pacing</Typography>
+                      <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                        {String(video.creativePlan.pacing || "balanced")}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Animation</Typography>
+                      <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                        {String(video.creativePlan.motionIntensity || "balanced")}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Shot Count</Typography>
+                      <Typography fontWeight={700}>{video.visualShotCount ?? "N/A"}</Typography>
+                    </Stack>
+                    {creativeTreatments(video) && (
+                      <Stack direction="row" justifyContent="space-between" spacing={2}>
+                        <Typography color="text.secondary">Visual Treatments</Typography>
+                        <Typography fontWeight={700} sx={{ textAlign: "right" }}>
+                          {creativeTreatments(video)}
+                        </Typography>
+                      </Stack>
+                    )}
+                    {sourceBreakdown(video) && (
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography color="text.secondary">Source Types</Typography>
+                        <Typography fontWeight={700}>{sourceBreakdown(video)}</Typography>
+                      </Stack>
+                    )}
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Brand Used</Typography>
+                      <Typography fontWeight={700}>
+                        {video.brandStyle?.hasBrand ? "Yes" : "ABUD defaults"}
+                      </Typography>
+                    </Stack>
+                  </Stack>
+                </SectionCard>
+              )}
+
               {/* Brand Kit */}
               <SectionCard title="Brand Profile">
                 <Stack spacing={1}>
                   <Typography>Brand Name: {video.brandName || "None"}</Typography>
                   <Typography>Watermark: {video.watermarkText || "None"}</Typography>
-                  <Typography>Caption Style: {video.captionStyle || "Bold"}</Typography>
+                  <Typography>Caption Style: {labelWith(CAPTION_LABELS, video.captionStyle) || "Bold"}</Typography>
+                  {video.brandStyle?.sources && (
+                    <Typography variant="caption" color="text.secondary">
+                      Colours you supplied: {suppliedBrandFields(video) || "none - ABUD defaults were used"}.
+                    </Typography>
+                  )}
                 </Stack>
               </SectionCard>
 

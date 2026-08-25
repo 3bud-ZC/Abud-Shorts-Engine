@@ -5,6 +5,10 @@ import { LandscapeVideo } from "../videos/LandscapeVideo";
 import { TestVideo } from "../videos/Test";
 import z from "zod";
 import { AvailableComponentsEnum } from "../types";
+import "@fontsource/cairo/400.css";
+import "@fontsource/cairo/700.css";
+import "@fontsource/cairo/800.css";
+import "@fontsource/cairo/900.css";
 
 const FPS = 25;
 

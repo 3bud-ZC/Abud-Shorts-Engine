@@ -15,6 +15,8 @@ import {
   Tabs,
   Typography,
   Box,
+  Switch,
+  FormControlLabel,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -40,11 +42,59 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
+/**
+ * Client vocabulary for infrastructure. A customer should read "Automation"
+ * rather than "n8n" and "Storage" rather than a container name; the technical
+ * identity is still available in Advanced Details.
+ */
+const CLIENT_SERVICE_NAMES: Record<string, string> = {
+  n8n: "Automation",
+  database: "Database",
+  postgres: "Database",
+  postgresql: "Database",
+  app: "Application",
+  api: "Application",
+  storage: "Storage",
+  disk: "Storage",
+  remotion: "Video Engine",
+  ffmpeg: "Video Engine",
+  worker: "Video Engine",
+  "render worker": "Video Engine",
+  pexels: "Integrations",
+  elevenlabs: "Integrations",
+};
+
 function serviceDisplayName(name: string): string {
-  if (name.toLowerCase() === "n8n") return "Automation engine";
-  if (name.toLowerCase() === "database") return "Database";
-  if (name.toLowerCase().includes("render worker")) return "Render worker";
-  return name;
+  const key = (name || "").toLowerCase().trim();
+  if (CLIENT_SERVICE_NAMES[key]) return CLIENT_SERVICE_NAMES[key];
+  const partial = Object.keys(CLIENT_SERVICE_NAMES).find((candidate) => key.includes(candidate));
+  return partial ? CLIENT_SERVICE_NAMES[partial] : name;
+}
+
+/** The six groups a non-technical operator actually cares about. */
+const CLIENT_HEALTH_GROUPS = [
+  "Application",
+  "Video Engine",
+  "Storage",
+  "Database",
+  "Automation",
+  "Integrations",
+] as const;
+
+/**
+ * Rolls the raw component list up into those groups. The worst status in a
+ * group wins, so a problem is never hidden behind a healthy sibling.
+ */
+function groupHealth(components: Array<{ name: string; status: string; message?: string }> = []) {
+  const severity: Record<string, number> = { healthy: 0, degraded: 1, unhealthy: 2 };
+  return CLIENT_HEALTH_GROUPS.map((group) => {
+    const members = components.filter((component) => serviceDisplayName(component.name) === group);
+    if (members.length === 0) return { group, status: "unknown", members: [] as typeof members };
+    const worst = members.reduce((a, b) =>
+      (severity[b.status] ?? 1) > (severity[a.status] ?? 1) ? b : a,
+    );
+    return { group, status: worst.status, members };
+  }).filter((entry) => entry.members.length > 0);
 }
 
 export const SystemPage: React.FC = () => {
@@ -53,6 +103,10 @@ export const SystemPage: React.FC = () => {
   const [diagnostics, setDiagnostics] = useState<any>(null);
   const [storage, setStorage] = useState<any>(null);
   const [observability, setObservability] = useState<SystemObservability | null>(null);
+  const [capabilities, setCapabilities] = useState<any[]>([]);
+  const [packs, setPacks] = useState<any[]>([]);
+  const [hardware, setHardware] = useState<any>(null);
+  const [arabicReadiness, setArabicReadiness] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [downloadingBundle, setDownloadingBundle] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,21 +114,38 @@ export const SystemPage: React.FC = () => {
   const load = async () => {
     setLoading(true);
     try {
-      const [healthRes, diagRes, storRes] = await Promise.all([
+      const [healthRes, diagRes, storRes, capRes, arabicRes] = await Promise.all([
         axios.get("/api/v2/system/health"),
         axios.get("/api/v2/system/diagnostics"),
         axios.get("/api/v2/system/storage"),
+        axios.get("/api/v2/system/capabilities").catch(() => ({ data: { capabilities: [], packs: [], hardware: null } })),
+        axios.get("/api/v2/system/arabic-readiness").catch(() => ({ data: null })),
       ]);
       const obsRes = await axios.get("/api/v2/system/observability").catch(() => ({ data: null }));
       setHealth(healthRes.data);
       setDiagnostics(diagRes.data);
       setStorage(storRes.data);
       setObservability(obsRes.data);
+      setCapabilities(capRes.data.capabilities || []);
+      setPacks(capRes.data.packs || []);
+      setHardware(capRes.data.hardware || null);
+      setArabicReadiness(arabicRes.data);
       setError(null);
     } catch {
       setError("Failed to load system metrics.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleCapability = async (id: string, enabled: boolean) => {
+    try {
+      await axios.post(`/api/v2/system/capabilities/${id}/toggle`, { enabled });
+      setCapabilities((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, enabled } : c)),
+      );
+    } catch (err: any) {
+      setError(err?.response?.data?.error || `Failed to toggle ${id}`);
     }
   };
 
@@ -107,9 +178,9 @@ export const SystemPage: React.FC = () => {
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="System"
-        eyebrow="Operations"
-        description="Check production readiness, storage usage, workers, and sanitized diagnostics without exposing credentials."
+        title="System Health"
+        eyebrow="System"
+        description="A quick check that everything needed to make videos is running."
         actions={
           <Stack direction="row" spacing={1}>
             <Button
@@ -118,7 +189,7 @@ export const SystemPage: React.FC = () => {
               onClick={downloadBundle}
               disabled={downloadingBundle}
             >
-              {downloadingBundle ? "Generating..." : "Download Diagnostic Bundle"}
+              {downloadingBundle ? "Generating..." : "Download support file"}
             </Button>
             <Button variant="contained" startIcon={<RefreshIcon />} onClick={load} disabled={loading}>
               Refresh
@@ -129,10 +200,30 @@ export const SystemPage: React.FC = () => {
 
       {error && <Alert severity="error">{error}</Alert>}
 
+      {arabicReadiness && (
+        <Alert
+          severity={arabicReadiness.ready ? "success" : "warning"}
+          action={
+            arabicReadiness.ready ? undefined : (
+              <Button size="small" variant="contained" href="/providers">
+                Configure ElevenLabs
+              </Button>
+            )
+          }
+        >
+          <strong>Arabic Production Readiness: {arabicReadiness.statusText}</strong>
+          <br />
+          {arabicReadiness.message}
+          {!arabicReadiness.ready && " English and local production remain available."}
+        </Alert>
+      )}
+
       {/* Top Overview Cards */}
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Product Version" value={diagnostics?.product?.version || "2.1.0"} />
+          {/* No hardcoded fallback: an unknown version must read as unknown rather
+              than silently claiming a version this build may not be. */}
+          <StatCard label="Product Version" value={diagnostics?.product?.version || "Unknown"} />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard label="System Status" value={<StatusBadge status={health?.status || "healthy"} />} />
@@ -161,12 +252,36 @@ export const SystemPage: React.FC = () => {
       </Grid>
 
       {/* Navigation Tabs */}
-      <Tabs value={tab} onChange={(_, val) => setTab(val)} sx={{ borderBottom: 1, borderColor: "divider" }}>
-        <Tab label="Health" />
-        <Tab label="Storage Breakdown" />
-        <Tab label="Logs" />
-        <Tab label="Support Bundle" />
-        <Tab label="Observability" />
+      {/* Plain-language rollup. Technical component identity stays in the
+          tabs below, which are for support rather than daily use. */}
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        {groupHealth(health?.components as any).map((entry) => (
+          <Grid item xs={12} sm={6} md={4} lg={2} key={entry.group}>
+            <SectionCard>
+              <Stack spacing={1}>
+                <Typography variant="body2" fontWeight={650}>
+                  {entry.group}
+                </Typography>
+                <StatusBadge status={entry.status} />
+              </Stack>
+            </SectionCard>
+          </Grid>
+        ))}
+      </Grid>
+
+      <Tabs
+        value={tab}
+        onChange={(_, val) => setTab(val)}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ borderBottom: 1, borderColor: "divider" }}
+      >
+        <Tab label="Services" />
+        <Tab label="Optional Features" />
+        <Tab label="Storage" />
+        <Tab label="Activity" />
+        <Tab label="Support" />
+        <Tab label="Advanced Details" />
       </Tabs>
 
       {/* Tab 0: Services & Health */}
@@ -194,8 +309,107 @@ export const SystemPage: React.FC = () => {
         </Grid>
       )}
 
-      {/* Tab 1: Storage Breakdown */}
+      {/* Tab 1: Capability Packs & Intelligence */}
       {tab === 1 && (
+        <Stack spacing={3}>
+          {/* Hardware Detection Banner */}
+          <SectionCard
+            title="Host Hardware Profile"
+            description="Automatic hardware detection for local AI acceleration and resource allocation."
+          >
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="caption" color="text.secondary">Platform / OS</Typography>
+                <Typography variant="body1" fontWeight={700}>{hardware?.platform || "Windows"} ({hardware?.arch || "x64"})</Typography>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="caption" color="text.secondary">CPU Cores / Memory</Typography>
+                <Typography variant="body1" fontWeight={700}>{hardware?.cpuCores || 8} Cores · {hardware?.totalMemoryGb || 16} GB RAM</Typography>
+              </Grid>
+              <Grid item xs={12} sm={4}>
+                <Typography variant="caption" color="text.secondary">GPU Acceleration</Typography>
+                <Typography variant="body1" fontWeight={700} color={hardware?.hasNvidiaGpu ? "success.main" : "text.primary"}>
+                  {hardware?.gpuName || (hardware?.hasNvidiaGpu ? "NVIDIA GPU Detected" : "No Dedicated GPU (CPU Mode)")}
+                  {hardware?.vramGb ? ` (${hardware.vramGb} GB VRAM)` : ""}
+                </Typography>
+              </Grid>
+            </Grid>
+          </SectionCard>
+
+          {/* Capability Packs */}
+          <Typography variant="h6" fontWeight={800}>Capability Packs</Typography>
+          <Grid container spacing={2}>
+            {packs.map((pack) => (
+              <Grid item xs={12} md={6} key={pack.id}>
+                <Card variant="outlined" sx={{ p: 2, height: "100%", bgcolor: "background.paper" }}>
+                  <Stack spacing={1.5}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="subtitle1" fontWeight={800}>{pack.name}</Typography>
+                      <Chip
+                        size="small"
+                        label={pack.status.toUpperCase()}
+                        color={pack.status === "installed" ? "success" : pack.status === "available" ? "info" : "default"}
+                      />
+                    </Stack>
+                    <Typography variant="body2" color="text.secondary">{pack.description}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Hardware: {pack.hardwareRequired} · Space: {pack.diskRequirement}
+                    </Typography>
+                  </Stack>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+
+          {/* Detailed Capabilities Table / Toggles */}
+          <Typography variant="h6" fontWeight={800}>Installed Runtime Modules</Typography>
+          <Grid container spacing={2}>
+            {capabilities.map((cap) => (
+              <Grid item xs={12} sm={6} md={4} key={cap.id}>
+                <Card variant="outlined" sx={{ p: 2, height: "100%" }}>
+                  <Stack spacing={1}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
+                      <Box>
+                        <Typography variant="subtitle2" fontWeight={800}>{cap.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">ID: {cap.id}</Typography>
+                      </Box>
+                      <Chip
+                        size="small"
+                        label={cap.installed ? (cap.healthy ? "Healthy" : "Degraded") : "Not Installed"}
+                        color={cap.installed && cap.healthy ? "success" : "default"}
+                        sx={{ fontSize: 10 }}
+                      />
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary">
+                      Runtime: {cap.runtime} · License: {cap.license}
+                    </Typography>
+                    {cap.failureReason && (
+                      <Typography variant="caption" color="text.secondary" sx={{ fontStyle: "italic" }}>
+                        Note: {cap.failureReason}
+                      </Typography>
+                    )}
+                    {cap.installed && (
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            size="small"
+                            checked={cap.enabled}
+                            onChange={(e) => toggleCapability(cap.id, e.target.checked)}
+                          />
+                        }
+                        label={<Typography variant="caption">{cap.enabled ? "Enabled" : "Disabled"}</Typography>}
+                      />
+                    )}
+                  </Stack>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+        </Stack>
+      )}
+
+      {/* Tab 2: Storage Breakdown */}
+      {tab === 2 && (
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <SectionCard title="Storage usage">
@@ -250,8 +464,8 @@ export const SystemPage: React.FC = () => {
         </Grid>
       )}
 
-      {/* Tab 2: Sanitized Logs */}
-      {tab === 2 && (
+      {/* Tab 3: Sanitized Logs */}
+      {tab === 3 && (
         <SectionCard title="Recent logs">
           <Paper
             sx={{
@@ -274,8 +488,8 @@ export const SystemPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {/* Tab 3: Support Bundle */}
-      {tab === 3 && (
+      {/* Tab 4: Support Bundle */}
+      {tab === 4 && (
         <SectionCard title="Download diagnostics">
           <Stack spacing={2}>
             <Typography variant="body2" color="text.secondary">
@@ -298,7 +512,8 @@ export const SystemPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {tab === 4 && (
+      {/* Tab 5: Observability */}
+      {tab === 5 && (
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <SectionCard title="Queue & Workers">

@@ -1,79 +1,134 @@
-# ABUD Shorts Engine V2 — Client Quick Start Guide
+# ABUD Shorts Engine — Quick Start
 
-Welcome to **ABUD Shorts Engine V2**! This guide gets you up and running in under 5 minutes.
-
----
-
-## 1. Quick Installation (Windows)
-
-1. **Install Docker Desktop**:  
-   Download and install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/). Make sure Docker Desktop is open and running.
-2. **Extract the Engine**:  
-   Extract the `ABUD-Shorts-Engine-2.1.0.zip` package to a folder of your choice (e.g. `C:\ABUD-Shorts-Engine`).
-3. **Run the Installer**:  
-   Right-click in the extracted folder, select **Open in Terminal** or open **PowerShell**, and run:
-   ```powershell
-   .\install.ps1
-   ```
-4. **Wait for Setup**:  
-   The installer will create necessary directories, set up security tokens, launch the Docker services, and configure the database.
-5. **Open Dashboard**:  
-   Open your browser and navigate to:
-   ```text
-   http://localhost:3130
-   ```
-6. **Sign in or Complete Setup**:  
-   The prepared local handoff installation uses:
-   ```text
-   URL: http://localhost:3130
-   Login: 1234
-   ```
-   The password is provided through the private handoff channel. Fresh clean installations continue through the Setup Wizard.
-7. **Complete the Setup Wizard**:  
-   The browser will direct you to `http://localhost:3130/setup`. Follow the 10 quick steps to create your admin password and add your free Pexels key.
-8. **Create Your First Video**:  
-   Go to **Create Video**, choose **Prompt** or a **Template** (e.g. Product Ad), enter your concept, and click **Generate Video**!
+Everything below happens in an installer and a browser. You never edit a file,
+type a Docker command or touch source code.
 
 ---
 
-## 2. Quick Installation (Linux / macOS)
+## 1. Install
 
-1. Ensure **Docker** and **Docker Compose** are installed and running.
-2. Extract the package and open terminal in the project folder.
-3. Run:
-   ```bash
-   chmod +x install.sh
-   ./install.sh
-   ```
-4. Open `http://localhost:3130` and follow the on-screen Setup Wizard.
+### Windows
 
----
+1. **Install Docker Desktop** from
+   [docker.com](https://www.docker.com/products/docker-desktop/) and start it.
+   Wait for the whale icon in the system tray to stop animating.
+2. **Extract** the client package to a folder, for example
+   `C:\ABUD-Shorts-Engine`.
+3. **Double-click `INSTALL-ABUD-SHORTS.bat`.**
+4. Wait. The installer checks Docker, generates this machine's own secrets,
+   creates the storage folders, downloads the application and starts it.
+5. When it finishes it prints your address, normally
+   `http://localhost:3130`, and opens the Setup Wizard in your browser.
 
-## 3. Daily Operations & Management
+### Linux or a server
 
-| Action | Windows Command | Linux / macOS Command | UI Location |
-| --- | --- | --- | --- |
-| **Start System** | `docker compose -f docker-compose.v2.yml up -d` | `docker compose -f docker-compose.v2.yml up -d` | Terminal / Background |
-| **Stop System** | `docker compose -f docker-compose.v2.yml down` | `docker compose -f docker-compose.v2.yml down` | Terminal |
-| **View Videos** | N/A | N/A | **Videos** page (`/videos`) |
-| **Create Backup** | N/A | N/A | **System** page (`/system`) -> Backups tab |
-| **Restore Backup** | N/A | N/A | **System** page (`/system`) -> Backups tab |
-| **Upgrade Engine** | `.\upgrade.ps1` | `./upgrade.sh` | Terminal |
-| **Uninstall Engine** | `.\uninstall.ps1` | `./uninstall.sh` | Terminal |
-| **Diagnostic Bundle**| N/A | N/A | **System** page (`/system`) -> "Download Diagnostic Bundle" |
+See `docs/SERVER_INSTALL.md`. In short:
+
+```bash
+sudo ./install.sh --url https://shorts.yourdomain.com --behind-proxy
+```
 
 ---
 
-## 4. Video Creation Modes
+## 2. First setup
 
-- **Prompt Studio**: Enter a topic or script prompt. Select language (`Arabic` / `English`), dialect (`Egyptian`, `Gulf`, `MSA`), duration, aspect ratio, quality, voice provider, and voice. The engine plans the scenes and renders automatically.
-- **Template Studio**: Choose from 6 pre-built business templates (Product Ad, Restaurant Promo, Real Estate, Viral Hook, Educational Explainer, Event Promo). Fill in your business details and brand style.
-- **Voice Preview**: Preview local Piper Arabic or Kokoro English before starting a job.
-- **Revision Studio**: Make caption-style, voice, or media revisions from Video Details. Caption-style revisions reuse existing voice/caption artifacts where the pipeline can safely do so.
+Open the address the installer printed, followed by `/setup`:
+
+```
+http://localhost:3130/setup
+```
+
+The Setup Wizard asks you to:
+
+1. **Create your administrator account.** You choose the password. There is no default password anywhere in this product.
+2. **Add a free Pexels key** for stock footage (optional, but recommended).
+3. **Set your brand** — name, colours, logo.
+
+That is it. You are on the dashboard.
 
 ---
 
-## 5. Need Help?
+## 3. Create your first video
 
-- **Providers & API Keys**: Visit **Providers** page (`/providers`) to check connection health.
-- **System Health**: Visit **System** page (`/system`) for disk usage, service statuses, and live sanitized logs.
+1. **Create Video**.
+2. Choose **Prompt** (describe what you want) or a **Template** such as Product
+   Ad or Restaurant Promo.
+3. Pick language, length and aspect ratio.
+4. **Generate Video**.
+
+Progress appears live. The finished video lands in **Video Library**, where you
+can play it, download it or send it to **Publishing**.
+
+Arabic narration is produced by ElevenLabs. Add your ElevenLabs key in
+**Integrations → ElevenLabs → Configure** before creating an Arabic video; the
+key is stored encrypted and never written to a file you have to manage.
+
+---
+
+## 4. Connect your social accounts
+
+**Integrations** → choose YouTube, TikTok or Instagram → **Connect**.
+
+Each provider shows the exact callback URL to paste into its developer console.
+That URL is built from your installation's public address, so a server on your
+own domain shows your domain, not `localhost`.
+
+---
+
+## 5. Backups
+
+**Settings → Backup & Restore**.
+
+- **Create Database + Config Backup** — settings, brands, templates, job and
+  publication history.
+- **Create Full Media Backup** — the above plus your video files.
+- **Download** keeps a copy off this machine.
+- **Restore** puts a backup back. A safety snapshot is taken first, and you are
+  asked to confirm before anything is replaced.
+
+Every backup shows when it was made, its type, its size, the version and
+database schema it came from, and its checksum.
+
+A backup is also created automatically before every update.
+
+---
+
+## 6. Update
+
+**Settings → Updates** shows your current version, the latest published version
+and the release notes, and checks on demand.
+
+To install an update:
+
+| Where you installed | What to do |
+| --- | --- |
+| Windows | Double-click `UPDATE-ABUD-SHORTS.bat`, or Start Menu → **ABUD Shorts → ABUD Shorts - Update** |
+| Linux / server | `sudo abud-shorts update` |
+
+The updater takes a backup first, verifies the download before installing it,
+checks the system is healthy afterwards, and puts the previous version back
+automatically if anything is wrong.
+
+Full details, including rollback: `docs/UPDATING.md`.
+
+---
+
+## 7. If something looks wrong
+
+1. **Settings → System** shows whether each part of the system is healthy.
+2. **Download Support Bundle** writes a diagnostic file with your version,
+   database schema, service health and recent errors. It contains no passwords
+   or API keys, so it is safe to send to support.
+3. **Restart**: Start Menu → **ABUD Shorts - Status** on Windows, or
+   `sudo abud-shorts restart` on Linux. Restarting never removes data.
+
+---
+
+## 8. Uninstalling
+
+| Windows | Linux |
+| --- | --- |
+| `.\uninstall.ps1` | `sudo ./uninstall.sh` |
+
+The default removes the software and **keeps every video, backup and setting**.
+Erasing your data requires an explicit flag and a typed confirmation.

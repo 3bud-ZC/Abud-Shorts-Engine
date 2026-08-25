@@ -108,6 +108,7 @@ RULES:
         resolution: params.resolution || "1080p",
         quality: params.quality || "standard",
         sceneCount: parsedJson.scenes?.length || 4,
+        productionMode: params.productionMode || parsedJson.productionMode || "auto_hybrid",
         visualMode: params.visualMode || "auto",
         voiceProvider: params.voiceProvider || "kokoro",
         voiceId: params.voiceId || "af_heart",

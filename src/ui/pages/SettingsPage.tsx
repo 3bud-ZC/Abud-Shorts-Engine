@@ -24,6 +24,8 @@ import {
   StatCard,
   StatusBadge,
 } from "../components/v2";
+import UpdateCenter from "../components/UpdateCenter";
+import PublicAddressPanel from "../components/PublicAddressPanel";
 import type { ApiTokenItem, BusinessTemplateOption, V2Brand } from "./v2Types";
 
 const SettingsPage: React.FC = () => {
@@ -70,9 +72,9 @@ const SettingsPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Settings & Production Defaults"
+        title="Settings"
         eyebrow="Configuration"
-        description="Configure default creation modes, language preferences, AI providers, and Brand Kit defaults. Secrets are masked and stored securely."
+        description="Defaults for new videos, your brand, publishing, security and backups."
         actions={
           <Button
             variant="contained"
@@ -234,8 +236,8 @@ const SettingsPage: React.FC = () => {
         {/* Secure Provider Credentials Summary */}
         <Grid item xs={12} lg={5}>
           <SectionCard
-            title="Provider Credentials (Masked)"
-            description="Credentials are securely injected via environment variables. Plaintext secrets are never transmitted to the browser."
+            title="Integrations"
+            description="Keys are stored encrypted and are never shown again after saving. Add or replace them on the Integrations page."
           >
             <Stack spacing={1.5}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
@@ -294,7 +296,7 @@ const SettingsPage: React.FC = () => {
         {/* Publishing & Distribution Defaults */}
         <Grid item xs={12}>
           <SectionCard
-            title="Publishing & Distribution Defaults"
+            title="Publishing"
             description="Control default publication modes, privacy, and scheduling timezone."
           >
             <Grid container spacing={2}>
@@ -351,17 +353,38 @@ const SettingsPage: React.FC = () => {
         {/* Backup & Restore Management */}
         <Grid item xs={12}>
           <SectionCard
-            title="API Tokens"
-            description="Create scoped server API tokens for production jobs, read-only job access, video reads, and publishing."
+            title="Security"
+            description="Access tokens for connecting other tools to ABUD Shorts. Not needed for normal use."
           >
             <ApiTokenManager />
           </SectionCard>
         </Grid>
 
+        {/* Updates. Client-facing: version, channel, status, release notes and
+            the one action that installs an update on this platform. */}
         <Grid item xs={12}>
           <SectionCard
-            title="Backup & Disaster Recovery"
-            description="Create backups of configuration, brand profiles, templates, production records, and rendered media."
+            title="Updates"
+            description="Which version you are running, and how to move to the latest one."
+          >
+            <UpdateCenter />
+          </SectionCard>
+        </Grid>
+
+        {/* The address this installation serves. OAuth callbacks follow it. */}
+        <Grid item xs={12}>
+          <SectionCard
+            title="Public Address"
+            description="Where customers reach this installation, and the callback URLs that follow from it."
+          >
+            <PublicAddressPanel />
+          </SectionCard>
+        </Grid>
+
+        <Grid item xs={12}>
+          <SectionCard
+            title="Backup & Restore"
+            description="Save a copy of your settings, brands, templates and videos - and restore them later."
             actions={
               <Button
                 variant="outlined"
@@ -612,9 +635,28 @@ const BackupManager: React.FC = () => {
                 <Typography variant="body2" fontWeight={700}>
                   {b.filename}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Type: {b.type} · Size: {(b.sizeBytes / 1024).toFixed(1)} KB · Version: {b.version} ·{" "}
-                  {new Date(b.createdAt).toLocaleString()}
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                  {new Date(b.createdAt).toLocaleString()} ·{" "}
+                  {b.type === "full"
+                    ? "Full media"
+                    : b.type === "config_db"
+                      ? "Database + config"
+                      : "Config only"}{" "}
+                  ·{" "}
+                  {b.sizeBytes >= 1048576
+                    ? `${(b.sizeBytes / 1048576).toFixed(1)} MB`
+                    : `${(b.sizeBytes / 1024).toFixed(1)} KB`}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", wordBreak: "break-all" }}
+                >
+                  Version {b.version}
+                  {b.manifest?.schemaVersion ? ` · Schema ${b.manifest.schemaVersion}` : ""}
+                  {b.checksumSha256 && b.checksumSha256 !== "local"
+                    ? ` · SHA-256 ${String(b.checksumSha256).slice(0, 16)}…`
+                    : ""}
                 </Typography>
               </Box>
               <Stack direction="row" spacing={1}>

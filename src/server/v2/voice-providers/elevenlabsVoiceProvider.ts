@@ -1,37 +1,324 @@
 import axios from "axios";
 import { Readable } from "stream";
+import { logger } from "../../../logger";
+import { providerSecrets } from "../provider-vault/providerSecrets";
 import type {
+  ElevenLabsVoicePreset,
+  ElevenLabsVoiceSettings,
+  ProviderErrorCategory,
+  ProviderErrorDetail,
   VoiceAudioResult,
   VoiceCapabilities,
   VoiceOption,
   VoiceProvider,
   VoiceProviderValidationResult,
 } from "./types";
+import {
+  alignmentMatchesText,
+  parseElevenLabsAlignment,
+  type CharacterAlignment,
+} from "./elevenLabsAlignment";
+
+/**
+ * Canonical production model for Arabic / Egyptian Arabic / MSA narration.
+ * eleven_multilingual_v2 is the currently documented high-quality multilingual
+ * model and is the only model this engine defaults to.
+ */
+export const ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2";
+
+export const ARABIC_NOT_CONFIGURED_MESSAGE =
+  "Arabic narration requires ElevenLabs. Configure ElevenLabs in Providers.";
+
+/**
+ * Per-model API capabilities. Nothing here is assumed: eleven_multilingual_v2
+ * currently documents that `language_code` is NOT an accepted request field
+ * (language is inferred from the input text instead). Sending it causes the
+ * ElevenLabs API to reject the request. Capabilities are looked up by model
+ * so a future model that does document language_code support can opt in
+ * without touching call sites.
+ */
+export type ElevenLabsModelCapabilities = {
+  modelId: string;
+  supportsLanguageCode: boolean;
+  supportsTTS: boolean;
+  supportsVoiceSettings: boolean;
+  supportsAlignment: boolean;
+};
+
+export const ELEVENLABS_MODEL_CAPABILITIES: Record<string, ElevenLabsModelCapabilities> = {
+  eleven_multilingual_v2: {
+    modelId: "eleven_multilingual_v2",
+    supportsLanguageCode: false,
+    supportsTTS: true,
+    supportsVoiceSettings: true,
+    supportsAlignment: true,
+  },
+};
+
+export function getElevenLabsModelCapabilities(modelId: string): ElevenLabsModelCapabilities {
+  return (
+    ELEVENLABS_MODEL_CAPABILITIES[modelId] || {
+      modelId,
+      // Unknown/undocumented models are treated conservatively: never send a
+      // field we have not confirmed the model accepts.
+      supportsLanguageCode: false,
+      supportsTTS: true,
+      supportsVoiceSettings: true,
+      supportsAlignment: false,
+    }
+  );
+}
+
+/**
+ * Parses ElevenLabs' documented error envelope
+ * ({ detail: { status, message, request_id, ... } }) into a sanitized,
+ * loggable category. Never reads or echoes request headers, so the API key
+ * can never leak through this path.
+ */
+export function categorizeElevenLabsError(
+  httpStatus: number | undefined,
+  upstreamStatus: string,
+  upstreamMessage: string,
+): ProviderErrorCategory {
+  const status = upstreamStatus.toLowerCase();
+  const message = upstreamMessage.toLowerCase();
+  if (status.includes("api_key_id_used_as_api_key")) return "api_key_id_used_as_api_key";
+  if (status.includes("invalid_api_key") || status === "unauthorized" || httpStatus === 401) return "invalid_api_key";
+  if (
+    status.includes("missing_permission") ||
+    status.includes("permission") ||
+    message.includes("missing_permission") ||
+    message.includes("does not have permission") ||
+    message.includes("doesn't have permission") ||
+    message.includes("do not have permission")
+  )
+    return "missing_permissions";
+  if (status.includes("quota") || status.includes("credit") || message.includes("quota") || message.includes("credit"))
+    return "quota_exceeded";
+  if (
+    status.includes("payment_required") ||
+    status.includes("paid_plan") ||
+    message.includes("upgrade your subscription") ||
+    message.includes("paid plan") ||
+    message.includes("cannot use library voices") ||
+    httpStatus === 402
+  )
+    return "plan_upgrade_required";
+  if (status.includes("voice_not_found") || message.includes("voice not found")) return "voice_not_found";
+  if (status.includes("character_limit") || message.includes("character limit") || message.includes("max_character"))
+    return "character_limit_exceeded";
+  if (httpStatus === 429) return "rate_limited";
+  if (httpStatus && httpStatus >= 500) return "server_error";
+  if (httpStatus === 400 || httpStatus === 422) return "unsupported_request";
+  return "unknown";
+}
+
+/**
+ * Extracts a sanitized diagnostic from an axios error/response for one
+ * ElevenLabs call. Only the upstream response body is read - never our own
+ * request headers - so the API key is structurally excluded from the result.
+ */
+export function parseElevenLabsError(err: any, endpoint: string, method: string): ProviderErrorDetail {
+  const httpStatus: number | undefined = err?.response?.status;
+  const detail = err?.response?.data?.detail;
+  let upstreamStatus = "";
+  let upstreamMessage = "";
+  let requestId: string | undefined;
+  if (detail && typeof detail === "object") {
+    upstreamStatus = String(detail.status || detail.code || "");
+    upstreamMessage = String(detail.message || "");
+    requestId = detail.request_id ? String(detail.request_id) : undefined;
+  } else if (typeof detail === "string") {
+    upstreamMessage = detail;
+  } else if (err?.response?.data?.message) {
+    upstreamMessage = String(err.response.data.message);
+  }
+  const category = categorizeElevenLabsError(httpStatus, upstreamStatus, upstreamMessage);
+  return {
+    category,
+    httpStatus,
+    upstreamStatus: upstreamStatus || undefined,
+    upstreamMessage: upstreamMessage || undefined,
+    requestId,
+    endpoint,
+    method,
+  };
+}
+
+/** Turns a sanitized error detail into an actionable, human-facing message. */
+export function describeElevenLabsErrorDetail(detail: ProviderErrorDetail): string {
+  switch (detail.category) {
+    case "api_key_id_used_as_api_key":
+      return (
+        "ElevenLabs rejected this credential: the stored value is an API Key ID, not the API key secret. " +
+        'In ElevenLabs, open Profile -> API Keys and copy the actual secret key (it starts with "sk_"), ' +
+        "then re-enter it in Providers -> ElevenLabs."
+      );
+    case "invalid_api_key":
+      return "Invalid or unauthorized ElevenLabs API key.";
+    case "missing_permissions":
+      return "ElevenLabs API key is valid but does not have the required Text-to-Speech / voice access permissions. Edit the key permissions in ElevenLabs.";
+    case "quota_exceeded":
+      return "ElevenLabs quota or credits are exhausted for this account.";
+    case "plan_upgrade_required":
+      return (
+        "This ElevenLabs voice requires a paid subscription plan: free-tier accounts cannot use " +
+        "library/professional voices via the API. Choose a different (premade) voice, or upgrade the ElevenLabs plan."
+      );
+    case "voice_not_found":
+      return "The requested ElevenLabs voice was not found on this account.";
+    case "character_limit_exceeded":
+      return "The request text exceeds ElevenLabs' character limit.";
+    case "rate_limited":
+      return "ElevenLabs rate limit reached. Try again shortly.";
+    case "server_error":
+      return "ElevenLabs is experiencing a server-side error. Try again shortly.";
+    case "unsupported_request":
+      return detail.upstreamMessage
+        ? `ElevenLabs rejected the request: ${detail.upstreamMessage}`
+        : "ElevenLabs rejected the request as malformed.";
+    default:
+      return detail.upstreamMessage
+        ? `ElevenLabs returned HTTP ${detail.httpStatus ?? "unknown"}: ${detail.upstreamMessage}`
+        : `ElevenLabs returned HTTP ${detail.httpStatus ?? "unknown"}.`;
+  }
+}
+
+/**
+ * Presets map only to voice settings documented by the ElevenLabs
+ * text-to-speech API: stability, similarity_boost, style, use_speaker_boost.
+ * No invented parameters.
+ */
+export const ELEVENLABS_PRESETS: Record<ElevenLabsVoicePreset, ElevenLabsVoiceSettings> = {
+  natural: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.15,
+    use_speaker_boost: true,
+  },
+  energetic_ad: {
+    stability: 0.35,
+    similarity_boost: 0.8,
+    style: 0.45,
+    use_speaker_boost: true,
+  },
+  professional: {
+    stability: 0.7,
+    similarity_boost: 0.8,
+    style: 0.05,
+    use_speaker_boost: true,
+  },
+  storytelling: {
+    stability: 0.4,
+    similarity_boost: 0.75,
+    style: 0.3,
+    use_speaker_boost: true,
+  },
+  calm: {
+    stability: 0.8,
+    similarity_boost: 0.7,
+    style: 0.0,
+    use_speaker_boost: true,
+  },
+};
+
+export const ELEVENLABS_PRESET_IDS = Object.keys(ELEVENLABS_PRESETS) as ElevenLabsVoicePreset[];
+
+type RawElevenLabsVoice = {
+  voice_id?: string;
+  name?: string;
+  category?: string;
+  labels?: Record<string, string>;
+  preview_url?: string;
+  high_quality_base_model_ids?: string[];
+  verified_languages?: Array<{ language?: string; accent?: string; locale?: string }>;
+};
+
+/**
+ * Normalizes one raw /v1/voices entry into the canonical VoiceOption shape.
+ * Language, accent and dialect are only asserted when ElevenLabs actually
+ * returned metadata that supports them - nothing is inferred from the name.
+ */
+export function normalizeElevenLabsVoice(raw: RawElevenLabsVoice): VoiceOption | null {
+  if (!raw?.voice_id) return null;
+  const labels = raw.labels || {};
+  const verified = Array.isArray(raw.verified_languages) ? raw.verified_languages : [];
+  const accentLabel = String(labels.accent || "").trim();
+  const verifiedArabic = verified.find((entry) => String(entry?.language || "").toLowerCase().startsWith("ar"));
+  const accent = accentLabel || String(verifiedArabic?.accent || "").trim() || undefined;
+  const accentLower = (accent || "").toLowerCase();
+  const localeLower = String(verifiedArabic?.locale || "").toLowerCase();
+
+  const arabicVerified = Boolean(verifiedArabic) || accentLower.includes("arab") || accentLower.includes("egypt");
+  const egyptianVerified = accentLower.includes("egypt") || localeLower.startsWith("ar-eg");
+
+  const gender = String(labels.gender || "").toLowerCase();
+
+  return {
+    id: raw.voice_id,
+    name: raw.name || raw.voice_id,
+    provider: "elevenlabs",
+    tier: "premium",
+    // Every eleven_multilingual_v2 voice can speak Arabic; only voices with
+    // real Arabic metadata are additionally tagged as such.
+    language: arabicVerified ? "ar" : "multilingual",
+    dialect: egyptianVerified ? "egyptian" : undefined,
+    gender: gender === "female" ? "female" : gender === "male" ? "male" : undefined,
+    voiceFamily: raw.category || undefined,
+    category: raw.category || undefined,
+    labels: Object.keys(labels).length ? labels : undefined,
+    accent,
+    previewUrl: raw.preview_url || undefined,
+    license: "ElevenLabs SaaS Commercial Terms",
+    commercialUse: "allowed",
+  };
+}
 
 export class ElevenLabsVoiceProvider implements VoiceProvider {
   public readonly id = "elevenlabs";
-  public readonly displayName = "ElevenLabs Multilingual & Arabic (Premium)";
+  public readonly displayName = "ElevenLabs (Production Arabic & Multilingual)";
   public readonly tier = "premium" as const;
+
+  private cachedVoices: VoiceOption[] | null = null;
+  private cacheTimestamp = 0;
+  private lastDiscoveryError: string | null = null;
+  private lastDiscoveryErrorDetail: ProviderErrorDetail | null = null;
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(private apiKey?: string) {}
 
+  public setApiKey(key: string): void {
+    this.apiKey = key;
+    this.cachedVoices = null;
+    this.cacheTimestamp = 0;
+  }
+
+  /**
+   * Resolution order: explicitly injected key, then environment, then the
+   * encrypted ProviderCredentialsVault (already resolved into memory).
+   */
+  public getApiKey(): string | undefined {
+    return this.apiKey || process.env.ELEVENLABS_API_KEY || providerSecrets.peekElevenLabsApiKey();
+  }
+
   public isConfigured(): boolean {
-    const key = this.apiKey || process.env.ELEVENLABS_API_KEY;
+    const key = this.getApiKey();
     return Boolean(key && key.trim().length > 10 && !key.includes("your_"));
   }
 
   public getCapabilities(): VoiceCapabilities {
     return {
-      languages: ["multilingual", "ar", "en"],
-      dialects: ["egyptian", "msa"],
+      languages: ["ar", "en", "multilingual"],
+      dialects: ["egyptian", "msa", "gulf", "levantine"],
       supportsLanguageDetection: true,
       supportsWordTimings: false,
       supportsStyles: true,
-      supportsPace: true,
+      supportsPace: false,
       local: false,
+      costTier: "premium",
       commercialUse: "allowed",
-      license: "Commercial SaaS provider terms; requires configured ElevenLabs account.",
-      notes: "Premium provider. Do not use unless explicitly selected/configured by the operator.",
+      license: "ElevenLabs SaaS Commercial Terms",
+      notes: `Canonical production voice provider for Arabic, Egyptian Arabic and MSA narration using ${ELEVENLABS_DEFAULT_MODEL_ID}.`,
     };
   }
 
@@ -39,116 +326,489 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     return !language || language === "auto" || language === "ar" || language === "en" || language === "multilingual";
   }
 
+  public resolveVoiceSettings(
+    preset?: ElevenLabsVoicePreset,
+    customSettings?: Partial<ElevenLabsVoiceSettings>,
+  ): ElevenLabsVoiceSettings {
+    const base = ELEVENLABS_PRESETS[preset as ElevenLabsVoicePreset] || ELEVENLABS_PRESETS.natural;
+    const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+    return {
+      stability: clamp01(customSettings?.stability ?? base.stability),
+      similarity_boost: clamp01(customSettings?.similarity_boost ?? base.similarity_boost),
+      style: clamp01(customSettings?.style ?? base.style ?? 0),
+      use_speaker_boost: customSettings?.use_speaker_boost ?? base.use_speaker_boost ?? true,
+    };
+  }
+
+  /**
+   * Resolves the voice to narrate with. No voice ID is ever invented: when the
+   * caller did not choose one we take the first voice the account actually owns.
+   */
+  public async resolveVoiceId(requestedVoiceId?: string): Promise<string> {
+    const requested = (requestedVoiceId || "").trim();
+    if (requested) return requested;
+
+    const configuredDefault = (process.env.ELEVENLABS_DEFAULT_VOICE_ID || "").trim();
+    if (configuredDefault) return configuredDefault;
+
+    const voices = await this.listVoices();
+    if (!voices.length) {
+      throw new Error(
+        "No ElevenLabs voice is available for this account. Open Providers → ElevenLabs → Browse Voices and select a voice.",
+      );
+    }
+    return voices[0].id;
+  }
+
+  private buildRequestBody(
+    text: string,
+    modelId: string,
+    voiceSettings: ElevenLabsVoiceSettings,
+    languageCode?: string,
+  ) {
+    const capabilities = getElevenLabsModelCapabilities(modelId);
+    return {
+      text,
+      model_id: modelId,
+      // language_code is only sent when the resolved model actually documents
+      // support for it. eleven_multilingual_v2 does not: it infers language
+      // from the input text, and sending language_code causes ElevenLabs to
+      // reject the request.
+      ...(capabilities.supportsLanguageCode && languageCode ? { language_code: languageCode } : {}),
+      voice_settings: voiceSettings,
+    };
+  }
+
+  /** Logs a sanitized upstream error. Never logs headers, so the API key cannot leak here. */
+  private logUpstreamError(detail: ReturnType<typeof parseElevenLabsError>): void {
+    logger.warn(
+      {
+        provider: "elevenlabs",
+        category: detail.category,
+        httpStatus: detail.httpStatus,
+        upstreamStatus: detail.upstreamStatus,
+        upstreamMessage: detail.upstreamMessage,
+        requestId: detail.requestId,
+        endpoint: detail.endpoint,
+        method: detail.method,
+      },
+      "ElevenLabs upstream error",
+    );
+  }
+
+  private describeError(err: any, endpoint: string, method: string): string {
+    if (!err?.response) return err?.message || "ElevenLabs request failed.";
+    const detail = parseElevenLabsError(err, endpoint, method);
+    this.logUpstreamError(detail);
+    return describeElevenLabsErrorDetail(detail);
+  }
+
+  /**
+   * Requests audio AND per-character alignment in a single synthesis call.
+   *
+   * Returns null (rather than throwing) when the model does not document
+   * alignment support or the endpoint is unavailable, so the caller can fall
+   * back to the plain endpoint without losing the job.
+   */
+  private async requestWithTimestamps(
+    text: string,
+    resolvedVoiceId: string,
+    modelId: string,
+    voiceSettings: ElevenLabsVoiceSettings,
+    languageCode: string | undefined,
+    key: string | undefined,
+  ): Promise<{ audio: Buffer; alignment: CharacterAlignment | null } | null> {
+    if (!getElevenLabsModelCapabilities(modelId).supportsAlignment) return null;
+    const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}/with-timestamps`;
+    let response;
+    try {
+      response = await axios.post(
+        `${endpoint}?output_format=mp3_44100_128`,
+        this.buildRequestBody(text, modelId, voiceSettings, languageCode),
+        {
+          headers: { "xi-api-key": key, "Content-Type": "application/json" },
+          responseType: "json",
+          timeout: 60000,
+        },
+      );
+    } catch (err: any) {
+      // A missing or restricted timestamps endpoint must not fail the job; the
+      // caller retries on the plain endpoint and captions fall back to Whisper.
+      this.logUpstreamError(parseElevenLabsError(err, endpoint, "POST"));
+      return null;
+    }
+
+    const payload = response.data || {};
+    if (typeof payload.audio_base64 !== "string" || !payload.audio_base64) return null;
+    const audio = Buffer.from(payload.audio_base64, "base64");
+    const parsed = parseElevenLabsAlignment(payload, "alignment");
+    // Only trust an alignment that actually describes the string we sent.
+    const alignment = parsed && alignmentMatchesText(parsed, text) ? parsed : null;
+    if (parsed && !alignment) {
+      logger.warn(
+        { provider: "elevenlabs", reason: "alignment_text_mismatch" },
+        "ElevenLabs alignment did not match the submitted text; falling back to Whisper timing",
+      );
+    }
+    return { audio, alignment };
+  }
+
   public async generateVoice(
     text: string,
-    voiceId: string = "21m00Tcm4TlvDq8ikWAM", // Default Rachel
+    voiceId?: string,
+    options: {
+      modelId?: string;
+      preset?: ElevenLabsVoicePreset;
+      voiceSettings?: Partial<ElevenLabsVoiceSettings>;
+      languageCode?: string;
+      /** Ask for native character alignment from the same synthesis request. */
+      requestAlignment?: boolean;
+    } = {},
   ): Promise<VoiceAudioResult> {
     if (!this.isConfigured()) {
-      throw new Error("ElevenLabs is not configured. Missing ELEVENLABS_API_KEY.");
+      throw new Error(ARABIC_NOT_CONFIGURED_MESSAGE);
     }
-    const key = this.apiKey || process.env.ELEVENLABS_API_KEY;
+    const key = this.getApiKey();
+    const modelId = options.modelId || ELEVENLABS_DEFAULT_MODEL_ID;
+    const voiceSettings = this.resolveVoiceSettings(options.preset, options.voiceSettings);
+    const resolvedVoiceId = await this.resolveVoiceId(voiceId);
 
-    const response = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-      {
+    const isArabic = options.languageCode === "ar" || /[\u0600-\u06FF]/.test(text);
+    const languageCode = options.languageCode || (isArabic ? "ar" : undefined);
+
+    if (options.requestAlignment) {
+      const startedWithTimestamps = Date.now();
+      const timestamped = await this.requestWithTimestamps(
         text,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75,
+        resolvedVoiceId,
+        modelId,
+        voiceSettings,
+        languageCode,
+        key,
+      );
+      if (timestamped) {
+        const stream = new Readable();
+        stream.push(timestamped.audio);
+        stream.push(null);
+        return {
+          audio: stream,
+          audioLength: timestamped.alignment
+            ? timestamped.alignment.endSeconds[timestamped.alignment.endSeconds.length - 1] || Math.max(text.length / 14, 1.5)
+            : Math.max(text.length / 14, 1.5),
+          // A native alignment carries the real spoken length, so this is a
+          // measurement rather than the usual pre-decode guess.
+          audioLengthEstimated: !timestamped.alignment,
+          sampleRate: 44100,
+          provider: "elevenlabs",
+          model: modelId,
+          modelId,
+          voiceId: resolvedVoiceId,
+          language: isArabic ? "ar" : "en",
+          voiceSettings,
+          characterAlignment: timestamped.alignment || undefined,
+          alignmentText: timestamped.alignment ? text : undefined,
+          generationMs: Date.now() - startedWithTimestamps,
+          estimatedCostTier: "premium",
+          usageBasedCost: true,
+          charactersBilled: text.length,
+        };
+      }
+    }
+
+    const startedAt = Date.now();
+    let response;
+    try {
+      response = await axios.post(
+        `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}?output_format=mp3_44100_128`,
+        this.buildRequestBody(text, modelId, voiceSettings, languageCode),
+        {
+          headers: {
+            "xi-api-key": key,
+            "Content-Type": "application/json",
+          },
+          responseType: "arraybuffer",
+          timeout: 60000,
         },
-      },
-      {
-        headers: {
-          "xi-api-key": key,
-          "Content-Type": "application/json",
-        },
-        responseType: "arraybuffer",
-        timeout: 20000,
-      },
-    );
+      );
+    } catch (err: any) {
+      throw new Error(
+        this.describeError(err, `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}`, "POST"),
+      );
+    }
 
     const buffer = Buffer.from(response.data);
-    // Approximate length: ~130 words/minute or ~15 chars/second
-    const approxDuration = Math.max(text.length / 14, 1.5);
-
     const stream = new Readable();
     stream.push(buffer);
     stream.push(null);
 
     return {
       audio: stream,
-      audioLength: approxDuration,
+      // Rough pre-decode hint only. The render pipeline measures the real
+      // duration with FFmpeg and uses that for scene fitting.
+      audioLength: Math.max(text.length / 14, 1.5),
+      audioLengthEstimated: true,
       sampleRate: 44100,
       provider: "elevenlabs",
-      model: "eleven_multilingual_v2",
-      voiceId,
-      language: "multilingual",
-      estimatedCost: text.length * 0.00003,
+      model: modelId,
+      modelId,
+      voiceId: resolvedVoiceId,
+      language: isArabic ? "ar" : "en",
+      voiceSettings,
+      generationMs: Date.now() - startedAt,
+      // ElevenLabs pricing is subscription/credit based; we do not invent a
+      // dollar figure here. The cost is reported as usage-based instead.
+      estimatedCostTier: "premium",
+      usageBasedCost: true,
+      charactersBilled: text.length,
     };
   }
 
-  public async listVoices(language?: string): Promise<VoiceOption[]> {
-    const premiumVoices: VoiceOption[] = [
-      {
-        id: "21m00Tcm4TlvDq8ikWAM",
-        name: "Rachel (Multilingual)",
-        provider: "elevenlabs",
-        tier: "premium",
-        language: "multilingual",
-        gender: "female",
-        license: this.getCapabilities().license,
-        commercialUse: "allowed",
-      },
-      {
-        id: "AZnzlk1XvdvUeBnXmlld",
-        name: "Domi (Multilingual)",
-        provider: "elevenlabs",
-        tier: "premium",
-        language: "multilingual",
-        gender: "female",
-        license: this.getCapabilities().license,
-        commercialUse: "allowed",
-      },
-      {
-        id: "EXAVITQu4vr4xnSDxMaL",
-        name: "Bella (Multilingual)",
-        provider: "elevenlabs",
-        tier: "premium",
-        language: "multilingual",
-        gender: "female",
-        license: this.getCapabilities().license,
-        commercialUse: "allowed",
-      },
-      {
-        id: "ErXwobaYiN019PkySvjV",
-        name: "Antoni (Multilingual)",
-        provider: "elevenlabs",
-        tier: "premium",
-        language: "multilingual",
-        gender: "male",
-        license: this.getCapabilities().license,
-        commercialUse: "allowed",
-      },
-      {
-        id: "MF3mGyEYCl7XYWbV9V6O",
-        name: "Tariq (Arabic Natural)",
-        provider: "elevenlabs",
-        tier: "premium",
-        language: "ar",
-        dialect: "egyptian",
-        gender: "male",
-        license: this.getCapabilities().license,
-        commercialUse: "allowed",
-      },
-    ];
-
-    if (language === "ar") {
-      return premiumVoices.filter((v) => v.language === "ar" || v.language === "multilingual");
+  /**
+   * Short audition sample for the Voice Lab. Never used for full renders.
+   */
+  public async generatePreview(
+    text: string,
+    voiceId?: string,
+    options: {
+      modelId?: string;
+      preset?: ElevenLabsVoicePreset;
+      voiceSettings?: Partial<ElevenLabsVoiceSettings>;
+      languageCode?: string;
+    } = {},
+  ): Promise<{
+    audioBase64: string;
+    voiceId: string;
+    modelId: string;
+    preset: ElevenLabsVoicePreset;
+    voiceSettings: ElevenLabsVoiceSettings;
+    charactersBilled: number;
+    generationMs: number;
+  }> {
+    if (!this.isConfigured()) {
+      throw new Error(ARABIC_NOT_CONFIGURED_MESSAGE);
     }
-    return premiumVoices;
+    const key = this.getApiKey();
+    const modelId = options.modelId || ELEVENLABS_DEFAULT_MODEL_ID;
+    const preset = options.preset || "natural";
+    const voiceSettings = this.resolveVoiceSettings(preset, options.voiceSettings);
+    const resolvedVoiceId = await this.resolveVoiceId(voiceId);
+    const isArabic = options.languageCode === "ar" || /[\u0600-\u06FF]/.test(text);
+    const languageCode = options.languageCode || (isArabic ? "ar" : undefined);
+
+    const startedAt = Date.now();
+    let response;
+    try {
+      response = await axios.post(
+        `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}?output_format=mp3_44100_128`,
+        this.buildRequestBody(text, modelId, voiceSettings, languageCode),
+        {
+          headers: {
+            "xi-api-key": key,
+            "Content-Type": "application/json",
+          },
+          responseType: "arraybuffer",
+          timeout: 30000,
+        },
+      );
+    } catch (err: any) {
+      throw new Error(
+        this.describeError(err, `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}`, "POST"),
+      );
+    }
+
+    const buffer = Buffer.from(response.data);
+    return {
+      audioBase64: `data:audio/mpeg;base64,${buffer.toString("base64")}`,
+      voiceId: resolvedVoiceId,
+      modelId,
+      preset,
+      voiceSettings,
+      charactersBilled: text.length,
+      generationMs: Date.now() - startedAt,
+    };
   }
 
+  /**
+   * Pages through GET /v2/voices - the current documented voice-discovery
+   * endpoint - collecting every voice the account actually owns. This is the
+   * customer's own ACCOUNT voice catalogue, not the ElevenLabs shared Voice
+   * Library (a separate, optional feature this engine does not depend on).
+   */
+  private async fetchAllVoicesV2(): Promise<VoiceOption[]> {
+    const pageSize = 100;
+    const maxPages = 20; // safety cap: up to 2000 voices, well beyond any real account
+    let nextPageToken: string | undefined;
+    const voices: VoiceOption[] = [];
+
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({ page_size: String(pageSize) });
+      if (nextPageToken) params.set("next_page_token", nextPageToken);
+      const response = await axios.get(`https://api.elevenlabs.io/v2/voices?${params.toString()}`, {
+        headers: { "xi-api-key": this.getApiKey() },
+        timeout: 15000,
+      });
+      const rawVoices = Array.isArray(response.data?.voices) ? response.data.voices : [];
+      for (const raw of rawVoices) {
+        const normalized = normalizeElevenLabsVoice(raw);
+        if (normalized) voices.push(normalized);
+      }
+      nextPageToken = response.data?.next_page_token || undefined;
+      if (!response.data?.has_more || !nextPageToken) break;
+    }
+    return voices;
+  }
+
+  /** Legacy single-page voice list, kept only for accounts/proxies where /v2/voices 404s. */
+  private async fetchVoicesV1Legacy(): Promise<VoiceOption[]> {
+    const response = await axios.get("https://api.elevenlabs.io/v1/voices", {
+      headers: { "xi-api-key": this.getApiKey() },
+      timeout: 15000,
+    });
+    const rawVoices = Array.isArray(response.data?.voices) ? response.data.voices : [];
+    return rawVoices
+      .map((raw: RawElevenLabsVoice) => normalizeElevenLabsVoice(raw))
+      .filter((voice: VoiceOption | null): voice is VoiceOption => Boolean(voice));
+  }
+
+  /**
+   * Dynamic voice discovery. Voices are always read from the live account;
+   * nothing is hardcoded and no placeholder catalogue is returned.
+   */
+  public async listVoices(language?: string): Promise<VoiceOption[]> {
+    if (!this.isConfigured()) {
+      this.lastDiscoveryError = ARABIC_NOT_CONFIGURED_MESSAGE;
+      this.lastDiscoveryErrorDetail = null;
+      return [];
+    }
+    if (this.cachedVoices && Date.now() - this.cacheTimestamp < this.CACHE_TTL_MS) {
+      return this.filterVoicesByLanguage(this.cachedVoices, language);
+    }
+
+    try {
+      const voices = await this.fetchAllVoicesV2();
+      this.cachedVoices = voices;
+      this.cacheTimestamp = Date.now();
+      this.lastDiscoveryError = null;
+      this.lastDiscoveryErrorDetail = null;
+      return this.filterVoicesByLanguage(voices, language);
+    } catch (err: any) {
+      const detail = parseElevenLabsError(err, "https://api.elevenlabs.io/v2/voices", "GET");
+      this.logUpstreamError(detail);
+
+      if (detail.httpStatus === 404) {
+        // Historical compatibility only: some very old integrations may sit
+        // behind a proxy that has not caught up to /v2/voices.
+        try {
+          const voices = await this.fetchVoicesV1Legacy();
+          this.cachedVoices = voices;
+          this.cacheTimestamp = Date.now();
+          this.lastDiscoveryError = null;
+          this.lastDiscoveryErrorDetail = null;
+          return this.filterVoicesByLanguage(voices, language);
+        } catch (legacyErr: any) {
+          const legacyDetail = parseElevenLabsError(legacyErr, "https://api.elevenlabs.io/v1/voices", "GET");
+          this.logUpstreamError(legacyDetail);
+          this.lastDiscoveryErrorDetail = legacyDetail;
+          this.lastDiscoveryError = describeElevenLabsErrorDetail(legacyDetail);
+          throw new Error(this.lastDiscoveryError as string);
+        }
+      }
+
+      this.lastDiscoveryErrorDetail = detail;
+      this.lastDiscoveryError = describeElevenLabsErrorDetail(detail);
+      throw new Error(this.lastDiscoveryError as string);
+    }
+  }
+
+  public getLastDiscoveryError(): string | null {
+    return this.lastDiscoveryError;
+  }
+
+  public getLastDiscoveryErrorDetail(): ProviderErrorDetail | null {
+    return this.lastDiscoveryErrorDetail;
+  }
+
+  private filterVoicesByLanguage(voices: VoiceOption[], language?: string): VoiceOption[] {
+    if (!language || language === "auto") return voices;
+    if (language === "ar") {
+      // Multilingual voices are legitimate Arabic candidates under
+      // eleven_multilingual_v2; Arabic-verified voices are surfaced first.
+      const arabicFirst = voices.filter((voice) => voice.language === "ar");
+      const multilingual = voices.filter((voice) => voice.language !== "ar");
+      return [...arabicFirst, ...multilingual];
+    }
+    return voices;
+  }
+
+  private buildValidationResult(input: {
+    authenticated: boolean;
+    voiceDiscoveryAvailable: boolean;
+    ttsReady: boolean;
+    start: number;
+    errorDetail?: ProviderErrorDetail;
+    accountTier?: string;
+    characterLimit?: number;
+    charactersUsed?: number;
+    voicesDiscovered?: number;
+  }): VoiceProviderValidationResult {
+    const { authenticated, voiceDiscoveryAvailable, ttsReady, start, errorDetail } = input;
+    let status: VoiceProviderValidationResult["status"];
+    let message: string;
+    let healthy: boolean;
+
+    if (!authenticated) {
+      healthy = false;
+      status = errorDetail?.category === "missing_permissions" ? "missing_permissions" : "invalid_credentials";
+      message = errorDetail ? describeElevenLabsErrorDetail(errorDetail) : "ElevenLabs authentication failed.";
+    } else if (!voiceDiscoveryAvailable) {
+      healthy = false;
+      if (errorDetail?.category === "missing_permissions") {
+        status = "missing_permissions";
+        message = describeElevenLabsErrorDetail(errorDetail);
+      } else {
+        status = "voice_discovery_restricted";
+        message = errorDetail
+          ? `Authenticated, but voice discovery failed: ${describeElevenLabsErrorDetail(errorDetail)}`
+          : "Authenticated, but voice discovery is currently unavailable.";
+      }
+    } else if (!ttsReady) {
+      healthy = true;
+      status = "voice_discovery_restricted";
+      message =
+        "Authenticated and voice discovery works, but this ElevenLabs account has no voices yet. Add or clone a voice in ElevenLabs, then Browse Voices again.";
+    } else {
+      healthy = true;
+      status = "healthy";
+      message = "ElevenLabs is authenticated and ready. Voice discovery and Text-to-Speech access are confirmed.";
+    }
+
+    return {
+      provider: "ElevenLabs",
+      category: "Voice",
+      tier: "premium",
+      configured: true,
+      healthy,
+      status,
+      message,
+      checkedAt: new Date().toISOString(),
+      latencyMs: Date.now() - start,
+      accountTier: input.accountTier,
+      characterLimit: input.characterLimit,
+      charactersUsed: input.charactersUsed,
+      authenticated,
+      voiceDiscoveryAvailable,
+      ttsReady,
+      voicesDiscovered: input.voicesDiscovered,
+      errorDetail,
+    };
+  }
+
+  /**
+   * Test Connection. Both calls below (GET /v1/user, GET /v2/voices) are
+   * read-only discovery/account endpoints - neither spends Text-to-Speech
+   * quota or credits. Live TTS is only ever exercised by an explicit preview
+   * or render request, never by this check.
+   */
   public async validate(): Promise<VoiceProviderValidationResult> {
     if (!this.isConfigured()) {
       return {
@@ -158,64 +818,88 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         configured: false,
         healthy: false,
         status: "not_configured",
-        message: "ELEVENLABS_API_KEY is not configured.",
+        message: "ElevenLabs is not configured. Add an API key in Providers → ElevenLabs → Configure.",
         checkedAt: new Date().toISOString(),
       };
     }
 
-    const key = this.apiKey || process.env.ELEVENLABS_API_KEY;
     const start = Date.now();
+    const userEndpoint = "https://api.elevenlabs.io/v1/user";
+    let userResponse;
     try {
-      const response = await axios.get("https://api.elevenlabs.io/v1/user", {
-        headers: { "xi-api-key": key },
-        timeout: 8000,
+      userResponse = await axios.get(userEndpoint, {
+        headers: { "xi-api-key": this.getApiKey() },
+        timeout: 12000,
+        validateStatus: () => true,
       });
-      if (response.status === 200) {
-        return {
-          provider: "ElevenLabs",
-          category: "Voice",
-          tier: "premium",
-          configured: true,
-          healthy: true,
-          status: "healthy",
-          message: "ElevenLabs API connection is healthy.",
-          checkedAt: new Date().toISOString(),
-          latencyMs: Date.now() - start,
-        };
-      }
-      return {
-        provider: "ElevenLabs",
-        category: "Voice",
-        tier: "premium",
-        configured: true,
-        healthy: false,
-        status: "provider_unavailable",
-        message: `ElevenLabs returned HTTP ${response.status}`,
-        checkedAt: new Date().toISOString(),
-      };
     } catch (err: any) {
-      if (err.response?.status === 401 || err.response?.status === 403) {
-        return {
-          provider: "ElevenLabs",
-          category: "Voice",
-          tier: "premium",
-          configured: true,
-          healthy: false,
-          status: "invalid_credentials",
-          message: "Invalid ElevenLabs API key.",
-          checkedAt: new Date().toISOString(),
-        };
-      }
-      return {
-        provider: "ElevenLabs",
-        category: "Voice",
-        tier: "premium",
-        configured: true,
-        healthy: false,
-        status: "provider_unavailable",
-        message: err.message || "ElevenLabs connection failed.",
-        checkedAt: new Date().toISOString(),
-      };
+      const detail = parseElevenLabsError(err, userEndpoint, "GET");
+      this.logUpstreamError(detail);
+      return this.buildValidationResult({ authenticated: false, voiceDiscoveryAvailable: false, ttsReady: false, start, errorDetail: detail });
     }
+
+    if (userResponse.status !== 200) {
+      const detail = parseElevenLabsError({ response: userResponse }, userEndpoint, "GET");
+      this.logUpstreamError(detail);
+      return this.buildValidationResult({ authenticated: false, voiceDiscoveryAvailable: false, ttsReady: false, start, errorDetail: detail });
+    }
+
+    const subscription = userResponse.data?.subscription || {};
+    const accountTier: string | undefined = subscription.tier || undefined;
+    const characterLimit = typeof subscription.character_limit === "number" ? subscription.character_limit : undefined;
+    const charactersUsed = typeof subscription.character_count === "number" ? subscription.character_count : undefined;
+
+    const voicesEndpoint = "https://api.elevenlabs.io/v2/voices?page_size=1";
+    let voicesResponse;
+    try {
+      voicesResponse = await axios.get(voicesEndpoint, {
+        headers: { "xi-api-key": this.getApiKey() },
+        timeout: 12000,
+        validateStatus: () => true,
+      });
+    } catch (err: any) {
+      const detail = parseElevenLabsError(err, voicesEndpoint, "GET");
+      this.logUpstreamError(detail);
+      return this.buildValidationResult({
+        authenticated: true,
+        voiceDiscoveryAvailable: false,
+        ttsReady: false,
+        start,
+        errorDetail: detail,
+        accountTier,
+        characterLimit,
+        charactersUsed,
+      });
+    }
+
+    if (voicesResponse.status !== 200) {
+      const detail = parseElevenLabsError({ response: voicesResponse }, voicesEndpoint, "GET");
+      this.logUpstreamError(detail);
+      return this.buildValidationResult({
+        authenticated: true,
+        voiceDiscoveryAvailable: false,
+        ttsReady: false,
+        start,
+        errorDetail: detail,
+        accountTier,
+        characterLimit,
+        charactersUsed,
+      });
+    }
+
+    const pageVoiceCount = Array.isArray(voicesResponse.data?.voices) ? voicesResponse.data.voices.length : 0;
+    const voicesDiscovered =
+      typeof voicesResponse.data?.total_count === "number" ? voicesResponse.data.total_count : pageVoiceCount;
+
+    return this.buildValidationResult({
+      authenticated: true,
+      voiceDiscoveryAvailable: true,
+      ttsReady: voicesDiscovered > 0,
+      start,
+      accountTier,
+      characterLimit,
+      charactersUsed,
+      voicesDiscovered,
+    });
   }
 }

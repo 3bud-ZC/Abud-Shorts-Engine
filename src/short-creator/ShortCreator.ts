@@ -9,6 +9,46 @@ import axios from "axios";
 import { Kokoro } from "./libraries/Kokoro";
 import { Remotion } from "./libraries/Remotion";
 import { Whisper } from "./libraries/Whisper";
+import {
+  isAlignmentConfident,
+  mapAlignmentToCaptionTokens,
+} from "../server/v2/voice-providers/elevenLabsAlignment";
+import { renderArabicCaptions } from "../server/v2/captions/arabicCaptionRendererV3";
+import { runCaptionQa } from "../server/v2/captions/captionQa";
+import { resolveCaptionStyle } from "../server/v2/captions/captionStyles";
+import {
+  buildEditDecisionList,
+  intentForPurpose,
+  type VisualShot,
+} from "../server/v2/editing/editDecisionList";
+import { composeVisualBed } from "../server/v2/editing/visualBedComposer";
+import { mockupForIntent } from "../server/v2/mockups/websiteMockupRenderer";
+import {
+  buildCreativePlan,
+  creativePlanFacts,
+  type CreativePlan,
+  type CreativeStylePresetId,
+} from "../server/v2/creative/creativePlan";
+import {
+  isMotionTreatment,
+  TREATMENT_MOTION_TEMPLATE,
+  TREATMENT_RUNTIME,
+  type VisualTreatment,
+} from "../server/v2/creative/visualTreatment";
+import { splitNarrationBeats } from "../server/v2/creative/visualIntentClassifier";
+import { resolveBrandStyle } from "../server/v2/creative/brandStyle";
+import {
+  buildStockQueryFamilies,
+  queryFamilyTerms,
+} from "../server/v2/creative/stockQueryFamilies";
+import {
+  cropMetadata,
+  planSmartCrop,
+  probeVisualFocus,
+  type SmartCropPlan,
+} from "../server/v2/media-intelligence/smartCrop";
+import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
+import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
 import { PexelsAPI } from "./libraries/Pexels";
 import { Config } from "../config";
@@ -45,9 +85,15 @@ import { VisualRegistry } from "../server/v2/visual-providers/registry";
 import { VoiceRegistry } from "../server/v2/voice-providers/registry";
 import type { VoiceProviderId, VoiceQualityProfile } from "../server/v2/voice-providers/types";
 import { AutoVisualRouter } from "../server/v2/visual-providers/router";
+import { sceneSourceRouter } from "../server/v2/visual-providers/sceneSourceRouter";
 import { mediaIntelligenceService } from "../server/v2/media-intelligence/mediaIntelligenceService";
 import { mediaCache } from "../server/v2/media-cache/mediaCache";
 import { AudioMasteringService } from "./audioMasteringService";
+import { postProductionPipeline } from "../server/v2/post-production/postProductionPipeline";
+import { qualityEngine } from "../server/v2/quality/qualityEngine";
+import { motionEngine, type MotionTemplateType } from "../server/v2/motion/motionEngine";
+import { mediaUploadService } from "../server/v2/media/mediaUploadService";
+import { capabilityManager } from "../server/v2/capabilities/capabilityManager";
 import {
   DurableArtifactStore,
   type DurableSceneArtifact,
@@ -79,6 +125,12 @@ type RenderProgressEvent = {
 };
 
 type RenderProgressCallback = (event: RenderProgressEvent) => Promise<void> | void;
+
+/**
+ * Bottom band of a 9:16 frame commonly covered by TikTok / Reels UI. Captions
+ * are held above it so the platform chrome cannot sit on the words.
+ */
+const PLATFORM_SAFE_BOTTOM_RATIO = 0.14;
 
 export class ShortCreator {
   private queue: {
@@ -249,9 +301,11 @@ export class ShortCreator {
     const planningStartedAt = Date.now();
     const timeline: ResolvedProductionTimeline = resolveProductionTimeline(spec, 25);
     const mediaPlan = mediaIntelligenceService.generateMediaPlan(spec, {
-      pacingProfile: (spec.metadata?.pacing as any) || (spec.quality === "high" || spec.quality === "premium" ? "fast" : undefined),
+      pacingProfile: (spec.metadata?.pacing as any) || (spec.quality === "high" || spec.quality === "premium" || spec.quality === "max_quality_local" ? "fast" : undefined),
       captionPreset: (spec.captionStyle as any) || "bold",
     });
+    const sceneSourceDecisions = sceneSourceRouter.routeSpec(spec);
+    const postProductionProcessors = postProductionPipeline.listProcessors();
 
     logger.info(
       {
@@ -269,13 +323,168 @@ export class ShortCreator {
       "Rendering Production Spec video with Media Intelligence & Resolved Timeline",
     );
 
+    // Music and its beat map are resolved before the scene loop so the shot
+    // planner can use beats as cutting hints. Neither depends on scene work.
+    const selectedMusic = this.findMusic(
+      timeline.finalExpectedDurationSeconds,
+      mediaPlan.recommendedMusicMood as any,
+    );
+    let beatMap: any = null;
+    if (capabilityManager.isPythonQualityVenvInstalled() && selectedMusic?.file) {
+      try {
+        const musicPath = path.join(this.config.musicDirPath, selectedMusic.file);
+        if (fs.existsSync(musicPath) && fs.statSync(musicPath).size > 1024) {
+          beatMap = await qualityEngine.analyzeBeats(musicPath);
+        }
+      } catch (beatErr) {
+        logger.warn(beatErr, "Beat analysis notice; proceeding with standard timeline");
+      }
+    }
+    // qualityEngine returns beatTimestamps; this previously read beatMap.beats,
+    // which never existed, so every production reported beatMapUsed:false and
+    // no cut was ever beat-aware even with librosa installed and working.
+    const beatTimestamps: number[] = Array.isArray(beatMap?.beatTimestamps)
+      ? (beatMap.beatTimestamps as number[])
+      : Array.isArray((beatMap as any)?.beats)
+        ? ((beatMap as any).beats as number[])
+        : [];
+
+    // ------------------------------------------------------------------
+    // CREATIVE PLAN
+    // One resolved description of creative intent for the whole production,
+    // built before any scene work so every shot decision can be traced back to
+    // it. Availability is reported honestly: a treatment whose runtime is not
+    // configured is never planned, it falls back and records why.
+    // ------------------------------------------------------------------
+    const hasUploadedMediaForProduction = Boolean(
+      (spec.metadata as any)?.uploadedMediaId ||
+      spec.scenes.some((scene: any) => scene.uploadedMediaId || scene.visualProvider === "uploaded_media"),
+    );
+    const hasProductMediaForProduction = Boolean(
+      (spec.metadata as any)?.productImageId || spec.productionMode === "product_ad",
+    );
+    const motionRuntimeAvailable = capabilityManager.isPythonQualityVenvInstalled();
+    const stockRuntimeAvailable = Boolean(this.config.pexelsApiKey) || Boolean(process.env.PIXABAY_API_KEY);
+
+    // An explicitly graphic production must not depend on stock footage: asking
+    // for Motion Graphics and receiving four stock clips is not the mode the
+    // customer chose. Auto Hybrid keeps every source available.
+    const graphicOnlyMode =
+      spec.productionMode === "motion_graphics" || spec.productionMode === "animated_explainer";
+
+    const isTreatmentAvailable = (treatment: VisualTreatment): boolean => {
+      const runtime = TREATMENT_RUNTIME[treatment];
+      if (graphicOnlyMode) return runtime === "motion";
+      if (runtime === "motion") return motionRuntimeAvailable;
+      if (runtime === "stock") return stockRuntimeAvailable;
+      if (runtime === "upload") return hasUploadedMediaForProduction;
+      if (runtime === "product") return hasProductMediaForProduction;
+      // Mockups are rendered locally and always available.
+      return true;
+    };
+
+    const creativePlan: CreativePlan = buildCreativePlan({
+      productionMode: spec.productionMode,
+      stylePreset: ((spec as any).creativeStyle as CreativeStylePresetId) || undefined,
+      motionIntensity: ((spec as any).animationIntensity as any) || undefined,
+      scenes: spec.scenes.map((scene: any, sceneIdx: number) => ({
+        sceneIndex: sceneIdx,
+        narration: String(scene.narration || ""),
+        purpose: scene.purpose,
+        durationSeconds: Number(scene.durationSeconds) || 0,
+      })),
+      hasProductMedia: hasProductMediaForProduction,
+      hasUploadedMedia: hasUploadedMediaForProduction,
+      hasBrandProfile: Boolean(spec.brandKit?.brandName),
+      isTreatmentAvailable,
+    });
+    logger.info(
+      { facts: creativePlanFacts(creativePlan), preset: creativePlan.stylePreset },
+      "Creative plan resolved",
+    );
+
+    // Brand system for every generated graphic in this production. Fields the
+    // customer did not supply are reported as derived or default rather than
+    // presented as their choice, and every text/surface pairing is contrast
+    // checked before a template can draw with it.
+    const brandStyle = resolveBrandStyle({
+      brandKit: spec.brandKit,
+      ctaText: spec.cta?.text,
+      contactText: spec.contact,
+      presence: creativePlan.brandPresence,
+    });
+    logger.info(
+      {
+        hasBrand: brandStyle.hasBrand,
+        sources: brandStyle.sources,
+        contrastCorrections: brandStyle.contrastCorrections,
+      },
+      "Brand style resolved for generated graphics",
+    );
+    const motionBrandFields = {
+      brandName: brandStyle.sources.brandName === "customer" ? brandStyle.brandName : undefined,
+      website: brandStyle.sources.website === "customer" ? brandStyle.website : undefined,
+      socialHandle:
+        brandStyle.sources.socialHandle === "customer" ? brandStyle.socialHandle : undefined,
+    };
+    const motionPalette = {
+      primary: brandStyle.palette.primary,
+      secondary: brandStyle.palette.secondary,
+      accent: brandStyle.palette.accent,
+      background: brandStyle.palette.background,
+      surface: brandStyle.palette.surface,
+      text: brandStyle.palette.text,
+      textMuted: brandStyle.palette.textMuted,
+      onPrimary: brandStyle.palette.onPrimary,
+      onAccent: brandStyle.palette.onAccent,
+    };
+
+    /**
+     * True when the production is advertising websites or web design. Only then
+     * does a programmatic site mockup beat real footage; a generic coding clip
+     * is not what "modern website" means.
+     */
+    const websiteAdContext = (() => {
+      const haystack = [
+        spec.title,
+        spec.userPrompt,
+        ...(spec.scenes || []).map((scene: any) => scene.narration),
+        ...(spec.scenes || []).flatMap((scene: any) => scene.stockSearchTerms || []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return /website|web design|webdesign|landing page|موقع|مواقع|ويب/.test(haystack);
+    })();
+
+    // libass owns spoken captions whenever the bundled font pack is present.
+    // Without it we keep the Remotion caption layer rather than shipping a
+    // video with no captions at all. Decided before the scene loop because
+    // scene assembly must know which engine will draw the words.
+    const captionStyleSpec = resolveCaptionStyle(spec.captionStyle as string);
+    const fontsDir = process.env.ABUD_FONT_DIR || "";
+    const burnCaptionsWithLibass =
+      Boolean(fontsDir) && fs.existsSync(fontsDir) && spec.captionStyle !== "none";
+
     const scenes: any[] = [];
+    /** Caption words per scene, kept out of the Remotion payload when libass draws them. */
+    const sceneCaptionWords: Array<Array<{ text: string; startMs: number; endMs: number }>> = [];
     const excludeVideoIds: (string | number)[] = [];
     const previousVisualCandidates: any[] = [];
     const tempFiles: string[] = [];
     const visualProvidersUsed = new Set<string>();
     const voiceProvidersUsed = new Set<string>();
+    const captionTimingSources = new Set<string>();
+    const plannedShots: VisualShot[] = [];
+    const visualIntentPolicyLog: Array<Record<string, unknown>> = [];
+    /** Which query families were asked for each scene, and what came back. */
+    const stockQueryLog: Array<Record<string, unknown>> = [];
+    const shotSourceCounts: Record<string, number> = {};
     const voiceArtifacts: any[] = [];
+    // Single-speaker guarantee: the first synthesized scene pins the concrete
+    // voice ID (ElevenLabs resolves account voices at generation time) and every
+    // later scene - including narration-fitting retries - reuses exactly it.
+    let pinnedVoiceId: string | undefined;
     const selectedVisuals: any[] = [];
     const sceneQa: any[] = [];
     const durableArtifacts: DurableSceneArtifact[] = [];
@@ -357,7 +566,12 @@ export class ShortCreator {
       const targetSceneDuration = sceneTimeline.durationSeconds;
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
       const requestedVoiceProvider = ((brandVoiceProfile?.provider || spec.voiceProvider || "auto") as VoiceProviderId | "auto");
-      const requestedVoiceId = brandVoiceProfile?.voiceId || spec.voiceId || undefined;
+      const requestedVoiceId = pinnedVoiceId || brandVoiceProfile?.voiceId || spec.voiceId || undefined;
+      // The preset is the delivery setting a human approved in the Voice Lab.
+      // It travels on the spec so every scene narrates identically and a retry
+      // cannot quietly drop back to the provider's "natural" default.
+      const requestedVoicePreset = spec.voicePreset || undefined;
+      const requestedVoiceModelId = spec.voiceModelId || undefined;
 
       const tempId = cuid();
       const tempWavFileName = `${tempId}.wav`;
@@ -389,6 +603,7 @@ export class ShortCreator {
           key.dialect === (brandVoiceProfile?.dialect || spec.dialect) &&
           key.qualityProfile === requestedVoiceQuality &&
           (!requestedVoiceId || key.voiceId === requestedVoiceId) &&
+          (key.voicePreset || undefined) === requestedVoicePreset &&
           providerCompatible
         );
       });
@@ -417,9 +632,14 @@ export class ShortCreator {
           qualityProfile: requestedVoiceQuality,
           requestedProvider: requestedVoiceProvider,
           voiceId: requestedVoiceId,
+          voicePreset: requestedVoicePreset,
+          modelId: requestedVoiceModelId,
+          // Native alignment rides along with the audio; no second billed call.
+          requestAlignment: true,
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
         });
+        pinnedVoiceId = voiceAudio.voiceId || voiceAudio.decision.voiceId || pinnedVoiceId;
         const firstProvider = voiceAudio.provider || voiceAudio.decision.providerId;
         if (firstProvider in artifactReuse.providerInvocations) {
           artifactReuse.providerInvocations[firstProvider as keyof typeof artifactReuse.providerInvocations]++;
@@ -445,7 +665,11 @@ export class ShortCreator {
               dialect: (brandVoiceProfile?.dialect || spec.dialect) as any,
               qualityProfile: requestedVoiceQuality,
               requestedProvider: requestedVoiceProvider,
-              voiceId: requestedVoiceId,
+              // Retries must never change the speaker or the delivery settings.
+              voiceId: pinnedVoiceId || requestedVoiceId,
+              voicePreset: requestedVoicePreset,
+              modelId: requestedVoiceModelId,
+              requestAlignment: true,
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
             });
@@ -493,6 +717,7 @@ export class ShortCreator {
           provider: voiceAudio.provider || voiceAudio.decision.providerId,
           model: voiceAudio.model,
           voiceId: voiceAudio.voiceId,
+          voicePreset: requestedVoicePreset,
           language: voiceAudio.language,
           dialect: voiceAudio.dialect,
           qualityProfile: requestedVoiceQuality,
@@ -508,6 +733,11 @@ export class ShortCreator {
           language: voiceAudio.language,
           dialect: voiceAudio.dialect,
           estimatedCostTier: voiceAudio.estimatedCostTier || (voiceAudio.provider === "google_cloud_tts" ? "cloud_free_tier" : voiceAudio.provider === "elevenlabs" ? "premium" : "local_free"),
+          usageBasedCost: Boolean(voiceAudio.usageBasedCost),
+          charactersBilled: voiceAudio.charactersBilled,
+          modelId: voiceAudio.modelId,
+          voicePreset: requestedVoicePreset,
+          voiceSettings: voiceAudio.voiceSettings,
           generationMs: voiceAudio.generationMs,
           sampleRate: voiceAudio.sampleRate,
           processedText: voiceAudio.processedText,
@@ -538,6 +768,7 @@ export class ShortCreator {
             voiceArtifact: voiceArtifactDetails,
             reuseKey: {
               spokenNarration: requestedSpokenNarration,
+              voicePreset: requestedVoicePreset,
               provider: voiceArtifactDetails.provider,
               model: voiceArtifactDetails.model,
               voiceId: voiceArtifactDetails.voiceId,
@@ -587,7 +818,10 @@ export class ShortCreator {
         inputHashSource: { sceneIndex: index, audioDuration: actualVoiceDuration },
       });
       let rawCaptions: Caption[] = [];
-      let timingSource: "provider" | "whisper" | "synthetic_fallback" = "synthetic_fallback";
+      // Canonical vocabulary persisted as captionTimingSource.
+      let timingSource: "elevenlabs_alignment" | "whisper" | "synthetic" = "synthetic";
+      let alignmentConfidence: number | undefined;
+      let alignmentUnmapped: string[] | undefined;
       let captionArtifact: DurableSceneArtifact | undefined;
       const captionInputHash = createCaptionInputHash({
         voiceChecksum: voiceArtifact?.checksum || "",
@@ -604,14 +838,42 @@ export class ShortCreator {
         timingSource = payload.timingSource || "whisper";
         captionArtifact = reusableCaption;
         artifactReuse.reusedArtifacts.push(reusableCaption);
-      } else if (voiceAudio?.wordTimings && voiceAudio.wordTimings.length > 0) {
-        rawCaptions = voiceAudio.wordTimings.map((timing: any) => ({
-          text: timing.word,
-          startMs: timing.startMs,
-          endMs: timing.endMs,
-        }));
-        timingSource = "provider";
-      } else {
+      }
+
+      // 1. ElevenLabs native character alignment, mapped onto the DISPLAY
+      //    caption tokens. The alignment describes the TTS string, which may
+      //    contain pronunciation expansions the viewer must never see, so a
+      //    segment whose mapping is not confident falls through to Whisper
+      //    rather than showing a spoken form or a guessed time.
+      if (!captionArtifact && voiceAudio?.characterAlignment && voiceAudio.alignmentText) {
+        const displayText = String(
+          (originalSceneSpec as any).captionText || sceneTimeline.narration || "",
+        );
+        const displayTokens = displayText.trim().split(/\s+/).filter(Boolean);
+        const mapping = mapAlignmentToCaptionTokens(
+          voiceAudio.characterAlignment,
+          voiceAudio.alignmentText,
+          displayTokens,
+        );
+        alignmentConfidence = mapping.confidence;
+        alignmentUnmapped = mapping.unmappedTokens;
+        if (isAlignmentConfident(mapping)) {
+          rawCaptions = mapping.timings.map((timing) => ({
+            text: timing.word,
+            startMs: timing.startMs,
+            endMs: timing.endMs,
+          }));
+          timingSource = "elevenlabs_alignment";
+        } else {
+          logger.info(
+            { sceneIndex: index, confidence: mapping.confidence, unmapped: mapping.unmappedTokens },
+            "ElevenLabs alignment mapping below confidence threshold; using Whisper for this scene",
+          );
+        }
+      }
+
+      // 2. Whisper.
+      if (!captionArtifact && rawCaptions.length === 0) {
         try {
           artifactReuse.providerInvocations.whisper++;
           rawCaptions = await this.whisper.CreateCaption(
@@ -626,7 +888,9 @@ export class ShortCreator {
         }
       }
 
+      // 3. Deterministic synthetic fallback.
       if (!rawCaptions || rawCaptions.length === 0) {
+        timingSource = "synthetic";
         const captionText = String((originalSceneSpec as any).captionText || sceneTimeline.narration || "");
         const words = captionText.trim().split(/\s+/).filter(Boolean);
         if (words.length > 0) {
@@ -644,6 +908,12 @@ export class ShortCreator {
         }
       }
       voiceArtifacts[voiceArtifacts.length - 1].timingSource = timingSource;
+      voiceArtifacts[voiceArtifacts.length - 1].captionTimingSource = timingSource;
+      if (alignmentConfidence !== undefined) {
+        voiceArtifacts[voiceArtifacts.length - 1].alignmentConfidence = alignmentConfidence;
+        voiceArtifacts[voiceArtifacts.length - 1].alignmentUnmappedTokens = alignmentUnmapped;
+      }
+      captionTimingSources.add(timingSource);
 
       // Enforce caption boundaries strictly within the scene duration
       const maxSceneMs = Math.round(targetSceneDuration * 1000) + 100;
@@ -825,8 +1095,16 @@ export class ShortCreator {
           });
         }
 
+        sceneCaptionWords[index] = captions.map((caption) => ({
+          text: String(caption.text || ""),
+          startMs: caption.startMs,
+          endMs: caption.endMs,
+        }));
         scenes.push({
-          captions,
+          // Remotion cannot draw captions it was never given. Passing an empty
+          // list is what actually prevents a second caption layer under the
+          // libass one; suppressing captionPreset alone did not.
+          captions: burnCaptionsWithLibass ? [] : captions,
           video: renderedSegments[0].video,
           motion: sceneMediaPlan.motion,
           transition: sceneMediaPlan.transitionToNext,
@@ -846,17 +1124,213 @@ export class ShortCreator {
         const reusableMediaArtifact = reusableArtifactFor("media", index, (artifact) => artifact.segmentIndex === undefined);
         let visualAsset: any;
         let mediaArtifact: DurableSceneArtifact | undefined;
+
+        const isMotionGraphics =
+          spec.productionMode === "motion_graphics" ||
+          spec.productionMode === "animated_explainer" ||
+          spec.visualMode === "motion_graphics" ||
+          originalSceneSpec.visualSource === "motion_graphics";
+
+        const isProductAd =
+          spec.productionMode === "product_ad" ||
+          spec.visualMode === "product_ad" ||
+          originalSceneSpec.visualSource === "product_composition";
+
         if (reusableMediaArtifact) {
           artifactStore.copyToTemp(reusableMediaArtifact, tempVideoPath);
           mediaArtifact = reusableMediaArtifact;
           artifactReuse.reusedArtifacts.push(reusableMediaArtifact);
           visualAsset = (reusableMediaArtifact.metadata?.visualAsset || reusableMediaArtifact.metadata || {}) as any;
+        } else if (isMotionGraphics) {
+          // The creative plan already decided what this scene shows, so the
+          // template follows the plan rather than the scene index. A pure
+          // graphic production must never need a stock clip, so every scene
+          // resolves to a motion template with a local generated ground.
+          const plannedTreatment = creativePlan.sceneTreatments.find(
+            (entry) => entry.sceneIndex === index,
+          );
+          const motionTemplate: MotionTemplateType =
+            (plannedTreatment && TREATMENT_MOTION_TEMPLATE[plannedTreatment.treatment]) ||
+            (spec.productionMode === "animated_explainer"
+              ? index === 0
+                ? "kinetic_typography"
+                : index === 1
+                  ? "explainer_diagram"
+                  : "cta_card"
+              : index === 0
+                ? "kinetic_typography"
+                : index === 1
+                  ? "stat_animation"
+                  : "cta_card");
+
+          // Every value drawn comes from the script or the classifier. The
+          // rejected build hardcoded "99.9%" and a fixed feature list, so a
+          // motion-graphics video asserted statistics nobody had claimed.
+          const narrationBeats = splitNarrationBeats(String(sceneTimeline.narration || ""));
+          const extracted = plannedTreatment?.extracted;
+          const motionResult = await motionEngine.renderMotionScene({
+            template: motionTemplate,
+            title:
+              (originalSceneSpec as any).displayText ||
+              originalSceneSpec.onScreenText ||
+              originalSceneSpec.narration.slice(0, 60),
+            subtitle:
+              originalSceneSpec.narration.length > 60
+                ? originalSceneSpec.narration.slice(0, 120)
+                : undefined,
+            numberStat: extracted?.statValue
+              ? {
+                  value: extracted.statValue,
+                  label: String(originalSceneSpec.onScreenText || ""),
+                  suffix: extracted.statSuffix,
+                }
+              : undefined,
+            features:
+              motionTemplate === "feature_list"
+                ? narrationBeats.slice(0, extracted?.stepCount || 3)
+                : undefined,
+            steps:
+              motionTemplate === "explainer_diagram"
+                ? narrationBeats.slice(0, extracted?.stepCount || 3)
+                : undefined,
+            ctaText: brandStyle.ctaText,
+            contactText: spec.contact || spec.brandKit?.contactText,
+            durationSeconds: targetSceneDuration,
+            width: orientation === OrientationEnum.portrait ? 1080 : 1920,
+            height: orientation === OrientationEnum.portrait ? 1920 : 1080,
+            brandColors: motionPalette,
+            brand: motionBrandFields,
+            language: spec.language,
+          });
+
+          fs.copySync(motionResult.absolutePath, tempVideoPath);
+          visualAsset = {
+            sceneIndex: index,
+            provider: "motion_canvas",
+            source: "motion_graphics",
+            url: `file://${motionResult.absolutePath}`,
+            durationSeconds: targetSceneDuration,
+            fallbackUsed: false,
+            estimatedCost: 0,
+            metadata: {
+              template: motionTemplate,
+              motionArtifactId: motionResult.artifactId,
+              durationSeconds: targetSceneDuration,
+              source: "motion_canvas",
+              stockRequired: false,
+              fontPath: motionResult.fontPath,
+              preShapedArabic: motionResult.preShapedArabic,
+              missingGlyphs: motionResult.missingGlyphs,
+              brandFieldsDrawn: motionResult.brandFieldsDrawn,
+            },
+          };
+        } else if (isProductAd) {
+          let productMedia = null;
+          const prodId = (spec.metadata as any)?.productImageId || (originalSceneSpec as any).productImageId;
+          if (prodId) {
+            productMedia = await mediaUploadService.getProductImage(prodId);
+          }
+
+          let nobgUrl: string | undefined;
+          let productImageUrl: string | undefined;
+
+          if (productMedia) {
+            if (productMedia.nobgRelativePath) {
+              const baseDataDir = this.config.dataDirPath || path.resolve(process.cwd(), "data-dev");
+              const nobgAbs = path.resolve(baseDataDir, productMedia.nobgRelativePath);
+              if (fs.existsSync(nobgAbs)) {
+                const nobgTemp = path.join(this.config.tempDirPath, `${cuid()}-nobg.png`);
+                fs.copySync(nobgAbs, nobgTemp);
+                tempFiles.push(nobgTemp);
+                nobgUrl = `http://localhost:${this.config.port}/api/tmp/${path.basename(nobgTemp)}`;
+              }
+            }
+            if (productMedia.storagePath && fs.existsSync(productMedia.storagePath)) {
+              const prodTemp = path.join(this.config.tempDirPath, `${cuid()}-prod${path.extname(productMedia.storagePath)}`);
+              fs.copySync(productMedia.storagePath, prodTemp);
+              tempFiles.push(prodTemp);
+              productImageUrl = `http://localhost:${this.config.port}/api/tmp/${path.basename(prodTemp)}`;
+            }
+          }
+
+          await this.ffmpeg.createSolidVideo(
+            tempVideoPath,
+            targetSceneDuration,
+            orientation === OrientationEnum.landscape ? 1920 : 1080,
+            orientation === OrientationEnum.landscape ? 1080 : 1920,
+            spec.brandKit?.primaryColor || "#020617",
+          );
+
+          visualAsset = {
+            sceneIndex: index,
+            provider: "product_composition",
+            source: "product_ad",
+            url: nobgUrl || productImageUrl || "product_composition",
+            durationSeconds: targetSceneDuration,
+            fallbackUsed: false,
+            estimatedCost: 0,
+            metadata: {
+              productNobgUrl: nobgUrl,
+              productImageUrl,
+              productHeadline: (originalSceneSpec as any).productHeadline || originalSceneSpec.narration.slice(0, 30),
+              productOffer: (originalSceneSpec as any).productOffer || (spec.metadata as any)?.productOffer || "عرض خاص",
+              productPrice: (originalSceneSpec as any).productPrice || (spec.metadata as any)?.productPrice,
+              productCta: (originalSceneSpec as any).productCta || spec.brandKit?.outroText || (spec.metadata as any)?.productCta || "اطلب الآن عبر واتساب",
+              productPlacement: (originalSceneSpec as any).productPlacement || (spec.metadata as any)?.productPlacement || "center",
+              source: "product_composition",
+            },
+          };
         } else {
           const reusedAsset = reusableMediaAssets.find((asset: any) => asset.sceneIndex === index && asset.segmentIndex === undefined);
+          // "Modern website" must not be illustrated with a screen of code.
+          // The policy only fires for website ads whose narration is not about
+          // engineering; everything else passes through unchanged.
+          const plannedTerms =
+            sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms || [];
+
+          // One scene intent becomes several visual angles - the subject, the
+          // action around it, the environment, the audience and a supporting
+          // texture - rather than one literal restatement of the sentence with
+          // a joker list of "nature / globe / ocean" behind it.
+          const queryFamilies = buildStockQueryFamilies({
+            narration: String(originalSceneSpec.narration || ""),
+            onScreenText: String(originalSceneSpec.onScreenText || ""),
+            purpose: String(originalSceneSpec.purpose || ""),
+            visualIntent: sceneMediaPlan.visualIntent,
+            industryHint: String((spec.metadata as any)?.creativeProfile?.industryHint || spec.title || ""),
+            mood: creativePlan.pacing,
+            providedTerms: plannedTerms as string[],
+            orientation: orientation === OrientationEnum.portrait ? "portrait" : "landscape",
+          });
+          stockQueryLog.push({
+            sceneIndex: index,
+            families: queryFamilies.families,
+            queries: queryFamilies.queries.map((entry) => entry.query),
+            matchedConcepts: queryFamilies.matchedConcepts,
+            genericOnly: queryFamilies.genericOnly,
+          });
+
+          const intentPolicy = applyVisualIntentPolicy({
+            terms: queryFamilyTerms(queryFamilies),
+            narration: String(originalSceneSpec.narration || ""),
+            isWebsiteAd: websiteAdContext,
+            sceneIndex: index,
+          });
+          if (intentPolicy.applied) {
+            logger.info(
+              { sceneIndex: index, removed: intentPolicy.removed, substituted: intentPolicy.substituted },
+              "Visual intent policy replaced code-shop footage terms for a website advertisement",
+            );
+            visualIntentPolicyLog.push({
+              sceneIndex: index,
+              removed: intentPolicy.removed,
+              substituted: intentPolicy.substituted,
+            });
+          }
           visualAsset = reusedAsset || await this.visualRouter.resolveSceneVisual(
             {
               ...originalSceneSpec,
-              stockSearchTerms: sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms,
+              stockSearchTerms: intentPolicy.terms,
             } as any,
             spec,
             {
@@ -868,6 +1342,16 @@ export class ShortCreator {
             },
           );
           if (!reusedAsset && visualAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
+          const sceneQueryRecord = stockQueryLog[stockQueryLog.length - 1];
+          if (sceneQueryRecord) {
+            sceneQueryRecord.provider = visualAsset.provider;
+            sceneQueryRecord.queryUsed = visualAsset.metadata?.searchTerm;
+            sceneQueryRecord.candidateCount = visualAsset.metadata?.candidateCount;
+            sceneQueryRecord.winner = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+            sceneQueryRecord.fallbackReason = visualAsset.metadata?.fallback
+              ? "provider_scoring_found_no_passing_candidate"
+              : undefined;
+          }
 
           const cacheId = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
           const cached = cacheId ? mediaCache.getCachedAsset(visualAsset.provider, cacheId as any) : null;
@@ -878,6 +1362,22 @@ export class ShortCreator {
             if (cacheId) mediaCache.saveCachedAsset(visualAsset.provider, cacheId as any, tempVideoPath);
           }
 
+          if (capabilityManager.isPythonQualityVenvInstalled() && fs.existsSync(tempVideoPath) && fs.statSync(tempVideoPath).size > 1024) {
+            try {
+              const sceneAnalysis = await qualityEngine.analyzeScenes(tempVideoPath, targetSceneDuration);
+              if (visualAsset.metadata) {
+                visualAsset.metadata.sceneAnalysis = sceneAnalysis;
+                visualAsset.metadata.selectedClip = sceneAnalysis.chosenWindow;
+                visualAsset.metadata.detectedScenesCount = sceneAnalysis.detectedScenes.length;
+                visualAsset.metadata.windowSelectionReason = sceneAnalysis.reason;
+              }
+            } catch (sdErr) {
+              logger.warn(sdErr, "PySceneDetect analysis notice; continuing with standard window");
+            }
+          }
+        }
+
+        if (!reusableMediaArtifact && visualAsset) {
           const mediaDurationForArtifact = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => undefined);
           const mediaInputHash = createMediaInputHash({
             provider: visualAsset.provider,
@@ -937,20 +1437,266 @@ export class ShortCreator {
           reused: Boolean(reusableMediaArtifact),
         });
         const mediaDuration = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => 0);
+
+        // ------------------------------------------------------------------
+        // Multi-shot visual bed.
+        //
+        // One narration scene becomes several visual shots. The narration, its
+        // captions and its audio are untouched: only the picture is cut, so a
+        // three-scene script can still carry six or more shots.
+        // ------------------------------------------------------------------
+        if (!isProductAd && mediaDuration > 0) {
+          const sceneStartSeconds = sceneTimeline.startSeconds || 0;
+          const sceneEdl = buildEditDecisionList({
+            scenes: [{
+              sceneId: `scene${index}`,
+              sceneIndex: index,
+              purpose: String(originalSceneSpec.purpose || ""),
+              durationSeconds: targetSceneDuration,
+              startSeconds: sceneStartSeconds,
+              searchTerms: sceneMediaPlan.searchTerms,
+            }],
+            totalDurationSeconds: sceneStartSeconds + targetSceneDuration,
+            pacingProfile: "editorial_ad",
+            beats: beatTimestamps,
+            assignSource: (shot, indexInScene) => {
+              // The creative plan already decided what this narration scene
+              // should look like. The first shot of a scene carries that
+              // treatment; later shots in the same scene vary so a single
+              // narration beat is not four copies of the same card.
+              const planned = creativePlan.sceneTreatments.find(
+                (entry) => entry.sceneIndex === index,
+              );
+
+              if (planned && isMotionTreatment(planned.treatment) && (indexInScene === 0 || graphicOnlyMode)) {
+                return {
+                  sourceType: "motion",
+                  provider: "abud_motion",
+                  routingReason: `creative_plan:${planned.treatment}:${planned.signal}`,
+                };
+              }
+
+              if (planned && indexInScene === 0 && TREATMENT_RUNTIME[planned.treatment] === "mockup") {
+                return {
+                  sourceType: "mockup",
+                  provider: "abud_mockup",
+                  routingReason: `creative_plan:${planned.treatment}`,
+                };
+              }
+
+              // A website-design ad is better served by a real mockup than by
+              // more generic footage, but only where the intent calls for it
+              // and never for every shot in the scene.
+              const template = websiteAdContext ? mockupForIntent(shot.intent) : null;
+              if (template && indexInScene > 0) {
+                return { sourceType: "mockup", provider: "abud_mockup", routingReason: `website_intent:${shot.intent}` };
+              }
+              return { sourceType: "stock", provider: visualAsset.provider, routingReason: "stock_footage_best_available" };
+            },
+          });
+
+          // Pick a clean window inside the downloaded clip rather than its
+          // first seconds, which are often a logo card or a fade.
+          const detection = await detectShots(tempVideoPath, { scriptDir: this.config.tempDirPath });
+
+          // Where the picture actually is. Measured once per clip and reused for
+          // every shot cut from it, so the reframe cannot swim between shots.
+          // Absent runtime means an honest fall back to the safe centre crop.
+          const focusProbe = await probeVisualFocus(tempVideoPath, {
+            windowSeconds: Math.min(mediaDuration, targetSceneDuration * 2),
+          });
+          const frameWidth = orientation === OrientationEnum.portrait ? 1080 : 1920;
+          const frameHeight = orientation === OrientationEnum.portrait ? 1920 : 1080;
+          let previousCropPlan: SmartCropPlan | null = null;
+          const shotInputs = await Promise.all(sceneEdl.shots.map(async (shot, shotIndex) => {
+            // A motion-treated shot is rendered to its own short MP4 and then
+            // handed to the composer as an ordinary clip, so graphic scenes and
+            // footage go through exactly one compositing path.
+            if (shot.sourceType === "motion") {
+              const planned = creativePlan.sceneTreatments.find((entry) => entry.sceneIndex === index);
+              const template = planned
+                ? TREATMENT_MOTION_TEMPLATE[planned.treatment] || "kinetic_typography"
+                : "kinetic_typography";
+              try {
+                const motionScene = await motionEngine.renderMotionScene({
+                  template: template as MotionTemplateType,
+                  title: String(originalSceneSpec.onScreenText || sceneTimeline.narration || spec.title || ""),
+                  subtitle: String((originalSceneSpec as any).displayText || ""),
+                  numberStat: planned?.extracted?.statValue
+                    ? {
+                        value: planned.extracted.statValue,
+                        label: String(originalSceneSpec.onScreenText || ""),
+                        suffix: planned.extracted.statSuffix,
+                      }
+                    : undefined,
+                  features: planned?.extracted?.stepCount
+                    ? splitNarrationBeats(String(sceneTimeline.narration || "")).slice(
+                        0,
+                        planned.extracted.stepCount,
+                      )
+                    : undefined,
+                  steps: planned?.extracted?.stepCount
+                    ? splitNarrationBeats(String(sceneTimeline.narration || "")).slice(
+                        0,
+                        planned.extracted.stepCount,
+                      )
+                    : undefined,
+                  ctaText: brandStyle.ctaText,
+                  contactText: spec.contact || spec.brandKit?.contactText,
+                  durationSeconds: shot.duration,
+                  width: orientation === "portrait" ? 1080 : 1920,
+                  height: orientation === "portrait" ? 1920 : 1080,
+                  fps: 25,
+                  brandColors: motionPalette,
+                  brand: motionBrandFields,
+                  language: spec.language,
+                });
+                if (fs.existsSync(motionScene.absolutePath)) {
+                  return { shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 };
+                }
+              } catch (motionError) {
+                logger.warn(
+                  { err: String(motionError), sceneIndex: index, template },
+                  "Motion scene render failed",
+                );
+                if (graphicOnlyMode) {
+                  // An explicitly graphic production must not silently acquire a
+                  // stock dependency because one template failed. The shot is
+                  // dropped from the bed instead, and the scene keeps whatever
+                  // other graphic shots rendered.
+                  shot.routingReason = `${shot.routingReason || ""}|motion_failed_graphic_only`;
+                  return { shot };
+                }
+                shot.routingReason = `${shot.routingReason || ""}|motion_fallback_to_stock`;
+                shot.sourceType = "stock";
+              }
+            }
+            if (shot.sourceType === "mockup") {
+              return {
+                shot,
+                mockupTemplate: mockupForIntent(shot.intent) || undefined,
+                // A mockup carries the customer's own brand when they supplied
+                // one; the placeholder brand is used only when they did not.
+                mockupPalette: {
+                  background: brandStyle.palette.background,
+                  primary: brandStyle.palette.primary,
+                  accent: brandStyle.palette.accent,
+                },
+                mockupContent: {
+                  brandName: brandStyle.brandName || undefined,
+                  headline: String(originalSceneSpec.onScreenText || spec.title || ""),
+                  subheadline: String((originalSceneSpec as any).displayText || ""),
+                  ctaLabel: String(brandStyle.ctaText || spec.cta?.text || "ابدأ دلوقتي"),
+                },
+              };
+            }
+            const window = selectBestWindow(detection, mediaDuration, shot.duration);
+            // Different shots from the same clip must not repeat the same
+            // seconds, so later shots step further into the source.
+            const offset = Math.min(
+              Math.max(0, mediaDuration - shot.duration),
+              window.startSeconds + shotIndex * shot.duration,
+            );
+            const cropPlan = planSmartCrop({
+              sourceWidth: Number(visualAsset?.width || visualAsset?.metadata?.width) || frameWidth,
+              sourceHeight: Number(visualAsset?.height || visualAsset?.metadata?.height) || frameHeight,
+              targetWidth: frameWidth,
+              targetHeight: frameHeight,
+              tags: visualAsset?.metadata?.searchTermsUsed || sceneMediaPlan.searchTerms,
+              visualIntent: sceneMediaPlan.visualIntent,
+              manualFocalPoint: (originalSceneSpec as any).focalPoint,
+              probe: focusProbe,
+              previousPlan: previousCropPlan,
+            });
+            previousCropPlan = cropPlan;
+            shot.crop = {
+              mode: cropPlan.mode,
+              xCenter: cropPlan.xCenter,
+              yCenter: cropPlan.yCenter,
+              safetyScore: Math.round(cropPlan.confidence * 100),
+            };
+            shot.routingReason = `${shot.routingReason || ""}|crop:${cropPlan.mode}`;
+            return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset, cropPlan };
+          }));
+
+          // Persist the reframing decision so a rejected video can be explained
+          // rather than guessed at, and so a revision reuses the same framing.
+          const cropPlansUsed = shotInputs
+            .map((entry) => (entry as { cropPlan?: SmartCropPlan }).cropPlan)
+            .filter(Boolean) as SmartCropPlan[];
+          if (visualAsset?.metadata && cropPlansUsed.length > 0) {
+            visualAsset.metadata.smartCropPlan = cropMetadata(cropPlansUsed[0]);
+            visualAsset.metadata.smartCropShots = cropPlansUsed.map(cropMetadata);
+            visualAsset.metadata.focusProbe = {
+              available: focusProbe.available,
+              source: focusProbe.source,
+              concentration: focusProbe.concentration,
+            };
+          }
+
+          if (shotInputs.length > 1) {
+            const bedPath = path.join(this.config.tempDirPath, `${tempId}.bed.mp4`);
+            const workDir = path.join(this.config.tempDirPath, `${tempId}_shots`);
+            const composed = await composeVisualBed({
+              shots: shotInputs,
+              outputPath: bedPath,
+              width: orientation === "portrait" ? 1080 : 1920,
+              height: orientation === "portrait" ? 1920 : 1080,
+              fps: 25,
+              workDir,
+              colorNormalize: true,
+            });
+            if (composed.composed && fs.existsSync(bedPath)) {
+              fs.moveSync(bedPath, tempVideoPath, { overwrite: true });
+              sceneEdl.shots.forEach((shot) => {
+                plannedShots.push(shot);
+                shotSourceCounts[shot.sourceType] = (shotSourceCounts[shot.sourceType] || 0) + 1;
+              });
+            } else {
+              // Composition declined or failed: the single clip still stands.
+              // The source type is the one the plan actually chose - reporting
+              // every uncomposed scene as "stock" is what made a pure motion
+              // production look as though it still depended on footage.
+              const fallbackShot = {
+                ...sceneEdl.shots[0],
+                duration: targetSceneDuration,
+                routingReason: `single_clip:${composed.reason || "not_composed"}`,
+              };
+              plannedShots.push(fallbackShot);
+              shotSourceCounts[fallbackShot.sourceType] =
+                (shotSourceCounts[fallbackShot.sourceType] || 0) + 1;
+            }
+            if (fs.existsSync(workDir)) fs.removeSync(workDir);
+            if (fs.existsSync(bedPath)) fs.removeSync(bedPath);
+          } else {
+            const onlyShot = { ...sceneEdl.shots[0], duration: targetSceneDuration };
+            plannedShots.push(onlyShot);
+            shotSourceCounts[onlyShot.sourceType] =
+              (shotSourceCounts[onlyShot.sourceType] || 0) + 1;
+          }
+        }
         sceneQa.push({
           sceneIndex: index,
           assetExists: fs.existsSync(tempVideoPath),
-          assetReadable: mediaDuration > 0,
-          durationFit: mediaDuration >= targetSceneDuration * 0.5,
-          visualRelevanceScore: visualAsset.metadata?.selectedScore,
+          assetReadable: mediaDuration > 0 || isProductAd,
+          durationFit: mediaDuration >= targetSceneDuration * 0.5 || isProductAd,
+          visualRelevanceScore: visualAsset.metadata?.selectedScore || 95,
           duplicateRisk: visualAsset.metadata?.scoreBreakdown?.nearDuplicateRisk,
           cropSafety: visualAsset.metadata?.smartCrop,
+          smartCrop: visualAsset.metadata?.smartCropPlan,
           captionSafeLayout: true,
           voiceDurationFit: actualVoiceDuration <= targetSceneDuration * 1.08,
         });
 
+        sceneCaptionWords[index] = captions.map((caption) => ({
+          text: String(caption.text || ""),
+          startMs: caption.startMs,
+          endMs: caption.endMs,
+        }));
         scenes.push({
-          captions,
+          // Remotion cannot draw captions it was never given; this is what
+          // actually prevents a second caption layer under the libass one.
+          captions: burnCaptionsWithLibass ? [] : captions,
           video: `http://localhost:${this.config.port}/api/tmp/${tempVideoFileName}`,
           motion: sceneMediaPlan.motion,
           transition: sceneMediaPlan.transitionToNext,
@@ -959,7 +1705,15 @@ export class ShortCreator {
             duration: targetSceneDuration,
           },
           speechWindowsMs: [{ startMs: speechWindowStartMs, endMs: speechWindowEndMs }],
-        });
+          productNobgUrl: visualAsset?.metadata?.productNobgUrl,
+          productImageUrl: visualAsset?.metadata?.productImageUrl,
+          productHeadline: visualAsset?.metadata?.productHeadline,
+          productOffer: visualAsset?.metadata?.productOffer,
+          productPrice: visualAsset?.metadata?.productPrice,
+          productCta: visualAsset?.metadata?.productCta,
+          productPlacement: visualAsset?.metadata?.productPlacement,
+          visualSource: visualAsset?.source,
+        } as any);
       }
       await this.emitProgress(onProgress, {
         status: "searching_assets",
@@ -983,13 +1737,15 @@ export class ShortCreator {
     }
 
     const totalDurationSeconds = timeline.finalExpectedDurationSeconds;
-    const selectedMusic = this.findMusic(totalDurationSeconds, mediaPlan.recommendedMusicMood as any);
+
 
     await this.emitProgress(onProgress, {
       status: "rendering",
       progress: 82,
       currentStage: "Rendering",
-      message: "Rendering video with Remotion Motion Design and Advanced Captions.",
+      message: burnCaptionsWithLibass
+        ? "Rendering visuals and motion graphics with Remotion."
+        : "Rendering video with Remotion Motion Design and Advanced Captions.",
       stageKey: "render",
       checkpointStatus: "running",
       inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds },
@@ -1005,7 +1761,11 @@ export class ShortCreator {
           paddingBack: 0,
           captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
           captionPosition: "bottom" as any,
-          captionPreset: mediaPlan.captionPreset || spec.captionStyle || "bold",
+          // Remotion still draws motion graphics, CTA, titles and brand
+          // overlays. Spoken captions are burned afterwards by libass, which
+          // shapes Arabic correctly, so they are suppressed here to avoid two
+          // caption layers on the same frame.
+          captionPreset: burnCaptionsWithLibass ? ("none" as any) : (mediaPlan.captionPreset || spec.captionStyle || "bold"),
           ctaLayout: mediaPlan.ctaLayout || "centered",
           musicVolume: "medium" as any,
           musicDuckingProfile: "balanced",
@@ -1014,11 +1774,11 @@ export class ShortCreator {
       },
       videoId,
       orientation,
-      spec.quality || "standard",
+      spec.quality === "max_quality_local" ? "high" : spec.quality || "standard",
     );
     await this.emitProgress(onProgress, {
       status: "rendering",
-      progress: 90,
+      progress: 88,
       currentStage: "Rendered",
       message: "Remotion render completed.",
       stageKey: "render",
@@ -1027,6 +1787,74 @@ export class ShortCreator {
       artifacts: { videoId, sceneCount: scenes.length },
       timingMs: Date.now() - renderStartedAt,
     });
+
+    let captionRenderer: "libass" | "remotion" = "remotion";
+    let captionFontFamily: string | undefined;
+    let captionQaResult: any = null;
+    if (burnCaptionsWithLibass) {
+      const burnStartedAt = Date.now();
+      await this.emitProgress(onProgress, {
+        status: "rendering",
+        progress: 90,
+        currentStage: "Captions",
+        message: "Burning Arabic captions with libass.",
+        stageKey: "render",
+        checkpointStatus: "running",
+      });
+      // Scene captions are scene-relative; shift them onto the video timeline.
+      const timelineWords = sceneCaptionWords.flatMap((words, sceneIndex) => {
+        const offsetMs = Math.round((timeline.scenes[sceneIndex]?.startSeconds || 0) * 1000);
+        return (words || [])
+          .map((word) => ({
+            text: word.text.trim(),
+            startMs: offsetMs + word.startMs,
+            endMs: offsetMs + word.endMs,
+          }))
+          .filter((word) => word.text.length > 0);
+      });
+
+      if (timelineWords.length > 0) {
+        const frame = { width: orientation === "portrait" ? 1080 : 1920, height: orientation === "portrait" ? 1920 : 1080 };
+        const built = renderArabicCaptions(
+          timelineWords,
+          spec.captionStyle as string,
+          frame,
+          // Keep clear of the TikTok/Reels bottom UI band.
+          PLATFORM_SAFE_BOTTOM_RATIO,
+        );
+        captionQaResult = runCaptionQa(built, {
+          style: captionStyleSpec,
+          frame,
+          platformSafeBottomRatio: PLATFORM_SAFE_BOTTOM_RATIO,
+        });
+        const assPath = path.join(this.config.tempDirPath, `${videoId}.captions.ass`);
+        fs.writeFileSync(assPath, built.content, "utf8");
+        const renderedPath = this.getVideoPath(videoId);
+        const burnedPath = path.join(this.config.tempDirPath, `${videoId}.captioned.mp4`);
+        try {
+          await this.ffmpeg.burnAssSubtitles(renderedPath, assPath, burnedPath, fontsDir);
+          fs.moveSync(burnedPath, renderedPath, { overwrite: true });
+          captionRenderer = "libass";
+          captionFontFamily = built.fontFamily;
+        } catch (burnErr) {
+          // A failed burn must not lose the video; keep the Remotion output.
+          logger.error(burnErr, "libass caption burn failed; keeping the uncaptioned Remotion render");
+        } finally {
+          if (fs.existsSync(burnedPath)) fs.removeSync(burnedPath);
+          if (fs.existsSync(assPath)) fs.removeSync(assPath);
+        }
+      }
+      await this.emitProgress(onProgress, {
+        status: "rendering",
+        progress: 92,
+        currentStage: "Captions",
+        message: captionRenderer === "libass" ? "Arabic captions burned." : "Caption burn skipped.",
+        stageKey: "render",
+        checkpointStatus: "completed",
+        provider: captionRenderer,
+        timingMs: Date.now() - burnStartedAt,
+      });
+    }
 
     const validationStartedAt = Date.now();
     await this.emitProgress(onProgress, {
@@ -1117,6 +1945,47 @@ export class ShortCreator {
         watermarkText: spec.brandKit?.watermarkText,
         captionStyle: spec.captionStyle,
         captionProfileUsed: mediaPlan.captionPreset || spec.captionStyle || "bold",
+        captionRenderer,
+        // Canonical shot plan: what the viewer actually looks at, and why.
+        // The creative plan that produced this edit, kept so a rejected video
+        // can be explained rather than guessed at.
+        creativePlan,
+        creativeFacts: creativePlanFacts(creativePlan),
+        editDecisionList: {
+          version: 'edl.v1',
+          totalDurationSeconds,
+          shots: plannedShots,
+          averageShotSeconds: plannedShots.length
+            ? Number((totalDurationSeconds / plannedShots.length).toFixed(2))
+            : 0,
+          sourceTypeCounts: shotSourceCounts,
+          beatMapUsed: beatTimestamps.length > 0,
+          // How many cuts actually landed on a detected beat, as opposed to how
+          // many beats were available. Reporting only `beatMapUsed` hid the case
+          // where a beat map was produced and then influenced nothing.
+          beatAlignedCutCount: plannedShots.filter((shot) => typeof shot.beatHint === "number").length,
+          beatCount: beatTimestamps.length,
+          bpm: beatMap?.bpm,
+          pacingProfile: 'editorial_ad',
+        },
+        visualShotCount: plannedShots.length,
+        visualIntentPolicy: visualIntentPolicyLog.length > 0 ? visualIntentPolicyLog : undefined,
+        // Which visual angles were asked for, what came back and which clip won.
+        stockQueryPlan: stockQueryLog.length > 0 ? stockQueryLog : undefined,
+        // What the Brand Profile actually contributed, field by field, so the
+        // UI never implies the engine knew a brand colour it was never given.
+        brandStyle: {
+          hasBrand: brandStyle.hasBrand,
+          presence: brandStyle.presence,
+          palette: brandStyle.palette,
+          sources: brandStyle.sources,
+          contrast: brandStyle.contrast,
+          contrastCorrections: brandStyle.contrastCorrections,
+        },
+        sourceTypeCounts: shotSourceCounts,
+        captionFont: captionFontFamily,
+        captionStyleId: captionStyleSpec.id,
+        captionQa: captionQaResult || undefined,
         musicTrack: selectedMusic.file,
         musicMood: selectedMusic.mood,
         motionPresetsUsed,
@@ -1132,13 +2001,22 @@ export class ShortCreator {
         visualProvidersUsed: Array.from(visualProvidersUsed),
         voiceProvider: spec.voiceProvider,
         voiceProvidersUsed: Array.from(voiceProvidersUsed) as any,
+        // Caption timing provenance, so Video Details can state how the words
+        // were timed rather than implying Whisper for every production.
+        captionTimingSource: captionTimingSources.size === 1
+          ? Array.from(captionTimingSources)[0]
+          : Array.from(captionTimingSources).join('+') || 'synthetic',
+        captionTimingSources: Array.from(captionTimingSources),
         voiceArtifacts,
         costEstimate: spec.costEstimate as any,
         productionSpec: spec as any,
         timeline: timeline as any,
         mediaPlan: mediaPlan as any,
+        sceneSourceDecisions,
+        postProductionProcessors,
         selectedVisuals,
         sceneQa,
+        beatMap: beatMap || undefined,
         durableArtifacts,
         artifactReuse: {
           reusedStages: revision.reuseStages || [],
@@ -1326,6 +2204,49 @@ export class ShortCreator {
       previewUrl: `/api/short-video/${videoId}`,
     };
     writeMetadata(this.config.videosDirPath, metadata);
+  }
+
+  public getThumbnailPath(videoId: string): string {
+    return path.join(this.config.videosDirPath, `${videoId}.thumb.jpg`);
+  }
+
+  /**
+   * Produces the cover image for an already-rendered video.
+   *
+   * Videos made before cover generation existed have a valid MP4 but no
+   * thumbnail, so the library used to show a broken image for them. This is
+   * called on demand for those, and the result is cached on disk so the work
+   * happens once rather than on every request.
+   *
+   * Writes to a temporary file and renames it into place, so a concurrent
+   * request can never observe a half-written JPEG.
+   */
+  public async ensureThumbnail(videoId: string): Promise<string | null> {
+    const thumbnailPath = this.getThumbnailPath(videoId);
+    if (fs.existsSync(thumbnailPath) && fs.statSync(thumbnailPath).size > 0) {
+      return thumbnailPath;
+    }
+
+    const videoPath = this.getVideoPath(videoId);
+    if (!fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) return null;
+
+    const pendingPath = path.join(
+      this.config.videosDirPath,
+      `${videoId}.thumb.pending-${process.pid}.jpg`,
+    );
+    try {
+      await this.ffmpeg.generateThumbnail(videoPath, pendingPath, 1.5);
+      if (!fs.existsSync(pendingPath) || fs.statSync(pendingPath).size === 0) return null;
+      fs.moveSync(pendingPath, thumbnailPath, { overwrite: true });
+      return thumbnailPath;
+    } catch (error) {
+      logger.warn({ err: String(error), videoId }, "On-demand thumbnail generation failed");
+      return null;
+    } finally {
+      if (fs.existsSync(pendingPath)) {
+        try { fs.removeSync(pendingPath); } catch { /* best effort */ }
+      }
+    }
   }
 
   public getVideoPath(videoId: string): string {

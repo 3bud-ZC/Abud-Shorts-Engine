@@ -4,6 +4,7 @@ export const BUSINESS_TEMPLATE_IDS = [
   "real_estate_listing",
   "educational_tip",
   "viral_curiosity",
+  "event_promo",
 ] as const;
 
 export type BusinessTemplateId = (typeof BUSINESS_TEMPLATE_IDS)[number];
@@ -470,6 +471,85 @@ const TEMPLATE_DEFINITIONS: Record<BusinessTemplateId, BusinessTemplate> = {
         type: "text",
         required: true,
         placeholder: "اكتب CTA يدفع للتعليق أو الزيارة",
+      },
+    ],
+  },
+  event_promo: {
+    id: "event_promo",
+    displayName: "Event Promo",
+    description:
+      "Announces a dated event: what it is, when and where, the atmosphere, and an urgent booking CTA.",
+    targetUseCase: "Venues, organisers and brands promoting a dated event",
+    defaultTone: "Anticipation-building, warm, urgent Egyptian Arabic",
+    suggestedDurationSeconds: 25,
+    recommendedSceneCount: 4,
+    targetDurationSeconds: 20,
+    qualityChecklist: [
+      "Opening states what the event is",
+      "Date, time and venue are on screen, not only spoken",
+      "Atmosphere footage shows the kind of night it will be",
+      "CTA carries real urgency: limited seats or a closing date",
+    ],
+    examplePrompt:
+      "اعلن عن الفعالية، حدد التاريخ والمكان، وأظهر الأجواء، واختم بدعوة للحجز قبل نفاد الأماكن",
+    pexelsSearchHints: [
+      "event stage lights",
+      "conference audience",
+      "festival crowd",
+      "venue interior evening",
+      "concert lighting",
+      "people celebrating",
+    ],
+    fallbackPexelsSearchHints: [
+      "event",
+      "crowd",
+      "stage",
+      "celebration",
+      "venue",
+    ],
+    hookStyle: "Name the event and the date in the first line",
+    ctaStyle: "Book now, with a stated deadline or limited capacity",
+    fields: [
+      {
+        key: "eventName",
+        label: "Event Name",
+        type: "text",
+        required: true,
+        placeholder: "مثال: ليلة الجاز في الساقية",
+      },
+      {
+        key: "eventDate",
+        label: "Date and Time",
+        type: "text",
+        required: true,
+        placeholder: "مثال: الجمعة 12 سبتمبر - 8 مساءً",
+      },
+      {
+        key: "venue",
+        label: "Venue or Location",
+        type: "text",
+        required: true,
+      },
+      {
+        key: "highlight",
+        label: "Main Attraction",
+        type: "textarea",
+        required: true,
+        helperText: "ما الذي يجعل الحضور يستحق؟",
+      },
+      {
+        key: "ticketInfo",
+        label: "Tickets or Entry",
+        type: "text",
+        required: true,
+        placeholder: "مثال: 250 جنيه - الأماكن محدودة",
+      },
+      {
+        key: "contactMethod",
+        label: "Booking Channel",
+        type: "text",
+        required: true,
+        placeholder: "WhatsApp / Instagram / Link",
       },
     ],
   },

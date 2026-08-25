@@ -98,7 +98,14 @@ export const brandKitSchema = z.object({
   brandName: z.string().optional(),
   watermarkText: z.string().optional(),
   primaryColor: z.string().optional(),
+  // Added in V2.2 so a Brand Profile can drive a full palette rather than two
+  // swatches. All optional: an older brand row simply has them undefined and the
+  // style resolver derives neutrals instead of inventing brand colours.
+  secondaryColor: z.string().optional(),
   accentColor: z.string().optional(),
+  logoUrl: z.string().max(500).optional(),
+  websiteUrl: z.string().max(300).optional(),
+  socialHandle: z.string().max(120).optional(),
   captionStyle: captionStyleEnum.optional(),
   includeOutro: z.boolean().optional(),
   outroText: z.string().optional(),

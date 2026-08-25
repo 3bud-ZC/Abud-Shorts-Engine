@@ -10,6 +10,10 @@ export function getSessionToken(): string {
   }
 }
 
+export function isAuthenticated(): boolean {
+  return Boolean(getSessionToken());
+}
+
 export function shouldRedirectToLogin(status?: number, url = ""): boolean {
   if (status !== 401) return false;
   const target = String(url || "");
@@ -53,7 +57,21 @@ export function configureAxiosAuth(): void {
   );
 }
 
+/**
+ * Builds a media URL the browser can fetch directly.
+ *
+ * `<img>` and `<video>` cannot send an Authorization header, so the session
+ * token travels as a query parameter for these same-origin media requests only.
+ * This is the application's own short-lived session token; no provider access
+ * token is ever placed in a URL.
+ *
+ * Returns an empty string when the path still contains an unresolved value. A
+ * media record that arrives without a filename used to produce a request for
+ * `/api/v2/media/uploads/undefined`, which is a guaranteed 404 and a console
+ * error for something the customer cannot act on.
+ */
 export function withMediaAccessToken(url: string): string {
+  if (!url || /\/(undefined|null)(\?|$)/.test(url)) return "";
   const token = getSessionToken();
   if (!token || url.startsWith("data:") || url.startsWith("blob:")) {
     return url;

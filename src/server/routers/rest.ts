@@ -456,7 +456,7 @@ export class APIRouter {
     this.router.get(
       ["/videos/:videoId/thumbnail", "/short-video/:videoId/thumbnail"],
       this.requireProtectedAccess("videos:read"),
-      (req: ExpressRequest, res: ExpressResponse) => {
+      async (req: ExpressRequest, res: ExpressResponse) => {
         try {
           const { videoId } = req.params;
           if (!videoId || !isSafeVideoId(videoId)) {
@@ -465,10 +465,28 @@ export class APIRouter {
           }
 
           const thumbPath = path.join(this.config.videosDirPath, `${videoId}.thumb.jpg`);
-          if (fs.existsSync(thumbPath)) {
+          const streamThumb = () => {
             res.setHeader("Content-Type", "image/jpeg");
             res.setHeader("Cache-Control", "public, max-age=86400");
             fs.createReadStream(thumbPath).pipe(res);
+          };
+
+          if (fs.existsSync(thumbPath)) {
+            streamThumb();
+            return;
+          }
+
+          // Videos rendered before cover generation existed have a valid MP4
+          // but no thumbnail, so the library showed a broken image for them.
+          // Generate one on demand and cache it; later requests take the
+          // branch above rather than re-encoding every time.
+          //
+          // videoId is validated by isSafeVideoId above and thumbPath is
+          // composed from the configured videos directory, so this cannot be
+          // pointed at an arbitrary file on disk.
+          const generated = await this.shortCreator.ensureThumbnail(videoId);
+          if (generated && fs.existsSync(thumbPath)) {
+            streamThumb();
             return;
           }
 

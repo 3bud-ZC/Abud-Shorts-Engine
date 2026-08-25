@@ -1,6 +1,13 @@
 import type { CostEstimate, ProductionSpec } from "../../types/productionSpec";
+import type { VoiceProviderId } from "./voice-providers/types";
 
-export function estimateProductionCost(spec: Partial<ProductionSpec>): CostEstimate {
+export type ResolvedRouteCostContext = {
+  voiceProvider?: VoiceProviderId | "auto";
+  visualMode?: string;
+  contentAIProvider?: string;
+};
+
+export function estimateProductionCost(spec: Partial<ProductionSpec>, routeContext: ResolvedRouteCostContext = {}): CostEstimate {
   const scenes = spec.scenes || [];
   let aiScenesCount = 0;
   let stockScenesCount = 0;
@@ -8,11 +15,11 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>): CostEstim
   let visualProvider = "pexels";
 
   scenes.forEach((scene) => {
-    if (scene.visualSource === "ai" || spec.visualMode === "ai") {
+    if (scene.visualSource === "ai" || scene.visualSource === "ai_generated_video" || routeContext.visualMode === "ai" || spec.visualMode === "ai") {
       aiScenesCount++;
       const p = scene.visualProvider || "veo";
       visualProvider = p;
-      const costPerScene = p === "fal" ? 0.15 : 0.2;
+      const costPerScene = p === "motion_canvas" || p === "local" ? 0 : p === "fal" ? 0.15 : 0.2;
       visualCost += costPerScene;
     } else {
       stockScenesCount++;
@@ -24,24 +31,44 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>): CostEstim
     0,
   );
 
-  let voiceCost = 0;
-  const voiceProvider = spec.voiceProvider || "kokoro";
-  let estimatedCostTier: "local_free" | "cloud_free_tier" | "premium" = "local_free";
+  const voiceCost = 0;
+  const voiceProvider = routeContext.voiceProvider && routeContext.voiceProvider !== "auto"
+    ? routeContext.voiceProvider
+    : spec.voiceProvider || "auto";
+  let estimatedCostTier: "local_free" | "experimental_free_online" | "cloud_free_tier" | "premium" = "local_free";
+  // ElevenLabs bills against a subscription character allowance, so no reliable
+  // per-job dollar figure exists. We report usage-based instead of inventing one,
+  // and never present an ElevenLabs job as a $0 external cost.
+  let voiceUsageBased = false;
+  let voiceCostLabel = "Local / Free";
   if (voiceProvider === "elevenlabs") {
     estimatedCostTier = "premium";
-    voiceCost = Math.round(totalChars * 0.0003 * 100) / 100;
+    voiceUsageBased = true;
+    voiceCostLabel = "ElevenLabs · Cloud / Usage Based";
   } else if (voiceProvider === "google_cloud_tts") {
     estimatedCostTier = "cloud_free_tier";
+    voiceUsageBased = true;
+    voiceCostLabel = "Google Cloud TTS · Cloud / Usage Based";
+  } else if (voiceProvider === "edge_tts") {
+    estimatedCostTier = "experimental_free_online";
+    voiceCostLabel = "Edge TTS · Experimental Free Online";
   }
 
-  const contentAICost = spec.metadata?.planner === "GeminiContentAIProvider" ? 0.001 : 0;
+  const contentAICost = routeContext.contentAIProvider === "gemini" || spec.metadata?.planner === "GeminiContentAIProvider" ? 0.001 : 0;
   const totalCost = Math.round((contentAICost + visualCost + voiceCost) * 100) / 100;
-  const isFree = totalCost === 0;
+  // A usage-based provider is never free, even though its exact cost is unknown.
+  const isFree = totalCost === 0 && !voiceUsageBased;
 
   return {
     estimatedCost: totalCost,
     currency: "USD",
     isFree,
+    usageBased: voiceUsageBased,
+    costLabel: voiceUsageBased
+      ? voiceCostLabel
+      : totalCost === 0
+        ? "Free local pipeline"
+        : `$${totalCost} USD`,
     breakdown: {
       contentAI: contentAICost,
       visualAssets: {
@@ -53,8 +80,10 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>): CostEstim
       voice: {
         provider: voiceProvider,
         charCount: totalChars,
-        cost: Math.round(voiceCost * 100) / 100,
+        cost: voiceCost,
         estimatedCostTier,
+        usageBased: voiceUsageBased,
+        costLabel: voiceCostLabel,
       },
       rendering: 0,
     },

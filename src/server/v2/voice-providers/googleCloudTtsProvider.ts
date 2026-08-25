@@ -115,7 +115,8 @@ export class GoogleCloudTtsProvider implements VoiceProvider {
     };
   }
 
-  public supportsLanguage(language?: string): boolean {
+  public supportsLanguage(language?: string, dialect?: any): boolean {
+    if (dialect && dialect !== "none" && dialect !== "msa") return false;
     return !language || language === "auto" || language === "ar" || language === DEFAULT_LANGUAGE_CODE;
   }
 

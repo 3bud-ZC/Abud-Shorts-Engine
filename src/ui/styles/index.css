@@ -2,17 +2,60 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Base styles */
+/*
+ * Locally bundled UI typography.
+ *
+ * IBM Plex Sans Arabic ships both Arabic and Latin glyphs, so one family serves
+ * the whole dashboard and mixed Arabic/English text stays visually consistent.
+ * The files are bundled with the app: the dashboard never requests a font from
+ * Google Fonts or any other network host.
+ */
+@font-face {
+  font-family: "IBM Plex Sans Arabic";
+  src: url("../assets/fonts/IBMPlexSansArabic-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans Arabic";
+  src: url("../assets/fonts/IBMPlexSansArabic-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans Arabic";
+  src: url("../assets/fonts/IBMPlexSansArabic-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans Arabic";
+  src: url("../assets/fonts/IBMPlexSansArabic-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
 body {
   margin: 0;
   padding: 0;
-  font-family: 'Roboto', 'Helvetica', 'Arial', sans-serif;
+  background-color: #07070c;
+  font-family: "IBM Plex Sans Arabic", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Arabic content keeps the same family; only direction changes. */
 [dir="rtl"] {
-  font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+  font-family: "IBM Plex Sans Arabic", "Segoe UI", Tahoma, Arial, sans-serif;
 }
 
 a {
@@ -20,39 +63,18 @@ a {
   text-decoration: none;
 }
 
-/* Scrollbar styles */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* The page itself must never scroll sideways at any breakpoint. */
+body {
+  overflow-x: hidden;
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-/* Focus styles for accessibility */
-:focus-visible {
-  outline: 3px solid rgba(36, 84, 90, 0.35);
-  outline-offset: 2px;
-}
-
-/* Transitions */
 .fade-enter {
   opacity: 0;
 }
 
 .fade-enter-active {
   opacity: 1;
-  transition: opacity 300ms;
+  transition: opacity 240ms;
 }
 
 .fade-exit {
@@ -61,5 +83,14 @@ a {
 
 .fade-exit-active {
   opacity: 0;
-  transition: opacity 300ms;
-} 
+  transition: opacity 240ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

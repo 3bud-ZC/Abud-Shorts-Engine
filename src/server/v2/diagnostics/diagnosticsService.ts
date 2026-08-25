@@ -6,6 +6,9 @@ import { logger } from "../../../logger";
 import { PRODUCT_NAME, PRODUCT_VERSION, PRODUCT_STAGE, DATABASE_SCHEMA_VERSION } from "../../../version";
 import { V2Database } from "../db";
 import { publishingRegistry } from "../publishing/registry";
+import { getReleaseChannel } from "../../../version";
+import { hasIncompleteTransaction, readUpdateState } from "../updates/updateState";
+import type { UpdateTransaction } from "../updates/updateState";
 
 export interface StorageUsage {
   totalDiskBytes?: number;
@@ -52,6 +55,20 @@ export interface DiagnosticReport {
   recentFailedJobs: any[];
   recentFailedPublications: any[];
   sanitizedLogs: string[];
+  /**
+   * What the host updater last did here. Support needs this far more often than
+   * anything else in the bundle: "which version is installed, did the last
+   * update finish, and did it roll back?".
+   */
+  updates: {
+    installedVersion: string;
+    schemaVersion: string;
+    releaseChannel: string;
+    updateInProgress: boolean;
+    lastAttempt: UpdateTransaction | null;
+    lastSuccessful: UpdateTransaction | null;
+    lastRollback: UpdateTransaction | null;
+  };
 }
 
 export class DiagnosticsService {
@@ -151,6 +168,25 @@ export class DiagnosticsService {
       recentFailedJobs,
       recentFailedPublications,
       sanitizedLogs,
+      updates: this.getUpdateFacts(),
+    };
+  }
+
+  /**
+   * Read-only view of the host updater record. The application never writes it;
+   * it only reports what the updater persisted in the shared data directory.
+   */
+  public getUpdateFacts(): DiagnosticReport["updates"] {
+    const state = readUpdateState(this.config?.dataDirPath || "./data");
+    const history = state.history || [];
+    return {
+      installedVersion: PRODUCT_VERSION,
+      schemaVersion: DATABASE_SCHEMA_VERSION,
+      releaseChannel: getReleaseChannel(),
+      updateInProgress: hasIncompleteTransaction(state),
+      lastAttempt: state.current || history[history.length - 1] || null,
+      lastSuccessful: state.lastSuccessful || null,
+      lastRollback: [...history].reverse().find((entry) => entry.rollback?.attempted) || null,
     };
   }
 

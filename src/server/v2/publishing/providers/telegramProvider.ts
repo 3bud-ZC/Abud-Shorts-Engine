@@ -3,6 +3,11 @@ import fs from "fs";
 import path from "path";
 import { logger } from "../../../../logger";
 import {
+  normalizeTelegramError,
+  normalizeTransportError,
+  type NormalizedProviderError,
+} from "../../integrations/providerErrors";
+import {
   DEFAULT_PLATFORM_CAPABILITIES,
   type PlatformCapabilities,
   type PublishingProvider,
@@ -291,6 +296,85 @@ export class TelegramPublishingProvider implements PublishingProvider {
     context?: Record<string, unknown>,
   ): Promise<boolean> {
     return true;
+  }
+
+  /**
+   * Checks the destination without posting anything.
+   *
+   * `getChat` is read-only, so connection validation never leaves a stray test
+   * message in a customer channel. It also returns `permissions` for a group and
+   * the `username` for a public channel, which is the only legitimate way to
+   * build a t.me link later - deriving one from a numeric chat id would produce
+   * a URL that does not resolve.
+   */
+  public async validateChat(input: {
+    botToken: string;
+    chatId: string;
+  }): Promise<{
+    ok: boolean;
+    chatTitle?: string;
+    chatUsername?: string;
+    chatType?: string;
+    error?: NormalizedProviderError;
+  }> {
+    try {
+      const response = await axios.get(`https://api.telegram.org/bot${input.botToken}/getChat`, {
+        params: { chat_id: input.chatId },
+        timeout: 10000,
+        validateStatus: () => true,
+      });
+
+      if (response.status === 200 && response.data?.ok) {
+        const chat = response.data.result || {};
+        return {
+          ok: true,
+          chatTitle: chat.title || chat.username || String(chat.id),
+          chatUsername: chat.username,
+          chatType: chat.type,
+        };
+      }
+      return { ok: false, error: normalizeTelegramError(response.status, response.data) };
+    } catch (error) {
+      return { ok: false, error: normalizeTransportError("telegram", error) };
+    }
+  }
+
+  /**
+   * Confirms the bot may actually post media in the destination.
+   *
+   * Reads the bot's own membership rather than sending anything: a bot that is
+   * present but muted is the most common Telegram failure, and discovering it at
+   * publish time wastes the render.
+   */
+  public async canPostToChat(input: {
+    botToken: string;
+    chatId: string;
+    botUserId: number;
+  }): Promise<{ allowed: boolean; reason?: string }> {
+    const response = await axios.get(`https://api.telegram.org/bot${input.botToken}/getChatMember`, {
+      params: { chat_id: input.chatId, user_id: input.botUserId },
+      timeout: 10000,
+      validateStatus: () => true,
+    });
+    if (response.status !== 200 || !response.data?.ok) {
+      return { allowed: false, reason: "The bot is not a member of that chat." };
+    }
+    const member = response.data.result || {};
+    const status = String(member.status || "");
+    if (status === "left" || status === "kicked") {
+      return { allowed: false, reason: "The bot is not a member of that chat." };
+    }
+    if (status === "administrator") {
+      // An administrator without can_post_messages cannot post in a channel.
+      if (member.can_post_messages === false) {
+        return { allowed: false, reason: "The bot is an admin but is not allowed to post messages." };
+      }
+      return { allowed: true };
+    }
+    if (status === "restricted" && member.can_send_other_messages === false) {
+      return { allowed: false, reason: "The bot is restricted from sending media in that chat." };
+    }
+    return { allowed: true };
   }
 
   public getPublishedUrl(

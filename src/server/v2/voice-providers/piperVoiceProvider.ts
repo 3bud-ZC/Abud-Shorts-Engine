@@ -86,8 +86,10 @@ export class PiperVoiceProvider implements VoiceProvider {
     };
   }
 
-  public supportsLanguage(language?: string): boolean {
-    return language === "ar" || language?.startsWith("ar") || false;
+  public supportsLanguage(language?: string, dialect?: any): boolean {
+    const languageOk = language === "ar" || language?.startsWith("ar") || false;
+    const dialectOk = !dialect || dialect === "none" || dialect === "msa" || dialect === "egyptian";
+    return languageOk && dialectOk;
   }
 
   public async generateVoice(text: string, voiceId = this.arabicVoiceId): Promise<VoiceAudioResult> {

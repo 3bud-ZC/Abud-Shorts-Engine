@@ -1,8 +1,37 @@
 import type { ArabicDialect } from "../../../types/productionSpec";
 
-export type VoiceProviderId = "kokoro" | "elevenlabs" | "piper" | "google_cloud_tts";
-export type VoiceTier = "free" | "cloud_free_tier" | "premium";
+export type VoiceProviderId = "kokoro" | "elevenlabs" | "piper" | "edge_tts" | "google_cloud_tts";
+export type VoiceTier = "free" | "experimental_free_online" | "cloud_free_tier" | "premium";
 export type VoiceQualityProfile = "fast" | "balanced" | "premium";
+
+/**
+ * CANONICAL ARABIC VOICE POLICY (V2.2)
+ * ------------------------------------
+ * Arabic, Egyptian Arabic and MSA production narration is served by ElevenLabs
+ * only. There is no silent fallback to Piper, Kokoro, Edge-TTS or Google Cloud
+ * TTS: when ElevenLabs is not configured the job is blocked before execution
+ * with ARABIC_ELEVENLABS_REQUIRED_MESSAGE.
+ *
+ * Piper remains readable for historical jobs and metadata but is no longer the
+ * production Arabic route.
+ */
+export const ARABIC_PRODUCTION_PROVIDER: VoiceProviderId = "elevenlabs";
+
+export const ARABIC_ELEVENLABS_REQUIRED_MESSAGE =
+  "Arabic narration requires ElevenLabs. Configure ElevenLabs in Providers.";
+
+/** Voice IDs that only ever existed as local Piper models. */
+export const LEGACY_PIPER_VOICE_IDS = ["ar_JO-kareem-medium"];
+
+export function isLegacyPiperVoiceId(voiceId?: string): boolean {
+  if (!voiceId) return false;
+  return LEGACY_PIPER_VOICE_IDS.includes(voiceId) || voiceId.startsWith("ar_JO-");
+}
+
+export function isArabicLanguage(language?: string, dialect?: ArabicDialect): boolean {
+  if (language === "ar" || language?.startsWith("ar")) return true;
+  return Boolean(dialect && dialect !== "none");
+}
 
 export type VoiceCapabilities = {
   languages: string[];
@@ -14,11 +43,31 @@ export type VoiceCapabilities = {
   supportsSSML?: boolean;
   supportsSpeakingRate?: boolean;
   supportsPitch?: boolean;
+  supportsVolume?: boolean;
   local: boolean;
   costTier?: VoiceTier;
   commercialUse: "allowed" | "model_dependent" | "not_allowed" | "unknown";
   license: string;
   notes?: string;
+  /** True only for providers that may serve new Arabic production jobs. */
+  arabicProduction?: boolean;
+  /** True for providers kept only so historical jobs stay readable. */
+  legacyOnly?: boolean;
+};
+
+export type ElevenLabsVoicePreset =
+  | "natural"
+  | "energetic_ad"
+  | "professional"
+  | "storytelling"
+  | "calm";
+
+/** Only settings documented by the ElevenLabs text-to-speech API. */
+export type ElevenLabsVoiceSettings = {
+  stability: number;
+  similarity_boost: number;
+  style?: number;
+  use_speaker_boost?: boolean;
 };
 
 export type VoiceOption = {
@@ -30,10 +79,14 @@ export type VoiceOption = {
   dialect?: ArabicDialect;
   gender?: "male" | "female";
   voiceFamily?: string;
+  category?: string;
+  labels?: Record<string, string>;
+  accent?: string;
   sampleRate?: number;
   supportsSSML?: boolean;
   supportsSpeakingRate?: boolean;
   supportsPitch?: boolean;
+  supportsVolume?: boolean;
   previewUrl?: string;
   license?: string;
   commercialUse?: VoiceCapabilities["commercialUse"];
@@ -42,9 +95,12 @@ export type VoiceOption = {
 export type VoiceAudioResult = {
   audio: any; // Audio stream or Buffer
   audioLength: number;
+  /** True when audioLength is a pre-decode estimate rather than a measurement. */
+  audioLengthEstimated?: boolean;
   sampleRate?: number;
   provider?: VoiceProviderId;
   model?: string;
+  modelId?: string;
   voiceFamily?: string;
   voiceId?: string;
   language?: string;
@@ -53,7 +109,52 @@ export type VoiceAudioResult = {
   generationMs?: number;
   estimatedCost?: number;
   estimatedCostTier?: VoiceTier;
+  /** Provider bills by usage; no fixed per-job dollar amount can be asserted. */
+  usageBasedCost?: boolean;
+  charactersBilled?: number;
+  voiceSettings?: ElevenLabsVoiceSettings;
   wordTimings?: Array<{ word: string; startMs: number; endMs: number }>;
+  /**
+   * Per-character alignment returned by the same synthesis request. Present
+   * only for providers that document it; consumers must treat its absence as
+   * "fall back to Whisper", never as an error.
+   */
+  characterAlignment?: {
+    characters: string[];
+    startSeconds: number[];
+    endSeconds: number[];
+  };
+  /** The exact TTS string the alignment above describes. */
+  alignmentText?: string;
+};
+
+/**
+ * Sanitized upstream-error categories. These are derived only from the
+ * response body ElevenLabs itself returns (detail.status / detail.message /
+ * detail.request_id) - never from headers, and never including the
+ * credential value.
+ */
+export type ProviderErrorCategory =
+  | "invalid_api_key"
+  | "api_key_id_used_as_api_key"
+  | "missing_permissions"
+  | "quota_exceeded"
+  | "voice_not_found"
+  | "character_limit_exceeded"
+  | "unsupported_request"
+  | "rate_limited"
+  | "server_error"
+  | "plan_upgrade_required"
+  | "unknown";
+
+export type ProviderErrorDetail = {
+  category: ProviderErrorCategory;
+  httpStatus?: number;
+  upstreamStatus?: string;
+  upstreamMessage?: string;
+  requestId?: string;
+  endpoint: string;
+  method: string;
 };
 
 export type VoiceProviderValidationResult = {
@@ -62,10 +163,27 @@ export type VoiceProviderValidationResult = {
   tier: VoiceTier;
   configured: boolean;
   healthy: boolean;
-  status: "healthy" | "not_configured" | "invalid_credentials" | "rate_limited" | "timeout" | "provider_unavailable";
+  status:
+    | "healthy"
+    | "not_configured"
+    | "invalid_credentials"
+    | "missing_permissions"
+    | "voice_discovery_restricted"
+    | "rate_limited"
+    | "timeout"
+    | "provider_unavailable";
   message: string;
   checkedAt: string;
   latencyMs?: number;
+  accountTier?: string;
+  characterLimit?: number;
+  charactersUsed?: number;
+  /** Granular Test Connection sub-states (never inferred from a spent-quota call). */
+  authenticated?: boolean;
+  voiceDiscoveryAvailable?: boolean;
+  ttsReady?: boolean;
+  voicesDiscovered?: number;
+  errorDetail?: ProviderErrorDetail;
 };
 
 export interface VoiceProvider {
@@ -76,7 +194,17 @@ export interface VoiceProvider {
   isConfigured(): boolean;
   getCapabilities(): VoiceCapabilities;
   supportsLanguage(language?: string, dialect?: ArabicDialect): boolean;
-  generateVoice(text: string, voiceId: string): Promise<VoiceAudioResult>;
+  generateVoice(
+    text: string,
+    voiceId?: string,
+    options?: {
+      modelId?: string;
+      preset?: ElevenLabsVoicePreset;
+      voiceSettings?: Partial<ElevenLabsVoiceSettings>;
+      languageCode?: string;
+      requestAlignment?: boolean;
+    },
+  ): Promise<VoiceAudioResult>;
   listVoices(language?: string): Promise<VoiceOption[]>;
   validate(): Promise<VoiceProviderValidationResult>;
 }
@@ -88,6 +216,14 @@ export type VoiceRouteRequest = {
   qualityProfile?: VoiceQualityProfile;
   requestedProvider?: VoiceProviderId | "auto";
   voiceId?: string;
+  voicePreset?: ElevenLabsVoicePreset;
+  voiceSettings?: Partial<ElevenLabsVoiceSettings>;
+  modelId?: string;
+  /** Request native character alignment alongside the audio. */
+  requestAlignment?: boolean;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
   fallbackPolicy?: "none" | "local" | "configured";
   brandPronunciations?: Record<string, string>;
 };
@@ -102,4 +238,8 @@ export type VoiceRouteDecision = {
   reason: string;
   fallbackAllowed: boolean;
   warnings: string[];
+  voicePreset?: ElevenLabsVoicePreset;
+  voiceSettings?: Partial<ElevenLabsVoiceSettings>;
+  modelId?: string;
+  requestAlignment?: boolean;
 };

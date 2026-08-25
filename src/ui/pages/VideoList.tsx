@@ -127,7 +127,7 @@ const VideoList: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Videos"
+        title="Video Library"
         description="Preview, download, search, distribute, and manage generated MP4s."
         actions={<Button variant="contained" startIcon={<AddIcon />} onClick={() => navigate("/create")}>Create Video</Button>}
       />

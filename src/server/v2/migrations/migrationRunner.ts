@@ -465,7 +465,139 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: "2.10.0",
+    name: "v2_2_provider_credentials_vault",
+    up: async (pool: Pool) => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS provider_credentials_vault (
+          provider_id TEXT NOT NULL,
+          credential_type TEXT NOT NULL,
+          ciphertext TEXT NOT NULL,
+          iv TEXT NOT NULL,
+          auth_tag TEXT NOT NULL,
+          key_version INTEGER NOT NULL DEFAULT 1,
+          masked_hint TEXT,
+          metadata JSONB NOT NULL DEFAULT '{}',
+          health TEXT NOT NULL DEFAULT 'unknown',
+          configured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          last_tested_at TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (provider_id, credential_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_provider_credentials_health
+          ON provider_credentials_vault(provider_id, health);
+
+        CREATE TABLE IF NOT EXISTS provider_oauth_states (
+          state TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          redirect_uri TEXT,
+          code_verifier_hash TEXT,
+          expires_at TIMESTAMPTZ NOT NULL,
+          used_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_provider_oauth_states_expiry
+          ON provider_oauth_states(provider_id, expires_at);
+      `);
+    },
+  },
+  {
+    version: "2.11.0",
+    name: "v2_2_brand_profile_depth",
+    up: async (pool: Pool) => {
+      // A Brand Profile could only carry two colours, so a customer who filled
+      // it in saw almost no difference in the finished video. These columns let
+      // the graphic treatments draw the real brand: a full palette, the logo,
+      // the website and the social handle. Every column is nullable - an
+      // existing brand row stays valid and the style resolver derives neutrals
+      // rather than inventing colours the customer never chose.
+      await pool.query(`
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS secondary_color TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS logo_url TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS website_url TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS social_handle TEXT;
+      `);
+    },
+  },
+  {
+    version: "2.12.0",
+    name: "v2_2_integrations_and_publishing_closure",
+    up: async (pool: Pool) => {
+      // Everything here is additive and nullable. No publication, attempt or
+      // event row is touched, so a customer's publishing history survives the
+      // migration untouched.
+      await pool.query(`
+        -- Connected account identity and token lifecycle. Previously a social
+        -- account carried only a name and an opaque credential blob, so the
+        -- engine could not tell when a token would expire, which scopes were
+        -- granted, or when the connection last actually worked.
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS granted_scopes TEXT[];
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS oauth_provider TEXT;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMPTZ;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ;
+
+        -- Reconnecting the same channel must update its row rather than leave a
+        -- duplicate behind holding a revoked token.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_platform_account
+          ON social_accounts(platform, account_id);
+
+        -- Remote processing state. A provider that accepts bytes and then
+        -- processes asynchronously (all three of YouTube, TikTok and Meta) needs
+        -- somewhere to record the ticket and how far the poll has got.
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS remote_state TEXT;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS remote_state_checked_at TIMESTAMPTZ;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS upload_session JSONB;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS error_category TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_publications_remote_state
+          ON publications(status, remote_state_checked_at)
+          WHERE provider_post_id IS NOT NULL;
+
+        -- OAuth state: the previous table stored a verifier hash derived from a
+        -- random value rather than a real PKCE verifier, and nothing ever marked
+        -- a state as used, so an authorization code could be replayed.
+        ALTER TABLE provider_oauth_states ADD COLUMN IF NOT EXISTS code_verifier TEXT;
+        ALTER TABLE provider_oauth_states ADD COLUMN IF NOT EXISTS return_path TEXT;
+        ALTER TABLE provider_oauth_states ALTER COLUMN code_verifier_hash DROP NOT NULL;
+      `);
+
+      // 'needs_attention' is a new terminal-ish state for a schedule whose
+      // account was disconnected. Existing rows keep their status.
+      await pool.query(`
+        ALTER TABLE scheduled_publications DROP CONSTRAINT IF EXISTS scheduled_publications_status_check;
+      `);
+    },
+  },
 ];
+
+/**
+ * The highest migration this build carries. DATABASE_SCHEMA_VERSION must equal
+ * it: the updater reports the schema after an update and compares it with what
+ * the release manifest promised, so a constant that drifted from the migration
+ * list would make a correct update look like a failed one.
+ */
+export function getLatestMigrationVersion(): string {
+  return MIGRATIONS[MIGRATIONS.length - 1].version;
+}
+
+/**
+ * Whether a rollback to an older application is safe on code alone.
+ *
+ * Every migration in this build is additive - new nullable columns, new indexes,
+ * a dropped CHECK constraint - so an N-1 application still reads and writes
+ * every row it knew about. The updater publishes this as
+ * `schemaBackwardsCompatible` in the release manifest; when a future migration
+ * drops or retypes a column the flag must be set false there, and the updater
+ * will restore the pre-upgrade database backup instead of pretending a code
+ * rollback is enough.
+ */
+export const SCHEMA_BACKWARDS_COMPATIBLE = true;
 
 export async function runMigrations(pool: Pool): Promise<void> {
   // Ensure schema_migrations table exists

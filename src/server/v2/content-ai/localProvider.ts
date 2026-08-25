@@ -82,9 +82,10 @@ export class LocalContentAIProvider implements ContentAIProvider {
     const aspectRatio = params.aspectRatio || "9:16";
     const resolution = params.resolution || "1080p";
     const quality = params.quality || "standard";
+    const productionMode = params.productionMode || "auto_hybrid";
     const visualMode = params.visualMode || "auto";
-    const voiceProvider = params.voiceProvider || "kokoro";
-    const voiceId = params.voiceId || "af_heart";
+    const voiceProvider = params.voiceProvider || "auto";
+    const voiceId = params.voiceId || "";
 
     const scenes = this.buildCreativeScenes({
       prompt,
@@ -115,6 +116,7 @@ export class LocalContentAIProvider implements ContentAIProvider {
       resolution,
       quality,
       sceneCount: scenes.length,
+      productionMode,
       visualMode,
       voiceProvider,
       voiceId,
@@ -130,7 +132,23 @@ export class LocalContentAIProvider implements ContentAIProvider {
       brandKit: params.brandKit,
       metadata: {
         planner: "LocalContentAIProvider",
-        plannerVersion: "2.0.0",
+        plannerVersion: "2.2.0",
+        scriptPipeline: isAr
+          ? {
+              stages: [
+                "draft",
+                "dialect_rewrite",
+                "spoken_language_normalization",
+                "duration_fit",
+                "hook_check",
+                "repetition_cleanup",
+                "cta_check",
+                "scene_segmentation",
+              ],
+              dialect,
+              subjectiveQualityScore: null,
+            }
+          : undefined,
       },
     };
 
