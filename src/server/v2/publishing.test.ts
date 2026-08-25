@@ -182,11 +182,14 @@ class FakePublishingDb {
         row.status = "failed";
         row.last_error = values[1];
         row.technical_error = values[2];
-      } else if (text.includes("published_at = now()")) {
+      } else if (text.includes("provider_post_id = $3")) {
+        // Provider accepted the upload. published_at is only stamped for a real
+        // publish; a provider that is still processing must not look published.
         row.status = values[1];
         row.provider_post_id = values[2];
         row.provider_url = values[3];
-        row.published_at = new Date();
+        row.remote_state = values[1];
+        if (values[1] === "published") row.published_at = new Date();
         row.last_error = null;
         row.technical_error = null;
       } else if (text.includes("attempt_count = COALESCE") || text.includes("last_error = CASE")) {
@@ -339,7 +342,24 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
 
     fakeDb = new FakePublishingDb();
     jobs = new JobService(fakeDb as any);
-    publishingService = new PublishingService(fakeDb as any, config, publishingRegistry);
+    // These tests exercise the publication state machine against nock-mocked
+    // provider HTTP, not real media, so the pre-flight probe is stubbed with a
+    // valid vertical MP4. Pre-flight itself has its own suite in
+    // integrationsF3.test.ts, where the real rules are asserted.
+    publishingService = new PublishingService(fakeDb as any, config, publishingRegistry, {
+      mediaProbe: async () => ({
+        exists: true,
+        sizeBytes: 8 * 1024 * 1024,
+        durationSeconds: 20,
+        hasVideoStream: true,
+        hasAudioStream: true,
+        width: 1080,
+        height: 1920,
+        videoCodec: "h264",
+        audioCodec: "aac",
+        container: "mp4",
+      }),
+    });
 
     app = express();
     app.use("/api/v2", createV2PublicRouter(config, fakeDb as any, jobs));

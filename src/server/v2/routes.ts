@@ -86,6 +86,7 @@ import { RevisionService } from "./revisions/revisionService";
 import { WorkerLeaseService } from "./workers/workerLeaseService";
 import { ProviderCredentialsVault, allowedCredentialTypes, type CredentialType } from "./provider-vault/providerCredentialsVault";
 import { providerSecrets } from "./provider-vault/providerSecrets";
+import { createOAuthRouter } from "./integrations/oauthRoutes";
 import { checkpointStages } from "./checkpoints";
 import {
   buildRevisionReusePlan,
@@ -2095,6 +2096,11 @@ export function createV2PublicRouter(
     });
   });
 
+  // Browser-only OAuth: app configuration, authorization, callback and Meta
+  // destination selection. Replaces the previous stubs, which created a CSRF
+  // state nothing ever consumed and answered the callback with HTTP 501.
+  router.use(createOAuthRouter(config, db, providerVault));
+
   router.put("/providers/:provider/credentials", async (req, res) => {
     try {
       if (!providerVault.isAvailable()) {
@@ -2128,36 +2134,6 @@ export function createV2PublicRouter(
     } catch (error) {
       res.status(400).json({ error: "Credential delete failed.", message: error instanceof Error ? error.message : String(error) });
     }
-  });
-
-  router.get("/providers/:provider/oauth/start", async (req, res) => {
-    try {
-      if (!["youtube", "meta", "tiktok"].includes(req.params.provider)) {
-        res.status(400).json({ error: "Provider does not use OAuth." });
-        return;
-      }
-      const state = await providerVault.createOAuthState(
-        req.params.provider,
-        typeof req.query.redirectUri === "string" ? req.query.redirectUri : undefined,
-      );
-      res.status(200).json({
-        provider: req.params.provider,
-        state: state.state,
-        expiresAt: state.expiresAt,
-        authUrl: null,
-        message: "OAuth app credentials are not configured yet. State was created for CSRF protection.",
-      });
-    } catch (error) {
-      res.status(400).json({ error: "OAuth start failed.", message: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  router.get("/providers/:provider/oauth/callback", async (req, res) => {
-    res.status(501).json({
-      provider: req.params.provider,
-      error: "OAuth callback exchange is not configured.",
-      message: "Configure provider app credentials before exchanging OAuth authorization codes.",
-    });
   });
 
   router.post("/providers/pexels/validate", async (req, res) => {

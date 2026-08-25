@@ -75,6 +75,38 @@ function formatWhen(value?: string): string {
   return `Tested ${date.toLocaleString()}`;
 }
 
+/** What the Connected Accounts endpoint gives us, minus anything sensitive. */
+type ConnectedAccountSummary = {
+  id: string;
+  platform: string;
+  provider: string;
+  accountName: string;
+  connectionStatus: string;
+};
+
+type OAuthSetupState = {
+  providerId: string;
+  displayName: string;
+  consoleUrl: string;
+  callbackUrl: string;
+  fields: Array<{ key: string; label: string; help: string }>;
+  scopes: Array<{ scope: string; reason: string }>;
+  configured: boolean;
+  values: Record<string, string>;
+  error?: string;
+};
+
+/**
+ * Which platforms an OAuth provider can publish to. Used to decide whether a
+ * customer account is really connected, which is a different question from
+ * whether the application credentials exist.
+ */
+const OAUTH_PLATFORMS: Record<string, string[]> = {
+  youtube: ["youtube"],
+  meta: ["instagram", "facebook"],
+  tiktok: ["tiktok"],
+};
+
 const IntegrationsContent: React.FC = () => {
   const theme = useTheme();
   const t = theme.abud;
@@ -87,24 +119,54 @@ const IntegrationsContent: React.FC = () => {
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; message: string }>>({});
 
   const [configureTarget, setConfigureTarget] = useState<ProviderRecord | null>(null);
+  /** Accounts the customer has actually connected, per platform. */
+  const [accounts, setAccounts] = useState<ConnectedAccountSummary[]>([]);
+  /** The OAuth app-setup dialog: which provider, and what it needs. */
+  const [oauthSetup, setOauthSetup] = useState<OAuthSetupState | null>(null);
+  const [oauthSaving, setOauthSaving] = useState(false);
   const [secretValue, setSecretValue] = useState("");
   const [credentialType, setCredentialType] = useState("api_key");
   const [saving, setSaving] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<ProviderRecord | null>(null);
 
-  const load = () => {
-    axios
-      .get("/api/v2/providers")
-      .then((res) => {
-        setProviders(res.data.providers || []);
-        setVaultAvailable(res.data.vault?.available !== false);
-        setError(null);
-      })
-      .catch(() => setError("Integrations could not be loaded."))
-      .finally(() => setLoading(false));
+  const load = async () => {
+    try {
+      const [providerResponse, accountResponse] = await Promise.all([
+        axios.get("/api/v2/providers"),
+        // Whether an account is connected is a separate fact from whether the
+        // application credentials exist, so it comes from a separate source.
+        axios.get("/api/v2/publishing/accounts").catch(() => ({ data: { accounts: [] } })),
+      ]);
+      setProviders(providerResponse.data.providers || []);
+      setVaultAvailable(providerResponse.data.vault?.available !== false);
+      setAccounts(accountResponse.data.accounts || []);
+      setError(null);
+    } catch {
+      setError("Integrations could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(load, []);
+  useEffect(() => {
+    void load();
+  }, []);
+
+  /**
+   * The OAuth callback returns here with a short status word. Nothing sensitive
+   * travels in the URL, and the parameters are cleared once read so a refresh
+   * does not repeat the message.
+   */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get("connection");
+    if (!outcome) return;
+    if (outcome === "connected") setFeedback("Account connected.");
+    else if (outcome === "cancelled") setError("The connection was cancelled before it finished.");
+    else setError(`The connection could not be completed (${params.get("reason") || "unknown"}).`);
+    window.history.replaceState({}, "", window.location.pathname);
+    void load();
+  }, []);
 
   /** Only providers the catalog knows about are shown to a customer. */
   const grouped = useMemo(() => {
@@ -186,8 +248,69 @@ const IntegrationsContent: React.FC = () => {
     }
   };
 
-  const startOauth = (provider: ProviderRecord) => {
-    window.location.href = `/api/v2/providers/${provider.id}/oauth/start`;
+  /**
+   * Opens the no-code application setup.
+   *
+   * The dialog shows the exact callback URL to paste into the provider console,
+   * so the customer never has to work it out or edit a file.
+   */
+  const openOauthSetup = async (providerId?: string) => {
+    if (!providerId) return;
+    try {
+      const response = await axios.get(`/api/v2/providers/${providerId}/oauth/config`);
+      setOauthSetup({ ...response.data, values: {} });
+    } catch {
+      setError("Could not load the setup details for this provider.");
+    }
+  };
+
+  const saveOauthApp = async () => {
+    if (!oauthSetup) return;
+    setOauthSaving(true);
+    try {
+      await axios.put(`/api/v2/providers/${oauthSetup.providerId}/oauth/app`, {
+        clientId: oauthSetup.values.clientId,
+        clientSecret: oauthSetup.values.clientSecret,
+      });
+      setOauthSetup(null);
+      await load();
+    } catch (err: any) {
+      setOauthSetup({ ...oauthSetup, error: err?.response?.data?.error || "Could not save these credentials." });
+    } finally {
+      setOauthSaving(false);
+    }
+  };
+
+  /**
+   * Begins account authorization.
+   *
+   * The endpoint returns the provider's consent URL rather than redirecting, so
+   * a provider that is not configured yet can answer with a clear next step
+   * instead of bouncing the customer to a broken screen.
+   */
+  const startOauth = async (provider: ProviderRecord) => {
+    try {
+      const response = await axios.get(`/api/v2/providers/${provider.id}/oauth/start`, {
+        params: { returnTo: "/integrations" },
+      });
+      if (response.data?.authUrl) window.location.href = response.data.authUrl;
+    } catch (err: any) {
+      if (err?.response?.status === 409) {
+        await openOauthSetup(provider.id);
+        return;
+      }
+      setError(err?.response?.data?.message || "Could not start the connection.");
+    }
+  };
+
+  /** True when a real customer account is connected for this provider. */
+  const connectedAccountFor = (providerId?: string): ConnectedAccountSummary | undefined => {
+    if (!providerId) return undefined;
+    const platforms = OAUTH_PLATFORMS[providerId];
+    if (!platforms) return undefined;
+    return accounts.find(
+      (account) => platforms.includes(account.platform) && account.connectionStatus === "connected",
+    );
   };
 
   if (loading) return <LoadingState label="Loading integrations..." />;
@@ -259,9 +382,20 @@ const IntegrationsContent: React.FC = () => {
           <Box sx={{ flexGrow: 1 }} />
           <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}>
             {catalog.connectionType === "oauth" ? (
-              <Button size="small" variant="contained" onClick={() => startOauth(provider)}>
-                {provider.configured ? "Reconnect" : `Connect ${catalog.shortName}`}
-              </Button>
+              /* Two genuinely different steps. Configuring the application is
+                 not the same as connecting an account, and collapsing them is
+                 what made a provider with saved credentials and no connected
+                 account read as ready. */
+              <>
+                <Button size="small" variant={provider.configured ? "outlined" : "contained"} onClick={() => openOauthSetup(provider.id)}>
+                  {provider.configured ? "Replace app credentials" : `Set up ${catalog.shortName}`}
+                </Button>
+                {provider.configured && (
+                  <Button size="small" variant="contained" onClick={() => startOauth(provider)}>
+                    {connectedAccountFor(provider.id) ? "Reconnect account" : "Connect account"}
+                  </Button>
+                )}
+              </>
             ) : catalog.connectionType === "key" ? (
               <Button size="small" variant="contained" onClick={() => openConfigure(provider)}>
                 {provider.configured ? "Replace key" : "Configure"}
@@ -375,6 +509,76 @@ const IntegrationsContent: React.FC = () => {
           <Button onClick={() => setConfigureTarget(null)}>Cancel</Button>
           <Button variant="contained" onClick={saveCredential} disabled={saving || !secretValue.trim()}>
             {saving ? "Saving..." : "Save securely"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* No-code OAuth application setup. The callback URL is generated and
+          shown here so the customer never has to construct it or edit a file. */}
+      <Dialog open={Boolean(oauthSetup)} onClose={() => setOauthSetup(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Set up {oauthSetup?.displayName}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            {oauthSetup?.error && <Alert severity="error">{oauthSetup.error}</Alert>}
+            <Alert severity="info">
+              <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                Paste this exact address into the provider console as the redirect URI:
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{ wordBreak: "break-all", fontFamily: "monospace", fontSize: "0.78rem" }}
+              >
+                {oauthSetup?.callbackUrl}
+              </Typography>
+            </Alert>
+            {oauthSetup?.consoleUrl && (
+              <Typography variant="caption" color="text.secondary">
+                Create the application at{" "}
+                <a href={oauthSetup.consoleUrl} target="_blank" rel="noreferrer">
+                  {oauthSetup.consoleUrl}
+                </a>
+                .
+              </Typography>
+            )}
+            {(oauthSetup?.fields || []).map((field) => (
+              <TextField
+                key={field.key}
+                label={field.label}
+                helperText={field.help}
+                type={field.key === "clientSecret" ? "password" : "text"}
+                value={oauthSetup?.values[field.key] || ""}
+                onChange={(event) =>
+                  setOauthSetup((prev) =>
+                    prev ? { ...prev, values: { ...prev.values, [field.key]: event.target.value } } : prev,
+                  )
+                }
+                fullWidth
+              />
+            ))}
+            {(oauthSetup?.scopes || []).length > 0 && (
+              <Box>
+                <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                  What this connection is allowed to do:
+                </Typography>
+                <Stack component="ul" sx={{ pl: 2, m: 0 }}>
+                  {oauthSetup?.scopes.map((entry) => (
+                    <Typography key={entry.scope} component="li" variant="caption" color="text.secondary">
+                      {entry.reason}
+                    </Typography>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOauthSetup(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={oauthSaving || !oauthSetup?.values.clientId || !oauthSetup?.values.clientSecret}
+            onClick={saveOauthApp}
+          >
+            {oauthSaving ? "Saving..." : "Save"}
           </Button>
         </DialogActions>
       </Dialog>

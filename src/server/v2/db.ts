@@ -36,6 +36,41 @@ export class V2Database {
     return result.rows;
   }
 
+  /**
+   * Runs a unit of work on one connection inside a transaction.
+   *
+   * Needed for anything that has to be serialised across concurrent callers -
+   * OAuth token refresh takes a `pg_advisory_xact_lock`, and an advisory
+   * transaction lock is only held for the life of the transaction that took it,
+   * so the whole sequence has to run on a single client.
+   */
+  public async transaction<T>(
+    work: (tx: {
+      query: <R extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) => Promise<R[]>;
+    }) => Promise<T>,
+  ): Promise<T> {
+    if (!this.pool) {
+      throw new Error("V2 database is not configured.");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await work({
+        query: async <R extends QueryResultRow = QueryResultRow>(text: string, values: unknown[] = []) => {
+          const rows = await client.query<R>(text, values);
+          return rows.rows;
+        },
+      });
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   public getPoolState(): {
     configured: boolean;
     totalCount: number;

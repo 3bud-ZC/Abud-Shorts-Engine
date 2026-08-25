@@ -97,6 +97,29 @@ export type PlatformMetadata = {
     shareToFeed?: boolean;
     audioName?: string;
   };
+  /** ISO timestamp for a platform-native scheduled release (YouTube publishAt). */
+  publishAt?: string;
+  /**
+   * True when the production was generated with AI assistance. Surfaced to the
+   * platforms that expose a declaration field, never assumed.
+   */
+  containsSyntheticMedia?: boolean;
+  /** TikTok Direct Post options, all taken from the creator info query. */
+  tiktok?: {
+    privacyLevel?: string;
+    disableComment?: boolean;
+    disableDuet?: boolean;
+    disableStitch?: boolean;
+    brandContentToggle?: boolean;
+    brandOrganicToggle?: boolean;
+    /** "direct_post" publishes; "draft" sends it to the creator inbox. */
+    mode?: "direct_post" | "draft";
+  };
+  /** Resolved Meta destination, chosen by the customer after discovery. */
+  meta?: {
+    pageId?: string;
+    instagramUserId?: string;
+  };
 };
 
 export type PublicationRecord = {
@@ -205,6 +228,21 @@ export const platformMetadataSchema = z.object({
   reelSettings: z.object({
     shareToFeed: z.boolean().optional(),
     audioName: z.string().optional(),
+  }).optional(),
+  publishAt: z.string().trim().max(40).optional(),
+  containsSyntheticMedia: z.boolean().optional(),
+  tiktok: z.object({
+    privacyLevel: z.string().trim().max(60).optional(),
+    disableComment: z.boolean().optional(),
+    disableDuet: z.boolean().optional(),
+    disableStitch: z.boolean().optional(),
+    brandContentToggle: z.boolean().optional(),
+    brandOrganicToggle: z.boolean().optional(),
+    mode: z.enum(["direct_post", "draft"]).optional(),
+  }).optional(),
+  meta: z.object({
+    pageId: z.string().trim().max(80).optional(),
+    instagramUserId: z.string().trim().max(80).optional(),
   }).optional(),
 });
 

@@ -522,6 +522,58 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: "2.12.0",
+    name: "v2_2_integrations_and_publishing_closure",
+    up: async (pool: Pool) => {
+      // Everything here is additive and nullable. No publication, attempt or
+      // event row is touched, so a customer's publishing history survives the
+      // migration untouched.
+      await pool.query(`
+        -- Connected account identity and token lifecycle. Previously a social
+        -- account carried only a name and an opaque credential blob, so the
+        -- engine could not tell when a token would expire, which scopes were
+        -- granted, or when the connection last actually worked.
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS granted_scopes TEXT[];
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS oauth_provider TEXT;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMPTZ;
+        ALTER TABLE social_accounts ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ;
+
+        -- Reconnecting the same channel must update its row rather than leave a
+        -- duplicate behind holding a revoked token.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_platform_account
+          ON social_accounts(platform, account_id);
+
+        -- Remote processing state. A provider that accepts bytes and then
+        -- processes asynchronously (all three of YouTube, TikTok and Meta) needs
+        -- somewhere to record the ticket and how far the poll has got.
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS remote_state TEXT;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS remote_state_checked_at TIMESTAMPTZ;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS upload_session JSONB;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ;
+        ALTER TABLE publications ADD COLUMN IF NOT EXISTS error_category TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_publications_remote_state
+          ON publications(status, remote_state_checked_at)
+          WHERE provider_post_id IS NOT NULL;
+
+        -- OAuth state: the previous table stored a verifier hash derived from a
+        -- random value rather than a real PKCE verifier, and nothing ever marked
+        -- a state as used, so an authorization code could be replayed.
+        ALTER TABLE provider_oauth_states ADD COLUMN IF NOT EXISTS code_verifier TEXT;
+        ALTER TABLE provider_oauth_states ADD COLUMN IF NOT EXISTS return_path TEXT;
+        ALTER TABLE provider_oauth_states ALTER COLUMN code_verifier_hash DROP NOT NULL;
+      `);
+
+      // 'needs_attention' is a new terminal-ish state for a schedule whose
+      // account was disconnected. Existing rows keep their status.
+      await pool.query(`
+        ALTER TABLE scheduled_publications DROP CONSTRAINT IF EXISTS scheduled_publications_status_check;
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {

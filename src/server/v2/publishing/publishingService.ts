@@ -8,7 +8,17 @@ import { Config } from "../../../config";
 import { logger } from "../../../logger";
 import { V2Database } from "../db";
 import { readMetadata } from "../../videoMetadata";
-import { PublishingProviderRegistry, publishingRegistry } from "./registry";
+import { PublishingProviderRegistry, isInternalProvider, publishingRegistry } from "./registry";
+
+/** Providers whose publish call requires the connected account's own token. */
+const OAUTH_BACKED_PROVIDERS: PublishingProviderId[] = [
+  "youtube_direct",
+  "meta_direct",
+  "tiktok_direct",
+];
+import { createFfprobeMediaProbe, runPreflight, type MediaProbe } from "./preflight";
+import { SocialAccountService } from "../integrations/socialAccountService";
+import { ProviderCredentialsVault } from "../provider-vault/providerCredentialsVault";
 import {
   DEFAULT_PLATFORM_CAPABILITIES,
   type PlatformCapabilities,
@@ -73,12 +83,33 @@ export class PublishingService {
   private maxConcurrency = 3;
   private activePublishCount = 0;
 
+  /** Decrypts, refreshes and revokes connected-account credentials. */
+  private accounts: SocialAccountService;
+  /** Injected so pre-flight can be exercised without FFmpeg installed. */
+  private mediaProbe: MediaProbe;
+
   constructor(
     private db: V2Database,
     private config: Config,
     private registry: PublishingProviderRegistry = publishingRegistry,
+    options: { accounts?: SocialAccountService; mediaProbe?: MediaProbe } = {},
   ) {
     this.events.setMaxListeners(300);
+    this.accounts =
+      options.accounts ||
+      new SocialAccountService(
+        db,
+        new ProviderCredentialsVault(db, config),
+        config.providerVaultMasterKey,
+      );
+    this.mediaProbe =
+      options.mediaProbe ||
+      createFfprobeMediaProbe((filePath, callback) => {
+        // Required lazily so a unit test never has to load FFmpeg bindings.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const ffmpeg = require("fluent-ffmpeg");
+        ffmpeg.ffprobe(filePath, callback);
+      });
   }
 
   // =========================================================================
@@ -358,19 +389,40 @@ export class PublishingService {
     }
 
     const id = cuid();
-    const providerId: PublishingProviderId =
-      (input.provider as PublishingProviderId) ||
-      (input.platform === "telegram" ? "telegram_bot" : "upload_post");
 
-    // Resolve Account
+    // Resolve Account first: which provider AUTO should choose depends on
+    // whether the customer actually connected a direct account for this
+    // platform.
     let accountId = input.accountId;
     if (!accountId) {
-      const accRows = await this.db.query(
+      const accRows = await this.db.query<{ id: string }>(
         `SELECT id FROM social_accounts WHERE platform = $1 AND connection_status = 'connected' LIMIT 1`,
         [input.platform],
       );
       if (accRows.length) accountId = accRows[0].id;
     }
+
+    // Which route AUTO takes depends on the account that will actually be used.
+    let accountProvider: PublishingProviderId | undefined;
+    if (accountId) {
+      const account = await this.getAccount(accountId);
+      accountProvider = account?.provider;
+    }
+
+    /**
+     * Provider selection.
+     *
+     * An explicit choice always wins - a customer who picked "Direct" must not
+     * be silently routed through the aggregator, and the reverse is equally
+     * true. AUTO prefers the direct adapter only when a direct account is really
+     * connected for the platform, and otherwise uses the aggregator. Whichever
+     * it lands on is persisted on the publication, so the record always says
+     * which route was taken.
+     */
+    const providerId: PublishingProviderId =
+      (input.provider as PublishingProviderId) ||
+      accountProvider ||
+      (input.platform === "telegram" ? "telegram_bot" : "upload_post");
 
     // Determine initial status & schedule
     let scheduledDate: Date | undefined;
@@ -543,16 +595,34 @@ export class PublishingService {
       return (await this.getPublication(publicationId)) || pub;
     }
 
-    // Resolve Account & Credentials
-    let account = pub.accountId ? await this.getAccount(pub.accountId) : null;
-    let token: string | undefined;
+    // Resolve the account and decrypt its credentials.
+    //
+    // This previously read `encrypted_credentials` straight out of the row and
+    // handed the ciphertext to the provider as though it were a token, so every
+    // provider saw an undefined access token and no account-based publish could
+    // ever have worked. Going through the account service also refreshes a token
+    // that is about to expire, atomically.
+    const account = pub.accountId ? await this.getAccount(pub.accountId) : null;
+    let accountCredentials: Record<string, unknown> = {};
 
-    if (account) {
-      const credRows = await this.db.query<{ encrypted_credentials?: string }>(
-        `SELECT encrypted_credentials FROM social_accounts WHERE id = $1`,
-        [account.id],
-      );
-      token = credRows[0]?.encrypted_credentials;
+    // Only the direct OAuth adapters publish with a per-account token. The
+    // aggregator authenticates with its own API key and Telegram with its bot
+    // token, so demanding decryptable account credentials for those would fail a
+    // publish that needs none.
+    const needsAccountToken = OAUTH_BACKED_PROVIDERS.includes(provider.id);
+
+    if (account && needsAccountToken) {
+      const resolved = await this.accounts.getUsableCredentials(account.id);
+      if (!resolved.ok) {
+        await this.failPublication(
+          pub.id,
+          resolved.error.userMessage,
+          resolved.error.technicalCode,
+          resolved.error.retryable,
+        );
+        return (await this.getPublication(publicationId)) || pub;
+      }
+      accountCredentials = resolved.credentials;
     }
 
     // Resolve Video Files & URLs
@@ -560,6 +630,52 @@ export class PublishingService {
     const thumbnailFilePath = path.join(this.config.videosDirPath, `${pub.videoId}.jpg`);
     const videoUrl = `${this.config.v2PublicUrl}/api/short-video/${pub.videoId}`;
     const thumbnailUrl = `${this.config.v2PublicUrl}/api/videos/${pub.videoId}/thumbnail`;
+
+    // Pre-flight. Everything checkable locally is checked before a byte leaves
+    // this machine, so obviously invalid media never spends provider quota.
+    //
+    // Skipped for the internal test provider, which reaches no network and has
+    // no quota to protect: running media checks against it would only couple the
+    // engine's deterministic tests to fixture files on disk.
+    if (!isInternalProvider(provider.id)) {
+    await this.recordEvent(pub.id, "queued", "preflight", "Checking the video against the platform's requirements.");
+    const capabilities = (account?.capabilities || {}) as Record<string, unknown>;
+    const preflight = await runPreflight({
+      platform: pub.platform,
+      videoFilePath,
+      probe: this.mediaProbe,
+      account: {
+        // The aggregator and the Telegram bot publish with their own
+        // credentials, so "no ABUD account row" is not a blocker for them; only
+        // the direct OAuth adapters genuinely need a connected account.
+        connected: needsAccountToken ? Boolean(account) : true,
+        missingScopes: Array.isArray(capabilities.missingScopes)
+          ? (capabilities.missingScopes as string[])
+          : undefined,
+        accountLimits: {
+          maxDurationSeconds: Number(capabilities.maxVideoPostDurationSeconds) || undefined,
+          privacyOptions: Array.isArray(capabilities.privacyLevelOptions)
+            ? (capabilities.privacyLevelOptions as string[])
+            : undefined,
+        },
+      },
+      title: pub.title,
+      caption: pub.caption,
+      hashtags: pub.hashtags,
+      requestedPrivacy: pub.metadata?.tiktok?.privacyLevel || pub.metadata?.privacy,
+    });
+
+    if (!preflight.ok) {
+      const blocking = preflight.issues.filter((issue) => issue.severity === "error");
+      await this.failPublication(
+        pub.id,
+        blocking.map((issue) => issue.message).join(" "),
+        `preflight:${blocking[0]?.code || "failed"}`,
+        false,
+      );
+      return (await this.getPublication(publicationId)) || pub;
+    }
+    }
 
     const attemptNumber = pub.attemptCount + 1;
     await this.updateStatus(pub.id, "uploading", {
@@ -578,29 +694,46 @@ export class PublishingService {
         thumbnailFilePath: fs.existsSync(thumbnailFilePath) ? thumbnailFilePath : undefined,
         thumbnailUrl,
         platform: pub.platform,
-        account: account
-          ? {
-              ...account,
-              encryptedCredentials: token,
-            }
-          : undefined,
+        account: account || undefined,
         title: pub.title,
         caption: pub.caption,
         description: pub.description,
         hashtags: pub.hashtags,
-        metadata: pub.metadata,
+        // The decrypted token travels with the call and never leaves this
+        // process; it is not persisted back onto the publication.
+        metadata: {
+          ...pub.metadata,
+          ...(accountCredentials.accessToken
+            ? { accessToken: accountCredentials.accessToken as string }
+            : {}),
+          ...(account?.capabilities as Record<string, unknown> | undefined)?.instagramUserId
+            ? {
+                meta: {
+                  ...(pub.metadata?.meta || {}),
+                  instagramUserId: (account?.capabilities as Record<string, string>).instagramUserId,
+                  pageId: (account?.capabilities as Record<string, string>).pageId,
+                },
+              }
+            : {},
+        } as typeof pub.metadata,
         idempotencyKey: pub.idempotencyKey,
       });
 
       if (publishResult.success) {
         await this.db.query(
+          // published_at is only stamped when the platform really published.
+          // Setting it at upload time made a processing - and possibly later
+          // rejected - video look published in every report.
           `UPDATE publications SET
             status = $2,
             provider_post_id = $3,
             provider_url = $4,
-            published_at = now(),
+            published_at = CASE WHEN $2 = 'published' THEN now() ELSE published_at END,
+            remote_state = $2,
+            remote_state_checked_at = now(),
             last_error = null,
             technical_error = null,
+            error_category = null,
             updated_at = now()
           WHERE id = $1`,
           [

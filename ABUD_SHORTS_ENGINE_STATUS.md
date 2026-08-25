@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Stable public release: **v2.1.0**
+Stable: **v2.1.0**
 
 Target: **v2.2.0**
 
@@ -23,21 +23,11 @@ Branch: **`v2.2-finalization`**
 
 V2.2: **NOT RELEASED** — not merged, not tagged, not packaged
 
-Schema: **2.11.0**
+Schema: **2.12.0**
 
-Current milestone: V2.2 — Creative Quality Engine & Provider Vault
-
-Arabic production: **ElevenLabs** — Arabic of any dialect routes to ElevenLabs,
-and a job is blocked before execution when ElevenLabs is not configured rather
-than falling back to another engine
-
-Default Arabic voice: **Mamdoh** (`68MRVrnQAt8vLbu0FCzw`)
-
-Preset: **Energetic Ad**, model `eleven_multilingual_v2`, persisted in
-`app_settings.arabic_voice_default` with `selectedBy: human`
-
-Human Arabic voice acceptance: **APPROVED** — accepted by the product owner and
-not re-evaluated in this pass
+Arabic voice: **ElevenLabs / Mamdoh / Energetic Ad / APPROVED**
+(`68MRVrnQAt8vLbu0FCzw`, model `eleven_multilingual_v2`, persisted in
+`app_settings.arabic_voice_default` with `selectedBy: human`; unchanged by F3)
 
 Finalization track:
 
@@ -46,8 +36,8 @@ Finalization track:
 | F1 | Product UI, ABUD design system, no-code client experience | **PASS** |
 | F1.5 | Product polish and client safety gate | **PASS** |
 | F2 | Creative and animation engine finalization | **PASS / CLOSED** |
-| F2.1 | Creative closure and evidence gate | **PASS** |
-| F3 | Integrations and real publishing closure | NOT STARTED |
+| F3 | Integrations and real publishing closure | **PASS** |
+| F4 | Client installation, operations and delivery closure | NOT STARTED |
 
 Final complete-product / client acceptance: PENDING
 
@@ -65,6 +55,98 @@ Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
 metadata and videos stay readable and playable. It is not a production Arabic
 route and is not a required runtime. The Piper evidence in the milestone
 sections below is historical and is deliberately left unchanged.
+
+---
+
+## F3 — Integrations & Publishing Closure
+
+Branch `v2.2-finalization`. No merge, no tag, no package, no release. Zero
+ElevenLabs synthesis calls. **No real external social post, draft or account
+modification was made** — see "Real external actions" below.
+
+### Provider contracts verified against current official documentation
+
+Checked 2026-08-25 against the providers' own docs, not inherited from the
+previous build. Four contracts in the source were wrong:
+
+| Item | Was | Is |
+| --- | --- | --- |
+| Telegram bot upload limit | 2000 MB | **50 MB** on the standard Bot API; 2000 MB only with a self-hosted local Bot API server |
+| YouTube upload limit | 256 MB | **256 GB** |
+| TikTok privacy model | fixed, public only | **returned per creator** by `/v2/post/publish/creator_info/query/`; an unaudited client is restricted to private posts |
+| TikTok draft endpoint | not implemented | `/v2/post/publish/inbox/video/init/` with the separate `video.upload` scope |
+
+Endpoints now implemented from the current specifications: YouTube resumable
+upload (`/upload/youtube/v3/videos?uploadType=resumable`, `X-Upload-Content-*`,
+308 + `Range` resume), TikTok Direct Post (`video/init/` → signed `PUT` →
+`status/fetch/`), Instagram Reels (`/media` container → `status_code` poll →
+`/media_publish` → `permalink`), Facebook Page Reels (three phases across
+`graph.facebook.com` and `rupload.facebook.com`), Telegram `getMe`, `getChat`,
+`getChatMember` and `sendVideo`.
+
+### What was actually built
+
+Before F3 the three direct providers were stubs: `publishVideo` returned a fixed
+failure string, there was no OAuth flow at all (`/oauth/start` answered with
+`authUrl: null` and the callback with HTTP 501), and `getPublishedUrl` built a
+`youtube.com/shorts/{id}` or `tiktok.com/@user/video/{id}` link from any string
+it was handed — advertising posts that did not exist.
+
+| Area | Delivered |
+| --- | --- |
+| Connection state | Seven-state model derived from four independently tracked facts (implemented / configured / authenticated / liveVerified). A configured OAuth app with no connected account reads **Ready to Connect**, never Ready, and never counts as publishing-healthy. |
+| Credential precedence | One rule — customer vault, then installation environment where intentionally supported, then Not Configured — with the active source reported as "Stored in ABUD" / "Installation Configuration" / "Not Configured" and never the secret. The OAuth providers deliberately have no environment route. |
+| Error taxonomy | Fifteen categories with a customer sentence and a short support code per provider. A Google 403 quota exhaustion and a 403 missing scope are now different things; a TikTok failure that arrives as HTTP 200 is read correctly; Instagram's consumer-account rejection says **Professional Account Required**. |
+| OAuth security | 32 bytes of CSPRNG state, 10-minute expiry, single-use redemption enforced by a conditional `UPDATE` (so a replayed code updates zero rows), real S256 PKCE for Google and TikTok, redirect URI matched against this installation's own callback, and same-origin-only return paths. |
+| No-code app setup | The customer enters Client ID/Key and Secret in the browser; the dialog shows the exact callback URL to paste into the provider console. Secrets are stored encrypted and never displayed again. No `.env` editing anywhere in the flow. |
+| Token refresh | Refreshed 5 minutes ahead of expiry under a `pg_advisory_xact_lock`, so two concurrent publishes cannot both spend the refresh token. A permanent failure moves the account to EXPIRED rather than retrying forever. |
+| Disconnect | Revokes where the provider supports it, destroys the stored credentials, keeps every historical publication and post URL, and flags pending scheduled publications **Needs Attention** rather than deleting them. |
+| Pre-flight | Really probes the file — existence, video and audio streams, container, codecs, duration, size, aspect — plus account connection, granted scopes and metadata length, against per-platform requirements that carry their official source and check date. |
+| Aggregator vs direct | An explicit provider choice is always honoured. AUTO prefers the direct adapter only when a direct account is genuinely connected, and the chosen route is persisted on the publication. |
+| Test provider isolation | Hidden from every listing, refused by `getSelectableProvider` outside a test environment, and excluded from platform fallback. |
+
+### Defects found and fixed while doing it
+
+- Publishing read `encrypted_credentials` straight from the row and passed the
+  **ciphertext** to the provider as the access token, so no account-based
+  publish could ever have worked.
+- `published_at` was stamped when the provider accepted the bytes, so a video
+  that was still processing — and might later be rejected — looked published in
+  every report.
+- The client could request `/api/v2/media/uploads/undefined` when a media record
+  arrived without a filename. This is the transient request seen once during F2;
+  the URL builder now refuses an unresolved path, with regression coverage.
+
+### Live verification
+
+Reported per provider, never merged:
+
+| Provider | Implemented | Configured | Authenticated | Live connection | Live publication | Blocker |
+| --- | --- | --- | --- | --- | --- | --- |
+| YouTube | Yes | No | No | No | No | LIVE VERIFICATION BLOCKED — CREDENTIALS NOT CONFIGURED |
+| Meta (Instagram + Facebook) | Yes | No | No | No | No | LIVE VERIFICATION BLOCKED — CREDENTIALS NOT CONFIGURED |
+| TikTok | Yes | No | No | No | No | LIVE VERIFICATION BLOCKED — CREDENTIALS NOT CONFIGURED; public Direct Post additionally needs TikTok app audit |
+| Telegram | Yes | No | No | No | No | LIVE VERIFICATION BLOCKED — CREDENTIALS NOT CONFIGURED |
+| Upload-Post | Yes | No | No | No | No | LIVE VERIFICATION BLOCKED — CREDENTIALS NOT CONFIGURED |
+| Pexels | Yes | Yes | n/a | Yes | n/a | none |
+
+No credentials were requested, invented or fabricated to fill this table.
+
+### Real external actions in this pass
+
+Posts created: **0**. Drafts created: **0**. Accounts modified: **0**. Only
+documentation was fetched over the network; no provider API was called with
+customer credentials, because none are configured.
+
+### Verification
+
+- Tests: 44 files, 625 tests, all passing (F2 baseline was 43 files / 561 tests).
+- `pnpm typecheck` and `pnpm build`: pass.
+- Docker: all four services healthy on the rebuilt image; migration 2.12.0
+  applied cleanly. No new ports exposed.
+- Browser QA at 1920x1080, 1366x768 and 390x844: 0 horizontal overflow, 0 blank
+  pages, 0 raw tokens or OAuth codes rendered, 0 TestPublishingProvider in the
+  UI, 0 environment-variable instructions in the customer flow.
 
 ---
 
