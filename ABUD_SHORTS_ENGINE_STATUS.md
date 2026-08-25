@@ -23,7 +23,7 @@ Target: **v2.3.0**
 Branch: **`v2.3-product-overhaul`**
 
 V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
-V2.3-01 is complete; V2.3-02 and V2.3-03 remain.
+V2.3-01 and V2.3-02 are complete; V2.3-03 remains.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
@@ -3706,3 +3706,236 @@ an image that crashes on startup with `MODULE_NOT_FOUND`.
   Templates, Media, Publishing, Integrations, Settings, Login. Their navigation,
   titles and status vocabulary are translated; their page bodies are not.
 - Video-quality work: ShortCreator, captions, motion, stock and media routing.
+
+## V2.3-02 — Create Video Studio & Capability-Aware Production Controls
+
+Date: 2026-08-26. Branch `v2.3-product-overhaul`. Commit `533712a`.
+
+Stable remains **v2.2.0** and was not touched: no tag moved, no GitHub Release
+edited, no release asset rewritten, no GHCR `2.2.0` image overwritten. V2.3 is
+not merged, not tagged and not packaged.
+
+### 1. Prompt-only production
+
+A prompt is now sufficient to produce a video. Every other control has a
+resolvable default, so nothing else is required before Create runs: duration,
+language, aspect ratio, resolution, quality, visual source, stock provider,
+media policy, AI visual provider, voice provider and caption style all carry
+defaults in `promptJobInputSchema` and `productionSpecPreviewSchema` rather
+than being required inputs.
+
+The panel's own framing changed to match. "AI Creative Director Prompt" became
+"What do you want to create?", and its description states plainly that the
+engine resolves type, visuals, voice, captions and providers automatically
+unless the operator chooses otherwise.
+
+The six example prompts were rewritten. The previous set was five Egyptian
+Arabic prompts and one English one, all written as agency briefs; the set is
+now three Arabic and three English, shorter, and covering the cases the product
+is actually asked for — clothing brand, café, restaurant, SaaS/AI tool, a
+curiosity short, and a real-estate listing.
+
+### 2. Auto video type
+
+`auto` is a first-class entry at the head of `VIDEO_TYPES` and is the studio's
+default selection, replacing `social_ad`. It maps to the canonical
+`auto_hybrid` mode and leaves the treatment to the Creative Director. The type
+grid is now labelled "Video type (optional)".
+
+Friendly labels replaced the raw canonical vocabulary throughout: `social_ad`
+reads as "Social / Reel", the advanced Production Mode select is now "Video
+Type" with plain names instead of `AUTO HYBRID - smart mixed source`, and the
+visual-mode select is "Source Provider".
+
+### 3. Caption controls
+
+Captions are an explicit **On / Off** control, not a style buried under
+Advanced. Off is carried end to end: `captionEnabled: false` resolves the
+canonical spec's `captionStyle` to `none`, is recorded on the UI contract, and
+the caption-style control is hidden rather than left showing a style that will
+not be used. A test asserts a captions-off job produces `captionStyle: "none"`
+without requiring caption artifacts.
+
+Caption styles were reduced to five professional options — Clean, Karaoke,
+Bold Social, Minimal, Cinematic — instead of seven entries written with their
+own font names and internal ids.
+
+### 4. Visual source controls
+
+A single **Visual Source** control — Auto Best, Stock, Uploaded Media, AI
+Generated, Mixed — sits in front of the existing visual-mode contract rather
+than replacing it. Each source maps to a canonical `visualMode`
+(`stock`, `uploaded_media`, `ai`, `hybrid`, or unset for Auto Best), so the
+production spec, the render pipeline and every stored job keep the vocabulary
+they already used.
+
+Dependent controls appear only when they apply: Stock Provider (Auto Stock,
+Pexels, Pixabay) for stock and auto sources, AI Visual Provider for AI
+Generated, and Media Selection (auto-use selected / use only selected) for
+uploaded and mixed sources. Unconfigured providers render disabled and say
+"Configure" rather than being silently selectable.
+
+### 5. Uploaded media
+
+Media selection moved from a single-asset dropdown to a multi-select grid of
+thumbnails with name, dimensions and usability. Selected ids travel on the job
+as `selectedMediaIds` and are recorded on the spec metadata, so the server
+knows exactly which assets a production was told to use.
+
+The media panel is no longer tied to Product Ad: it appears for any uploaded or
+mixed visual source, and the product-specific fields (headline, price, CTA,
+placement) render only for an actual Product Ad. Items the library holds but
+cannot use stay visible in Media and are not selectable here.
+
+### 6. Provider readiness and blockers
+
+Readiness is computed on the server, by `checkCreateReadiness`, from what is
+actually configured — environment keys, the Provider Vault, and the ElevenLabs
+provider's own `isConfigured()`. It returns the resolved source, the selected
+media, a per-capability list with the action that fixes each gap, and the
+blocking requirements.
+
+The same function backs three call sites, so the studio's blockers and the
+server's refusal cannot disagree:
+
+- `GET /system/readiness` — live blockers as the operator changes controls.
+- `POST /production-spec/preview` — readiness returned alongside the spec.
+- `POST /jobs` and the job-creation path — a setup that cannot run is refused
+  with **409 `production_not_runnable`**, the first blocking requirement as the
+  message, and the action to resolve it.
+
+This is the substantive change: a production that could not have succeeded is
+now stopped before it starts, rather than failing part-way through a render.
+Four cases are covered by tests — stock-only with no configured stock provider,
+AI Generated with no AI video provider, uploaded-media-only with nothing usable
+selected, and Arabic without ElevenLabs.
+
+Arabic blocking was also extended to the job-creation path that had only been
+guarded on the prompt route, so an Arabic production cannot enter the queue
+through the generated-spec or supplied-spec branch either.
+
+External provider use is reported as a **usage-based label** ("ElevenLabs ·
+Usage Based", "Pexels · Stock API", "Local / No Paid API") rather than a
+computed figure, because per-job cost for these providers cannot be derived
+reliably from what the installation knows. The production summary shows this
+in place of an invented number.
+
+### 7. Quality controls
+
+Four profiles with what each one actually does, rather than five entries
+written in internal vocabulary: **Fast** (720p, quickest local route),
+**Balanced** (1080p, normal media intelligence), **High** (richer pacing and
+multi-asset scene search) and **Maximum** (strongest local quality processors
+available). `high` and `maximum` were added to `productionJobSchema` and to the
+route's quality map, which previously accepted only `fast`, `balanced`,
+`premium` and `max_quality_local` — `high` was reachable from the interface but
+not from the job contract.
+
+Maximum is explicitly the strongest **local** route and does not silently
+enable a paid AI video provider.
+
+### 8. Arabic and English support
+
+Both languages remain first class through the new controls. The Arabic policy
+is unchanged and now enforced one step earlier: an Arabic production without
+ElevenLabs is refused at readiness with the actionable message and a
+Configure ElevenLabs action, on every job-creation path, rather than being
+accepted and failing later. Piper remains legacy — historical jobs stay
+readable and no new Arabic route was added.
+
+The bundled Arabic fallback face was fixed on two counts. Its `@font-face`
+`src` declared `format("truetype-variations")`, which browsers do not accept
+for a `.ttf`, so the declared Arabic fallback never loaded; it is now
+`format("truetype")`. And `src/ui/assets/fonts/NotoSansArabic-Variable.ttf`
+was present locally but had never been committed, so the stylesheet referenced
+a file no fresh clone had — a clone would have failed its `vite build`. Its
+four IBM Plex siblings in the same directory were already tracked.
+
+### 9. Docker and build reproducibility
+
+`v2.Dockerfile` is now self-contained. It builds whisper.cpp v1.7.1 and its
+`small` model, installs the Node dependencies, compiles the bundle, and builds
+the Python quality runtime (`opencv-python-headless`, PySceneDetect, librosa,
+pillow, fonttools) in its own stages, then assembles the runtime image, installs
+the bundled OFL Arabic caption fonts into the system font path and runs the
+installer.
+
+This retires the `ARG BASE_IMAGE` two-image arrangement and, with it, the
+V2.3-01 build note that the local image *had* to be built with
+`--build-arg BASE_IMAGE=abud-shorts-engine-base:2.2.0-f8e37ad` because the
+default `abud-shorts-engine:dev` base carried a stale 23-package `node_modules`
+without `google-auth-library` and produced an image that crashed on startup
+with `MODULE_NOT_FOUND`. A base image that has to be kept in step by hand is
+exactly the failure that caused; there is no longer one to keep in step.
+
+Both workflows were corrected to match. `release.yml` and `ghcr-candidate.yml`
+each built that base with `main-tiny.Dockerfile` and then passed
+`--build-arg BASE_IMAGE=...` into `v2.Dockerfile`. Against the self-contained
+file that argument is consumed by nothing, so the base build was an expensive
+step producing an image no longer used. Both steps and both build-args are
+removed. `main-tiny.Dockerfile` itself is retained — `docker-compose.dev.yml`
+and the `publish:docker:tiny` script still use it.
+
+`src/scripts/install.ts` now retries each of its three network-bound steps
+(Kokoro, browser shell, whisper) three times with a growing delay, and the
+installer **exits non-zero** on failure. It previously logged the error and
+exited 0, so a `docker build` whose install step had failed still produced an
+image that was reported as built and then failed at runtime.
+
+**Not verified in this session:** no Docker image was built. The Dockerfile and
+workflow changes are reviewed and consistent with the compose files and scripts
+that reference them, but they have not been executed. A Docker build should be
+run before V2.3 is packaged.
+
+### 10. Option lists that had drifted
+
+Two lists would have rendered an empty Select, and both were found while
+verifying this work:
+
+- Settings still offered a **45-second** default duration that the studio's
+  duration list no longer contained. A customer who had saved 45 would have
+  opened Create Video to a blank Duration field with no indication of the value
+  in force. Both screens now read one `DURATION_OPTIONS` list (10, 15, 20, 30,
+  60 seconds), and a saved value outside that list stays selectable on both
+  rather than disappearing.
+- The Motion Graphics video type suggests the `kinetic_phrase` caption style,
+  which the curated five-style list folds into "Bold Social". Selecting that
+  type would have blanked the Caption Style field. The control now keeps an
+  off-list style selectable under its friendly label, so the rendering
+  behaviour of existing types is unchanged and the field always shows the real
+  value.
+
+A misordered `10s` entry that sat after `60s` in the duration menu was
+corrected by the same change.
+
+### 11. Testing and build
+
+- `pnpm typecheck` — **PASS** (server + UI)
+- `pnpm vitest run` — **51 files, 815 tests, 0 failures**. This milestone added
+  six tests to `src/server/v2/v2.test.ts`, against the V2.3-01 baseline of 809.
+- `pnpm build` — **PASS** (server bundle + UI, 1201 modules)
+
+The six new tests cover prompt-only creation resolving safe defaults, captions
+off, stock-only blocked with no stock provider, uploaded-media-only blocked
+with nothing usable selected, AI Generated locked with no AI video provider,
+and a generic Auto Reel staying out of geometric motion graphics by default.
+
+ESLint reports pre-existing `@typescript-eslint/no-explicit-any` findings across
+these files. There is no lint script and no CI lint step; this milestone did not
+change that, and did not add to or reduce those findings beyond the code it
+touched.
+
+### 12. Deliberately unchanged
+
+No change to ShortCreator creative algorithms, caption rendering, ElevenLabs
+timing, scene selection, motion graphics or the render pipeline. The visual
+source, caption and quality controls resolve to the same canonical
+`ProductionSpec` contract the pipeline already consumed.
+
+### 13. Left for V2.3-03
+
+- Full Setup wizard redesign.
+- Localisation of the remaining page bodies: Productions, Video Library, Brands,
+  Templates, Media, Publishing, Integrations, Settings, Login.
+- Video-quality work: ShortCreator, captions, motion, stock and media routing.
+- A Docker build and live browser QA of the Create Video studio.
