@@ -576,6 +576,29 @@ export const MIGRATIONS: Migration[] = [
   },
 ];
 
+/**
+ * The highest migration this build carries. DATABASE_SCHEMA_VERSION must equal
+ * it: the updater reports the schema after an update and compares it with what
+ * the release manifest promised, so a constant that drifted from the migration
+ * list would make a correct update look like a failed one.
+ */
+export function getLatestMigrationVersion(): string {
+  return MIGRATIONS[MIGRATIONS.length - 1].version;
+}
+
+/**
+ * Whether a rollback to an older application is safe on code alone.
+ *
+ * Every migration in this build is additive - new nullable columns, new indexes,
+ * a dropped CHECK constraint - so an N-1 application still reads and writes
+ * every row it knew about. The updater publishes this as
+ * `schemaBackwardsCompatible` in the release manifest; when a future migration
+ * drops or retypes a column the flag must be set false there, and the updater
+ * will restore the pre-upgrade database backup instead of pretending a code
+ * rollback is enough.
+ */
+export const SCHEMA_BACKWARDS_COMPATIBLE = true;
+
 export async function runMigrations(pool: Pool): Promise<void> {
   // Ensure schema_migrations table exists
   await pool.query(`

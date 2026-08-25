@@ -1,68 +1,181 @@
 # ==============================================================================
-# ABUD Shorts Engine V2 — Reference Nginx Reverse Proxy Configuration
+# ABUD Shorts Engine - reference nginx reverse proxy configuration
+# ==============================================================================
+# A working starting point for a server installation reached at a real domain.
+# Copy it to /etc/nginx/sites-available/abud-shorts, replace the two server_name
+# lines and the certificate paths, then enable it.
+#
+# ONLY the ABUD Shorts application is published. PostgreSQL, n8n and the render
+# worker have no host port at all - they live on the internal Docker network -
+# so there is deliberately nothing here that proxies to them.
+#
+# After the proxy is in front, set TRUSTED_PROXY=1 in the installation's
+# configuration and restart. Without it the application ignores X-Forwarded-*
+# entirely, which is the correct default for a directly reachable server: those
+# headers are trivially spoofable by anyone who can reach the app another way.
 # ==============================================================================
 
 upstream abud_shorts_app {
+    # The port the installer published. Change it if you installed with --port.
     server 127.0.0.1:3130;
     keepalive 32;
 }
 
+# --- HTTP: redirect everything to HTTPS ---------------------------------------
 server {
     listen 80;
     listen [::]:80;
-    server_name shorts.yourdomain.com;
+    server_name shorts.example.com;
 
-    # Redirect all HTTP traffic to HTTPS (Recommended)
-    # return 301 https://$host$request_uri;
+    # Certificate renewal must keep working over plain HTTP.
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
 
-    client_max_body_size 2048M; # Allow large video/asset uploads
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
 
-    # Security Headers
+# --- HTTPS: the application ---------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name shorts.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/shorts.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/shorts.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # Video uploads and product images. The application caps its own request
+    # bodies; this only has to be large enough not to reject them first.
+    client_max_body_size 2048M;
+    client_body_timeout  600s;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-    # Gzip Compression
     gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript;
+    # Video and audio are already compressed; re-compressing them wastes CPU and
+    # breaks byte-range serving.
+    gzip_proxied off;
 
-    # Root Application Proxy
-    location / {
+    # --- Server-sent events ---------------------------------------------------
+    # Live production progress and live publishing events. Buffering here makes
+    # the dashboard look frozen while a job actually runs, so it is off, and the
+    # read timeout is long enough for an idle stream to survive.
+    location = /api/v2/publishing/events {
         proxy_pass http://abud_shorts_app;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
-        proxy_buffering off;
-    }
-
-    # Server-Sent Events (SSE) Live Streams
-    location ~* ^/api/v2/(events|publishing/events)/stream {
-        proxy_pass http://abud_shorts_app;
-        proxy_http_version 1.1;
-        proxy_set_header Connection '';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
         proxy_buffering off;
         proxy_cache off;
         chunked_transfer_encoding off;
         proxy_read_timeout 24h;
     }
 
-    # Video Range Requests & Media Streaming
-    location ~* ^/api/(short-video|videos) {
+    location ~ ^/api/v2/jobs/[^/]+/events$ {
         proxy_pass http://abud_shorts_app;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header Range $http_range;
-        proxy_set_header If-Range $http_if_range;
+        proxy_set_header Connection "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding off;
+        proxy_read_timeout 24h;
+    }
+
+    # --- Video and media streaming --------------------------------------------
+    # The application serves 206 Partial Content for these paths. Buffering a
+    # range response through nginx defeats seeking in the player, so it is off
+    # and Range/If-Range are passed straight through.
+    location ~ ^/api/(short-video|videos|voice-preview|music|tmp)(/|$) {
+        proxy_pass http://abud_shorts_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Range             $http_range;
+        proxy_set_header If-Range          $http_if_range;
+        proxy_buffering off;
         proxy_force_ranges on;
+        proxy_max_temp_file_size 0;
+        proxy_read_timeout 600s;
+    }
+
+    # --- OAuth callbacks ------------------------------------------------------
+    # The address a provider redirects the customer's browser back to. It needs
+    # nothing special beyond correct forwarded headers, which is exactly why
+    # they must be right: the application builds the callback URL it registers
+    # from the canonical public address, and validates the one it receives.
+    location /api/v2/integrations/ {
+        proxy_pass http://abud_shorts_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_read_timeout 120s;
+    }
+
+    # --- Everything else ------------------------------------------------------
+    location / {
+        proxy_pass http://abud_shorts_app;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        # Rendering a video is slow. A short gateway timeout turns a working
+        # render into a 504 in the customer's browser.
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
     }
 }
+
+# ==============================================================================
+# Add this to the http { } block, alongside the other maps:
+#
+#   map $http_upgrade $connection_upgrade {
+#       default upgrade;
+#       ''      close;
+#   }
+#
+# ==============================================================================
+# Behind Cloudflare
+# ------------------------------------------------------------------------------
+# Cloudflare terminates TLS and forwards X-Forwarded-Proto: https, which the
+# application honours once TRUSTED_PROXY is set, so the callback URLs it shows
+# are the https ones customers actually use.
+#
+# To make $remote_addr the visitor rather than Cloudflare, add Cloudflare's
+# published ranges with `set_real_ip_from` and `real_ip_header CF-Connecting-IP`.
+# Do not do that for any proxy you do not control: it means believing a header.
+#
+# Cloudflare's default proxy timeout is 100 seconds, which is shorter than a
+# render. Video generation already runs asynchronously with progress over SSE,
+# so the browser never waits on a single long request - but do not add a
+# synchronous long-running route behind Cloudflare and expect it to survive.
+# ==============================================================================

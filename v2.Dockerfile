@@ -1,4 +1,11 @@
-FROM abud-shorts-engine:dev
+# The runtime layer on top of the base image.
+#
+# BASE_IMAGE is an argument so the same Dockerfile serves both paths: a
+# developer builds abud-shorts-engine:dev locally and gets the default, while
+# the release workflow builds the base in CI and passes its tag in. Without
+# this, the published image could not be reproduced outside one machine.
+ARG BASE_IMAGE=abud-shorts-engine:dev
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 

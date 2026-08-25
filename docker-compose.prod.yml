@@ -1,0 +1,216 @@
+# ==============================================================================
+# ABUD Shorts Engine V2 - CLIENT / PRODUCTION COMPOSE
+# ==============================================================================
+# This is the file a customer installation runs. It never builds from source:
+# every service references an immutable, published image, so installing and
+# updating are a pull rather than a multi-gigabyte compile on the customer's
+# machine.
+#
+#   ABUD_IMAGE          the released application image, pinned by digest by the
+#                       updater (ghcr.io/3bud-zc/abud-shorts-engine@sha256:...)
+#   ABUD_DATA_DIR       the persistent data directory on the host. It lives
+#                       outside every release directory, so upgrading the code
+#                       never touches videos, uploads, brands or backups.
+#
+# Developers keep using docker-compose.v2.yml, which builds from the working
+# tree. Nothing here replaces that.
+# ==============================================================================
+
+services:
+  abud-shorts-postgres:
+    # Pinned to an exact patch release. A floating tag would let an unrelated
+    # PostgreSQL upgrade ride along with an application update.
+    image: postgres:16.10-alpine
+    container_name: abud-shorts-postgres
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-abud_shorts}
+      POSTGRES_USER: ${POSTGRES_USER:-abud_shorts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set by the installer}
+    volumes:
+      # A named volume, never removed by the updater and never subject to
+      # `down -v` in any normal path.
+      - abud-shorts-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - postgres
+
+  abud-shorts-n8n:
+    # Pinned. n8n changes workflow semantics between minor versions, so a
+    # floating tag could break the control plane without any ABUD release.
+    image: n8nio/n8n:1.76.1
+    container_name: abud-shorts-n8n
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      N8N_HOST: n8n
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set by the installer}
+      N8N_USER_MANAGEMENT_DISABLED: "true"
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Africa/Cairo}
+    volumes:
+      - abud-shorts-n8n-data:/home/node/.n8n
+      - ${ABUD_RELEASE_DIR:-.}/integrations/n8n:/workflows:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "n8n import:workflow --input=/workflows/abud-shorts-v2-control-plane-workflow.json || true;
+      n8n import:workflow --input=/workflows/abud-shorts-v2-publishing-workflow.json || true;
+      n8n update:workflow --id=abud-shorts-v2-control-plane --active=true || true;
+      n8n update:workflow --id=abud-shorts-v2-publishing --active=true || true;
+      n8n publish:workflow --id=abud-shorts-v2-control-plane || true;
+      n8n publish:workflow --id=abud-shorts-v2-publishing || true;
+      n8n start"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - n8n
+
+  # The render worker and the application are the same immutable image running
+  # in two roles, which is what SERVICE_ROLE already selects. One image to pull,
+  # one digest to verify, one thing to roll back.
+  abud-shorts-render-worker:
+    image: ${ABUD_IMAGE:?ABUD_IMAGE must be set by the installer or updater}
+    container_name: abud-shorts-render-worker
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    environment:
+      SERVICE_ROLE: render-worker
+      V2_ENABLED: "true"
+      PORT: 3125
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
+      PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-45000}
+      WEBHOOK_TIMEOUT_MS: ${WEBHOOK_TIMEOUT_MS:-10000}
+      MIN_FREE_DISK_BYTES: ${MIN_FREE_DISK_BYTES:-536870912}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must be set by the installer}
+      PROVIDER_VAULT_MASTER_KEY: ${PROVIDER_VAULT_MASTER_KEY:-}
+      DATABASE_URL: postgres://${POSTGRES_USER:-abud_shorts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-abud_shorts}
+      DATA_DIR_PATH: /app/data
+      DOCKER: "true"
+      DEV: "false"
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
+      # Arabic narration is ElevenLabs only, configured from the app UI and held
+      # encrypted in the provider vault. This variable is an override, not the
+      # normal route.
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
+      CONCURRENCY: ${CONCURRENCY:-1}
+      VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
+    volumes:
+      - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}:/app/data
+    entrypoint: ["sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3125/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - render-worker
+
+  abud-shorts-app:
+    image: ${ABUD_IMAGE:?ABUD_IMAGE must be set by the installer or updater}
+    container_name: abud-shorts-app
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    depends_on:
+      abud-shorts-postgres:
+        condition: service_healthy
+      abud-shorts-n8n:
+        condition: service_started
+      abud-shorts-render-worker:
+        condition: service_started
+    environment:
+      SERVICE_ROLE: app
+      V2_ENABLED: "true"
+      PORT: 3123
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
+      PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-45000}
+      WEBHOOK_TIMEOUT_MS: ${WEBHOOK_TIMEOUT_MS:-10000}
+      MIN_FREE_DISK_BYTES: ${MIN_FREE_DISK_BYTES:-536870912}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must be set by the installer}
+      PROVIDER_VAULT_MASTER_KEY: ${PROVIDER_VAULT_MASTER_KEY:-}
+      DATABASE_URL: postgres://${POSTGRES_USER:-abud_shorts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-abud_shorts}
+      N8N_BASE_URL: http://n8n:5678
+      N8N_WEBHOOK_PATH: /webhook/abud-v2/jobs/start
+      RENDER_WORKER_BASE_URL: http://render-worker:3125
+      APP_INTERNAL_BASE_URL: http://app:3123
+      # The address customers reach this installation on. Set by the installer
+      # and editable from Settings; every OAuth callback URL derives from it.
+      V2_PUBLIC_URL: ${V2_PUBLIC_URL:-http://localhost:3130}
+      HOST_PORT: ${HOST_PORT:-3130}
+      # Unset means forwarded headers are ignored. Set to 1 (or a CIDR list)
+      # only when nginx or Cloudflare really is in front.
+      TRUSTED_PROXY: ${TRUSTED_PROXY:-}
+      ABUD_RELEASE_CHANNEL: ${ABUD_RELEASE_CHANNEL:-stable}
+      ABUD_HOST_PLATFORM: ${ABUD_HOST_PLATFORM:-linux}
+      ABUD_INSTALL_TYPE: ${ABUD_INSTALL_TYPE:-docker_linux}
+      ABUD_UPDATE_MANIFEST_URL: ${ABUD_UPDATE_MANIFEST_URL:-}
+      DATA_DIR_PATH: /app/data
+      DOCKER: "true"
+      DEV: "false"
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
+      CONCURRENCY: ${CONCURRENCY:-1}
+      VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
+    ports:
+      # Only the application is published. PostgreSQL, n8n and the render worker
+      # stay on the internal network with no host port at all.
+      - "${HOST_PORT:-3130}:3123"
+    volumes:
+      - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}:/app/data
+    entrypoint: ["sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3123/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - app
+
+volumes:
+  abud-shorts-postgres-data:
+  abud-shorts-n8n-data:
+
+networks:
+  abud-shorts-v2:
+    driver: bridge

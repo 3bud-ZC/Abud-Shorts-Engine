@@ -36,8 +36,8 @@ Finalization track:
 | F1 | Product UI, ABUD design system, no-code client experience | **PASS** |
 | F1.5 | Product polish and client safety gate | **PASS** |
 | F2 | Creative and animation engine finalization | **PASS / CLOSED** |
-| F3 | Integrations and real publishing closure | **PASS** |
-| F4 | Client installation, operations and delivery closure | NOT STARTED |
+| F3 | Integrations and real publishing closure | **PASS / CLOSED** |
+| F4 | Client installation, operations and delivery closure | **PASS** |
 
 Final complete-product / client acceptance: PENDING
 
@@ -55,6 +55,98 @@ Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
 metadata and videos stay readable and playable. It is not a production Arabic
 route and is not a required runtime. The Piper evidence in the milestone
 sections below is historical and is deliberately left unchanged.
+
+---
+
+## F4 — Client Installation, Operations & Online Update Closure
+
+Branch `v2.2-finalization`. No merge, no tag, no GitHub Release, no published
+GHCR production image and no official v2.2.0 customer artifact. Stable remains
+`v2.1.0`; target remains `v2.2.0`.
+
+### Delivery model
+
+F4 adds the customer delivery surface without moving update execution into the
+web app. The browser can check and report update state, but applying an update
+is host-side only:
+
+- Linux/VPS: `sudo abud-shorts update`
+- Windows: Start Menu / host PowerShell updater
+- No Git workflow, source upload, manual compose edit or raw Docker command is
+  required for customer updates.
+
+The prepared release flow publishes immutable application images and a GitHub
+Release update manifest in F5. F4 prepared `.github/workflows/release.yml`,
+`scripts/release/package-client.mjs`, `scripts/release/verify-package.mjs`,
+`docker-compose.prod.yml`, host updater scripts and client documentation.
+
+### Update and rollback proof
+
+Local mock release assets were generated in a temp directory with a dummy image
+digest; they were not published. The package verifier reported:
+
+- package SHA-256 verified
+- no secrets, source, dependencies or developer data
+- installer, updater, compose and documentation present
+- manifest matched the package
+
+Isolated Linux/container updater verification: **PASS**. Executed the real shell
+host scripts in an Alpine container with a temp installation and mocked Docker
+daemon. Covered `status`, `backup`, `update --check`, successful update from
+fixture `2.1.0` to `2.2.0`, manual rollback to `2.1.0`, failed update,
+automatic rollback, transaction state and data sentinel preservation.
+
+Windows updater verification: **PASS**. Executed `install.ps1` from the staged
+client package plus the real Windows host updater in a temp installation with a
+local manifest server and mocked Docker CLI. Covered install, status, backup,
+update check, successful `-TargetVersion 2.2.0` update, manual rollback, failed
+update, automatic rollback and data sentinel preservation.
+
+### Security and data safety
+
+- The normal app container is not given `/var/run/docker.sock`.
+- No generic web/API command execution route (`exec`, `shell`, `command`,
+  `run-command`, `eval`) is exposed.
+- Host update scripts stop only app and render-worker during version switch;
+  PostgreSQL and n8n data remain attached.
+- Normal install/update/restart paths do not run `docker compose down -v`,
+  remove Docker volumes or prune Docker state.
+- Pre-update backup is created before switching versions.
+- Package allow-list excludes `.env`, secrets, Provider Vault data, customer
+  media/data, backups, logs, coverage, `node_modules`, `.git`, source/build
+  output and scratch files.
+
+### Public URL and server operation
+
+F4 adds canonical public URL resolution and explicit trusted-proxy handling.
+Defaults stay local (`http://localhost:3130`); online installs can use a domain
+such as `https://shorts.customer.com`. OAuth callback URLs derive from the
+configured canonical public URL. Forwarded headers are ignored unless
+`TRUSTED_PROXY` is explicitly configured.
+
+`nginx.conf.reference` covers HTTPS redirect/termination, SSE, video range
+requests, OAuth callback paths, uploads and long render-related requests. Only
+the ABUD app is public; PostgreSQL, n8n and render worker stay internal.
+
+### Browser QA
+
+Settings -> Updates was verified through the current source UI with Playwright
+at 1366x768 and 390x844. Verified visible labels: Current Version, Channel,
+Last Checked, Latest Version, Update Status and Release Notes. The Check for
+Updates action rendered, public address callbacks followed the canonical URL,
+advanced details were opt-in, there was no horizontal overflow and no raw
+Docker operation text leaked into the normal UI.
+
+### Verification
+
+- Targeted F4 tests: 3 files, 76 tests, PASS.
+- Full tests: 47 files, 701 tests, PASS.
+- `pnpm typecheck`: PASS.
+- `pnpm build`: PASS.
+- Docker after verification: app, render-worker, n8n and PostgreSQL healthy;
+  only app exposed on `localhost:3130`.
+
+**F4 is closed. V2.2 is still NOT RELEASED.**
 
 ---
 

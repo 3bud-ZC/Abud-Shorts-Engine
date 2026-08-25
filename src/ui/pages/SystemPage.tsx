@@ -221,7 +221,9 @@ export const SystemPage: React.FC = () => {
       {/* Top Overview Cards */}
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Product Version" value={diagnostics?.product?.version || "2.1.0"} />
+          {/* No hardcoded fallback: an unknown version must read as unknown rather
+              than silently claiming a version this build may not be. */}
+          <StatCard label="Product Version" value={diagnostics?.product?.version || "Unknown"} />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <StatCard label="System Status" value={<StatusBadge status={health?.status || "healthy"} />} />

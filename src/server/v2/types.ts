@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canonicalPublicUrlSchema } from "./system/publicUrl";
 import { createShortInput, renderConfig } from "../../types/shorts";
 import {
   arabicDialectEnum,
@@ -377,6 +378,10 @@ export const appSettingsSchema = z.object({
   uploadPostApiKey: z.string().trim().max(256).optional(),
   telegramBotToken: z.string().trim().max(256).optional(),
   telegramChatId: z.string().trim().max(120).optional(),
+  // The address this installation is reached on. A VPS install sets its own
+  // domain here and every OAuth callback URL follows, with no source edit.
+  // Null clears it and falls back to the installer's V2_PUBLIC_URL.
+  canonicalPublicUrl: canonicalPublicUrlSchema.nullable().optional(),
 });
 
 export type BrandProfileRecord = z.infer<typeof brandProfileSchema> & {

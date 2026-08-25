@@ -23,6 +23,7 @@ import {
   type OAuthProviderId,
 } from "./oauthService";
 import { SocialAccountService } from "./socialAccountService";
+import { resolveInstallationPublicUrl } from "../system/publicUrl";
 
 /**
  * OAUTH ROUTES
@@ -51,9 +52,18 @@ export function createOAuthRouter(
   const states = new OAuthStateService(db);
   const accounts = new SocialAccountService(db, vault, config.providerVaultMasterKey);
 
-  /** The address this installation serves, used for every callback URL. */
-  const publicBaseUrl = (): string =>
-    (process.env.V2_PUBLIC_URL || `http://localhost:${config.port}`).replace(/\/+$/, "");
+  /**
+   * The address this installation serves, used for every callback URL.
+   *
+   * A VPS installation sets its own domain in Settings, so the callback URL the
+   * customer pastes into the provider console follows that value rather than a
+   * hard-coded localhost. The installer's V2_PUBLIC_URL is the fallback, and
+   * localhost the last resort for a workstation install.
+   */
+  const publicBaseUrl = async (): Promise<string> => {
+    const resolved = await resolveInstallationPublicUrl(db, config);
+    return resolved.url;
+  };
 
   function provider(req: express.Request): OAuthProviderId | null {
     const value = String(req.params.provider || "").toLowerCase();
@@ -80,7 +90,7 @@ export function createOAuthRouter(
       displayName: contract.displayName,
       consoleUrl: contract.consoleUrl,
       // The single value the customer must paste into the provider console.
-      callbackUrl: callbackUrlFor(publicBaseUrl(), id),
+      callbackUrl: callbackUrlFor(await publicBaseUrl(), id),
       fields: contract.appFields,
       scopes: contract.scopes.map((scope) => ({
         scope,
@@ -129,7 +139,7 @@ export function createOAuthRouter(
       });
       res.status(200).json({
         credential,
-        callbackUrl: callbackUrlFor(publicBaseUrl(), id),
+        callbackUrl: callbackUrlFor(await publicBaseUrl(), id),
       });
     } catch (error) {
       res.status(400).json({
@@ -163,7 +173,7 @@ export function createOAuthRouter(
       return;
     }
 
-    const redirectUri = callbackUrlFor(publicBaseUrl(), id);
+    const redirectUri = callbackUrlFor(await publicBaseUrl(), id);
     const contract = OAUTH_CONTRACTS[id];
 
     try {
@@ -203,8 +213,9 @@ export function createOAuthRouter(
    */
   router.get("/providers/:provider/oauth/callback", async (req, res) => {
     const id = provider(req);
+    const baseUrl = await publicBaseUrl();
     const back = (status: string, detail?: string, path = "/integrations") => {
-      const target = new URL(path, publicBaseUrl());
+      const target = new URL(path, baseUrl);
       target.searchParams.set("connection", status);
       if (id) target.searchParams.set("provider", id);
       if (detail) target.searchParams.set("reason", detail.slice(0, 120));
@@ -230,7 +241,7 @@ export function createOAuthRouter(
       return back("error", "invalid_state");
     }
 
-    if (!isAllowedRedirectUri(consumed.redirectUri, publicBaseUrl(), id)) {
+    if (!isAllowedRedirectUri(consumed.redirectUri, baseUrl, id)) {
       logger.warn({ provider: id }, "OAuth callback rejected: redirect URI is not this installation");
       return back("error", "invalid_redirect");
     }

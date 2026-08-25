@@ -19,6 +19,7 @@ import { SystemHealthService } from "./v2/system/systemHealthService";
 import { AuthService } from "./v2/auth/authService";
 import { ApiTokenService } from "./v2/auth/apiTokenService";
 import { cleanupTemporaryArtifacts } from "./v2/storage/storagePolicy";
+import { resolveTrustedProxy } from "./v2/system/trustedProxy";
 
 export class Server {
   private app: express.Application;
@@ -35,6 +36,18 @@ export class Server {
     this.config = config;
     this.app = express();
     this.app.disable("x-powered-by");
+
+    // Behind nginx or Cloudflare the browser's real protocol and host arrive
+    // only as X-Forwarded-* headers. They are spoofable by anyone who can reach
+    // the app directly, so they are honoured only when the operator declared a
+    // proxy via TRUSTED_PROXY. Unset means "ignore them", which is what a
+    // localhost installation wants.
+    const trustedProxy = resolveTrustedProxy(process.env.TRUSTED_PROXY);
+    this.app.set("trust proxy", trustedProxy.expressSetting);
+    if (trustedProxy.enabled) {
+      logger.info({ trustedProxy: trustedProxy.description }, "Trusted proxy mode enabled");
+    }
+
     this.app.use(express.json({ limit: "2mb" }));
     this.app.use((req, res, next) => {
       const headerRequestId = req.headers["x-request-id"];

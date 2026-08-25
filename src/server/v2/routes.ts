@@ -7,6 +7,7 @@ import axios from "axios";
 import cuid from "cuid";
 import fs from "fs-extra";
 import path from "path";
+import { logger } from "../../logger";
 import { Config } from "../../config";
 import { listBusinessTemplates } from "../../short-creator/business-templates";
 import { ShortCreator } from "../../short-creator/ShortCreator";
@@ -55,6 +56,14 @@ import { PublishingService } from "./publishing/publishingService";
 import { PublishingScheduler } from "./publishing/scheduler";
 import { publishingRegistry } from "./publishing/registry";
 import { getProductInfo } from "../../version";
+import { UpdateService, type UpdateCenterState } from "./updates/updateService";
+import {
+  OAUTH_CALLBACK_PROVIDERS,
+  oauthCallbackUrl,
+  publicUrlWarnings,
+  resolveInstallationPublicUrl,
+} from "./system/publicUrl";
+import { resolveTrustedProxy } from "./system/trustedProxy";
 import { AuthService } from "./auth/authService";
 import { ApiTokenService, type ApiTokenScope } from "./auth/apiTokenService";
 import type { VoiceProviderId } from "./voice-providers/types";
@@ -169,6 +178,24 @@ async function readAppSettings(db: V2Database) {
     ["dashboard"],
   );
   return rows[0]?.value || {};
+}
+
+/**
+ * Advanced Technical Details are opt-in. The ordinary client view never shows a
+ * Docker image reference or a digest, so they are stripped unless the caller
+ * explicitly asked for the technical panel.
+ */
+function isAdvancedUpdateView(req: ExpressRequest): boolean {
+  return String(req.query.advanced || "") === "true";
+}
+
+function clientSafeUpdateState(
+  state: UpdateCenterState,
+  includeAdvanced: boolean,
+): UpdateCenterState | Omit<UpdateCenterState, "advanced"> {
+  if (includeAdvanced) return state;
+  const { advanced: _advanced, ...rest } = state;
+  return rest;
 }
 
 async function writeAppSettings(db: V2Database, value: Record<string, unknown>) {
@@ -718,6 +745,7 @@ export function createV2PublicRouter(
   const revisionService = new RevisionService(db);
   const workerLeaseService = new WorkerLeaseService(db);
   const providerVault = new ProviderCredentialsVault(db, config);
+  const updateService = new UpdateService({ dataDir: config.dataDirPath });
 
   // Provider classes read credentials synchronously; the vault resolver keeps a
   // decrypted copy in process memory only. Plaintext never leaves this module.
@@ -2468,8 +2496,68 @@ export function createV2PublicRouter(
   });
 
   // 1. System Info & Diagnostics
-  router.get("/system/info", (req, res) => {
-    res.status(200).json(getProductInfo());
+  router.get("/system/info", async (req, res) => {
+    // Public-safe: product identity and the address it is published on. No
+    // secret, no path, no provider state.
+    const info = getProductInfo();
+    const resolved = await resolveInstallationPublicUrl(db, config);
+    res.status(200).json({ ...info, canonicalUrl: resolved.url });
+  });
+
+  /**
+   * Update Center. The application only ever reports; it never applies an
+   * update, because applying one requires Docker control that the web app is
+   * deliberately not given. `refresh=true` performs a live manifest check.
+   */
+  router.get("/system/updates", async (req, res) => {
+    try {
+      const refresh = String(req.query.refresh || "") === "true";
+      const state = await updateService.getCenterState({ refresh });
+      res.status(200).json(clientSafeUpdateState(state, isAdvancedUpdateView(req)));
+    } catch (error) {
+      logger.warn({ error }, "Update Center state could not be read");
+      res.status(500).json({ error: "Update status is unavailable right now." });
+    }
+  });
+
+  router.post("/system/updates/check", async (req, res) => {
+    try {
+      await updateService.check();
+      const state = await updateService.getCenterState({ refresh: false });
+      res.status(200).json(clientSafeUpdateState(state, isAdvancedUpdateView(req)));
+    } catch (error) {
+      logger.warn({ error }, "Update check failed");
+      res.status(200).json({
+        status: "CHECK_FAILED",
+        currentVersion: getProductInfo().version,
+        message: "Could not reach the update service. Try again in a moment.",
+      });
+    }
+  });
+
+  /**
+   * The canonical public address and the OAuth callback URLs derived from it.
+   * Saving a new address goes through PUT /settings like any other setting.
+   */
+  router.get("/system/public-url", async (req, res) => {
+    const resolved = await resolveInstallationPublicUrl(db, config);
+    res.status(200).json({
+      url: resolved.url,
+      source: resolved.source,
+      isLocal: resolved.isLocal,
+      isSecure: resolved.isSecure,
+      warnings: publicUrlWarnings(resolved),
+      callbackUrls: Object.fromEntries(
+        OAUTH_CALLBACK_PROVIDERS.map((provider) => [
+          provider,
+          oauthCallbackUrl(resolved.url, provider),
+        ]),
+      ),
+      trustedProxy: {
+        enabled: resolveTrustedProxy(process.env.TRUSTED_PROXY).enabled,
+        description: resolveTrustedProxy(process.env.TRUSTED_PROXY).description,
+      },
+    });
   });
 
   router.get("/system/storage", (req, res) => {

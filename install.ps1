@@ -1,210 +1,359 @@
 # ==============================================================================
-# ABUD Shorts Engine V2 — Production Installer (Windows PowerShell)
-# Version: 2.1.0
+# ABUD Shorts Engine V2 - Client Installer (Windows)
+# ==============================================================================
+# Right-click install.ps1 -> Run with PowerShell, or:
+#
+#   .\install.ps1
+#   .\install.ps1 -Port 3131
+#   .\install.ps1 -PublicUrl https://shorts.example.com
+#
+# What it produces:
+#
+#   %ProgramData%\AbudShorts\
+#     current.txt                 the release directory in use
+#     releases\<version>\         this release, and every earlier one
+#     shared\                     EVERYTHING THE CUSTOMER OWNS
+#       data\ config\ backups\ logs\ state\ installation.json
+#
+# Updating replaces a release directory. It never writes inside shared\, which
+# is why videos, uploads, brands, settings and backups survive every update.
 # ==============================================================================
 
 [CmdletBinding()]
-param (
+param(
     [int]$Port = 3130,
-    [string]$ProjectName = "",
-    [string]$ComposeFile = "docker-compose.v2.yml",
-    [string]$DataDir = "data",
-    [switch]$DevMode = $false
+    [string]$PublicUrl = "",
+    [string]$InstallRoot = "",
+    [string]$Image = "",
+    [switch]$BehindProxy,
+    # Used by the isolated F4 rehearsal so a test installation cannot collide
+    # with a real one on the same machine.
+    [string]$ComposeProject = "abud-shorts",
+    [switch]$NoShortcuts
 )
 
 $ErrorActionPreference = "Stop"
+$PackageDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+if (-not $InstallRoot) { $InstallRoot = Join-Path $env:ProgramData "AbudShorts" }
+$AbudShared      = Join-Path $InstallRoot "shared"
+$AbudReleases    = Join-Path $InstallRoot "releases"
+$AbudCurrentFile = Join-Path $InstallRoot "current.txt"
+$AbudDataDir     = Join-Path $AbudShared "data"
+$AbudConfigDir   = Join-Path $AbudShared "config"
+$AbudEnvFile     = Join-Path $AbudConfigDir ".env"
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "  ABUD Shorts Engine V2 — One-Command Production Installer" -ForegroundColor Cyan
-Write-Host "  Version: 2.1.0" -ForegroundColor Cyan
+Write-Host "  ABUD Shorts Engine - Installer" -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Verify Docker Engine & CLI
-Write-Host "[1/8] Verifying Docker installation..." -ForegroundColor Yellow
+function Fail([string]$Message) {
+    Write-Host ""
+    Write-Host "  $Message" -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# 1. Docker
+# ---------------------------------------------------------------------------
+Write-Host "[1/9] Checking Docker..." -ForegroundColor Yellow
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    Write-Error "Docker is not installed or not in PATH. Please install Docker Desktop for Windows: https://www.docker.com/products/docker-desktop/"
-    exit 1
+    Fail "Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ and run this installer again."
+}
+docker info 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Fail "Docker Desktop is not running. Start it, wait for the whale icon to settle, then run this installer again."
+}
+docker compose version 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { Fail "The Docker Compose plugin is missing from this Docker Desktop installation." }
+Write-Host "      Docker is running." -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# 2. Disk
+# ---------------------------------------------------------------------------
+Write-Host "[2/9] Checking disk space..." -ForegroundColor Yellow
+New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+$driveLetter = (Split-Path -Qualifier $InstallRoot).TrimEnd(":")
+$freeGb = [math]::Round((Get-PSDrive -Name $driveLetter).Free / 1GB, 1)
+if ($freeGb -lt 15) { Fail "$freeGb GB free. ABUD Shorts needs at least 15 GB to install." }
+Write-Host "      $freeGb GB available." -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# 3. Address
+# ---------------------------------------------------------------------------
+Write-Host "[3/9] Checking the address this installation will serve..." -ForegroundColor Yellow
+$portBusy = $false
+try {
+    $probe = New-Object System.Net.Sockets.TcpClient
+    $probe.Connect("127.0.0.1", $Port)
+    $probe.Close()
+    $portBusy = $true
+} catch { $portBusy = $false }
+if ($portBusy) { Fail "Port $Port is already in use on this machine. Choose another one: .\install.ps1 -Port 3131" }
+
+$TrustedProxyValue = ""
+if ($BehindProxy) { $TrustedProxyValue = "1" }
+if (-not $PublicUrl) {
+    $PublicUrl = "http://localhost:$Port"
+    Write-Host "      Local installation: $PublicUrl" -ForegroundColor Green
+    Write-Host "      For a server with a domain, rerun with: -PublicUrl https://shorts.example.com"
+} else {
+    if ($PublicUrl -notmatch '^https?://') { Fail "-PublicUrl must start with http:// or https://" }
+    $PublicUrl = $PublicUrl.TrimEnd("/")
+    # A public address almost always means a reverse proxy in front, and the
+    # application must be told before it will believe any forwarded header.
+    if (-not $TrustedProxyValue) { $TrustedProxyValue = "1" }
+    Write-Host "      Public address: $PublicUrl" -ForegroundColor Green
 }
 
-try {
-    $dockerInfo = docker info 2>&1
+# ---------------------------------------------------------------------------
+# 4. Release identity
+# ---------------------------------------------------------------------------
+Write-Host "[4/9] Reading this release..." -ForegroundColor Yellow
+$releaseJsonPath = Join-Path $PackageDir "release.json"
+if (-not (Test-Path $releaseJsonPath)) {
+    Fail "release.json is missing. This does not look like an ABUD Shorts client package."
+}
+$releaseInfo = Get-Content $releaseJsonPath -Raw | ConvertFrom-Json
+$ReleaseVersion = $releaseInfo.version
+$ReleaseImage   = if ($Image) { $Image } else { $releaseInfo.image }
+$ReleaseDigest  = $releaseInfo.imageDigest
+$ReleaseChannel = if ($releaseInfo.channel) { $releaseInfo.channel } else { "stable" }
+if (-not $ReleaseVersion) { Fail "This package does not declare a version." }
+Write-Host "      Version $ReleaseVersion ($ReleaseChannel)" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# 5. The application image: offline archive first, otherwise pull
+# ---------------------------------------------------------------------------
+Write-Host "[5/9] Preparing the application..." -ForegroundColor Yellow
+$offlineArchive = $null
+$imagesDir = Join-Path $PackageDir "images"
+if (Test-Path $imagesDir) {
+    $offlineArchive = Get-ChildItem $imagesDir -Filter "*.tar*" -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+$imageAlreadyLocal = $false
+if ($ReleaseImage) {
+    & docker image inspect $ReleaseImage 2>$null | Out-Null
+    $imageAlreadyLocal = ($LASTEXITCODE -eq 0)
+}
+
+if ($offlineArchive) {
+    Write-Host "      Offline package: loading the bundled image (this takes a few minutes)..."
+    & docker load -i $offlineArchive.FullName | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "The bundled application image could not be loaded." }
+    Write-Host "      Image loaded from the package." -ForegroundColor Green
+} elseif ($imageAlreadyLocal) {
+    # Already present locally - the case an offline reinstall and the isolated
+    # F4 rehearsal both hit. No download needed.
+    Write-Host "      The application image is already on this machine." -ForegroundColor Green
+} else {
+    # Pull by digest when the package publishes one: a tag can be moved, a
+    # digest cannot, so this is what makes the installed version reproducible.
+    $pullRef = $ReleaseImage
+    if ($ReleaseDigest -and $ReleaseDigest -ne "null") {
+        $pullRef = "$(($ReleaseImage -split ':')[0])@$ReleaseDigest"
+    }
+    Write-Host "      Downloading the application (this takes a few minutes)..."
+    & docker pull $pullRef | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Docker daemon is not running. Please start Docker Desktop and rerun this installer."
-        exit 1
+        Fail "The application image could not be downloaded. Check this machine's internet connection and try again."
     }
-    Write-Host " -> Docker is running and healthy." -ForegroundColor Green
-} catch {
-    Write-Error "Failed to communicate with Docker daemon."
-    exit 1
+    $ReleaseImage = $pullRef
+    Write-Host "      Application downloaded." -ForegroundColor Green
 }
 
-# 2. Check Disk Space
-Write-Host "[2/8] Checking available disk space..." -ForegroundColor Yellow
-$drive = Get-PSDrive -Name (Get-Location).Drive.Name
-$freeSpaceGB = [math]::Round($drive.Free / 1GB, 2)
-if ($freeSpaceGB -lt 2.0) {
-    Write-Warning "Low disk space detected: $freeSpaceGB GB available. At least 5 GB is recommended."
-} else {
-    Write-Host " -> Disk space available: $freeSpaceGB GB." -ForegroundColor Green
+# ---------------------------------------------------------------------------
+# 6. Persistent layout
+# ---------------------------------------------------------------------------
+Write-Host "[6/9] Creating the installation..." -ForegroundColor Yellow
+foreach ($dir in @("videos", "thumbnails", "uploads", "cache", "models", "backups", "logs", "updates")) {
+    New-Item -ItemType Directory -Path (Join-Path $AbudDataDir $dir) -Force | Out-Null
+}
+foreach ($dir in @($AbudConfigDir, (Join-Path $AbudShared "backups"), (Join-Path $AbudShared "logs"), (Join-Path $AbudShared "state"), $AbudReleases)) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 
-# 3. Port Conflict Detection
-Write-Host "[3/8] Checking port availability for HTTP ($Port)..." -ForegroundColor Yellow
-$portOccupied = $false
-try {
-    $conn = New-Object System.Net.Sockets.TcpClient
-    $conn.Connect("127.0.0.1", $Port)
-    $conn.Close()
-    $portOccupied = $true
-} catch {
-    $portOccupied = $false
+$ReleaseDir = Join-Path $AbudReleases $ReleaseVersion
+if (Test-Path "$ReleaseDir.incoming") { Remove-Item "$ReleaseDir.incoming" -Recurse -Force }
+New-Item -ItemType Directory -Path "$ReleaseDir.incoming" -Force | Out-Null
+# The image archive is not copied into the release directory: it is many
+# gigabytes and Docker already holds it.
+Get-ChildItem $PackageDir -Exclude "images" | Copy-Item -Destination "$ReleaseDir.incoming" -Recurse -Force
+if (Test-Path $ReleaseDir) { Remove-Item $ReleaseDir -Recurse -Force }
+Move-Item "$ReleaseDir.incoming" $ReleaseDir
+Set-Content -Path $AbudCurrentFile -Value $ReleaseDir -Encoding utf8
+Write-Host "      Installed to $ReleaseDir" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# 7. Configuration and secrets
+# ---------------------------------------------------------------------------
+Write-Host "[7/9] Configuring..." -ForegroundColor Yellow
+function New-SecretHex([int]$Bytes) {
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $buffer = New-Object byte[] $Bytes
+    $rng.GetBytes($buffer)
+    return [System.BitConverter]::ToString($buffer).Replace("-", "").ToLower()
 }
 
-if ($portOccupied) {
-    Write-Warning "Port $Port is already in use on this system!"
-    Write-Host " -> You can specify a different port: .\install.ps1 -Port 3131" -ForegroundColor Yellow
-} else {
-    Write-Host " -> Port $Port is available." -ForegroundColor Green
-}
-
-# 4. Create Persistent Storage Directories
-Write-Host "[4/8] Creating persistent storage directories..." -ForegroundColor Yellow
-$storageDirs = @(
-    "data/videos",
-    "data/thumbnails",
-    "data/uploads",
-    "data/cache",
-    "data/models",
-    "data/backups",
-    "data/logs"
-)
-foreach ($dir in $storageDirs) {
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-}
-Write-Host " -> Storage directories initialized." -ForegroundColor Green
-
-# 5. Generate Secure Configuration & Secrets
-Write-Host "[5/8] Configuring environment and generating cryptographic secrets..." -ForegroundColor Yellow
-if (-not (Test-Path ".env")) {
-    function Generate-SecretHex([int]$bytes) {
-        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-        $buffer = New-Object byte[] $bytes
-        $rng.GetBytes($buffer)
-        return [System.BitConverter]::ToString($buffer).Replace("-", "").ToLower()
-    }
-
-    $internalToken = "abud_v2_sec_" + (Generate-SecretHex 32)
-    $pgPass = "abud_pg_" + (Generate-SecretHex 16)
-    $n8nKey = Generate-SecretHex 16
-    $sessionSecret = Generate-SecretHex 32
-    $providerVaultMasterKey = Generate-SecretHex 32
-    $whSecret = "whsec_" + (Generate-SecretHex 24)
-
+if (-not (Test-Path $AbudEnvFile)) {
+    $pgPass = "abud_pg_" + (New-SecretHex 16)
     $envContent = @"
-# ABUD Shorts Engine V2 — Environment Configuration
-PORT=3123
+# ABUD Shorts Engine - installation configuration
+# Generated by the installer. Every secret below is unique to this machine;
+# there is no shared or default password anywhere in the product.
+
 HOST_PORT=$Port
-SERVICE_ROLE=app
+V2_PUBLIC_URL=$PublicUrl
+TRUSTED_PROXY=$TrustedProxyValue
+
+ABUD_IMAGE=$ReleaseImage
+ABUD_RELEASE_CHANNEL=$ReleaseChannel
+ABUD_HOST_PLATFORM=windows
+ABUD_INSTALL_TYPE=docker_windows
+
 NODE_ENV=production
 V2_ENABLED=true
-
-# Persistent Directories
-DATA_DIR=/app/data
-VIDEOS_DIR=/app/data/videos
-TEMP_DIR=/app/data/cache
-
-# Internal Communication
-APP_INTERNAL_BASE_URL=http://app:3123
-RENDER_WORKER_BASE_URL=http://render-worker:3124
-N8N_BASE_URL=http://n8n:5678
-DATABASE_URL=postgresql://abud_shorts:$pgPass@postgres:5432/abud_shorts
+LOG_LEVEL=info
+GENERIC_TIMEZONE=Africa/Cairo
 WHISPER_MODEL=small
 KOKORO_MODEL_PRECISION=q4
 
-# Arabic production voice (ElevenLabs only).
-# Normal customers configure this from the app: Providers -> ElevenLabs -> Configure.
-# The key is stored encrypted in the provider vault; editing this file is not required.
-ELEVENLABS_API_KEY=
-# Optional. Leave empty to resolve the voice from your ElevenLabs account,
-# or set the voice you selected in Providers -> ElevenLabs -> Voice Lab.
-ELEVENLABS_DEFAULT_VOICE_ID=
-
-# Legacy Piper Arabic runtime. NOT required for production: Arabic narration is
-# served by ElevenLabs. These are only needed to re-open or re-render historical
-# jobs that were produced with Piper before V2.2.
-# PIPER_BIN=/opt/piper/bin/piper
-# PIPER_AR_MODEL_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx
-# PIPER_AR_MODEL_CONFIG_PATH=/app/data/models/piper/ar_JO-kareem-medium.onnx.json
-# PIPER_AR_VOICE_ID=ar_JO-kareem-medium
-
-# Cryptographic Secrets
-INTERNAL_SERVICE_TOKEN=$internalToken
+POSTGRES_DB=abud_shorts
+POSTGRES_USER=abud_shorts
 POSTGRES_PASSWORD=$pgPass
-N8N_ENCRYPTION_KEY=$n8nKey
-SESSION_SECRET=$sessionSecret
-PROVIDER_VAULT_MASTER_KEY=$providerVaultMasterKey
-WEBHOOK_SIGNING_SECRET=$whSecret
+
+INTERNAL_SERVICE_TOKEN=abud_v2_sec_$(New-SecretHex 32)
+N8N_ENCRYPTION_KEY=$(New-SecretHex 16)
+SESSION_SECRET=$(New-SecretHex 32)
+PROVIDER_VAULT_MASTER_KEY=$(New-SecretHex 32)
+WEBHOOK_SIGNING_SECRET=whsec_$(New-SecretHex 24)
+
+# Arabic narration is produced by ElevenLabs and configured from the app:
+# Providers -> ElevenLabs -> Configure. The key is held encrypted in the
+# provider vault, so editing this file is not required.
+ELEVENLABS_API_KEY=
+ELEVENLABS_DEFAULT_VOICE_ID=
+PEXELS_API_KEY=
 "@
-    Set-Content -Path ".env" -Value $envContent -Encoding utf8
-    Write-Host " -> Generated secure production .env with random cryptographic secrets." -ForegroundColor Green
+    Set-Content -Path $AbudEnvFile -Value $envContent -Encoding utf8
+    Write-Host "      Generated a unique configuration with fresh secrets." -ForegroundColor Green
 } else {
-    Write-Host " -> Existing .env found; preserving configured credentials." -ForegroundColor Green
-}
-
-# 6. Start Docker Stack
-Write-Host "[6/8] Starting Docker services (app, render-worker, n8n, postgres)..." -ForegroundColor Yellow
-$composeArgs = @("-f", $ComposeFile)
-if ($ProjectName) {
-    $composeArgs += @("-p", $ProjectName)
-}
-$composeArgs += @("up", "-d", "--remove-orphans")
-& docker compose @composeArgs
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to start Docker compose stack."
-    exit 1
-}
-
-# 7. Wait for Service Health
-Write-Host "[7/8] Waiting for services to become healthy..." -ForegroundColor Yellow
-$maxAttempts = 30
-$attempt = 0
-$healthy = $false
-
-while ($attempt -lt $maxAttempts) {
-    $attempt++
-    Start-Sleep -Seconds 2
-    try {
-        $response = Invoke-RestMethod -Uri "http://localhost:$Port/health/ready" -Method Get -TimeoutSec 3 -ErrorAction SilentlyContinue
-        if ($response.ready -eq $true -or $response.status -eq "ok") {
-            $healthy = $true
-            break
+    # An existing installation keeps its secrets and its data. Only the version
+    # pointers move.
+    $lines = Get-Content $AbudEnvFile
+    function Update-EnvLine([string[]]$Lines, [string]$Key, [string]$Value) {
+        $found = $false
+        $out = foreach ($line in $Lines) {
+            if ($line -match "^$([regex]::Escape($Key))=") { $found = $true; "$Key=$Value" } else { $line }
         }
-    } catch {
-        # continue waiting
+        if (-not $found) { $out = @($out) + "$Key=$Value" }
+        return $out
     }
-    Write-Host " -> Waiting for application startup ($attempt/$maxAttempts)..." -ForegroundColor Gray
+    $lines = Update-EnvLine $lines "ABUD_IMAGE" $ReleaseImage
+    $lines = Update-EnvLine $lines "ABUD_RELEASE_CHANNEL" $ReleaseChannel
+    $lines | Out-File -FilePath $AbudEnvFile -Encoding utf8
+    Write-Host "      Existing configuration kept; secrets and data untouched." -ForegroundColor Green
 }
 
-if (-not $healthy) {
-    Write-Warning "Application took longer than expected to report ready. Check logs with: docker compose -f docker-compose.v2.yml logs app"
+[ordered]@{
+    product         = "ABUD Shorts Engine"
+    currentVersion  = $ReleaseVersion
+    previousVersion = $null
+    image           = $ReleaseImage
+    channel         = $ReleaseChannel
+    publicUrl       = $PublicUrl
+    installRoot     = $InstallRoot
+    updatedAt       = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+} | ConvertTo-Json -Depth 6 | Out-File -FilePath (Join-Path $AbudShared "installation.json") -Encoding utf8
+
+# ---------------------------------------------------------------------------
+# 8. Start
+# ---------------------------------------------------------------------------
+Write-Host "[8/9] Starting ABUD Shorts..." -ForegroundColor Yellow
+$env:ABUD_DATA_DIR = $AbudDataDir
+$env:ABUD_RELEASE_DIR = $ReleaseDir
+$composeFile = Join-Path $ReleaseDir "docker-compose.prod.yml"
+& docker compose --project-name $ComposeProject --env-file $AbudEnvFile --file $composeFile up -d --remove-orphans
+if ($LASTEXITCODE -ne 0) { Fail "The system could not be started. Check that Docker Desktop has enough memory assigned." }
+
+# Start Menu shortcuts, so the customer never types a Docker command.
+if (-not $NoShortcuts) {
+    $cliPath = Join-Path $ReleaseDir "scripts\host\abud-shorts.ps1"
+    $startMenu = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\ABUD Shorts"
+    try {
+        New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcuts = @(
+            @{ Name = "ABUD Shorts - Open";        Cmd = "start";       Desc = "Start ABUD Shorts and open the dashboard" },
+            @{ Name = "ABUD Shorts - Update";      Cmd = "update";      Desc = "Install the latest version, safely" },
+            @{ Name = "ABUD Shorts - Backup";      Cmd = "backup";      Desc = "Create a backup now" },
+            @{ Name = "ABUD Shorts - Diagnostics"; Cmd = "diagnostics"; Desc = "Write a support bundle" },
+            @{ Name = "ABUD Shorts - Status";      Cmd = "status";      Desc = "Show system health and version" }
+        )
+        foreach ($entry in $shortcuts) {
+            $link = $shell.CreateShortcut((Join-Path $startMenu "$($entry.Name).lnk"))
+            $link.TargetPath = "powershell.exe"
+            $link.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$cliPath`" $($entry.Cmd) -Pause"
+            $link.WorkingDirectory = $ReleaseDir
+            $link.Description = $entry.Desc
+            $link.Save()
+        }
+        Write-Host "      Start Menu shortcuts created under 'ABUD Shorts'." -ForegroundColor Green
+    } catch {
+        Write-Host "      Note: Start Menu shortcuts could not be created (run as administrator to add them)." -ForegroundColor Yellow
+        Write-Host "      Run operations from: $cliPath"
+    }
+}
+
+Write-Host "[9/9] Waiting for the system to become ready..." -ForegroundColor Yellow
+$ready = $false
+for ($attempt = 0; $attempt -lt 90; $attempt++) {
+    try {
+        Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health/ready" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+        $ready = $true
+        break
+    } catch { Start-Sleep -Seconds 2 }
+}
+
+# ---------------------------------------------------------------------------
+# Health summary
+# ---------------------------------------------------------------------------
+function Get-Health([string]$Name) {
+    $state = & docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $Name 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($state)) { return "missing" }
+    return $state.Trim()
+}
+function Friendly([string]$s) {
+    switch ($s) {
+        "healthy" { "Healthy" } "running" { "Healthy" } "starting" { "Starting" } default { "Problem" }
+    }
+}
+
+Write-Host ""
+Write-Host "=================================================================" -ForegroundColor Green
+if ($ready) {
+    Write-Host "  ABUD Shorts Engine $ReleaseVersion is installed and running" -ForegroundColor Green
 } else {
-    Write-Host " -> All services are healthy and operational." -ForegroundColor Green
+    Write-Host "  ABUD Shorts Engine $ReleaseVersion is installed" -ForegroundColor Green
 }
-
-# 8. Success Banner
-Write-Host ""
-Write-Host "=================================================================" -ForegroundColor Green
-Write-Host "  ABUD Shorts Engine V2 is Ready!" -ForegroundColor Green
-Write-Host "=================================================================" -ForegroundColor Green
-Write-Host "  Dashboard:       http://localhost:$Port" -ForegroundColor Cyan
-Write-Host "  Setup Wizard:    http://localhost:$Port/setup" -ForegroundColor Cyan
-Write-Host "  Free Pipeline:   Ready (Local Director, Pexels, Kokoro English, Whisper, Remotion)" -ForegroundColor Green
-Write-Host "  Arabic Voice:    Requires ElevenLabs - configure it in Providers -> ElevenLabs" -ForegroundColor Yellow
-Write-Host "  Database:        PostgreSQL Connected & Migrated" -ForegroundColor Green
-Write-Host "  Orchestrator:    n8n Internal Automation Active" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Run the First-Run Setup Wizard at: http://localhost:$Port/setup" -ForegroundColor Yellow
+Write-Host "  ABUD Shorts:   $(if ($ready) { 'Healthy' } else { 'Still starting' })"
+Write-Host "  Application:   $(Friendly (Get-Health 'abud-shorts-app'))"
+Write-Host "  Video Engine:  $(Friendly (Get-Health 'abud-shorts-render-worker'))"
+Write-Host "  Database:      $(Friendly (Get-Health 'abud-shorts-postgres'))"
+Write-Host "  Automation:    $(Friendly (Get-Health 'abud-shorts-n8n'))"
+Write-Host "  URL:           $PublicUrl"
+Write-Host ""
+Write-Host "  Next step - open this address and create your administrator account:" -ForegroundColor Yellow
+Write-Host "      $PublicUrl/setup" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Day-to-day, use the Start Menu shortcuts under 'ABUD Shorts':"
+Write-Host "      ABUD Shorts - Status, Update, Backup, Diagnostics"
+Write-Host ""
+if (-not $ready) {
+    Write-Host "  The system is taking longer than usual to start. Check it with the Status shortcut." -ForegroundColor Yellow
+    Write-Host ""
+}

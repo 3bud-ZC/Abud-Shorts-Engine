@@ -24,6 +24,8 @@ import {
   StatCard,
   StatusBadge,
 } from "../components/v2";
+import UpdateCenter from "../components/UpdateCenter";
+import PublicAddressPanel from "../components/PublicAddressPanel";
 import type { ApiTokenItem, BusinessTemplateOption, V2Brand } from "./v2Types";
 
 const SettingsPage: React.FC = () => {
@@ -358,6 +360,27 @@ const SettingsPage: React.FC = () => {
           </SectionCard>
         </Grid>
 
+        {/* Updates. Client-facing: version, channel, status, release notes and
+            the one action that installs an update on this platform. */}
+        <Grid item xs={12}>
+          <SectionCard
+            title="Updates"
+            description="Which version you are running, and how to move to the latest one."
+          >
+            <UpdateCenter />
+          </SectionCard>
+        </Grid>
+
+        {/* The address this installation serves. OAuth callbacks follow it. */}
+        <Grid item xs={12}>
+          <SectionCard
+            title="Public Address"
+            description="Where customers reach this installation, and the callback URLs that follow from it."
+          >
+            <PublicAddressPanel />
+          </SectionCard>
+        </Grid>
+
         <Grid item xs={12}>
           <SectionCard
             title="Backup & Restore"
@@ -612,9 +635,28 @@ const BackupManager: React.FC = () => {
                 <Typography variant="body2" fontWeight={700}>
                   {b.filename}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Type: {b.type} · Size: {(b.sizeBytes / 1024).toFixed(1)} KB · Version: {b.version} ·{" "}
-                  {new Date(b.createdAt).toLocaleString()}
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                  {new Date(b.createdAt).toLocaleString()} ·{" "}
+                  {b.type === "full"
+                    ? "Full media"
+                    : b.type === "config_db"
+                      ? "Database + config"
+                      : "Config only"}{" "}
+                  ·{" "}
+                  {b.sizeBytes >= 1048576
+                    ? `${(b.sizeBytes / 1048576).toFixed(1)} MB`
+                    : `${(b.sizeBytes / 1024).toFixed(1)} KB`}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", wordBreak: "break-all" }}
+                >
+                  Version {b.version}
+                  {b.manifest?.schemaVersion ? ` · Schema ${b.manifest.schemaVersion}` : ""}
+                  {b.checksumSha256 && b.checksumSha256 !== "local"
+                    ? ` · SHA-256 ${String(b.checksumSha256).slice(0, 16)}…`
+                    : ""}
                 </Typography>
               </Box>
               <Stack direction="row" spacing={1}>
