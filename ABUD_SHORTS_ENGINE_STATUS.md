@@ -15,13 +15,20 @@
 
 Product: ABUD Shorts Engine V2
 
-Stable: **v2.1.0**
+Stable: **v2.2.0** — released to the customer and **immutable**. Its tag, GitHub
+Release, release assets and GHCR image are never moved, rewritten or patched.
 
-Target: **v2.2.0**
+Target: **v2.3.0**
 
-Branch: **`v2.2-finalization`**
+Branch: **`v2.3-product-overhaul`**
 
-V2.2: **NOT RELEASED** — not merged, not tagged, not officially packaged or published
+V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
+V2.3-01 is complete; V2.3-02 and V2.3-03 remain.
+
+Interface languages: **English and Arabic, both first class.** The interface
+language is independent of the language a video is narrated in - an Arabic
+interface producing English videos, and an English interface producing Arabic
+videos, are both ordinary supported cases.
 
 Schema: **2.12.0**
 
@@ -3368,3 +3375,334 @@ rather than claimed fixed.
 
 V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release, no merge
 to main. Human creative acceptance of the F2 outputs is **pending**.
+
+---
+
+## V2.3-01 — Bilingual Foundation, Dashboard & Health
+
+Date: 2026-08-25. Branch `v2.3-product-overhaul`, cut from the v2.2.0 release
+state at `80b5a13`. Commit `f63b4f4`.
+
+Stable remains **v2.2.0** and was not touched: no tag moved, no GitHub Release
+edited, no release asset rewritten, no GHCR `2.2.0` image overwritten. Nothing
+in this milestone was applied to the customer's stable release.
+
+### 1. Real i18n foundation
+
+One centralised localisation layer under `src/ui/i18n`, not `language === "ar"`
+conditions spread through components:
+
+- `types.ts` — locales, directions, BCP-47 tags, the sixteen declared namespaces.
+- `locales/en.ts` / `locales/ar.ts` — flat `namespace.key` catalogues.
+- `catalog.ts` — resolution, interpolation, lookup, persistence, document `dir`/`lang`.
+- `format.ts` — locale-aware dates, times, numbers, percentages, file sizes, durations.
+- `status.ts` — the many raw backend states mapped onto the small set of words a customer reads.
+- `index.tsx` — the React provider and `useI18n()` / `useT()`.
+
+Namespaces: common, navigation, dashboard, create, productions, videos, brands,
+templates, media, publishing, integrations, settings, health, updates, setup,
+errors, statuses.
+
+The Arabic catalogue is verified against the English one **in both directions**,
+including matching `{placeholder}` sets and a check that Arabic values are
+actually in Arabic script rather than copied English. A string added without a
+translation fails the test run rather than shipping as an English word in an
+Arabic interface.
+
+Server-supplied customer-facing text was the half of this that is easy to miss.
+`/system/health/fast` and the update service now each send a `messageKey`
+alongside their English `message`: the interface renders the key so an Arabic
+operator reads Arabic, while a support bundle and any API consumer keep one
+stable English wording.
+
+Dependencies added: `stylis-plugin-rtl`, `stylis`, `@emotion/cache` — roughly
+10 KB combined, chosen over a full i18n framework.
+
+### 2. RTL / LTR
+
+`dir="rtl"` and `lang="ar"` move together on `<html>` on every language change.
+Beyond that:
+
+- `theme.direction` drives MUI's own components (drawer anchor, tabs, inputs).
+- An emotion stylis middleware mirrors the physical CSS the application emits,
+  so margins, padding, borders and the selected-nav accent land on the trailing
+  edge in Arabic without a second rule anywhere in the codebase.
+- Content direction follows the *content*: an English video title stays LTR in
+  an Arabic interface and vice versa.
+- Technical text — URLs, IDs, versions, shell commands, error messages, image
+  digests, checksums — is bidi-isolated so RTL layout cannot reorder it.
+- Numbers use Western Arabic digits (0-9) in both languages, pinned via
+  `-u-nu-latn`, because every ID, version and file size in this product is
+  written that way.
+
+Verified in a real browser: sidebar on the trailing edge at 1088-1356 of 1366
+and mirrored at 1920; the active navigation accent measured on the **right**
+border in Arabic; tab order still follows DOM order.
+
+### 3. Language switcher
+
+A quiet text control in the sidebar footer and the mobile app bar. Options are
+written in their own language ("English", "العربية") rather than translated, so
+someone who cannot read the current interface can still find their way out of
+it. Choice persists in `localStorage` under `abud_ui_locale` and survives a
+reload. Precedence: saved preference → browser language → English. A storage
+write that throws does not break the switch; the choice simply does not persist.
+
+### 4. Typography
+
+One harmonised superfamily. IBM Plex Sans Arabic is IBM Plex Sans extended to
+Arabic by the same foundry, so English gets a genuinely strong Latin face rather
+than an Arabic-first family's Latin afterthought, and mixed text reads as one
+design. Noto Sans Arabic Variable follows as the Arabic fallback. Both are
+bundled; **no font is fetched over the network**, which a test now enforces.
+
+A real type scale replaced MUI's defaults: body moved from 14px to 15px, the
+smallest customer-facing size is 12.5px, weight is used sparingly (600 for
+emphasis, 700 for headings) instead of 800+ everywhere, and Arabic gets an 8%
+line-height increase for its diacritics and descenders.
+
+Found and fixed here: `bidiProps` and the production card requested a
+`"Cairo"` family that no `@font-face` rule ever declared, so Arabic content
+silently fell back to Segoe UI or Tahoma — two different Arabic faces on the
+same screen. A test now fails if the interface asks for a family the stylesheet
+does not declare.
+
+### 5. Design system polish
+
+ABUD identity preserved: dark background, violet primary, cyan accent, green
+success. Refined rather than restyled — surface hierarchy, card contrast,
+consistent radius, hover and focus states, skeletons, empty states, and status
+colour tied to the one status vocabulary. Glow is reserved for primary actions,
+the selected navigation item and important status.
+
+### 6. Application shell
+
+Information architecture unchanged. Every navigation label, group heading and
+browser tab title is now translation-backed; adding a menu item without
+translating it is a visible omission. Active state uses a leading-edge rule and
+a coloured icon; icon spacing is logical so it mirrors correctly.
+
+### 7-12. Dashboard rebuild
+
+Rebuilt as an operational overview computed **only** from records the
+installation holds. Nothing is invented, and anything that cannot be derived is
+returned as `null` so the page omits the card rather than printing a confident
+zero.
+
+- **Metrics**: Total Videos, Videos Ready, Active Productions, Failed
+  Productions, Videos Today, Storage Used. Storage prefers the measured figure
+  and falls back to the library's own file sizes.
+- **Publishing metrics**: Published Today, Scheduled, Failed Publications,
+  Connected Channels — rendered **only** when `/api/v2/publishing/summary`
+  actually answered.
+- **Analytics**: a 30-day activity chart drawn from divs (no charting package
+  for one series of thirty daily counts), completed-vs-failed, success rate,
+  average production duration from jobs that recorded both ends, output-language
+  split and production-type split. Success rate is `null` rather than 0% when
+  nothing has finished.
+- **Alerts**: failed productions, unavailable non-optional services, failed
+  publications, low storage, update available, and a missing ElevenLabs key —
+  the last at *information* severity with English production explicitly called
+  out as unaffected. An optional provider that was never configured is never
+  raised as an alarm.
+- **Recent productions**: language, production type, duration, relative time,
+  status, progress only while active, Preview on completed and View Error on
+  failed. RTL titles render in their own direction.
+- **Recent videos**: real thumbnails where they exist, duration, language, date,
+  status, and Preview / Open / Publish.
+- **Publishing summary**: real counts only, shown only when the API answered.
+
+Every dashboard request now carries a client-side deadline, so a request that
+never settles can no longer hold the page on its skeleton.
+
+### 13. System Health root cause
+
+The page could sit on "Checking V2 system diagnostics…" indefinitely. The cause
+was structural, not a timeout that needed raising:
+
+1. First paint was gated on `Promise.all([/system/health, /system/diagnostics,
+   /system/storage])`, so it finished with the **slowest** of the three.
+2. `/system/diagnostics` calls `publishingRegistry.validateAll()`, which
+   contacts every configured publishing platform over the network on a **30s
+   per-provider** client timeout, then walks the whole data directory
+   synchronously, then reads the log file.
+3. `/system/storage` walks videos, cache, models, backups and logs recursively
+   with synchronous `readdirSync`/`statSync`, blocking the event loop.
+4. The browser requests carried **no client timeout**, so one provider that
+   never answered held the spinner forever.
+
+None of this was a slow endpoint that needed tuning. It was a fast path that did
+not exist.
+
+### 14. Fast health vs deep diagnostics
+
+New `GET /api/v2/system/health/fast`. Every check is individually bounded at
+1.5s, none contacts a provider API, none walks storage, and the result is cached
+for 3s so polling and Refresh cannot turn a cheap endpoint into load. It reports
+Application, Database, Video Engine, Automation, Voice, AI, Media Sources,
+Publishing and Storage.
+
+Deep diagnostics moved behind an explicit **Run full diagnostics**. Sections
+render independently, so storage failing does not hide core status.
+
+Measured on a live installation:
+
+| Endpoint | Time |
+| --- | --- |
+| `/system/health/fast` (cache bypassed, 5 runs) | 8-16 ms |
+| `/system/health/fast` (cached) | 5 ms |
+| `/system/diagnostics` (deep, opt-in) | 1.13 s |
+| System Health first meaningful render, in browser | **6 ms** |
+
+Target was under 2 seconds locally.
+
+### 15. Health timeouts
+
+Every external and deep check is bounded. Deep diagnostics now bounds publishing
+provider validation and the database check at 8s and reports honestly that it
+could not reach them rather than reporting them healthy. Storage measurement is
+cached for 30s so the synchronous walk is paid once.
+
+Provider states are Healthy, Not Configured, Needs Attention, Unavailable and
+Checking. **Not Configured on an optional provider never counts towards "needs
+attention"** — a customer who never wanted TikTok publishing is not told their
+system is unhealthy.
+
+### 16. System Health UI
+
+Top summary reads "All systems operational" or "N items need attention".
+Sections: Core, Providers, Storage, Updates, Advanced diagnostics. No container
+or service name appears in the normal view; `n8n`, `postgres` and
+`render-worker` live behind **Advanced details**, and a test fails the build if
+a technical name appears in translated copy. Storage says "Not measured yet"
+rather than showing a zero it has not computed.
+
+### 17. Setup copy regression
+
+- The hardcoded version is gone. Version now comes from
+  `/api/v2/system/info`, which serves `src/version.ts`, the canonical version
+  contract. An unknown version renders **nothing** rather than a guess.
+- The claim that "Piper provides the local Arabic path" is gone. Setup now
+  states the current policy: English narration runs locally with Kokoro, Arabic
+  narration uses ElevenLabs.
+- "FFmpeg, Remotion, Piper, Kokoro, and Whisper available" replaced with what
+  those components do for the customer.
+- A literal `#f9fafb` card background — a light-theme leak into a dark product
+  — replaced with the themed surface.
+
+A test now reads the customer-facing source directly and fails on any literal
+`x.y.z` version string, any mention of Piper, any internal milestone
+vocabulary, and any near-white background literal.
+
+### 18. Stale UI copy audit
+
+`src/ui/customerCopy.test.ts` audits Setup, Dashboard, System Health, Login, the
+shell and the shared components for hardcoded versions, Piper claims, internal
+milestone language (F1/F2/F3, GA acceptance, `V2.x-nn`, "release candidate"),
+container names in translated copy, light-theme leaks, untranslated navigation
+labels, and network font loading. Historical technical files keep their history
+and are not audited.
+
+### 19-20. Status labels and formatters
+
+One localised status vocabulary maps every raw backend state onto the words a
+customer reads; an unrecognised state degrades to "Needs Attention" and is never
+presented as success. Dates, times, numbers, file sizes, durations and
+percentages are centralised and locale-aware, with technical identifiers
+deliberately exempt.
+
+### 21. Accessibility
+
+Verified in-browser in Arabic: navigation landmark labelled, language switcher
+carries `aria-label` and `aria-haspopup`, no unlabelled icon buttons, no
+negative tab indices, tab order follows DOM order rather than visual order, an
+`h1` present on each page, and a 2px focus ring visible on keyboard focus.
+
+Contrast was measured rather than assumed, and it found a real failure: sidebar
+section headings at 3.8:1, below the 4.5:1 WCAG AA floor. The `muted` token was
+raised from `#6E6E8C` to `#8E8EAC` and the headings moved to the secondary
+colour. All alert text passes AA once the translucent tint is composited over
+the card surface (6.36:1 minimum).
+
+### 22. Mobile
+
+Browser QA at 390x844 found the Setup wizard's ten horizontal steps sitting
+~48px past the viewport, visible only because the document clips horizontal
+overflow. On phones the wizard now shows a compact "Step N of 10" line with a
+progress bar. Document horizontal overflow is **0 px** on Dashboard, System
+Health and Setup, in both languages, at all three viewports.
+
+### 23. Video quality deliberately untouched
+
+No change to ShortCreator creative algorithms, caption generation, ElevenLabs
+timing, scene selection, motion graphics, stock routing, media routing or
+production mode logic. Shared contracts were touched only where the interface
+needed them: `messageKey` on fast health and update status.
+
+### 24. Data safety
+
+Customer data verified identical before and after deployment:
+
+| Table | Rows |
+| --- | --- |
+| jobs | 156 |
+| publications | 38 |
+| social_accounts | 2 |
+| admin_users | 1 |
+| provider_credentials_vault | 2 |
+| backups | 6 |
+| video_revisions | 45 |
+| app_settings | 1 |
+
+377 video files on disk before and after. PostgreSQL was not reset and no
+migration was required. Browser QA ran against a **separate isolated instance**
+on port 3131 with its own database and data directory, so no QA fixture ever
+touched the customer's installation.
+
+### 25. Testing
+
+New and updated suites: `src/ui/i18n/i18n.test.ts` (27),
+`src/ui/i18n/format.test.ts` (19), `src/ui/customerCopy.test.ts` (13),
+`src/server/v2/system/fastHealth.test.ts` (14), and
+`src/ui/utils/dashboardMetrics.test.ts` rewritten from 3 tests to 23.
+
+- `pnpm typecheck` — **PASS** (server + UI)
+- `pnpm vitest run` — **51 files, 809 tests, 0 failures**. This milestone added
+  four suites (73 tests) and grew the dashboard suite from 3 to 23, so the
+  baseline it was measured against is 47 files / 716 tests.
+- `pnpm build` — **PASS**
+
+### 26. Browser QA
+
+Real browser, against a live installation, English and Arabic, on Dashboard,
+System Health and Setup, at 1920x1080, 1366x768 and 390x844:
+
+- 0 blank pages
+- 0 fatal console errors
+- 0 px horizontal document overflow
+- 0 untranslated placeholder keys
+- 0 broken RTL layouts
+
+Deep diagnostics were also exercised end to end and completed in 2.9 s without
+blocking the page.
+
+### 27. Docker
+
+`abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n` and
+`abud-shorts-postgres` all healthy after deployment. Only the app is publicly
+exposed, on `localhost:3130 -> 3123`. The developer installation was not reset.
+
+Build note for future milestones: the local `abud-shorts-engine:v2` image must
+be built with `--build-arg BASE_IMAGE=abud-shorts-engine-base:2.2.0-f8e37ad`.
+The default `abud-shorts-engine:dev` base carries a stale 23-package
+`node_modules` without `google-auth-library`, and building against it produces
+an image that crashes on startup with `MODULE_NOT_FOUND`.
+
+### 28. Deliberately left for V2.3-02
+
+- Create Video studio and capability-aware production controls.
+- Full Setup wizard redesign (only stale and incorrect copy was corrected here).
+- Localisation of the remaining pages: Productions, Video Library, Brands,
+  Templates, Media, Publishing, Integrations, Settings, Login. Their navigation,
+  titles and status vocabulary are translated; their page bodies are not.
+- Video-quality work: ShortCreator, captions, motion, stock and media routing.
