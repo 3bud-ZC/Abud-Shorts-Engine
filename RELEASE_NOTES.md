@@ -41,8 +41,11 @@ sudo abud-shorts restart
 sudo abud-shorts rollback
 ```
 
-Windows installations use the **ABUD Shorts** Start Menu shortcuts for Status,
-Update, Backup and Diagnostics.
+Windows installations use the **ABUD Shorts** Start Menu shortcuts, or the
+`START-ABUD-SHORTS.bat` / `UPDATE-ABUD-SHORTS.bat` / `BACKUP-ABUD-SHORTS.bat` /
+`DIAGNOSTICS-ABUD-SHORTS.bat` files in the install folder, for Status, Update,
+Backup and Diagnostics. Installing is a double-click of
+`INSTALL-ABUD-SHORTS.bat` after Docker Desktop is running.
 
 ## Data Safety
 
