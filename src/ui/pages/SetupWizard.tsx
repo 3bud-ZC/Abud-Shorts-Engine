@@ -17,6 +17,7 @@ import {
   Chip,
   FormControl,
   InputLabel,
+  LinearProgress,
   Select,
   MenuItem,
 } from "@mui/material";
@@ -29,21 +30,29 @@ import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-const steps = [
-  "Welcome",
-  "System Check",
-  "Sign-in",
-  "Storage",
-  "Stock Footage",
-  "Voice & AI",
-  "Publishing",
-  "Video Defaults",
-  "Review",
-  "Ready",
+import { useI18n } from "../i18n";
+import { useProductInfo } from "../utils/productInfo";
+
+/** Step labels as translation keys; the wizard is bilingual like the rest. */
+const stepKeys = [
+  "setup.welcome",
+  "setup.systemCheck",
+  "setup.signIn",
+  "setup.storage",
+  "setup.stockFootage",
+  "setup.voiceAndAi",
+  "setup.publishing",
+  "setup.videoDefaults",
+  "setup.review",
+  "setup.ready",
 ];
 
 export const SetupWizard: React.FC = () => {
   const navigate = useNavigate();
+  const { t, format } = useI18n();
+  // Version comes from the canonical contract, never from a literal here.
+  const { info: productInfo } = useProductInfo();
+  const steps = stepKeys;
   const [activeStep, setActiveStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -177,18 +186,60 @@ export const SetupWizard: React.FC = () => {
     <Box sx={{ maxWidth: 900, mx: "auto", py: 4, px: 2 }}>
       <Card sx={{ p: 3, borderRadius: 3, boxShadow: "0 4px 20px rgba(0,0,0,0.08)" }}>
         <Box sx={{ textAlign: "center", mb: 3 }}>
-          <Typography variant="h4" sx={{ fontWeight: 800, color: "primary.main" }}>
-            ABUD Shorts Engine V2
+          <Typography variant="h4" sx={{ color: "primary.main" }}>
+            {t("setup.wizardTitle")}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Production First-Run Setup Wizard
+            {t("setup.wizardSubtitle")}
           </Typography>
+          {/* Rendered only once the canonical version is known. An unknown
+              version shows nothing rather than a stale or guessed number. */}
+          {productInfo?.version && (
+            <Chip
+              size="small"
+              variant="outlined"
+              dir="ltr"
+              sx={{ mt: 1 }}
+              label={t("setup.versionLabel", { version: productInfo.version })}
+            />
+          )}
         </Box>
 
-        <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 4 }}>
-          {steps.map((label) => (
-            <Step key={label}>
-              <StepLabel>{label}</StepLabel>
+        {/*
+          Ten horizontal steps do not fit a 390px phone: browser QA found the
+          last steps sitting ~48px past the viewport, visible only because the
+          document clips horizontal overflow. On a phone the wizard shows a
+          compact "Step N of 10" line and a progress bar instead, which carries
+          the same information in the space that exists.
+        */}
+        <Box sx={{ display: { xs: "block", md: "none" }, mb: 3 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 1 }}>
+            <Typography variant="subtitle1">{t(steps[activeStep])}</Typography>
+            <Typography variant="caption" color="text.secondary">
+              {t("setup.stepCounter", {
+                current: format.number(activeStep + 1),
+                total: format.number(steps.length),
+              })}
+            </Typography>
+          </Stack>
+          <LinearProgress
+            variant="determinate"
+            value={((activeStep + 1) / steps.length) * 100}
+            aria-label={t("setup.stepCounter", {
+              current: String(activeStep + 1),
+              total: String(steps.length),
+            })}
+          />
+        </Box>
+
+        <Stepper
+          activeStep={activeStep}
+          alternativeLabel
+          sx={{ mb: 4, display: { xs: "none", md: "flex" } }}
+        >
+          {steps.map((key) => (
+            <Step key={key}>
+              <StepLabel>{t(key)}</StepLabel>
             </Step>
           ))}
         </Stepper>
@@ -203,65 +254,62 @@ export const SetupWizard: React.FC = () => {
           {/* Step 0: Welcome */}
           {activeStep === 0 && (
             <Stack spacing={2} alignItems="center" textAlign="center">
-              <RocketLaunchIcon sx={{ fontSize: 60, color: "primary.main" }} />
-              <Typography variant="h5" fontWeight={700}>
-                Welcome to ABUD Shorts Engine V2
+              <RocketLaunchIcon sx={{ fontSize: 56, color: "primary.main" }} />
+              <Typography variant="h5">{t("setup.welcomeHeading")}</Typography>
+              <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 620 }}>
+                {t("setup.welcomeBody")}
               </Typography>
-              <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 600 }}>
-                This wizard will guide you through setting up your local video production and multi-platform publishing engine.
-                This wizard prepares the local video engine, admin access, default voice settings, and optional publishing. Piper provides the local Arabic path, Kokoro provides local English, and cloud providers stay optional.
+              {/* Arabic production is ElevenLabs. The previous copy told the
+                  customer Piper was the local Arabic path, which has not been
+                  true since v2.2 and would have them set up the wrong provider
+                  on their very first run. */}
+              <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 620 }}>
+                {t("setup.welcomeBodyVoice")}
               </Typography>
-              <Chip label="Local-first video production" color="success" variant="outlined" />
+              <Chip label={t("setup.localFirst")} color="success" variant="outlined" />
             </Stack>
           )}
 
           {/* Step 1: System Check */}
           {activeStep === 1 && (
             <Stack spacing={2}>
-              <Typography variant="h6" fontWeight={700}>
-                System Diagnostic & Health Check
-              </Typography>
+              <Typography variant="h6">{t("setup.systemCheckHeading")}</Typography>
               <Typography variant="body2" color="text.secondary">
-                Verifying the local application stack, database, worker, automation engine, and storage.
+                {t("setup.systemCheckBody")}
               </Typography>
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" fontWeight={700}>
-                      Database
-                    </Typography>
+                    <Typography variant="subtitle2">{t("setup.checkDatabase")}</Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> Connected and ready
+                      <CheckCircleIcon fontSize="small" /> {t("setup.checkDatabaseOk")}
                     </Typography>
                   </Card>
                 </Grid>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" fontWeight={700}>
-                      Media Storage
-                    </Typography>
+                    <Typography variant="subtitle2">{t("setup.checkStorage")}</Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> Video and cache storage ready
+                      <CheckCircleIcon fontSize="small" /> {t("setup.checkStorageOk")}
                     </Typography>
                   </Card>
                 </Grid>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" fontWeight={700}>
-                      Render worker
-                    </Typography>
+                    <Typography variant="subtitle2">{t("setup.checkEngine")}</Typography>
+                    {/* Component names replaced with what they do for the
+                        customer. The old line also listed Piper, which is
+                        legacy and is not part of any production path. */}
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> FFmpeg, Remotion, Piper, Kokoro, and Whisper available
+                      <CheckCircleIcon fontSize="small" /> {t("setup.checkEngineOk")}
                     </Typography>
                   </Card>
                 </Grid>
                 <Grid item xs={12} sm={6}>
                   <Card variant="outlined" sx={{ p: 2 }}>
-                    <Typography variant="subtitle2" fontWeight={700}>
-                      Automation engine
-                    </Typography>
+                    <Typography variant="subtitle2">{t("setup.checkAutomation")}</Typography>
                     <Typography variant="body2" color="success.main" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                      <CheckCircleIcon fontSize="small" /> Internal workflow engine active
+                      <CheckCircleIcon fontSize="small" /> {t("setup.checkAutomationOk")}
                     </Typography>
                   </Card>
                 </Grid>
@@ -315,7 +363,9 @@ export const SetupWizard: React.FC = () => {
               <Typography variant="body2" color="text.secondary">
                 Videos, reusable artifacts, cache, logs, and backups are stored in the private application data volume.
               </Typography>
-              <Card variant="outlined" sx={{ p: 2, bgcolor: "#f9fafb" }}>
+              {/* The literal near-white background here was a light-theme leak
+                  into a dark product; the card now uses the themed surface. */}
+              <Card variant="outlined" sx={{ p: 2, bgcolor: "background.default" }}>
                 <Stack spacing={1}>
                   <Typography variant="body2"><strong>Rendered videos:</strong> kept for preview, download, revisions, and publishing.</Typography>
                   <Typography variant="body2"><strong>Reusable artifacts:</strong> retained so revisions can reuse voice, captions, and media.</Typography>
@@ -412,12 +462,19 @@ export const SetupWizard: React.FC = () => {
           {/* Step 7: Defaults */}
           {activeStep === 7 && (
             <Stack spacing={2.5}>
-              <Typography variant="h6" fontWeight={700}>
-                Production Defaults
+              <Typography variant="h6">{t("setup.videoDefaults")}</Typography>
+              {/* Narration language is a production setting. It is deliberately
+                  not the interface language, and the hint says so. */}
+              <Typography variant="body2" color="text.secondary">
+                {t("setup.defaultNarrationLanguageHint")}
               </Typography>
               <FormControl fullWidth size="small">
-                <InputLabel>Default Language</InputLabel>
-                <Select value={defaultLanguage} label="Default Language" onChange={(e) => setDefaultLanguage(e.target.value)}>
+                <InputLabel>{t("setup.defaultNarrationLanguage")}</InputLabel>
+                <Select
+                  value={defaultLanguage}
+                  label={t("setup.defaultNarrationLanguage")}
+                  onChange={(e) => setDefaultLanguage(e.target.value)}
+                >
                   <MenuItem value="ar">Arabic (العربية)</MenuItem>
                   <MenuItem value="en">English</MenuItem>
                 </Select>
@@ -474,11 +531,17 @@ Everything checks out
 
         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <Button disabled={activeStep === 0 || activeStep === steps.length - 1} onClick={handleBack}>
-            Back
+            {t("common.back")}
           </Button>
           {activeStep < steps.length - 1 && (
             <Button variant="contained" onClick={handleNext} disabled={loading}>
-              {loading ? <CircularProgress size={24} color="inherit" /> : activeStep === steps.length - 2 ? "Finish setup" : "Next"}
+              {loading ? (
+                <CircularProgress size={22} color="inherit" />
+              ) : activeStep === steps.length - 2 ? (
+                t("setup.finish")
+              ) : (
+                t("common.next")
+              )}
             </Button>
           )}
         </Box>

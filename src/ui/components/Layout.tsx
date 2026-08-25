@@ -1,5 +1,6 @@
 import React from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { CacheProvider } from "@emotion/react";
 import {
   AppBar,
   Box,
@@ -27,8 +28,11 @@ import SendIcon from "@mui/icons-material/SendOutlined";
 import CircleIcon from "@mui/icons-material/Circle";
 import PermMediaIcon from "@mui/icons-material/PermMediaOutlined";
 
-import { abudTheme } from "../theme/abudTheme";
+import { buildAbudTheme } from "../theme/abudTheme";
+import { getDirectionCache } from "../theme/directionCache";
 import { AbudWordmark } from "./AbudMark";
+import { LanguageSwitcher } from "./LanguageSwitcher";
+import { useI18n } from "../i18n";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -43,88 +47,99 @@ const drawerWidth = 268;
  * n8n, PostgreSQL, the render worker and the internal service token are
  * deliberately absent: they are implementation, and the customer never has to
  * know they exist.
+ *
+ * Labels are translation keys rather than literals so the whole menu changes
+ * language with the rest of the product.
  */
 const navSections: Array<{
-  label: string;
-  items: Array<{ label: string; path: string; icon: React.ReactNode }>;
+  labelKey: string;
+  items: Array<{ labelKey: string; path: string; icon: React.ReactNode }>;
 }> = [
   {
-    label: "",
-    items: [{ label: "Dashboard", path: "/", icon: <DashboardIcon /> }],
+    labelKey: "",
+    items: [{ labelKey: "navigation.dashboard", path: "/", icon: <DashboardIcon /> }],
   },
   {
-    label: "Create",
+    labelKey: "navigation.groupCreate",
     items: [
-      { label: "Create Video", path: "/create", icon: <AddIcon /> },
-      { label: "Productions", path: "/jobs", icon: <WorkIcon /> },
-      { label: "Video Library", path: "/videos", icon: <VideoIcon /> },
+      { labelKey: "navigation.createVideo", path: "/create", icon: <AddIcon /> },
+      { labelKey: "navigation.productions", path: "/jobs", icon: <WorkIcon /> },
+      { labelKey: "navigation.videoLibrary", path: "/videos", icon: <VideoIcon /> },
     ],
   },
   {
-    label: "Content",
+    labelKey: "navigation.groupContent",
     items: [
-      { label: "Brands", path: "/brands", icon: <BusinessIcon /> },
-      { label: "Templates", path: "/templates", icon: <ViewModuleIcon /> },
-      { label: "Media", path: "/media", icon: <PermMediaIcon /> },
+      { labelKey: "navigation.brands", path: "/brands", icon: <BusinessIcon /> },
+      { labelKey: "navigation.templates", path: "/templates", icon: <ViewModuleIcon /> },
+      { labelKey: "navigation.media", path: "/media", icon: <PermMediaIcon /> },
     ],
   },
   {
-    label: "Distribute",
-    items: [{ label: "Publishing", path: "/publishing", icon: <SendIcon /> }],
+    labelKey: "navigation.groupDistribute",
+    items: [{ labelKey: "navigation.publishing", path: "/publishing", icon: <SendIcon /> }],
   },
   {
-    label: "Configure",
+    labelKey: "navigation.groupConfigure",
     items: [
-      { label: "Integrations", path: "/integrations", icon: <HubIcon /> },
-      { label: "Settings", path: "/settings", icon: <SettingsIcon /> },
+      { labelKey: "navigation.integrations", path: "/integrations", icon: <HubIcon /> },
+      { labelKey: "navigation.settings", path: "/settings", icon: <SettingsIcon /> },
     ],
   },
   {
-    label: "System",
-    items: [{ label: "System Health", path: "/system", icon: <MonitorHeartIcon /> }],
+    labelKey: "navigation.groupSystem",
+    items: [{ labelKey: "navigation.systemHealth", path: "/system", icon: <MonitorHeartIcon /> }],
   },
 ];
 
-const pageTitles: Record<string, string> = {
-  "/": "Dashboard",
-  "/create": "Create Video",
-  "/jobs": "Productions",
-  "/videos": "Video Library",
-  "/media": "Media",
-  "/publishing": "Publishing",
-  "/brands": "Brands",
-  "/templates": "Templates",
-  "/integrations": "Integrations",
-  "/providers": "Integrations",
-  "/settings": "Settings",
-  "/system": "System Health",
-  "/setup": "Setup",
-  "/login": "Sign in",
+/** Browser tab title per route, as a translation key. */
+const pageTitleKeys: Record<string, string> = {
+  "/": "navigation.dashboard",
+  "/create": "navigation.createVideo",
+  "/jobs": "navigation.productions",
+  "/videos": "navigation.videoLibrary",
+  "/media": "navigation.media",
+  "/publishing": "navigation.publishing",
+  "/brands": "navigation.brands",
+  "/templates": "navigation.templates",
+  "/integrations": "navigation.integrations",
+  "/providers": "navigation.integrations",
+  "/settings": "navigation.settings",
+  "/system": "navigation.systemHealth",
+  "/setup": "navigation.setup",
+  "/login": "navigation.signIn",
 };
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { t, direction } = useI18n();
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const t = abudTheme.abud;
+
+  const theme = React.useMemo(() => buildAbudTheme("dark", direction), [direction]);
+  const cache = React.useMemo(() => getDirectionCache(direction), [direction]);
+  const tokens = theme.abud;
 
   React.useEffect(() => {
-    const exactTitle = pageTitles[location.pathname];
-    const dynamicTitle = location.pathname.startsWith("/jobs/")
-      ? "Production Details"
+    const exactKey = pageTitleKeys[location.pathname];
+    const dynamicKey = location.pathname.startsWith("/jobs/")
+      ? "navigation.productionDetails"
       : location.pathname.startsWith("/video/")
-        ? "Video Details"
-        : exactTitle || "ABUD Shorts";
-    document.title = `${dynamicTitle} · ABUD Shorts`;
-  }, [location.pathname]);
+        ? "navigation.videoDetails"
+        : exactKey;
+    const title = dynamicKey ? t(dynamicKey) : t("common.appName");
+    document.title = `${title} · ${t("common.appName")}`;
+  }, [location.pathname, t]);
 
   // Login and Setup are full-bleed: no shell, no navigation to get lost in.
   if (location.pathname === "/login") {
     return (
-      <ThemeProvider theme={abudTheme}>
-        <CssBaseline />
-        <Box sx={{ minHeight: "100vh", bgcolor: "background.default", px: 2 }}>{children}</Box>
-      </ThemeProvider>
+      <CacheProvider value={cache}>
+        <ThemeProvider theme={theme}>
+          <CssBaseline />
+          <Box sx={{ minHeight: "100vh", bgcolor: "background.default", px: 2 }}>{children}</Box>
+        </ThemeProvider>
+      </CacheProvider>
     );
   }
 
@@ -134,32 +149,32 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        bgcolor: t.backgroundAlt,
+        bgcolor: tokens.backgroundAlt,
       }}
     >
       <Toolbar sx={{ minHeight: 88, alignItems: "center", px: 2.5 }}>
-        <AbudWordmark onClick={() => navigate("/")} />
+        <AbudWordmark subtitle={t("common.appTagline")} onClick={() => navigate("/")} />
       </Toolbar>
 
-      <Box component="nav" aria-label="Main navigation" sx={{ px: 1.5, pb: 2, overflowY: "auto" }}>
+      <Box
+        component="nav"
+        aria-label={t("common.mainNavigation")}
+        sx={{ px: 1.5, pb: 2, overflowY: "auto" }}
+      >
         <Stack spacing={1.5}>
           {navSections.map((section, sectionIndex) => (
-            <Box key={section.label || `section-${sectionIndex}`}>
-              {section.label && (
+            <Box key={section.labelKey || `section-${sectionIndex}`}>
+              {section.labelKey && (
                 <Typography
-                  variant="caption"
+                  variant="overline"
                   component="div"
-                  sx={{
-                    px: 1.5,
-                    py: 0.75,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.10em",
-                    fontSize: "0.68rem",
-                    color: t.muted,
-                  }}
+                  // Section headings are small uppercase text, so they take the
+                  // secondary colour rather than the muted one: muted is for
+                  // genuinely de-emphasised values, not for a heading someone
+                  // has to read.
+                  sx={{ px: 1.5, py: 0.75, color: tokens.textSecondary, display: "block" }}
                 >
-                  {section.label}
+                  {t(section.labelKey)}
                 </Typography>
               )}
               <Stack spacing={0.25} component="ul" sx={{ listStyle: "none", m: 0, p: 0 }}>
@@ -173,23 +188,37 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                       fullWidth
                       onClick={() => setMobileOpen(false)}
                       sx={{
+                        // `flex-start` plus logical icon spacing keeps the icon
+                        // on the leading edge in both directions.
                         justifyContent: "flex-start",
-                        minHeight: 42,
+                        textAlign: "start",
+                        minHeight: 44,
                         px: 1.5,
                         fontWeight: 500,
-                        color: t.textSecondary,
+                        color: tokens.textSecondary,
                         borderRadius: 2,
-                        "& .MuiButton-startIcon": { color: "inherit", minWidth: 24 },
-                        "&:hover": { bgcolor: t.surfaceHover, color: t.textPrimary },
+                        "& .MuiButton-startIcon": {
+                          color: "inherit",
+                          minWidth: 24,
+                          marginInlineEnd: 1.25,
+                          marginInlineStart: 0,
+                        },
+                        "&:hover": { bgcolor: tokens.surfaceHover, color: tokens.textPrimary },
                         "&.active": {
-                          bgcolor: t.primaryMuted,
-                          color: t.textPrimary,
+                          bgcolor: tokens.primaryMuted,
+                          color: tokens.textPrimary,
                           fontWeight: 600,
-                          boxShadow: `inset 2px 0 0 ${t.primary}`,
+                          // A leading-edge rule marks the selected item. Written
+                          // with a logical border so it moves to the right-hand
+                          // edge in Arabic without a second rule.
+                          borderInlineStartWidth: 2,
+                          borderInlineStartStyle: "solid",
+                          borderInlineStartColor: tokens.primary,
+                          "& .MuiButton-startIcon": { color: tokens.primary },
                         },
                       }}
                     >
-                      {item.label}
+                      {t(item.labelKey)}
                     </Button>
                   </li>
                 ))}
@@ -199,21 +228,30 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         </Stack>
       </Box>
 
-      <Box sx={{ mt: "auto", px: 2.5, pb: 2.5, pt: 1 }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 0.75 }}>
-          <CircleIcon sx={{ fontSize: 8, color: t.success }} aria-hidden="true" />
-          <Typography variant="caption" sx={{ color: t.textSecondary }}>
-            All services running
-          </Typography>
+      <Box sx={{ mt: "auto", px: 2, pb: 2, pt: 1 }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          justifyContent="space-between"
+          sx={{ mb: 0.5 }}
+        >
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+            <CircleIcon sx={{ fontSize: 8, color: tokens.success }} aria-hidden="true" />
+            <Typography variant="caption" sx={{ color: tokens.textSecondary }} noWrap>
+              {t("common.allServicesRunning")}
+            </Typography>
+          </Stack>
+          <LanguageSwitcher compact />
         </Stack>
-        <Tooltip title="Re-run the guided setup at any time">
+        <Tooltip title={t("common.setupGuide")}>
           <Button
             size="small"
             variant="text"
             onClick={() => navigate("/setup")}
-            sx={{ fontSize: "0.75rem", px: 0, minWidth: 0, minHeight: 28, color: t.muted }}
+            sx={{ fontSize: "0.78rem", px: 1, minWidth: 0, minHeight: 30, color: tokens.textSecondary }}
           >
-            Setup guide
+            {t("common.setupGuide")}
           </Button>
         </Tooltip>
       </Box>
@@ -221,84 +259,100 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   );
 
   return (
-    <ThemeProvider theme={abudTheme}>
-      <CssBaseline />
-      <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: t.background }}>
-        <AppBar
-          position="fixed"
-          elevation={0}
-          sx={{
-            display: { md: "none" },
-            bgcolor: t.backgroundAlt,
-            borderBottom: `1px solid ${t.border}`,
-            backgroundImage: "none",
-          }}
-        >
-          <Toolbar>
-            <IconButton
-              aria-label="Open navigation menu"
-              edge="start"
-              onClick={() => setMobileOpen(true)}
-              sx={{ mr: 1.5, color: t.textPrimary }}
+    <CacheProvider value={cache}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: tokens.background }}>
+          <AppBar
+            position="fixed"
+            elevation={0}
+            sx={{
+              display: { md: "none" },
+              bgcolor: tokens.backgroundAlt,
+              borderBottom: `1px solid ${tokens.border}`,
+              backgroundImage: "none",
+            }}
+          >
+            <Toolbar sx={{ gap: 1 }}>
+              <IconButton
+                aria-label={t("common.openNavigation")}
+                edge="start"
+                onClick={() => setMobileOpen(true)}
+                sx={{ color: tokens.textPrimary }}
+              >
+                <MenuIcon />
+              </IconButton>
+              <AbudWordmark size={26} subtitle={null} onClick={() => navigate("/")} />
+              <Box sx={{ flexGrow: 1 }} />
+              <LanguageSwitcher compact />
+            </Toolbar>
+          </AppBar>
+
+          <Box component="div" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
+            <Drawer
+              variant="temporary"
+              // No explicit anchor: MUI already resolves the default `left`
+              // against `theme.direction`, so the drawer lands on the leading
+              // edge in both languages. Passing "right" for RTL flips it a
+              // second time and puts the sidebar back on the wrong side.
+              open={mobileOpen}
+              onClose={() => setMobileOpen(false)}
+              ModalProps={{ keepMounted: true }}
+              sx={{
+                display: { xs: "block", md: "none" },
+                "& .MuiDrawer-paper": {
+                  width: drawerWidth,
+                  boxSizing: "border-box",
+                  bgcolor: tokens.backgroundAlt,
+                  borderInlineEndWidth: 1,
+                  borderInlineEndStyle: "solid",
+                  borderInlineEndColor: tokens.border,
+                },
+              }}
             >
-              <MenuIcon />
-            </IconButton>
-            <AbudWordmark size={26} subtitle={null} onClick={() => navigate("/")} />
-          </Toolbar>
-        </AppBar>
+              {drawer}
+            </Drawer>
+            <Drawer
+              variant="permanent"
+              open
+              sx={{
+                display: { xs: "none", md: "block" },
+                "& .MuiDrawer-paper": {
+                  width: drawerWidth,
+                  boxSizing: "border-box",
+                  bgcolor: tokens.backgroundAlt,
+                  borderInlineEndWidth: 1,
+                  borderInlineEndStyle: "solid",
+                  borderInlineEndColor: tokens.border,
+                },
+              }}
+            >
+              {drawer}
+            </Drawer>
+          </Box>
 
-        <Box component="div" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
-          <Drawer
-            variant="temporary"
-            open={mobileOpen}
-            onClose={() => setMobileOpen(false)}
-            ModalProps={{ keepMounted: true }}
+          <Box
+            component="main"
             sx={{
-              display: { xs: "block", md: "none" },
-              "& .MuiDrawer-paper": {
-                width: drawerWidth,
-                boxSizing: "border-box",
-                bgcolor: t.backgroundAlt,
-                borderRight: `1px solid ${t.border}`,
-              },
+              flexGrow: 1,
+              width: { xs: "100%", md: `calc(100% - ${drawerWidth}px)` },
+              pt: { xs: 10, md: 4 },
+              pb: 6,
+              px: { xs: 2, sm: 3, lg: 4 },
+              minWidth: 0,
+              // A subtle violet wash at the leading top corner; nowhere near
+              // body text. Mirrored so it stays in the corner nearest the
+              // sidebar in both directions.
+              backgroundImage: `radial-gradient(1200px 380px at ${
+                direction === "rtl" ? "78%" : "22%"
+              } -12%, ${tokens.primaryMuted} 0%, transparent 70%)`,
             }}
           >
-            {drawer}
-          </Drawer>
-          <Drawer
-            variant="permanent"
-            open
-            sx={{
-              display: { xs: "none", md: "block" },
-              "& .MuiDrawer-paper": {
-                width: drawerWidth,
-                boxSizing: "border-box",
-                bgcolor: t.backgroundAlt,
-                borderRight: `1px solid ${t.border}`,
-              },
-            }}
-          >
-            {drawer}
-          </Drawer>
+            <Box sx={{ width: "100%", maxWidth: 1560, mx: "auto", minWidth: 0 }}>{children}</Box>
+          </Box>
         </Box>
-
-        <Box
-          component="main"
-          sx={{
-            flexGrow: 1,
-            width: { xs: "100%", md: `calc(100% - ${drawerWidth}px)` },
-            pt: { xs: 10, md: 4 },
-            pb: 6,
-            px: { xs: 2, sm: 3, lg: 4 },
-            minWidth: 0,
-            // A subtle violet wash at the top; nowhere near body text.
-            backgroundImage: `radial-gradient(1200px 380px at 22% -12%, ${t.primaryMuted} 0%, transparent 70%)`,
-          }}
-        >
-          <Box sx={{ width: "100%", maxWidth: 1560, mx: "auto", minWidth: 0 }}>{children}</Box>
-        </Box>
-      </Box>
-    </ThemeProvider>
+      </ThemeProvider>
+    </CacheProvider>
   );
 };
 

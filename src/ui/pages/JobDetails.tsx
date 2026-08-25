@@ -30,7 +30,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   bidiProps,
   isArabicText,
-  getStageLabel,
   EmptyState,
   ErrorBoundary,
   JobDetailsSkeleton,
@@ -39,6 +38,8 @@ import {
   SectionCard,
   StatusBadge,
 } from "../components/v2";
+import { useT } from "../i18n";
+import { localizedStatus } from "../i18n/status";
 import type { V2Job, V2JobEvent } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
 
@@ -54,6 +55,7 @@ function formatDuration(startedAt?: string, completedAt?: string) {
 }
 
 const JobDetailsContent: React.FC = () => {
+  const tt = useT();
   const { jobId, id } = useParams<{ jobId?: string; id?: string }>();
   const effectiveId = jobId || id;
   const navigate = useNavigate();
@@ -520,7 +522,7 @@ const JobDetailsContent: React.FC = () => {
                       <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} spacing={1}>
                         <Stack spacing={0.25} sx={{ minWidth: 0, flex: 1 }}>
                           <Stack direction="row" spacing={1} alignItems="center">
-                            <Typography fontWeight={800} variant="body2">{getStageLabel(event.stage)}</Typography>
+                            <Typography fontWeight={650} variant="body2">{tt(localizedStatus(event.stage || event.status).key)}</Typography>
                             <StatusBadge status={event.status} />
                           </Stack>
                           <Typography

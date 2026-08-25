@@ -3,12 +3,25 @@
 @tailwind utilities;
 
 /*
- * Locally bundled UI typography.
+ * BILINGUAL TYPOGRAPHY
+ * --------------------
+ * One harmonised superfamily serves both scripts.
  *
- * IBM Plex Sans Arabic ships both Arabic and Latin glyphs, so one family serves
- * the whole dashboard and mixed Arabic/English text stays visually consistent.
- * The files are bundled with the app: the dashboard never requests a font from
- * Google Fonts or any other network host.
+ * IBM Plex Sans Arabic is IBM Plex Sans extended to Arabic by the same
+ * foundry, so the Latin and Arabic halves of the product share proportions,
+ * stroke weight and rhythm. A screen mixing an Arabic label with an English
+ * video ID reads as one design rather than two pasted together, and English
+ * gets a genuinely strong Latin face rather than the Latin afterthought that
+ * ships with most Arabic-first families.
+ *
+ * Noto Sans Arabic follows as the Arabic fallback: if a customer's content
+ * uses a glyph IBM Plex Arabic does not carry, it still renders in a
+ * professional Arabic face instead of dropping to Tahoma.
+ *
+ * Every file here is bundled with the application. The dashboard never
+ * requests a font from Google Fonts or any other network host - a production
+ * install may have no outbound internet at all, and a blocked font request
+ * would leave the entire interface in a system fallback.
  */
 @font-face {
   font-family: "IBM Plex Sans Arabic";
@@ -27,20 +40,37 @@
 @font-face {
   font-family: "IBM Plex Sans Arabic";
   src: url("../assets/fonts/IBMPlexSansArabic-SemiBold.ttf") format("truetype");
-  font-weight: 600;
+  /* 600 and 650 both resolve here: the type scale uses 650 for card headings,
+     and without this range the browser would synthesise a faux-bold. */
+  font-weight: 600 690;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "IBM Plex Sans Arabic";
   src: url("../assets/fonts/IBMPlexSansArabic-Bold.ttf") format("truetype");
-  font-weight: 700;
+  font-weight: 700 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Arabic fallback. Variable, so one file covers every weight the scale uses. */
+@font-face {
+  font-family: "Noto Sans Arabic";
+  src: url("../assets/fonts/NotoSansArabic-Variable.ttf") format("truetype-variations");
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 
 :root {
   color-scheme: dark;
+  /* The one family declaration the rest of the product inherits from. */
+  --abud-font-sans:
+    "IBM Plex Sans Arabic", "Noto Sans Arabic", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
+  --abud-font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 html,
@@ -48,14 +78,43 @@ body {
   margin: 0;
   padding: 0;
   background-color: #07070c;
-  font-family: "IBM Plex Sans Arabic", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  font-family: var(--abud-font-sans);
+  /* 16px root keeps the rem-based type scale honest and lets a browser or OS
+     text-size preference scale the whole product. */
+  font-size: 16px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Arabic content keeps the same family; only direction changes. */
+/*
+ * Direction changes; the family does not. Both scripts come from the same
+ * superfamily, so switching language must not also switch typeface.
+ */
 [dir="rtl"] {
-  font-family: "IBM Plex Sans Arabic", "Segoe UI", Tahoma, Arial, sans-serif;
+  font-family: var(--abud-font-sans);
+}
+
+/*
+ * Technical text stays left-to-right regardless of the surrounding direction.
+ * A URL, an ID, a version or an error code must never have its characters
+ * reordered because the paragraph around it is Arabic.
+ */
+[dir="rtl"] code,
+[dir="rtl"] pre,
+[dir="rtl"] kbd,
+[dir="rtl"] samp,
+[dir="rtl"] [data-technical] {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: start;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--abud-font-mono);
 }
 
 a {
@@ -66,6 +125,16 @@ a {
 /* The page itself must never scroll sideways at any breakpoint. */
 body {
   overflow-x: hidden;
+}
+
+/*
+ * Anything that can genuinely be wider than the viewport - a wide table, a
+ * diagram, a long code block - scrolls inside its own box rather than pushing
+ * the document sideways.
+ */
+.abud-scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .fade-enter {

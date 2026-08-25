@@ -171,7 +171,10 @@ describe("Browser QA regressions", () => {
     // a completely empty main area.
     expect(appSource).toContain('<Route path="*"');
     expect(appSource).toContain("NotFoundPage");
-    expect(appSource).toMatch(/Page not found/);
+    // The copy itself moved into the translation catalogue in V2.3-01, so the
+    // page is now asserted by the key it renders rather than by an English
+    // literal that would only ever be right in one of the two languages.
+    expect(appSource).toMatch(/common\.pageNotFound/);
   });
 
   it("never prints an internal identifier in the normal Video Details view", () => {

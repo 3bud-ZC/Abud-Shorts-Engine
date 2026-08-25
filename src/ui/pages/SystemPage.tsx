@@ -1,562 +1,555 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
+  Box,
   Button,
   Card,
   CardContent,
   Chip,
-  CircularProgress,
   Divider,
   Grid,
+  LinearProgress,
   Paper,
   Stack,
-  Tab,
-  Tabs,
   Typography,
-  Box,
-  Switch,
-  FormControlLabel,
+  useTheme,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import DownloadIcon from "@mui/icons-material/Download";
-import BugReportIcon from "@mui/icons-material/BugReport";
-import StorageIcon from "@mui/icons-material/Storage";
-import TerminalIcon from "@mui/icons-material/Terminal";
-import {
-  LoadingState,
-  PageHeader,
-  SectionCard,
-  StatCard,
-  StatusBadge,
-} from "../components/v2";
-import type { V2HealthComponent } from "./v2Types";
-import type { SystemObservability } from "./v2Types";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import CheckCircleIcon from "@mui/icons-material/CheckCircleOutline";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import ScienceIcon from "@mui/icons-material/ScienceOutlined";
 
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes === 0) return "0 MB";
-  const mb = bytes / (1024 * 1024);
-  if (mb > 1024) {
-    return `${(mb / 1024).toFixed(2)} GB`;
-  }
-  return `${mb.toFixed(1)} MB`;
-}
+import { ErrorBoundary, PageHeader, SectionCard, StatusBadge } from "../components/v2";
+import { useI18n } from "../i18n";
+import UpdateCenter from "../components/UpdateCenter";
 
 /**
- * Client vocabulary for infrastructure. A customer should read "Automation"
- * rather than "n8n" and "Storage" rather than a container name; the technical
- * identity is still available in Advanced Details.
+ * SYSTEM HEALTH
+ * -------------
+ * This page used to gate its first render on
+ * `Promise.all([health, diagnostics, storage])`. `/system/diagnostics` contacts
+ * every configured publishing platform over the network and then walks the
+ * whole data directory; `/system/storage` walks it again. `Promise.all`
+ * finishes with the slowest of the three, the browser requests carried no
+ * client timeout, and the page rendered nothing at all until they all settled -
+ * which is why it could sit on "Checking V2 system diagnostics…" indefinitely
+ * whenever one external provider stopped answering.
+ *
+ * The fix is structural, not a longer timeout:
+ *
+ *   - First paint comes from `/system/health/fast`, where every check is
+ *     individually bounded and none of them touches a provider API or storage.
+ *   - The expensive report is opt-in behind "Run full diagnostics" and never
+ *     blocks anything.
+ *   - Every request here carries a client-side deadline, so a request that
+ *     never settles can no longer hold the page.
+ *   - Sections render independently: storage failing does not hide core status.
  */
-const CLIENT_SERVICE_NAMES: Record<string, string> = {
-  n8n: "Automation",
-  database: "Database",
-  postgres: "Database",
-  postgresql: "Database",
-  app: "Application",
-  api: "Application",
-  storage: "Storage",
-  disk: "Storage",
-  remotion: "Video Engine",
-  ffmpeg: "Video Engine",
-  worker: "Video Engine",
-  "render worker": "Video Engine",
-  pexels: "Integrations",
-  elevenlabs: "Integrations",
+
+/** Fast health must answer quickly; this deadline is a backstop, not the plan. */
+const FAST_REQUEST_TIMEOUT_MS = 6000;
+
+/** Deep diagnostics are allowed to be slow, but never unbounded. */
+const DEEP_REQUEST_TIMEOUT_MS = 45_000;
+
+type FastHealthItem = {
+  id: string;
+  section: "core" | "providers" | "storage" | string;
+  status: string;
+  optional: boolean;
+  message: string;
+  /** Translation key for the same detail; see the server contract. */
+  messageKey?: string;
+  latencyMs: number;
+  technicalName?: string;
 };
 
-function serviceDisplayName(name: string): string {
-  const key = (name || "").toLowerCase().trim();
-  if (CLIENT_SERVICE_NAMES[key]) return CLIENT_SERVICE_NAMES[key];
-  const partial = Object.keys(CLIENT_SERVICE_NAMES).find((candidate) => key.includes(candidate));
-  return partial ? CLIENT_SERVICE_NAMES[partial] : name;
-}
+type FastHealthReport = {
+  ok: boolean;
+  attentionCount: number;
+  status: string;
+  items: FastHealthItem[];
+  product: { version: string; stage: string; build: string; uptimeSeconds: number };
+  checkedAt: string;
+  durationMs: number;
+  cached: boolean;
+};
 
-/** The six groups a non-technical operator actually cares about. */
-const CLIENT_HEALTH_GROUPS = [
-  "Application",
-  "Video Engine",
-  "Storage",
-  "Database",
-  "Automation",
-  "Integrations",
-] as const;
+const ITEM_LABEL_KEYS: Record<string, string> = {
+  application: "health.group.application",
+  database: "health.group.database",
+  videoEngine: "health.group.videoEngine",
+  automation: "health.group.automation",
+  voice: "health.group.voice",
+  ai: "health.group.ai",
+  mediaSources: "health.group.mediaSources",
+  publishing: "health.group.publishing",
+  storage: "health.group.storage",
+};
 
-/**
- * Rolls the raw component list up into those groups. The worst status in a
- * group wins, so a problem is never hidden behind a healthy sibling.
- */
-function groupHealth(components: Array<{ name: string; status: string; message?: string }> = []) {
-  const severity: Record<string, number> = { healthy: 0, degraded: 1, unhealthy: 2 };
-  return CLIENT_HEALTH_GROUPS.map((group) => {
-    const members = components.filter((component) => serviceDisplayName(component.name) === group);
-    if (members.length === 0) return { group, status: "unknown", members: [] as typeof members };
-    const worst = members.reduce((a, b) =>
-      (severity[b.status] ?? 1) > (severity[a.status] ?? 1) ? b : a,
-    );
-    return { group, status: worst.status, members };
-  }).filter((entry) => entry.members.length > 0);
-}
+const HealthItemCard: React.FC<{ item: FastHealthItem }> = ({ item }) => {
+  const { t, format } = useI18n();
+  return (
+    <Card variant="outlined" sx={{ height: "100%", borderRadius: 2.5 }}>
+      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
+        <Stack spacing={1}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+            <Typography variant="subtitle1">
+              {t(ITEM_LABEL_KEYS[item.id] || "common.unknown")}
+            </Typography>
+            <StatusBadge status={item.status} />
+          </Stack>
+          {/* The server sends a translation key alongside its English wording.
+              The key wins so an Arabic operator reads Arabic; `message` is the
+              fallback for a key this build does not carry yet. */}
+          <Typography variant="body2" color="text.secondary">
+            {item.messageKey ? t(item.messageKey) : item.message}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {format.number(item.latencyMs)} ms
+          </Typography>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+};
 
-export const SystemPage: React.FC = () => {
-  const [tab, setTab] = useState(0);
-  const [health, setHealth] = useState<{ status: string; components: V2HealthComponent[] } | null>(null);
-  const [diagnostics, setDiagnostics] = useState<any>(null);
-  const [storage, setStorage] = useState<any>(null);
-  const [observability, setObservability] = useState<SystemObservability | null>(null);
-  const [capabilities, setCapabilities] = useState<any[]>([]);
-  const [packs, setPacks] = useState<any[]>([]);
-  const [hardware, setHardware] = useState<any>(null);
+const SystemPageContent: React.FC = () => {
+  const { t, format } = useI18n();
+  const theme = useTheme();
+
+  const [health, setHealth] = useState<FastHealthReport | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [deep, setDeep] = useState<any>(null);
+  const [deepStorage, setDeepStorage] = useState<any>(null);
+  const [deepRunning, setDeepRunning] = useState(false);
+  const [deepError, setDeepError] = useState<string | null>(null);
+
   const [arabicReadiness, setArabicReadiness] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [downloadingBundle, setDownloadingBundle] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const load = async () => {
-    setLoading(true);
+  /**
+   * Fast path. This is the only request the first paint waits on, and it is
+   * allowed to fail without taking the page with it.
+   */
+  const loadFast = useCallback(async (force = false) => {
+    setRefreshing(true);
     try {
-      const [healthRes, diagRes, storRes, capRes, arabicRes] = await Promise.all([
-        axios.get("/api/v2/system/health"),
-        axios.get("/api/v2/system/diagnostics"),
-        axios.get("/api/v2/system/storage"),
-        axios.get("/api/v2/system/capabilities").catch(() => ({ data: { capabilities: [], packs: [], hardware: null } })),
-        axios.get("/api/v2/system/arabic-readiness").catch(() => ({ data: null })),
-      ]);
-      const obsRes = await axios.get("/api/v2/system/observability").catch(() => ({ data: null }));
-      setHealth(healthRes.data);
-      setDiagnostics(diagRes.data);
-      setStorage(storRes.data);
-      setObservability(obsRes.data);
-      setCapabilities(capRes.data.capabilities || []);
-      setPacks(capRes.data.packs || []);
-      setHardware(capRes.data.hardware || null);
-      setArabicReadiness(arabicRes.data);
-      setError(null);
+      const response = await axios.get("/api/v2/system/health/fast", {
+        params: force ? { refresh: "true" } : undefined,
+        timeout: FAST_REQUEST_TIMEOUT_MS,
+      });
+      setHealth(response.data);
+      setHealthError(null);
     } catch {
-      setError("Failed to load system metrics.");
+      setHealthError(t("errors.healthLoadFailed"));
     } finally {
-      setLoading(false);
+      setRefreshing(false);
     }
-  };
-
-  const toggleCapability = async (id: string, enabled: boolean) => {
-    try {
-      await axios.post(`/api/v2/system/capabilities/${id}/toggle`, { enabled });
-      setCapabilities((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, enabled } : c)),
-      );
-    } catch (err: any) {
-      setError(err?.response?.data?.error || `Failed to toggle ${id}`);
-    }
-  };
+  }, [t]);
 
   useEffect(() => {
-    load();
-  }, []);
+    void loadFast();
+    // Arabic readiness is a local capability check, not a provider call, so it
+    // is cheap enough to run alongside the fast path. It is deliberately
+    // fire-and-forget: it can never block the page.
+    axios
+      .get("/api/v2/system/arabic-readiness", { timeout: FAST_REQUEST_TIMEOUT_MS })
+      .then((response) => setArabicReadiness(response.data))
+      .catch(() => setArabicReadiness(null));
+  }, [loadFast]);
+
+  /**
+   * Deep path. Runs only when the customer asks, uses `allSettled` so one slow
+   * or failing call cannot discard the other's result, and carries its own
+   * deadline.
+   */
+  const runDeepDiagnostics = useCallback(async () => {
+    setDeepRunning(true);
+    setDeepError(null);
+    const [report, storage] = await Promise.allSettled([
+      axios.get("/api/v2/system/diagnostics", { timeout: DEEP_REQUEST_TIMEOUT_MS }),
+      axios.get("/api/v2/system/storage", {
+        params: { refresh: "true" },
+        timeout: DEEP_REQUEST_TIMEOUT_MS,
+      }),
+    ]);
+
+    if (report.status === "fulfilled") setDeep(report.value.data);
+    if (storage.status === "fulfilled") setDeepStorage(storage.value.data);
+
+    if (report.status === "rejected" && storage.status === "rejected") {
+      setDeepError(t("health.deepFailed"));
+    }
+    setDeepRunning(false);
+  }, [t]);
 
   const downloadBundle = async () => {
-    setDownloadingBundle(true);
+    setDownloading(true);
+    setDownloadError(null);
     try {
-      const res = await axios.get("/api/v2/system/diagnostics/bundle", {
+      const response = await axios.get("/api/v2/system/diagnostics/bundle", {
         responseType: "blob",
+        timeout: DEEP_REQUEST_TIMEOUT_MS,
       });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement("a");
       link.href = url;
       link.setAttribute("download", `abud_diagnostics_${Date.now()}.json`);
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url);
     } catch {
-      setError("Failed to download diagnostic bundle.");
+      setDownloadError(t("errors.supportFileFailed"));
     } finally {
-      setDownloadingBundle(false);
+      setDownloading(false);
     }
   };
 
-  if (loading && !health) return <LoadingState label="Checking V2 system diagnostics..." />;
+  const sections = useMemo(() => {
+    const items = health?.items || [];
+    return {
+      core: items.filter((item) => item.section === "core"),
+      providers: items.filter((item) => item.section === "providers"),
+      storage: items.filter((item) => item.section === "storage"),
+    };
+  }, [health]);
+
+  const storageRows = useMemo(() => {
+    if (!deepStorage) return null;
+    return [
+      { labelKey: "health.storageVideos", bytes: deepStorage.videosStorageBytes || 0 },
+      { labelKey: "health.storageCache", bytes: deepStorage.cacheStorageBytes || 0 },
+      { labelKey: "health.storageModels", bytes: deepStorage.modelsStorageBytes || 0 },
+      { labelKey: "health.storageBackups", bytes: deepStorage.backupsStorageBytes || 0 },
+      { labelKey: "health.storageLogs", bytes: deepStorage.logsStorageBytes || 0 },
+    ];
+  }, [deepStorage]);
+
+  const summaryOk = health?.ok ?? false;
+  const attentionCount = health?.attentionCount ?? 0;
 
   return (
     <Stack spacing={3}>
       <PageHeader
-        title="System Health"
-        eyebrow="System"
-        description="A quick check that everything needed to make videos is running."
+        title={t("health.title")}
+        eyebrow={t("health.eyebrow")}
+        description={t("health.description")}
         actions={
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ rowGap: 1 }}>
             <Button
               variant="outlined"
               startIcon={<DownloadIcon />}
               onClick={downloadBundle}
-              disabled={downloadingBundle}
+              disabled={downloading}
             >
-              {downloadingBundle ? "Generating..." : "Download support file"}
+              {downloading ? t("health.generatingSupportFile") : t("health.downloadSupportFile")}
             </Button>
-            <Button variant="contained" startIcon={<RefreshIcon />} onClick={load} disabled={loading}>
-              Refresh
+            <Button
+              variant="contained"
+              startIcon={<RefreshIcon />}
+              onClick={() => loadFast(true)}
+              disabled={refreshing}
+            >
+              {t("common.refresh")}
             </Button>
           </Stack>
         }
       />
 
-      {error && <Alert severity="error">{error}</Alert>}
+      {/* ------------------------------------------------------- top summary */}
+      <Card
+        variant="outlined"
+        sx={{
+          borderRadius: 3,
+          borderColor: health ? (summaryOk ? theme.abud.success : theme.abud.warning) : "divider",
+        }}
+      >
+        <CardContent sx={{ p: 2.5 }}>
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            justifyContent="space-between"
+            alignItems={{ xs: "flex-start", sm: "center" }}
+            spacing={2}
+          >
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              {!health ? (
+                <ScienceIcon sx={{ color: theme.abud.muted, fontSize: 30 }} />
+              ) : summaryOk ? (
+                <CheckCircleIcon sx={{ color: theme.abud.success, fontSize: 30 }} />
+              ) : (
+                <WarningAmberIcon sx={{ color: theme.abud.warning, fontSize: 30 }} />
+              )}
+              <Box>
+                <Typography variant="h5">
+                  {!health
+                    ? t("health.checking")
+                    : summaryOk
+                      ? t("health.allOperational")
+                      : attentionCount === 1
+                        ? t("health.needAttentionOne")
+                        : t("health.needAttention", { count: attentionCount })}
+                </Typography>
+                {health && (
+                  <Typography variant="caption" color="text.secondary">
+                    {t("health.lastChecked", { time: format.time(health.checkedAt) })}
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
 
-      {arabicReadiness && (
-        <Alert
-          severity={arabicReadiness.ready ? "success" : "warning"}
-          action={
-            arabicReadiness.ready ? undefined : (
-              <Button size="small" variant="contained" href="/providers">
-                Configure ElevenLabs
-              </Button>
-            )
-          }
-        >
-          <strong>Arabic Production Readiness: {arabicReadiness.statusText}</strong>
-          <br />
-          {arabicReadiness.message}
-          {!arabicReadiness.ready && " English and local production remain available."}
+            {health && (
+              <Stack direction="row" spacing={3}>
+                <Box>
+                  <Typography variant="overline" color="text.secondary" display="block">
+                    {t("health.productVersion")}
+                  </Typography>
+                  {/* A version string is technical: kept left-to-right so it
+                      does not reorder inside an Arabic interface. */}
+                  <Typography variant="subtitle1" dir="ltr" sx={{ textAlign: "start" }}>
+                    {health.product.version}
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="overline" color="text.secondary" display="block">
+                    {t("health.uptime")}
+                  </Typography>
+                  <Typography variant="subtitle1">
+                    {t("health.uptimeMinutes", {
+                      count: format.number(Math.round(health.product.uptimeSeconds / 60)),
+                    })}
+                  </Typography>
+                </Box>
+              </Stack>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
+
+      {healthError && (
+        <Alert severity="error" action={<Button color="inherit" size="small" onClick={() => loadFast(true)}>{t("common.retry")}</Button>}>
+          {healthError}
         </Alert>
       )}
 
-      {/* Top Overview Cards */}
-      <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={3}>
-          {/* No hardcoded fallback: an unknown version must read as unknown rather
-              than silently claiming a version this build may not be. */}
-          <StatCard label="Product Version" value={diagnostics?.product?.version || "Unknown"} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="System Status" value={<StatusBadge status={health?.status || "healthy"} />} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Project Storage" value={formatBytes(storage?.usedProjectStorageBytes || 0)} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Uptime" value={`${Math.round((diagnostics?.product?.uptimeSeconds || 0) / 60)} min`} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Queue Depth" value={String(observability?.queueDepth ?? 0)} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Active Workers" value={String(observability?.activeWorkers ?? 0)} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard label="Active Renders" value={`${observability?.activeRenders ?? 0} / ${observability?.maxConcurrentRenders ?? 1}`} />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <StatCard
-            label="Average Generation"
-            value={observability?.averageGenerationTimeMs ? `${Math.round(observability.averageGenerationTimeMs / 1000)}s` : "N/A"}
-          />
-        </Grid>
-      </Grid>
+      {/* Arabic readiness is a product policy statement, not a fault: without
+          ElevenLabs, Arabic narration is blocked but English is unaffected, and
+          the banner says exactly that. */}
+      {arabicReadiness && !arabicReadiness.ready && (
+        <Alert
+          severity="info"
+          action={
+            <Button size="small" variant="contained" href="/integrations">
+              {t("health.configureElevenLabs")}
+            </Button>
+          }
+        >
+          <strong>{t("health.arabicNotReady")}</strong>
+          <br />
+          {t("health.arabicNotReadyBody")}
+        </Alert>
+      )}
 
-      {/* Navigation Tabs */}
-      {/* Plain-language rollup. Technical component identity stays in the
-          tabs below, which are for support rather than daily use. */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {groupHealth(health?.components as any).map((entry) => (
-          <Grid item xs={12} sm={6} md={4} lg={2} key={entry.group}>
-            <SectionCard>
-              <Stack spacing={1}>
-                <Typography variant="body2" fontWeight={650}>
-                  {entry.group}
-                </Typography>
-                <StatusBadge status={entry.status} />
-              </Stack>
-            </SectionCard>
-          </Grid>
-        ))}
-      </Grid>
-
-      <Tabs
-        value={tab}
-        onChange={(_, val) => setTab(val)}
-        variant="scrollable"
-        scrollButtons="auto"
-        sx={{ borderBottom: 1, borderColor: "divider" }}
-      >
-        <Tab label="Services" />
-        <Tab label="Optional Features" />
-        <Tab label="Storage" />
-        <Tab label="Activity" />
-        <Tab label="Support" />
-        <Tab label="Advanced Details" />
-      </Tabs>
-
-      {/* Tab 0: Services & Health */}
-      {tab === 0 && (
+      {/* -------------------------------------------------------------- core */}
+      <SectionCard title={t("health.sectionCore")}>
         <Grid container spacing={2}>
-          {health?.components.map((component) => (
-            <Grid item xs={12} md={6} lg={4} key={component.name}>
-              <SectionCard>
-                <Stack spacing={1}>
-                  <Stack direction="row" justifyContent="space-between" spacing={1}>
-                    <Typography variant="h6">{serviceDisplayName(component.name)}</Typography>
-                    <StatusBadge status={component.status} />
-                  </Stack>
-                  <Typography variant="body2" color="text.secondary">
-                    {component.message}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {new Date(component.checkedAt).toLocaleTimeString()}
-                    {typeof component.latencyMs === "number" ? ` · ${component.latencyMs}ms` : ""}
-                  </Typography>
-                </Stack>
-              </SectionCard>
+          {sections.core.map((item) => (
+            <Grid item xs={12} sm={6} md={3} key={item.id}>
+              <HealthItemCard item={item} />
             </Grid>
           ))}
-        </Grid>
-      )}
-
-      {/* Tab 1: Capability Packs & Intelligence */}
-      {tab === 1 && (
-        <Stack spacing={3}>
-          {/* Hardware Detection Banner */}
-          <SectionCard
-            title="Host Hardware Profile"
-            description="Automatic hardware detection for local AI acceleration and resource allocation."
-          >
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}>
-                <Typography variant="caption" color="text.secondary">Platform / OS</Typography>
-                <Typography variant="body1" fontWeight={700}>{hardware?.platform || "Windows"} ({hardware?.arch || "x64"})</Typography>
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <Typography variant="caption" color="text.secondary">CPU Cores / Memory</Typography>
-                <Typography variant="body1" fontWeight={700}>{hardware?.cpuCores || 8} Cores · {hardware?.totalMemoryGb || 16} GB RAM</Typography>
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <Typography variant="caption" color="text.secondary">GPU Acceleration</Typography>
-                <Typography variant="body1" fontWeight={700} color={hardware?.hasNvidiaGpu ? "success.main" : "text.primary"}>
-                  {hardware?.gpuName || (hardware?.hasNvidiaGpu ? "NVIDIA GPU Detected" : "No Dedicated GPU (CPU Mode)")}
-                  {hardware?.vramGb ? ` (${hardware.vramGb} GB VRAM)` : ""}
-                </Typography>
-              </Grid>
+          {sections.core.length === 0 && (
+            <Grid item xs={12}>
+              <Typography variant="body2" color="text.secondary">
+                {t("health.checking")}
+              </Typography>
             </Grid>
-          </SectionCard>
-
-          {/* Capability Packs */}
-          <Typography variant="h6" fontWeight={800}>Capability Packs</Typography>
-          <Grid container spacing={2}>
-            {packs.map((pack) => (
-              <Grid item xs={12} md={6} key={pack.id}>
-                <Card variant="outlined" sx={{ p: 2, height: "100%", bgcolor: "background.paper" }}>
-                  <Stack spacing={1.5}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
-                      <Typography variant="subtitle1" fontWeight={800}>{pack.name}</Typography>
-                      <Chip
-                        size="small"
-                        label={pack.status.toUpperCase()}
-                        color={pack.status === "installed" ? "success" : pack.status === "available" ? "info" : "default"}
-                      />
-                    </Stack>
-                    <Typography variant="body2" color="text.secondary">{pack.description}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Hardware: {pack.hardwareRequired} · Space: {pack.diskRequirement}
-                    </Typography>
-                  </Stack>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
-
-          {/* Detailed Capabilities Table / Toggles */}
-          <Typography variant="h6" fontWeight={800}>Installed Runtime Modules</Typography>
-          <Grid container spacing={2}>
-            {capabilities.map((cap) => (
-              <Grid item xs={12} sm={6} md={4} key={cap.id}>
-                <Card variant="outlined" sx={{ p: 2, height: "100%" }}>
-                  <Stack spacing={1}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                      <Box>
-                        <Typography variant="subtitle2" fontWeight={800}>{cap.name}</Typography>
-                        <Typography variant="caption" color="text.secondary">ID: {cap.id}</Typography>
-                      </Box>
-                      <Chip
-                        size="small"
-                        label={cap.installed ? (cap.healthy ? "Healthy" : "Degraded") : "Not Installed"}
-                        color={cap.installed && cap.healthy ? "success" : "default"}
-                        sx={{ fontSize: 10 }}
-                      />
-                    </Stack>
-                    <Typography variant="caption" color="text.secondary">
-                      Runtime: {cap.runtime} · License: {cap.license}
-                    </Typography>
-                    {cap.failureReason && (
-                      <Typography variant="caption" color="text.secondary" sx={{ fontStyle: "italic" }}>
-                        Note: {cap.failureReason}
-                      </Typography>
-                    )}
-                    {cap.installed && (
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            size="small"
-                            checked={cap.enabled}
-                            onChange={(e) => toggleCapability(cap.id, e.target.checked)}
-                          />
-                        }
-                        label={<Typography variant="caption">{cap.enabled ? "Enabled" : "Disabled"}</Typography>}
-                      />
-                    )}
-                  </Stack>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
-        </Stack>
-      )}
-
-      {/* Tab 2: Storage Breakdown */}
-      {tab === 2 && (
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={6}>
-            <SectionCard title="Storage usage">
-              <Stack spacing={2}>
-                <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">Rendered videos</Typography>
-                  <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.videosStorageBytes || 0)}</Typography>
-                </Box>
-                <Divider />
-                <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">Temporary cache</Typography>
-                  <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.cacheStorageBytes || 0)}</Typography>
-                </Box>
-                <Divider />
-                <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">Backups</Typography>
-                  <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.backupsStorageBytes || 0)}</Typography>
-                </Box>
-                <Divider />
-                <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="body2">System logs</Typography>
-                  <Typography variant="body2" fontWeight={700}>{formatBytes(storage?.logsStorageBytes || 0)}</Typography>
-                </Box>
-                <Divider />
-                <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-                  <Typography variant="subtitle2" fontWeight={800}>Total project storage</Typography>
-                  <Typography variant="subtitle2" fontWeight={800} color="primary.main">
-                    {formatBytes(storage?.usedProjectStorageBytes || 0)}
-                  </Typography>
-                </Box>
-              </Stack>
-            </SectionCard>
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <SectionCard title="Lifecycle and retention">
-              <Stack spacing={1.5}>
-                <Typography variant="body2" color="text.secondary">
-                  Temporary render files are removed after completion.
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Cached stock media can expire when it is no longer referenced.
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Logs are rotated and included in diagnostics only after redaction.
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Final videos and production records are not purged automatically.
-                </Typography>
-              </Stack>
-            </SectionCard>
-          </Grid>
+          )}
         </Grid>
-      )}
+      </SectionCard>
 
-      {/* Tab 3: Sanitized Logs */}
-      {tab === 3 && (
-        <SectionCard title="Recent logs">
-          <Paper
-            sx={{
-              p: 2,
-              bgcolor: "#0f172a",
-              color: "#38bdf8",
-              fontFamily: "monospace",
-              fontSize: "0.85rem",
-              maxHeight: 400,
-              overflowY: "auto",
-              borderRadius: 2,
-            }}
-          >
-            {diagnostics?.sanitizedLogs?.map((line: string, idx: number) => (
-              <Box key={idx} sx={{ py: 0.25 }}>
-                {line}
-              </Box>
-            )) || <Typography>No recent log records available.</Typography>}
-          </Paper>
-        </SectionCard>
-      )}
-
-      {/* Tab 4: Support Bundle */}
-      {tab === 4 && (
-        <SectionCard title="Download diagnostics">
-          <Stack spacing={2}>
-            <Typography variant="body2" color="text.secondary">
-              Download a support bundle with service status, storage breakdown, and recent error summaries.
-            </Typography>
-            <Alert severity="info">
-              Secrets are redacted before export. Review the file before sharing it outside your team.
-            </Alert>
-            <Box>
-              <Button
-                variant="contained"
-                startIcon={<DownloadIcon />}
-                onClick={downloadBundle}
-                disabled={downloadingBundle}
-              >
-                {downloadingBundle ? "Exporting Bundle..." : "Download Diagnostic Bundle (JSON)"}
-              </Button>
-            </Box>
-          </Stack>
-        </SectionCard>
-      )}
-
-      {/* Tab 5: Observability */}
-      {tab === 5 && (
+      {/* --------------------------------------------------------- providers */}
+      <SectionCard title={t("health.sectionProviders")}>
         <Grid container spacing={2}>
+          {sections.providers.map((item) => (
+            <Grid item xs={12} sm={6} md={3} key={item.id}>
+              <HealthItemCard item={item} />
+            </Grid>
+          ))}
+          {sections.providers.length === 0 && (
+            <Grid item xs={12}>
+              <Typography variant="body2" color="text.secondary">
+                {t("health.checking")}
+              </Typography>
+            </Grid>
+          )}
+        </Grid>
+      </SectionCard>
+
+      {/* ----------------------------------------------------------- storage */}
+      <SectionCard title={t("health.sectionStorage")}>
+        <Grid container spacing={2.5}>
           <Grid item xs={12} md={6}>
-            <SectionCard title="Queue & Workers">
-              <Stack spacing={1.25}>
-                <Typography variant="body2">Queue depth: <strong>{observability?.queueDepth ?? 0}</strong></Typography>
-                <Typography variant="body2">Active renders: <strong>{observability?.activeRenders ?? 0}</strong></Typography>
-                <Typography variant="body2">Recent bottleneck: <strong>{observability?.recentStageBottleneck || "N/A"}</strong></Typography>
-                <Divider />
-                {observability?.workers?.length ? observability.workers.map((worker) => (
-                  <Box key={worker.workerId} sx={{ p: 1.25, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
-                    <Stack direction="row" justifyContent="space-between">
-                      <Typography variant="body2" fontWeight={800}>Render worker</Typography>
-                      <Chip size="small" label={worker.status} />
-                    </Stack>
-                    <Typography variant="caption" color="text.secondary">
-                      Heartbeat {new Date(worker.lastHeartbeat).toLocaleTimeString()}
-                    </Typography>
-                  </Box>
-                )) : (
-                  <Typography variant="body2" color="text.secondary">No worker activity recorded yet.</Typography>
-                )}
-              </Stack>
-            </SectionCard>
+            <Stack spacing={2}>
+              {sections.storage.map((item) => (
+                <HealthItemCard key={item.id} item={item} />
+              ))}
+            </Stack>
           </Grid>
           <Grid item xs={12} md={6}>
-            <SectionCard title="Cache, Jobs & Webhooks">
+            {storageRows ? (
               <Stack spacing={1.25}>
-                <Typography variant="body2">Cache: <strong>{formatBytes(Number(observability?.cache?.cacheStorageBytes || 0))}</strong></Typography>
-                <Typography variant="body2">Project disk: <strong>{formatBytes(Number(observability?.cache?.usedProjectStorageBytes || 0))}</strong></Typography>
-                <Typography variant="body2">Job counts: <strong>{JSON.stringify(observability?.jobCounts || {})}</strong></Typography>
-                <Divider />
-                {(observability?.recentWebhookDeliveries || []).slice(0, 5).map((delivery: any) => (
-                  <Typography key={delivery.id} variant="caption" color="text.secondary">
-                    {delivery.event} · {delivery.status} · attempts {delivery.attemptCount}
-                  </Typography>
+                {storageRows.map((row) => (
+                  <Stack
+                    key={row.labelKey}
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                  >
+                    <Typography variant="body2" color="text.secondary">
+                      {t(row.labelKey)}
+                    </Typography>
+                    <Typography variant="body2" fontWeight={650}>
+                      {format.bytes(row.bytes)}
+                    </Typography>
+                  </Stack>
                 ))}
+                <Divider />
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography variant="subtitle1">{t("health.storageTotal")}</Typography>
+                  <Typography variant="subtitle1" color="primary.main">
+                    {format.bytes(deepStorage?.usedProjectStorageBytes || 0)}
+                  </Typography>
+                </Stack>
               </Stack>
-            </SectionCard>
+            ) : (
+              // Measuring storage means walking the whole data directory, which
+              // is exactly the kind of work the fast path must not do. The page
+              // is honest that the figure is not known yet.
+              <Typography variant="body2" color="text.secondary">
+                {t("health.storageNotMeasured")}
+              </Typography>
+            )}
           </Grid>
         </Grid>
-      )}
+      </SectionCard>
+
+      {/* ----------------------------------------------------------- updates */}
+      <SectionCard title={t("health.sectionUpdates")}>
+        <UpdateCenter />
+      </SectionCard>
+
+      {/* ---------------------------------------------- advanced diagnostics */}
+      <SectionCard
+        title={t("health.sectionAdvanced")}
+        description={t("health.deepDescription")}
+        actions={
+          <Button
+            variant="outlined"
+            startIcon={<ScienceIcon />}
+            onClick={runDeepDiagnostics}
+            disabled={deepRunning}
+          >
+            {deepRunning ? t("health.runningDeep") : t("health.runDeep")}
+          </Button>
+        }
+      >
+        <Stack spacing={2}>
+          {deepRunning && <LinearProgress />}
+          {deepError && <Alert severity="warning">{deepError}</Alert>}
+          {downloadError && <Alert severity="warning">{downloadError}</Alert>}
+
+          {!deep && !deepRunning && (
+            <Typography variant="body2" color="text.secondary">
+              {t("health.deepNotRun")}
+            </Typography>
+          )}
+
+          {deep && (
+            <Stack spacing={2}>
+              {/* Provider reachability, as actually measured by the deep run.
+                  A provider that was never configured reports `not_configured`
+                  and is shown as such rather than as a failure. */}
+              <Grid container spacing={2}>
+                {(deep.providers || []).map((provider: any) => (
+                  <Grid item xs={12} sm={6} md={3} key={provider.id}>
+                    <Card variant="outlined" sx={{ height: "100%", borderRadius: 2.5 }}>
+                      <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
+                        <Stack spacing={1}>
+                          <Typography variant="subtitle2" dir="ltr" sx={{ textAlign: "start" }}>
+                            {provider.displayName}
+                          </Typography>
+                          <StatusBadge status={provider.status} />
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                ))}
+              </Grid>
+
+              {/* Container names, pool state and log lines live behind this
+                  disclosure. The normal view never shows them. */}
+              <Accordion>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle1">{t("health.advancedDetails")}</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={2}>
+                    <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ rowGap: 1 }}>
+                      {(health?.items || []).map((item) => (
+                        <Chip
+                          key={item.id}
+                          size="small"
+                          variant="outlined"
+                          dir="ltr"
+                          label={`${item.technicalName || item.id}: ${item.status}`}
+                        />
+                      ))}
+                    </Stack>
+                    <Paper
+                      variant="outlined"
+                      sx={{
+                        p: 2,
+                        bgcolor: theme.abud.backgroundAlt,
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                        fontSize: "0.78rem",
+                        maxHeight: 320,
+                        overflow: "auto",
+                        borderRadius: 2,
+                      }}
+                      dir="ltr"
+                    >
+                      {(deep.sanitizedLogs || []).map((line: string, index: number) => (
+                        <Box key={index} sx={{ py: 0.25, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                          {line}
+                        </Box>
+                      ))}
+                    </Paper>
+                  </Stack>
+                </AccordionDetails>
+              </Accordion>
+            </Stack>
+          )}
+        </Stack>
+      </SectionCard>
     </Stack>
   );
 };
+
+export const SystemPage: React.FC = () => (
+  <ErrorBoundary>
+    <SystemPageContent />
+  </ErrorBoundary>
+);
 
 export default SystemPage;

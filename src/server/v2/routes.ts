@@ -15,6 +15,7 @@ import { validateCreateShortInput } from "../validator";
 import { readMetadata } from "../videoMetadata";
 import { V2Database } from "./db";
 import { getV2Health, validatePexelsProvider } from "./health";
+import { getFastHealth, type ProviderConfigurationSnapshot } from "./system/fastHealth";
 import { JobService } from "./jobs";
 import { N8nOrchestrator } from "./orchestrator";
 import {
@@ -1518,6 +1519,52 @@ export function createV2PublicRouter(
 
   router.get("/system/health", sendHealth);
 
+  /**
+   * FAST HEALTH - what System Health renders from on first paint.
+   *
+   * Every check inside is individually bounded and none of them contacts a
+   * paid provider API or walks storage, so this answers in well under a second
+   * even when an external service is down. The expensive work moved to
+   * `/system/diagnostics`, which the page now runs only on request.
+   *
+   * Provider *configuration* is read locally and passed in; provider
+   * *reachability* is deliberately not asked here.
+   */
+  router.get("/system/health/fast", async (req, res) => {
+    try {
+      let publishingAccountCount = 0;
+      try {
+        publishingAccountCount = (await publishingService.listAccounts()).length;
+      } catch {
+        // A publishing table that is not reachable must not fail the page; the
+        // database item in the report already carries that signal.
+        publishingAccountCount = 0;
+      }
+
+      const aiProvider = contentAIRegistry.getProvider();
+      const snapshot: ProviderConfigurationSnapshot = {
+        elevenLabsConfigured: new ElevenLabsVoiceProvider().isConfigured(),
+        pexelsConfigured: Boolean(
+          config.pexelsApiKey &&
+            config.pexelsApiKey !== "dummy-key" &&
+            !config.pexelsApiKey.includes("your_pexels"),
+        ),
+        aiConfigured: aiProvider.id !== "local_ai",
+        publishingAccountCount,
+      };
+
+      const report = await getFastHealth(config, db, snapshot, {
+        bypassCache: req.query.refresh === "true",
+      });
+      res.status(200).json(report);
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to read system status.",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   router.get("/templates", async (req, res) => {
     res.status(200).json({ templates: listBusinessTemplates() });
   });
@@ -2579,8 +2626,13 @@ export function createV2PublicRouter(
     });
   });
 
+  // Measuring storage walks the whole data directory synchronously, so the
+  // result is served from a short-lived cache unless the caller explicitly asks
+  // for a fresh measurement.
   router.get("/system/storage", (req, res) => {
-    res.status(200).json(diagnosticsService.getStorageUsage());
+    res.status(200).json(
+      diagnosticsService.getStorageUsage({ bypassCache: req.query.refresh === "true" }),
+    );
   });
 
   router.get("/system/observability", async (req, res) => {

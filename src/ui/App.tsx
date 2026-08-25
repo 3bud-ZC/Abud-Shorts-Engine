@@ -19,6 +19,7 @@ import SetupWizard from "./pages/SetupWizard";
 import LoginPage from "./pages/LoginPage";
 import { Button } from "@mui/material";
 import { EmptyState, ErrorBoundary, PageHeader } from "./components/v2";
+import { I18nProvider, useI18n } from "./i18n";
 
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { getSessionToken } from "./utils/auth";
@@ -43,16 +44,20 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 const NotFoundPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { t, format } = useI18n();
   return (
     <>
-      <PageHeader
-        title="Page not found"
-        description="That address does not match anything in ABUD Shorts."
-      />
+      <PageHeader title={t("common.pageNotFound")} description={t("common.pageNotFoundBody")} />
       <EmptyState
-        title={`Nothing lives at ${location.pathname}`}
-        description="The link may be out of date. Use the menu to go to your videos, productions or settings."
-        action={<Button variant="contained" onClick={() => navigate("/")}>Go to Dashboard</Button>}
+        // The path is a URL fragment, so it is isolated: an Arabic interface
+        // must not reorder the slashes in "/videos/abc".
+        title={t("common.nothingAtPath", { path: format.technical(location.pathname) })}
+        description={t("common.nothingAtPathBody")}
+        action={
+          <Button variant="contained" onClick={() => navigate("/")}>
+            {t("common.goToDashboard")}
+          </Button>
+        }
       />
     </>
   );
@@ -60,39 +65,44 @@ const NotFoundPage: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <Router>
-      <Layout>
-        <ErrorBoundary>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/setup" element={<SetupWizard />} />
+    // The interface language wraps the whole application, including the
+    // router, so the shell resolves its direction before the first route
+    // renders and the layout never flips after paint.
+    <I18nProvider>
+      <Router>
+        <Layout>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/setup" element={<SetupWizard />} />
 
-            <Route path="/" element={<ProtectedRoute><DashboardHome /></ProtectedRoute>} />
-            <Route path="/create" element={<ProtectedRoute><VideoCreator /></ProtectedRoute>} />
-            <Route path="/jobs" element={<ProtectedRoute><JobsPage /></ProtectedRoute>} />
-            <Route path="/jobs/:jobId" element={<ProtectedRoute><JobDetails /></ProtectedRoute>} />
-            <Route path="/jobs/:id" element={<ProtectedRoute><JobDetails /></ProtectedRoute>} />
-            <Route path="/videos" element={<ProtectedRoute><VideoList /></ProtectedRoute>} />
-            <Route path="/video/:videoId" element={<ProtectedRoute><VideoDetails /></ProtectedRoute>} />
-            <Route path="/publishing" element={<ProtectedRoute><PublishingPage /></ProtectedRoute>} />
-            <Route path="/brands" element={<ProtectedRoute><BrandsPage /></ProtectedRoute>} />
-            <Route path="/templates" element={<ProtectedRoute><TemplatesPage /></ProtectedRoute>} />
-            <Route path="/media" element={<ProtectedRoute><MediaPage /></ProtectedRoute>} />
-            <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
-            {/* Legacy path kept so old links and bookmarks still resolve. */}
-            <Route path="/providers" element={<Navigate to="/integrations" replace />} />
-            <Route path="/providers/technical" element={<ProtectedRoute><ProvidersPage /></ProtectedRoute>} />
-            <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-            <Route path="/system" element={<ProtectedRoute><SystemPage /></ProtectedRoute>} />
-            {/* The library lives at /videos and a single video at /video/:id, so
-                /videos/:id is an easy URL to land on by hand or from an old
-                bookmark. Without a catch-all every unmatched path rendered the
-                shell with an empty main area, which reads as a broken page. */}
-            <Route path="*" element={<ProtectedRoute><NotFoundPage /></ProtectedRoute>} />
-          </Routes>
-        </ErrorBoundary>
-      </Layout>
-    </Router>
+              <Route path="/" element={<ProtectedRoute><DashboardHome /></ProtectedRoute>} />
+              <Route path="/create" element={<ProtectedRoute><VideoCreator /></ProtectedRoute>} />
+              <Route path="/jobs" element={<ProtectedRoute><JobsPage /></ProtectedRoute>} />
+              <Route path="/jobs/:jobId" element={<ProtectedRoute><JobDetails /></ProtectedRoute>} />
+              <Route path="/jobs/:id" element={<ProtectedRoute><JobDetails /></ProtectedRoute>} />
+              <Route path="/videos" element={<ProtectedRoute><VideoList /></ProtectedRoute>} />
+              <Route path="/video/:videoId" element={<ProtectedRoute><VideoDetails /></ProtectedRoute>} />
+              <Route path="/publishing" element={<ProtectedRoute><PublishingPage /></ProtectedRoute>} />
+              <Route path="/brands" element={<ProtectedRoute><BrandsPage /></ProtectedRoute>} />
+              <Route path="/templates" element={<ProtectedRoute><TemplatesPage /></ProtectedRoute>} />
+              <Route path="/media" element={<ProtectedRoute><MediaPage /></ProtectedRoute>} />
+              <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
+              {/* Legacy path kept so old links and bookmarks still resolve. */}
+              <Route path="/providers" element={<Navigate to="/integrations" replace />} />
+              <Route path="/providers/technical" element={<ProtectedRoute><ProvidersPage /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+              <Route path="/system" element={<ProtectedRoute><SystemPage /></ProtectedRoute>} />
+              {/* The library lives at /videos and a single video at /video/:id, so
+                  /videos/:id is an easy URL to land on by hand or from an old
+                  bookmark. Without a catch-all every unmatched path rendered the
+                  shell with an empty main area, which reads as a broken page. */}
+              <Route path="*" element={<ProtectedRoute><NotFoundPage /></ProtectedRoute>} />
+            </Routes>
+          </ErrorBoundary>
+        </Layout>
+      </Router>
+    </I18nProvider>
   );
 };
 
