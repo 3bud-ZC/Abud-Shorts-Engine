@@ -504,6 +504,24 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: "2.11.0",
+    name: "v2_2_brand_profile_depth",
+    up: async (pool: Pool) => {
+      // A Brand Profile could only carry two colours, so a customer who filled
+      // it in saw almost no difference in the finished video. These columns let
+      // the graphic treatments draw the real brand: a full palette, the logo,
+      // the website and the social handle. Every column is nullable - an
+      // existing brand row stays valid and the style resolver derives neutrals
+      // rather than inventing colours the customer never chose.
+      await pool.query(`
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS secondary_color TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS logo_url TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS website_url TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS social_handle TEXT;
+      `);
+    },
+  },
 ];
 
 export async function runMigrations(pool: Pool): Promise<void> {

@@ -68,6 +68,15 @@ export type MockupRenderRequest = {
   progress?: number;
 };
 
+/** Handset aspect used by every phone mockup. */
+const PHONE_ASPECT = 2.02;
+
+/** Keeps a element of `size` fully inside `extent`, with a small margin. */
+function clampToFrame(position: number, size: number, extent: number, margin = 8): number {
+  const maximum = Math.max(margin, extent - size - margin);
+  return Math.max(margin, Math.min(position, maximum));
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -312,34 +321,41 @@ export function renderMockupSvg(request: MockupRenderRequest): string {
       break;
     }
     case "mobile_site": {
-      const pw = W * 0.46;
-      const ph = pw * 2.02;
+      // Sized against BOTH axes. Deriving the phone from the frame width alone
+      // put a 1784px tall handset inside a 1080px tall 16:9 frame, so the top
+      // and bottom of the mockup were simply cut off.
+      const ph = Math.min(W * 0.46 * PHONE_ASPECT, H * 0.86);
+      const pw = ph / PHONE_ASPECT;
       body.push(phoneFrame((W - pw) / 2, (H - ph) / 2, pw, ph, palette, content, scale * 2.2));
       break;
     }
     case "responsive_transition": {
       // Desktop slides left while the phone rises: one site, any screen.
-      const bw = W * 0.72;
-      const bh = bw * 0.62;
+      const bh = Math.min(W * 0.72 * 0.62, H * 0.62);
+      const bw = bh / 0.62;
       // Kept fully on-frame: the desktop panel drifts, it never leaves.
       const bx = W * 0.04;
-      const by = (H - bh) / 2 - H * 0.04;
+      const by = clampToFrame((H - bh) / 2 - H * 0.04, bh, H);
       body.push(browserChrome(bx, by, bw, bh, palette));
       const chromeH = Math.max(18, bh * 0.055);
       body.push(heroContent(bx, by + chromeH, bw, bh - chromeH, palette, content, scale * 1.35));
-      const pw = W * 0.26;
-      const ph = pw * 2.02;
-      const px = W * 0.66;
-      const py = (H - ph) / 2 + H * 0.06 - progress * H * 0.05;
+      const ph = Math.min(W * 0.26 * PHONE_ASPECT, H * 0.8);
+      const pw = ph / PHONE_ASPECT;
+      const px = Math.min(W * 0.66, W - pw - W * 0.02);
+      // The rise animation must not carry the handset past the top edge.
+      const py = clampToFrame((H - ph) / 2 + H * 0.06 - progress * H * 0.05, ph, H);
       body.push(phoneFrame(px, py, pw, ph, palette, content, scale * 1.35));
       break;
     }
     case "before_after": {
-      const panelW = W * 0.86;
-      const panelH = panelW * 0.56;
+      // Two stacked panels have to share the height. Sizing each from the width
+      // alone overflowed a 16:9 frame by several hundred pixels.
+      const gap = H * 0.06;
+      const panelH = Math.min(W * 0.86 * 0.56, (H * 0.84 - gap) / 2);
+      const panelW = panelH / 0.56;
       const px = (W - panelW) / 2;
-      const topY = H * 0.16;
-      const bottomY = H * 0.54;
+      const topY = (H - (panelH * 2 + gap)) / 2;
+      const bottomY = topY + panelH + gap;
       body.push(outdatedSite(px, topY, panelW, panelH, scale * 1.5));
       body.push(rect(px, topY, panelW, panelH, "none", 0, 'stroke="#5A4632" stroke-width="2"'));
       body.push(browserChrome(px, bottomY, panelW, panelH, palette));

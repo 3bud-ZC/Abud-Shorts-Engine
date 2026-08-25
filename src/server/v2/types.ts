@@ -74,6 +74,22 @@ export const promptJobInputSchema = z.preprocess(
     dialect: arabicDialectEnum.optional().default("none"),
     contentStyle: contentStyleEnum.optional().default("advertisement"),
     productionMode: productionModeEnum.optional().default("auto_hybrid"),
+    // Client-facing creative controls. Plain-language on the surface, and the
+    // only creative knobs the client sends; treatment names and EDL detail stay
+    // internal.
+    creativeStyle: z
+      .enum([
+        "auto",
+        "clean_professional",
+        "viral_social",
+        "cinematic",
+        "motion_explainer",
+        "product_showcase",
+        "tech_saas",
+        "educational",
+      ])
+      .optional(),
+    animationIntensity: z.enum(["low", "balanced", "high"]).optional(),
     requestedDurationSeconds: z.number().min(5).max(120).optional(),
     durationSeconds: z.number().min(5).max(120).optional(),
     duration: z.number().min(5).max(120).optional(),
@@ -142,6 +158,22 @@ export const productionSpecPreviewSchema = z.preprocess(
     dialect: arabicDialectEnum.optional().default("none"),
     contentStyle: contentStyleEnum.optional().default("advertisement"),
     productionMode: productionModeEnum.optional().default("auto_hybrid"),
+    // Client-facing creative controls. Plain-language on the surface, and the
+    // only creative knobs the client sends; treatment names and EDL detail stay
+    // internal.
+    creativeStyle: z
+      .enum([
+        "auto",
+        "clean_professional",
+        "viral_social",
+        "cinematic",
+        "motion_explainer",
+        "product_showcase",
+        "tech_saas",
+        "educational",
+      ])
+      .optional(),
+    animationIntensity: z.enum(["low", "balanced", "high"]).optional(),
     requestedDurationSeconds: z.number().min(5).max(120).optional(),
     durationSeconds: z.number().min(5).max(120).optional(),
     duration: z.number().min(5).max(120).optional(),
@@ -295,7 +327,13 @@ export const brandProfileSchema = z.object({
   name: z.string().trim().min(1).max(120),
   watermarkText: z.string().trim().max(120).optional().default(""),
   primaryColor: z.string().trim().min(1).max(40).optional().default("#24545a"),
+  // Optional so an existing brand keeps validating; the style resolver derives a
+  // neutral companion rather than inventing a colour the customer never gave.
+  secondaryColor: z.string().trim().max(40).optional(),
   accentColor: z.string().trim().min(1).max(40).optional().default("#d28b4c"),
+  logoUrl: z.string().trim().max(500).optional(),
+  websiteUrl: z.string().trim().max(300).optional(),
+  socialHandle: z.string().trim().max(120).optional(),
   captionStyle: z.enum(["clean", "bold", "minimal"]).optional().default("bold"),
   includeOutro: z.boolean().optional().default(true),
   outroText: z.string().trim().max(220).optional().default(""),

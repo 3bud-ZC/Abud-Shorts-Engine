@@ -151,6 +151,26 @@ function buildViralCuriosityScenes(templateData?: TemplateData): GeneratedScene[
   ];
 }
 
+function buildEventPromoScenes(templateData?: TemplateData): GeneratedScene[] {
+  const eventName = pickValue(templateData, "eventName", "this event");
+  const eventDate = pickValue(templateData, "eventDate", "this weekend");
+  const venue = pickValue(templateData, "venue", "the main hall");
+  const highlight = pickValue(
+    templateData,
+    "highlight",
+    "a live set you will not want to miss",
+  );
+  const tickets = pickValue(templateData, "ticketInfo", "limited seats");
+  const contact = pickValue(templateData, "contactMethod", "WhatsApp");
+
+  return [
+    { text: `${eventName} is happening ${eventDate}.` },
+    { text: `Doors open at ${venue}, and it is built around ${highlight}.` },
+    { text: `Entry is ${tickets}, so the room fills quickly.` },
+    { text: `Book on ${contact} today before it sells out.` },
+  ];
+}
+
 export function generateScenesForTemplate(
   templateId: BusinessTemplateId,
   templateData?: TemplateData,
@@ -166,6 +186,8 @@ export function generateScenesForTemplate(
       return buildEducationalScenes(templateData);
     case "viral_curiosity":
       return buildViralCuriosityScenes(templateData);
+    case "event_promo":
+      return buildEventPromoScenes(templateData);
     default:
       return [];
   }

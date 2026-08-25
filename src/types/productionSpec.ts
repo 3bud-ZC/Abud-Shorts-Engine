@@ -143,6 +143,13 @@ export const productionSceneSpecSchema = z.object({
   negativePrompt: z.string().trim().max(300).optional(),
   visualSource: visualSourceEnum.default("stock"),
   visualProvider: z.string().trim().max(50).optional(),
+  /**
+   * Visual treatment this scene should use, when the template or the operator
+   * has already decided. The creative planner honours it if the runtime can
+   * serve it and records a fallback reason when it cannot; without a hint the
+   * planner classifies the narration as before.
+   */
+  treatmentHint: z.string().trim().max(40).optional(),
   transition: transitionEnum.default("cut"),
   notes: z.string().trim().max(300).optional(),
 });
@@ -208,6 +215,10 @@ export const productionSpecSchema = z.object({
   quality: qualityProfileEnum.default("standard"),
   sceneCount: z.number().int().min(1).max(12).default(4),
   productionMode: productionModeEnum.default("auto_hybrid"),
+  /** Creative style preset id; drives pacing, treatment bias and caption energy. */
+  creativeStyle: z.string().trim().max(40).optional(),
+  /** low | balanced | high. Scales shot density and motion. */
+  animationIntensity: z.enum(["low", "balanced", "high"]).optional(),
   visualMode: visualModeEnum.default("auto"),
   voiceProvider: voiceProviderEnum.default("auto"),
   voiceId: z.string().trim().max(120).default(""),

@@ -107,6 +107,31 @@ const BrandsPage: React.FC = () => {
                   <TextField fullWidth type="color" label="Accent" value={draft.accentColor || "#d28b4c"} onChange={(e) => setDraft({ ...draft, accentColor: e.target.value })} />
                 </Grid>
               </Grid>
+              {/* Optional. Left blank, the engine derives a neutral companion
+                  colour rather than presenting a default as your choice. */}
+              <TextField
+                type="color"
+                label="Secondary (optional)"
+                value={draft.secondaryColor || "#1b3b47"}
+                onChange={(e) => setDraft({ ...draft, secondaryColor: e.target.value })}
+                helperText="Leave untouched to let ABUD derive a neutral companion colour."
+              />
+              <TextField
+                label="Logo URL (optional)"
+                value={draft.logoUrl || ""}
+                onChange={(e) => setDraft({ ...draft, logoUrl: e.target.value })}
+                helperText="Shown on brand cards and the closing frame."
+              />
+              <TextField
+                label="Website (optional)"
+                value={draft.websiteUrl || ""}
+                onChange={(e) => setDraft({ ...draft, websiteUrl: e.target.value })}
+              />
+              <TextField
+                label="Social handle (optional)"
+                value={draft.socialHandle || ""}
+                onChange={(e) => setDraft({ ...draft, socialHandle: e.target.value })}
+              />
               <FormControl fullWidth>
                 <InputLabel>Caption Style</InputLabel>
                 <Select label="Caption Style" value={draft.captionStyle || "bold"} onChange={(e) => setDraft({ ...draft, captionStyle: e.target.value as any })}>

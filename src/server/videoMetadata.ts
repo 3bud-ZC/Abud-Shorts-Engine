@@ -46,6 +46,13 @@ export interface VideoMetadata {
   editDecisionList?: Record<string, unknown>;
   visualShotCount?: number;
   sourceTypeCounts?: Record<string, number>;
+  /** Query families asked per scene, the winning clip and any fallback reason. */
+  stockQueryPlan?: Array<Record<string, unknown>>;
+  /**
+   * Resolved brand system for the generated graphics, including which fields
+   * the customer really supplied and which were derived or defaulted.
+   */
+  brandStyle?: Record<string, unknown>;
   stockAttributions?: Array<Record<string, unknown>>;
   /** Search terms replaced because code footage was off-message. */
   visualIntentPolicy?: Array<Record<string, unknown>>;

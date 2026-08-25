@@ -218,6 +218,17 @@ export function presetForProductionMode(mode?: string): CreativeStylePresetId {
   }
 }
 
+/**
+ * Accepts a treatment hint only if it names a treatment the vocabulary really
+ * has. An unknown string is ignored rather than crashing a production or
+ * silently routing to a treatment that does not exist.
+ */
+function normalizeTreatmentHint(hint?: string): VisualTreatment | undefined {
+  if (!hint) return undefined;
+  const upper = hint.trim().toUpperCase() as VisualTreatment;
+  return TREATMENT_RUNTIME[upper] ? upper : undefined;
+}
+
 const MOTION_INTENSITY_DENSITY: Record<MotionIntensity, number> = {
   low: 0.85,
   balanced: 1,
@@ -230,7 +241,19 @@ export type CreativePlanInput = {
   productionMode?: string;
   stylePreset?: CreativeStylePresetId;
   motionIntensity?: MotionIntensity;
-  scenes: Array<{ sceneIndex: number; narration: string; purpose?: string; durationSeconds: number }>;
+  scenes: Array<{
+    sceneIndex: number;
+    narration: string;
+    purpose?: string;
+    durationSeconds: number;
+    /**
+     * Treatment the template or operator already chose for this scene. Honoured
+     * when the runtime can serve it; otherwise the usual fallback chain runs and
+     * the reason is recorded. This is what makes two business templates produce
+     * genuinely different plans rather than the same classifier output twice.
+     */
+    treatmentHint?: string;
+  }>;
   hasProductMedia?: boolean;
   hasUploadedMedia?: boolean;
   hasBrandProfile?: boolean;
@@ -268,13 +291,16 @@ export function buildCreativePlan(input: CreativePlanInput): CreativePlan {
     };
 
     const classification = classifyVisualIntent(scene.narration, context);
-    let preferred = classification.treatment;
+    const hinted = normalizeTreatmentHint(scene.treatmentHint);
+    let preferred = hinted || classification.treatment;
     let repetitionReason: string | undefined;
+    const hintReason = hinted ? `template requested ${hinted}` : undefined;
 
     // Discourage an immediate repeat unless the classifier is confident or the
     // scene is the CTA, where consistency is the point.
     const justUsed = recentTreatments[recentTreatments.length - 1];
     if (
+      !hinted &&
       justUsed === preferred &&
       classification.signal !== "cta" &&
       classification.confidence < 0.85
@@ -296,8 +322,8 @@ export function buildCreativePlan(input: CreativePlanInput): CreativePlan {
       treatment: resolved.treatment,
       runtime: TREATMENT_RUNTIME[resolved.treatment],
       signal: classification.signal,
-      confidence: classification.confidence,
-      reason: [classification.reason, repetitionReason].filter(Boolean).join("; "),
+      confidence: hinted ? Math.max(classification.confidence, 0.9) : classification.confidence,
+      reason: [hintReason, classification.reason, repetitionReason].filter(Boolean).join("; "),
       extracted: classification.extracted,
       fellBackFrom: resolved.fellBackFrom,
       fallbackReason: resolved.reason,

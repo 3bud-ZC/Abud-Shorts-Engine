@@ -1,34 +1,53 @@
 # ABUD Shorts Engine V2 — Status
 
+> **Canonical status file.** This file, at the repository root
+> (`source/ABUD_SHORTS_ENGINE_STATUS.md`), is the single status document used for
+> ongoing work. Copies kept outside the repository are snapshots and are not
+> maintained. Everything under "Current Product State" describes the state right
+> now; every section below it is a historical milestone record and is preserved
+> as written at the time, including superseded Piper and provider evidence.
+
 ## Current Product State
 
 Product: ABUD Shorts Engine V2
 
+Stable release: **v2.1.0**
+
+Development target: **v2.2.0**
+
+Development branch: **`v2.2-finalization`**
+
+Release status: **V2.1 GENERAL AVAILABILITY; V2.2 NOT RELEASED** (not merged, not tagged, not packaged)
+
 Current milestone: V2.2 — Creative Quality Engine & Provider Vault
 
-Milestone completion: V2.2 development. Arabic voice APPROVED and wired into routing; creative editing and Arabic typography pass complete; F1 product shell complete; F1.5 client safety gate complete; F2 creative and animation engine complete
+Version: 2.1.0 stable baseline; schema 2.11.0 in the development source
 
-Overall project completion: V2.1 GA complete; V2.2 development in progress
+Arabic provider: **ElevenLabs** (Arabic of any dialect routes to ElevenLabs; a
+job is blocked before execution when ElevenLabs is not configured, rather than
+falling back to another engine)
 
-Release status: V2.1 GENERAL AVAILABILITY; V2.2 NOT RELEASED
+Arabic default voice: **Mamdoh** (`68MRVrnQAt8vLbu0FCzw`)
 
-Version: 2.1.0 stable baseline (Build 2026.08.23.4, Schema 2.10.0 in development source)
+Arabic preset: **Energetic Ad**, model `eleven_multilingual_v2`, persisted in
+`app_settings.arabic_voice_default` with `selectedBy: human`
 
-Target release: 2.1.0 ACHIEVED; V2.2 in development on branch `v2.2-finalization`
+Human Arabic voice acceptance: **APPROVED** — accepted by the product owner and
+not re-evaluated in this pass
 
-Finalization track: F1 (product UI, ABUD design system, no-code client experience) COMPLETE; F1.5 (product polish & client safety gate) COMPLETE; F2 (creative & animation engine finalization) COMPLETE; F3 (integrations & real publishing closure) NOT STARTED
+Finalization track:
+
+| Gate | Scope | Status |
+| --- | --- | --- |
+| F1 | Product UI, ABUD design system, no-code client experience | **PASS** |
+| F1.5 | Product polish and client safety gate | **PASS** |
+| F2 | Creative and animation engine finalization | **PASS (closed by F2.1)** |
+| F2.1 | Creative closure and evidence gate | **PARTIAL** — engine work complete and verified; authenticated browser QA outstanding |
+| F3 | Integrations and real publishing closure | NOT STARTED |
 
 Final complete-product / client acceptance: PENDING
 
-Human Arabic voice selection: APPROVED — ElevenLabs / Mamdoh (`68MRVrnQAt8vLbu0FCzw`) / Energetic Ad / `eleven_multilingual_v2`, persisted in `app_settings.arabic_voice_default` with `selectedBy: human`
-
-Human Arabic voice acceptance: PASS — Mamdoh accepted by the product owner; not re-evaluated in this pass
-
-Creative quality: acceptance video `cmt6vgxfb000308sbakaebzkm` was REJECTED on captions, typography, shot segmentation, B-roll and editing. The V2.2 Creative Quality Pass addressed those points; new acceptance video `cmt783azu000107qh36330485`
-
 Final complete-video acceptance: PENDING USER REVIEW
-
-Final acceptance testing: ENGINE-SIDE PASS; complete-video acceptance pending user review
 
 Canonical URL: http://localhost:3130
 
@@ -37,6 +56,119 @@ Canonical Docker services:
 - `abud-shorts-render-worker` — healthy, internal only
 - `abud-shorts-n8n` — healthy, internal only on Docker DNS alias `n8n`
 - `abud-shorts-postgres` — healthy, internal only on Docker DNS alias `postgres`
+
+Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
+metadata and videos stay readable and playable. It is not a production Arabic
+route and is not a required runtime. The Piper evidence in the milestone
+sections below is historical and is deliberately left unchanged.
+
+---
+
+## F2.1 — Creative Closure & Evidence Gate
+
+Branch `v2.2-finalization`. No merge, no tag, no package, no release. Zero new
+ElevenLabs synthesis calls were made in this pass.
+
+### Media incident — what was actually established
+
+The previous report described five legacy 1x1 product placeholders disappearing
+with no deliberate delete. The investigation found two different storage roots,
+and only one of them lost anything:
+
+- **Workstation store** `source/data-dev/uploads/products` — **intact**: 32
+  manifest records, 32 files on disk, zero manifest entries pointing at a
+  missing file, zero orphaned files. Nothing was lost here.
+- **Container-mounted store** `C:/abud-shorts-engine/data-dev/uploads/products`
+  (bind-mounted to `/app/data` by both the app and the render worker) — the
+  manifest was reduced to `{}` and the directory emptied, both stamped
+  2026-08-25 ~04:29, during a render session.
+
+An exhaustive search of every destructive filesystem call in the engine shows
+exactly one code path that can remove stored product media:
+`DELETE /api/v2/media/products/:id`, one asset at a time, behind a confirm
+dialog. No startup cleanup, temp cleanup, invalid-media cleanup, duplicate
+cleanup, migration hook, revision cleanup or cache cleanup touches the uploads
+tree; `cleanupTemporaryArtifacts` is confined to `<DATA_DIR_PATH>/temp` and is
+age-gated. **The root cause of the container-store loss is therefore NOT
+established as an engine action, and this pass does not claim one.**
+
+Two structural defects that make exactly this class of confusion possible were
+found and fixed:
+
+1. `src/test/mediaUploadService.test.ts` ran against the module-level singleton,
+   which points at the live customer library. Two records it created
+   (`sample_item.png`, `duplicate-source.png`, 2026-08-24T15:52) are still in the
+   shipped workstation library. Tests now own a temporary storage root.
+2. `MediaCache` read `DATA_DIR` while every other service reads `DATA_DIR_PATH`,
+   so the cache could live in a different directory from the media library.
+
+### Data-safety invariant
+
+Normal startup, render, test and cleanup can no longer remove persistent
+customer media. Enforced in code and covered by regression tests:
+
+- `deleteProductImage` requires an explicit `user_request` or
+  `documented_retention` reason; a retention deletion must record its policy.
+  Every deletion is written to an append-only audit log before the bytes go.
+- A manifest that exists but does not parse is quarantined and the read fails
+  loudly. It previously returned an empty object, so the next write persisted
+  that emptiness and silently orphaned every stored file.
+- Writing an empty manifest over a populated one is refused unless the deletion
+  path just removed the last record.
+- Legacy unusable media is marked (`usable: false` with a reason) and kept, never
+  deleted.
+
+No historical or customer media was deleted during this pass.
+
+### Creative work completed
+
+| Area | What changed |
+| --- | --- |
+| Smart crop | New `smartCrop` planner: source geometry, delivery target, an OpenCV motion/detail probe from the existing QUALITY_CPU runtime, provider tags and any manual focal point. Aspect ratio is always locked, the crop centre may move at most 0.06 of the frame between shots, focal points are clamped inside the frame, and a safe centre crop is the fallback. The plan is applied in the FFmpeg chain and persisted in shot metadata. No ML model was installed; no face detector is claimed, because the installed OpenCV build ships none. |
+| Stock query families | New `stockQueryFamilies` engine: one scene intent produces subject / action / environment / audience / support / industry angles from a bilingual concept lexicon, deterministically. Broad terms are emitted only as a labelled fallback. Query, provider, candidate count, winner and fallback reason are recorded per scene. |
+| Brand injection | New `brandStyle` resolver producing a full contrast-checked palette plus brand name, website, social handle, logo and CTA. Every field reports whether it came from the customer, was derived, or is an ABUD default. Brand data now reaches the Motion Engine and the mockup renderer; raw stock footage is deliberately not recoloured. Brand Profile gained secondary colour, logo, website and social handle (schema 2.11.0). |
+| Template differentiation | New per-template creative profiles giving each format its own style preset, production mode, pacing and per-scene treatment plan. A sixth format, Event Promo, was added. Tests assert that all six produce different treatment sequences and different plans. |
+| Motion graphics purity | A graphic production now plans entirely on local motion runtimes, renders a local generated ground per template, and never falls back to stock when a template fails. Proven by an integration test that renders and composes a full picture track with both stock credentials removed. |
+| Arabic typography | Motion frames were being drawn by a Pillow build without libraqm, which renders Arabic unshaped and left-to-right. Arabic is now pre-shaped to contextual forms and reordered for display when the renderer cannot shape it, and left in logical order when it can. Fonts resolve from the bundled OFL pack relative to the module; WOFF and WOFF2 are refused. |
+| Editing variety | Camera motion is chosen by shot meaning instead of index parity, and never repeats immediately. |
+| Beat integration | Beat count, BPM and beat-aligned cut count are recorded alongside `beatMapUsed`, and the field-name contract is protected by tests. |
+
+### Defects found and fixed by the new tests
+
+- The visual bed composer invoked a bare `ffmpeg` from PATH. On any machine
+  without a system FFmpeg — including this workstation — every composition
+  failed with ENOENT, was caught, and fell back to a single clip. Multi-shot
+  visual beds therefore never composed. This is the real cause of the
+  "1 base-media shot remains" ambiguity in the F2 report.
+- `mobile_site`, `responsive_transition` and `before_after` mockups were sized
+  from frame width alone and overflowed a 16:9 frame by hundreds of pixels.
+- A derived accent could fall below the accessible contrast threshold against
+  the derived background.
+- The Motion Graphics path drew hardcoded placeholder copy (`99.9%` and a fixed
+  Arabic feature list), asserting statistics nobody had claimed. Templates now
+  draw only what the script and classifier actually produced.
+- The Product Ad picker offered unusable placeholder assets and auto-selected
+  whichever happened to be first.
+
+### Product Ad
+
+Status: **SKIPPED — NO VALID PRODUCT MEDIA**. No product photo was fabricated to
+make the acceptance table green. The code path is covered by automated tests and
+the creator now states plainly that a Product Ad requires a product photo,
+offering only assets the library reports as usable.
+
+### Verification
+
+- Tests: 43 files, 556 tests, all passing (F2 baseline was 40 files / 453 tests).
+- `pnpm typecheck` and `pnpm build`: pass.
+- Docker: `abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n` and
+  `abud-shorts-postgres` all healthy on the rebuilt image; migration 2.11.0
+  applied cleanly. No new ports exposed.
+- Browser QA: **NOT COMPLETED.** The dashboard requires an operator sign-in that
+  was not available in this pass. This is the one remaining blocker on the F2.1
+  gate.
+
+---
 
 ---
 

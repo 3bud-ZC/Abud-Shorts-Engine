@@ -115,6 +115,11 @@ export class MediaCache {
   }
 }
 
+// DATA_DIR_PATH is the storage root every other service reads. This module used
+// DATA_DIR, which nothing sets, so the cache silently lived in a different
+// directory from the media library and the artifacts - the kind of split that
+// makes a store look as though it emptied itself. DATA_DIR is still honoured for
+// an existing deployment that set it.
 export const mediaCache = new MediaCache(
-  process.env.DATA_DIR || path.join(process.cwd(), "data"),
+  process.env.DATA_DIR_PATH || process.env.DATA_DIR || path.join(process.cwd(), "data"),
 );

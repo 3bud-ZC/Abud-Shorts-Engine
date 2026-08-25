@@ -36,6 +36,17 @@ import {
   type VisualTreatment,
 } from "../server/v2/creative/visualTreatment";
 import { splitNarrationBeats } from "../server/v2/creative/visualIntentClassifier";
+import { resolveBrandStyle } from "../server/v2/creative/brandStyle";
+import {
+  buildStockQueryFamilies,
+  queryFamilyTerms,
+} from "../server/v2/creative/stockQueryFamilies";
+import {
+  cropMetadata,
+  planSmartCrop,
+  probeVisualFocus,
+  type SmartCropPlan,
+} from "../server/v2/media-intelligence/smartCrop";
 import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
 import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
@@ -392,6 +403,42 @@ export class ShortCreator {
       "Creative plan resolved",
     );
 
+    // Brand system for every generated graphic in this production. Fields the
+    // customer did not supply are reported as derived or default rather than
+    // presented as their choice, and every text/surface pairing is contrast
+    // checked before a template can draw with it.
+    const brandStyle = resolveBrandStyle({
+      brandKit: spec.brandKit,
+      ctaText: spec.cta?.text,
+      contactText: spec.contact,
+      presence: creativePlan.brandPresence,
+    });
+    logger.info(
+      {
+        hasBrand: brandStyle.hasBrand,
+        sources: brandStyle.sources,
+        contrastCorrections: brandStyle.contrastCorrections,
+      },
+      "Brand style resolved for generated graphics",
+    );
+    const motionBrandFields = {
+      brandName: brandStyle.sources.brandName === "customer" ? brandStyle.brandName : undefined,
+      website: brandStyle.sources.website === "customer" ? brandStyle.website : undefined,
+      socialHandle:
+        brandStyle.sources.socialHandle === "customer" ? brandStyle.socialHandle : undefined,
+    };
+    const motionPalette = {
+      primary: brandStyle.palette.primary,
+      secondary: brandStyle.palette.secondary,
+      accent: brandStyle.palette.accent,
+      background: brandStyle.palette.background,
+      surface: brandStyle.palette.surface,
+      text: brandStyle.palette.text,
+      textMuted: brandStyle.palette.textMuted,
+      onPrimary: brandStyle.palette.onPrimary,
+      onAccent: brandStyle.palette.onAccent,
+    };
+
     /**
      * True when the production is advertising websites or web design. Only then
      * does a programmatic site mockup beat real footage; a generic coding clip
@@ -430,6 +477,8 @@ export class ShortCreator {
     const captionTimingSources = new Set<string>();
     const plannedShots: VisualShot[] = [];
     const visualIntentPolicyLog: Array<Record<string, unknown>> = [];
+    /** Which query families were asked for each scene, and what came back. */
+    const stockQueryLog: Array<Record<string, unknown>> = [];
     const shotSourceCounts: Record<string, number> = {};
     const voiceArtifacts: any[] = [];
     // Single-speaker guarantee: the first synthesized scene pins the concrete
@@ -1093,27 +1142,64 @@ export class ShortCreator {
           artifactReuse.reusedArtifacts.push(reusableMediaArtifact);
           visualAsset = (reusableMediaArtifact.metadata?.visualAsset || reusableMediaArtifact.metadata || {}) as any;
         } else if (isMotionGraphics) {
-          let motionTemplate: MotionTemplateType = "kinetic_typography";
-          if (spec.productionMode === "animated_explainer") {
-            motionTemplate = index === 0 ? "kinetic_typography" : index === 1 ? "explainer_diagram" : "cta_card";
-          } else {
-            motionTemplate = index === 0 ? "kinetic_typography" : index === 1 ? "stat_animation" : "cta_card";
-          }
+          // The creative plan already decided what this scene shows, so the
+          // template follows the plan rather than the scene index. A pure
+          // graphic production must never need a stock clip, so every scene
+          // resolves to a motion template with a local generated ground.
+          const plannedTreatment = creativePlan.sceneTreatments.find(
+            (entry) => entry.sceneIndex === index,
+          );
+          const motionTemplate: MotionTemplateType =
+            (plannedTreatment && TREATMENT_MOTION_TEMPLATE[plannedTreatment.treatment]) ||
+            (spec.productionMode === "animated_explainer"
+              ? index === 0
+                ? "kinetic_typography"
+                : index === 1
+                  ? "explainer_diagram"
+                  : "cta_card"
+              : index === 0
+                ? "kinetic_typography"
+                : index === 1
+                  ? "stat_animation"
+                  : "cta_card");
 
+          // Every value drawn comes from the script or the classifier. The
+          // rejected build hardcoded "99.9%" and a fixed feature list, so a
+          // motion-graphics video asserted statistics nobody had claimed.
+          const narrationBeats = splitNarrationBeats(String(sceneTimeline.narration || ""));
+          const extracted = plannedTreatment?.extracted;
           const motionResult = await motionEngine.renderMotionScene({
             template: motionTemplate,
-            title: (originalSceneSpec as any).displayText || originalSceneSpec.onScreenText || originalSceneSpec.narration.slice(0, 35),
-            subtitle: originalSceneSpec.narration.length > 35 ? originalSceneSpec.narration.slice(0, 75) : undefined,
-            numberStat: { value: "99.9%", label: "أداء فائق" },
-            features: ["جودة فيديو 1080p فائقة", "تصميم عصري وحركي", "دعم كامل للغة العربية"],
-            ctaText: spec.brandKit?.outroText || "اطلب الآن عبر واتساب",
-            contactText: spec.brandKit?.contactText,
+            title:
+              (originalSceneSpec as any).displayText ||
+              originalSceneSpec.onScreenText ||
+              originalSceneSpec.narration.slice(0, 60),
+            subtitle:
+              originalSceneSpec.narration.length > 60
+                ? originalSceneSpec.narration.slice(0, 120)
+                : undefined,
+            numberStat: extracted?.statValue
+              ? {
+                  value: extracted.statValue,
+                  label: String(originalSceneSpec.onScreenText || ""),
+                  suffix: extracted.statSuffix,
+                }
+              : undefined,
+            features:
+              motionTemplate === "feature_list"
+                ? narrationBeats.slice(0, extracted?.stepCount || 3)
+                : undefined,
+            steps:
+              motionTemplate === "explainer_diagram"
+                ? narrationBeats.slice(0, extracted?.stepCount || 3)
+                : undefined,
+            ctaText: brandStyle.ctaText,
+            contactText: spec.contact || spec.brandKit?.contactText,
             durationSeconds: targetSceneDuration,
-            brandColors: {
-              primary: spec.brandKit?.primaryColor || "#24545a",
-              accent: spec.brandKit?.accentColor || "#d97706",
-              secondary: (spec.brandKit as any)?.secondaryColor || "#11222c",
-            },
+            width: orientation === OrientationEnum.portrait ? 1080 : 1920,
+            height: orientation === OrientationEnum.portrait ? 1920 : 1080,
+            brandColors: motionPalette,
+            brand: motionBrandFields,
             language: spec.language,
           });
 
@@ -1131,6 +1217,11 @@ export class ShortCreator {
               motionArtifactId: motionResult.artifactId,
               durationSeconds: targetSceneDuration,
               source: "motion_canvas",
+              stockRequired: false,
+              fontPath: motionResult.fontPath,
+              preShapedArabic: motionResult.preShapedArabic,
+              missingGlyphs: motionResult.missingGlyphs,
+              brandFieldsDrawn: motionResult.brandFieldsDrawn,
             },
           };
         } else if (isProductAd) {
@@ -1196,8 +1287,31 @@ export class ShortCreator {
           // engineering; everything else passes through unchanged.
           const plannedTerms =
             sceneMediaPlan.searchCandidates || sceneMediaPlan.searchTerms || originalSceneSpec.stockSearchTerms || [];
+
+          // One scene intent becomes several visual angles - the subject, the
+          // action around it, the environment, the audience and a supporting
+          // texture - rather than one literal restatement of the sentence with
+          // a joker list of "nature / globe / ocean" behind it.
+          const queryFamilies = buildStockQueryFamilies({
+            narration: String(originalSceneSpec.narration || ""),
+            onScreenText: String(originalSceneSpec.onScreenText || ""),
+            purpose: String(originalSceneSpec.purpose || ""),
+            visualIntent: sceneMediaPlan.visualIntent,
+            industryHint: String((spec.metadata as any)?.creativeProfile?.industryHint || spec.title || ""),
+            mood: creativePlan.pacing,
+            providedTerms: plannedTerms as string[],
+            orientation: orientation === OrientationEnum.portrait ? "portrait" : "landscape",
+          });
+          stockQueryLog.push({
+            sceneIndex: index,
+            families: queryFamilies.families,
+            queries: queryFamilies.queries.map((entry) => entry.query),
+            matchedConcepts: queryFamilies.matchedConcepts,
+            genericOnly: queryFamilies.genericOnly,
+          });
+
           const intentPolicy = applyVisualIntentPolicy({
-            terms: plannedTerms as string[],
+            terms: queryFamilyTerms(queryFamilies),
             narration: String(originalSceneSpec.narration || ""),
             isWebsiteAd: websiteAdContext,
             sceneIndex: index,
@@ -1228,6 +1342,16 @@ export class ShortCreator {
             },
           );
           if (!reusedAsset && visualAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
+          const sceneQueryRecord = stockQueryLog[stockQueryLog.length - 1];
+          if (sceneQueryRecord) {
+            sceneQueryRecord.provider = visualAsset.provider;
+            sceneQueryRecord.queryUsed = visualAsset.metadata?.searchTerm;
+            sceneQueryRecord.candidateCount = visualAsset.metadata?.candidateCount;
+            sceneQueryRecord.winner = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+            sceneQueryRecord.fallbackReason = visualAsset.metadata?.fallback
+              ? "provider_scoring_found_no_passing_candidate"
+              : undefined;
+          }
 
           const cacheId = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
           const cached = cacheId ? mediaCache.getCachedAsset(visualAsset.provider, cacheId as any) : null;
@@ -1374,6 +1498,16 @@ export class ShortCreator {
           // Pick a clean window inside the downloaded clip rather than its
           // first seconds, which are often a logo card or a fade.
           const detection = await detectShots(tempVideoPath, { scriptDir: this.config.tempDirPath });
+
+          // Where the picture actually is. Measured once per clip and reused for
+          // every shot cut from it, so the reframe cannot swim between shots.
+          // Absent runtime means an honest fall back to the safe centre crop.
+          const focusProbe = await probeVisualFocus(tempVideoPath, {
+            windowSeconds: Math.min(mediaDuration, targetSceneDuration * 2),
+          });
+          const frameWidth = orientation === OrientationEnum.portrait ? 1080 : 1920;
+          const frameHeight = orientation === OrientationEnum.portrait ? 1920 : 1080;
+          let previousCropPlan: SmartCropPlan | null = null;
           const shotInputs = await Promise.all(sceneEdl.shots.map(async (shot, shotIndex) => {
             // A motion-treated shot is rendered to its own short MP4 and then
             // handed to the composer as an ordinary clip, so graphic scenes and
@@ -1401,29 +1535,38 @@ export class ShortCreator {
                         planned.extracted.stepCount,
                       )
                     : undefined,
-                  ctaText: String(spec.cta?.text || ""),
-                  contactText: String(spec.contact || ""),
+                  steps: planned?.extracted?.stepCount
+                    ? splitNarrationBeats(String(sceneTimeline.narration || "")).slice(
+                        0,
+                        planned.extracted.stepCount,
+                      )
+                    : undefined,
+                  ctaText: brandStyle.ctaText,
+                  contactText: spec.contact || spec.brandKit?.contactText,
                   durationSeconds: shot.duration,
                   width: orientation === "portrait" ? 1080 : 1920,
                   height: orientation === "portrait" ? 1920 : 1080,
                   fps: 25,
-                  brandColors: {
-                    primary: spec.brandKit?.primaryColor,
-                    accent: spec.brandKit?.accentColor,
-                  },
+                  brandColors: motionPalette,
+                  brand: motionBrandFields,
                   language: spec.language,
                 });
                 if (fs.existsSync(motionScene.absolutePath)) {
                   return { shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 };
                 }
               } catch (motionError) {
-                // A motion template failing must not fail the production; the
-                // shot falls back to the scene's stock footage below and the
-                // reason is recorded rather than swallowed.
                 logger.warn(
                   { err: String(motionError), sceneIndex: index, template },
-                  "Motion scene render failed; falling back to footage for this shot",
+                  "Motion scene render failed",
                 );
+                if (graphicOnlyMode) {
+                  // An explicitly graphic production must not silently acquire a
+                  // stock dependency because one template failed. The shot is
+                  // dropped from the bed instead, and the scene keeps whatever
+                  // other graphic shots rendered.
+                  shot.routingReason = `${shot.routingReason || ""}|motion_failed_graphic_only`;
+                  return { shot };
+                }
                 shot.routingReason = `${shot.routingReason || ""}|motion_fallback_to_stock`;
                 shot.sourceType = "stock";
               }
@@ -1432,10 +1575,18 @@ export class ShortCreator {
               return {
                 shot,
                 mockupTemplate: mockupForIntent(shot.intent) || undefined,
+                // A mockup carries the customer's own brand when they supplied
+                // one; the placeholder brand is used only when they did not.
+                mockupPalette: {
+                  background: brandStyle.palette.background,
+                  primary: brandStyle.palette.primary,
+                  accent: brandStyle.palette.accent,
+                },
                 mockupContent: {
+                  brandName: brandStyle.brandName || undefined,
                   headline: String(originalSceneSpec.onScreenText || spec.title || ""),
                   subheadline: String((originalSceneSpec as any).displayText || ""),
-                  ctaLabel: String(spec.cta?.text || "ابدأ دلوقتي"),
+                  ctaLabel: String(brandStyle.ctaText || spec.cta?.text || "ابدأ دلوقتي"),
                 },
               };
             }
@@ -1446,8 +1597,42 @@ export class ShortCreator {
               Math.max(0, mediaDuration - shot.duration),
               window.startSeconds + shotIndex * shot.duration,
             );
-            return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset };
+            const cropPlan = planSmartCrop({
+              sourceWidth: Number(visualAsset?.width || visualAsset?.metadata?.width) || frameWidth,
+              sourceHeight: Number(visualAsset?.height || visualAsset?.metadata?.height) || frameHeight,
+              targetWidth: frameWidth,
+              targetHeight: frameHeight,
+              tags: visualAsset?.metadata?.searchTermsUsed || sceneMediaPlan.searchTerms,
+              visualIntent: sceneMediaPlan.visualIntent,
+              manualFocalPoint: (originalSceneSpec as any).focalPoint,
+              probe: focusProbe,
+              previousPlan: previousCropPlan,
+            });
+            previousCropPlan = cropPlan;
+            shot.crop = {
+              mode: cropPlan.mode,
+              xCenter: cropPlan.xCenter,
+              yCenter: cropPlan.yCenter,
+              safetyScore: Math.round(cropPlan.confidence * 100),
+            };
+            shot.routingReason = `${shot.routingReason || ""}|crop:${cropPlan.mode}`;
+            return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset, cropPlan };
           }));
+
+          // Persist the reframing decision so a rejected video can be explained
+          // rather than guessed at, and so a revision reuses the same framing.
+          const cropPlansUsed = shotInputs
+            .map((entry) => (entry as { cropPlan?: SmartCropPlan }).cropPlan)
+            .filter(Boolean) as SmartCropPlan[];
+          if (visualAsset?.metadata && cropPlansUsed.length > 0) {
+            visualAsset.metadata.smartCropPlan = cropMetadata(cropPlansUsed[0]);
+            visualAsset.metadata.smartCropShots = cropPlansUsed.map(cropMetadata);
+            visualAsset.metadata.focusProbe = {
+              available: focusProbe.available,
+              source: focusProbe.source,
+              concentration: focusProbe.concentration,
+            };
+          }
 
           if (shotInputs.length > 1) {
             const bedPath = path.join(this.config.tempDirPath, `${tempId}.bed.mp4`);
@@ -1469,19 +1654,25 @@ export class ShortCreator {
               });
             } else {
               // Composition declined or failed: the single clip still stands.
-              plannedShots.push({
+              // The source type is the one the plan actually chose - reporting
+              // every uncomposed scene as "stock" is what made a pure motion
+              // production look as though it still depended on footage.
+              const fallbackShot = {
                 ...sceneEdl.shots[0],
                 duration: targetSceneDuration,
-                sourceType: "stock",
                 routingReason: `single_clip:${composed.reason || "not_composed"}`,
-              });
-              shotSourceCounts.stock = (shotSourceCounts.stock || 0) + 1;
+              };
+              plannedShots.push(fallbackShot);
+              shotSourceCounts[fallbackShot.sourceType] =
+                (shotSourceCounts[fallbackShot.sourceType] || 0) + 1;
             }
             if (fs.existsSync(workDir)) fs.removeSync(workDir);
             if (fs.existsSync(bedPath)) fs.removeSync(bedPath);
           } else {
-            plannedShots.push({ ...sceneEdl.shots[0], duration: targetSceneDuration });
-            shotSourceCounts.stock = (shotSourceCounts.stock || 0) + 1;
+            const onlyShot = { ...sceneEdl.shots[0], duration: targetSceneDuration };
+            plannedShots.push(onlyShot);
+            shotSourceCounts[onlyShot.sourceType] =
+              (shotSourceCounts[onlyShot.sourceType] || 0) + 1;
           }
         }
         sceneQa.push({
@@ -1492,6 +1683,7 @@ export class ShortCreator {
           visualRelevanceScore: visualAsset.metadata?.selectedScore || 95,
           duplicateRisk: visualAsset.metadata?.scoreBreakdown?.nearDuplicateRisk,
           cropSafety: visualAsset.metadata?.smartCrop,
+          smartCrop: visualAsset.metadata?.smartCropPlan,
           captionSafeLayout: true,
           voiceDurationFit: actualVoiceDuration <= targetSceneDuration * 1.08,
         });
@@ -1768,10 +1960,28 @@ export class ShortCreator {
             : 0,
           sourceTypeCounts: shotSourceCounts,
           beatMapUsed: beatTimestamps.length > 0,
+          // How many cuts actually landed on a detected beat, as opposed to how
+          // many beats were available. Reporting only `beatMapUsed` hid the case
+          // where a beat map was produced and then influenced nothing.
+          beatAlignedCutCount: plannedShots.filter((shot) => typeof shot.beatHint === "number").length,
+          beatCount: beatTimestamps.length,
+          bpm: beatMap?.bpm,
           pacingProfile: 'editorial_ad',
         },
         visualShotCount: plannedShots.length,
         visualIntentPolicy: visualIntentPolicyLog.length > 0 ? visualIntentPolicyLog : undefined,
+        // Which visual angles were asked for, what came back and which clip won.
+        stockQueryPlan: stockQueryLog.length > 0 ? stockQueryLog : undefined,
+        // What the Brand Profile actually contributed, field by field, so the
+        // UI never implies the engine knew a brand colour it was never given.
+        brandStyle: {
+          hasBrand: brandStyle.hasBrand,
+          presence: brandStyle.presence,
+          palette: brandStyle.palette,
+          sources: brandStyle.sources,
+          contrast: brandStyle.contrast,
+          contrastCorrections: brandStyle.contrastCorrections,
+        },
         sourceTypeCounts: shotSourceCounts,
         captionFont: captionFontFamily,
         captionStyleId: captionStyleSpec.id,

@@ -103,7 +103,11 @@ type BrandRow = {
   name: string;
   watermark_text: string;
   primary_color: string;
+  secondary_color?: string | null;
   accent_color: string;
+  logo_url?: string | null;
+  website_url?: string | null;
+  social_handle?: string | null;
   caption_style: "none" | "clean" | "bold" | "minimal";
   include_outro: boolean;
   outro_text: string;
@@ -126,7 +130,11 @@ function mapBrand(row: BrandRow) {
     name: row.name,
     watermarkText: row.watermark_text,
     primaryColor: row.primary_color,
+    secondaryColor: row.secondary_color || undefined,
     accentColor: row.accent_color,
+    logoUrl: row.logo_url || undefined,
+    websiteUrl: row.website_url || undefined,
+    socialHandle: row.social_handle || undefined,
     captionStyle: row.caption_style,
     includeOutro: row.include_outro,
     outroText: row.outro_text,
@@ -298,6 +306,13 @@ export function canonicalizeProductionSpecContract(
     resolution: controls.resolution || spec.resolution,
     quality: controls.quality || spec.quality,
     productionMode: controls.productionMode || spec.productionMode,
+    // "auto" means "let the preset follow the production mode", so it is not
+    // persisted as an explicit style choice.
+    creativeStyle:
+      controls.creativeStyle && controls.creativeStyle !== "auto"
+        ? controls.creativeStyle
+        : spec.creativeStyle,
+    animationIntensity: controls.animationIntensity || spec.animationIntensity,
     visualMode: controls.visualMode || spec.visualMode,
     voiceProvider: resolvedVoiceProvider,
     voiceId,
@@ -2367,9 +2382,10 @@ export function createV2PublicRouter(
     const rows = await db.query<BrandRow>(
       `INSERT INTO brands (
         id, name, watermark_text, primary_color, accent_color, caption_style,
-        include_outro, outro_text, contact_text, voice_profile, is_default, created_at, updated_at
+        include_outro, outro_text, contact_text, voice_profile, is_default,
+        secondary_color, logo_url, website_url, social_handle, created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now())
       RETURNING *`,
       [
         id,
@@ -2383,6 +2399,10 @@ export function createV2PublicRouter(
         parsed.data.contactText,
         parsed.data.voiceProfile ? JSON.stringify(parsed.data.voiceProfile) : null,
         parsed.data.isDefault,
+        parsed.data.secondaryColor || null,
+        parsed.data.logoUrl || null,
+        parsed.data.websiteUrl || null,
+        parsed.data.socialHandle || null,
       ],
     );
     res.status(201).json({ brand: mapBrand(rows[0]) });
@@ -2414,6 +2434,10 @@ export function createV2PublicRouter(
            contact_text = $9,
            voice_profile = $10,
            is_default = $11,
+           secondary_color = $12,
+           logo_url = $13,
+           website_url = $14,
+           social_handle = $15,
            updated_at = now()
        WHERE id = $1
        RETURNING *`,
@@ -2429,6 +2453,10 @@ export function createV2PublicRouter(
         parsed.data.contactText,
         parsed.data.voiceProfile ? JSON.stringify(parsed.data.voiceProfile) : null,
         parsed.data.isDefault,
+        parsed.data.secondaryColor || null,
+        parsed.data.logoUrl || null,
+        parsed.data.websiteUrl || null,
+        parsed.data.socialHandle || null,
       ],
     );
     if (!rows[0]) {
@@ -2820,7 +2848,12 @@ export function createV2PublicRouter(
 
   router.delete("/media/products/:id", async (req, res) => {
     try {
-      const deleted = await mediaUploadService.deleteProductImage(req.params.id);
+      // The only route in the engine that may remove customer media, and it
+      // always records that a person asked for it.
+      const deleted = await mediaUploadService.deleteProductImage(
+        req.params.id,
+        "user_request",
+      );
       if (!deleted) {
         res.status(404).json({ error: "Media item not found." });
         return;

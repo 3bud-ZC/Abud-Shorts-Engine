@@ -67,6 +67,26 @@ function captionTimingLabel(video: any): string {
   return CAPTION_TIMING_LABELS[source] || String(source);
 }
 
+/** Distinct visual treatments the plan actually used, most used first. */
+function creativeTreatments(video: any): string {
+  const counts = video?.creativePlan?.treatmentCounts as Record<string, number> | undefined;
+  if (!counts || Object.keys(counts).length === 0) return "";
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([treatment, count]) => `${treatment.replace(/_/g, " ").toLowerCase()} x${count}`)
+    .join(", ");
+}
+
+/** Only the brand fields the customer really supplied; never the derived ones. */
+function suppliedBrandFields(video: any): string {
+  const sources = video?.brandStyle?.sources as Record<string, string> | undefined;
+  if (!sources) return "";
+  return Object.entries(sources)
+    .filter(([, source]) => source === "customer")
+    .map(([field]) => field.replace(/([A-Z])/g, " $1").toLowerCase().trim())
+    .join(", ");
+}
+
 function sourceBreakdown(video: any): string {
   const counts = video?.sourceTypeCounts || video?.editDecisionList?.sourceTypeCounts;
   if (!counts || typeof counts !== "object") return "";
@@ -760,12 +780,68 @@ const VideoDetailsContent: React.FC = () => {
                 </Stack>
               </SectionCard>
 
+              {/* Creative summary. Readable evidence of what the engine chose
+                  and why; the raw plan stays in the collapsed technical block. */}
+              {video.creativePlan && (
+                <SectionCard title="Creative">
+                  <Stack spacing={1.25}>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Creative Style</Typography>
+                      <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                        {String(video.creativePlan.stylePreset || "auto").replace(/_/g, " ")}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Pacing</Typography>
+                      <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                        {String(video.creativePlan.pacing || "balanced")}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Animation</Typography>
+                      <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
+                        {String(video.creativePlan.motionIntensity || "balanced")}
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Shot Count</Typography>
+                      <Typography fontWeight={700}>{video.visualShotCount ?? "N/A"}</Typography>
+                    </Stack>
+                    {creativeTreatments(video) && (
+                      <Stack direction="row" justifyContent="space-between" spacing={2}>
+                        <Typography color="text.secondary">Visual Treatments</Typography>
+                        <Typography fontWeight={700} sx={{ textAlign: "right" }}>
+                          {creativeTreatments(video)}
+                        </Typography>
+                      </Stack>
+                    )}
+                    {sourceBreakdown(video) && (
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography color="text.secondary">Source Types</Typography>
+                        <Typography fontWeight={700}>{sourceBreakdown(video)}</Typography>
+                      </Stack>
+                    )}
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">Brand Used</Typography>
+                      <Typography fontWeight={700}>
+                        {video.brandStyle?.hasBrand ? "Yes" : "ABUD defaults"}
+                      </Typography>
+                    </Stack>
+                  </Stack>
+                </SectionCard>
+              )}
+
               {/* Brand Kit */}
               <SectionCard title="Brand Profile">
                 <Stack spacing={1}>
                   <Typography>Brand Name: {video.brandName || "None"}</Typography>
                   <Typography>Watermark: {video.watermarkText || "None"}</Typography>
                   <Typography>Caption Style: {video.captionStyle || "Bold"}</Typography>
+                  {video.brandStyle?.sources && (
+                    <Typography variant="caption" color="text.secondary">
+                      Colours you supplied: {suppliedBrandFields(video) || "none - ABUD defaults were used"}.
+                    </Typography>
+                  )}
                 </Stack>
               </SectionCard>
 

@@ -187,6 +187,10 @@ const VideoCreator: React.FC = () => {
   const [resolution, setResolution] = useState("1080p");
   const [contentStyle, setContentStyle] = useState("advertisement");
   const [productionMode, setProductionMode] = useState("auto_hybrid");
+  // Plain-language creative controls. These map onto the creative plan; the
+  // internal treatment names and EDL stay out of the client surface.
+  const [creativeStyle, setCreativeStyle] = useState("auto");
+  const [animationIntensity, setAnimationIntensity] = useState<"low" | "balanced" | "high">("balanced");
   // Simple is the default: a customer should be able to produce a video from a
   // prompt and a handful of obvious choices. Advanced reveals the full control
   // surface without changing any underlying contract.
@@ -298,8 +302,12 @@ const VideoCreator: React.FC = () => {
     axios.get("/api/v2/media/products").then((res) => {
       const prods = res.data.products || [];
       setUploadedProducts(prods);
-      if (prods.length > 0 && !selectedProductMediaId) {
-        setSelectedProductMediaId(prods[0].id);
+      // A 1x1 placeholder is a structurally valid PNG and used to be offered as
+      // a product photo, and auto-selected because it happened to be first. Only
+      // an asset the library reports as usable may be chosen.
+      const firstUsable = prods.find((prod: any) => prod.usable !== false);
+      if (firstUsable && !selectedProductMediaId) {
+        setSelectedProductMediaId(firstUsable.id);
       }
     }).catch(() => {});
   }, [params]);
@@ -405,7 +413,14 @@ const VideoCreator: React.FC = () => {
         brandName: brand.name,
         watermarkText: brand.watermarkText || brand.name,
         primaryColor: brand.primaryColor || "#24545a",
+        // Only forwarded when the brand really carries them; an absent field
+        // stays undefined so the style resolver derives a neutral instead of
+        // presenting an engine default as the customer's choice.
+        secondaryColor: brand.secondaryColor || undefined,
         accentColor: brand.accentColor || "#d28b4c",
+        logoUrl: brand.logoUrl || undefined,
+        websiteUrl: brand.websiteUrl || undefined,
+        socialHandle: brand.socialHandle || undefined,
         // A brand set to "none" has no caption-style override to contribute;
         // the production spec's own captionStyle governs that case.
         captionStyle: brand.captionStyle && brand.captionStyle !== "none" ? brand.captionStyle : "bold",
@@ -422,6 +437,17 @@ const VideoCreator: React.FC = () => {
       brandKit: { ...prev.brandKit, [field]: value },
     }));
   }
+
+  // The library reports usability per asset; the creator only ever offers the
+  // assets that can actually appear in a video.
+  const usableProducts = useMemo(
+    () => uploadedProducts.filter((prod) => prod?.usable !== false),
+    [uploadedProducts],
+  );
+  const unusableProducts = useMemo(
+    () => uploadedProducts.filter((prod) => prod?.usable === false),
+    [uploadedProducts],
+  );
 
   const selectedVoiceProvider = useMemo(() => {
     if (voiceProvider === "auto") return null;
@@ -510,6 +536,8 @@ const VideoCreator: React.FC = () => {
         voiceId,
         captionStyle,
         productionMode,
+        creativeStyle,
+        animationIntensity,
         brandId: selectedBrandId || undefined,
         brandName: config.brandKit?.brandName,
       });
@@ -574,6 +602,8 @@ const VideoCreator: React.FC = () => {
           resolution,
           contentStyle,
           productionMode,
+          creativeStyle,
+          animationIntensity,
           visualMode,
           voiceProvider,
           voiceId,
@@ -959,6 +989,54 @@ const VideoCreator: React.FC = () => {
                 </Grid>
                 )}
 
+                {/* Creative Style. Plain-language names for the creative
+                    presets; the treatment vocabulary behind them is internal and
+                    never surfaced here. */}
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="creative-style-select-label">Creative Style</InputLabel>
+                      <Select
+                        labelId="creative-style-select-label"
+                        id="creative-style-select"
+                        label="Creative Style"
+                        value={creativeStyle}
+                        onChange={(e) => setCreativeStyle(e.target.value)}
+                      >
+                        <MenuItem value="auto">Auto (match the brief)</MenuItem>
+                        <MenuItem value="clean_professional">Clean Professional</MenuItem>
+                        <MenuItem value="viral_social">Viral Social</MenuItem>
+                        <MenuItem value="cinematic">Cinematic</MenuItem>
+                        <MenuItem value="motion_explainer">Motion Explainer</MenuItem>
+                        <MenuItem value="product_showcase">Product Showcase</MenuItem>
+                        <MenuItem value="tech_saas">Tech / SaaS</MenuItem>
+                        <MenuItem value="educational">Educational</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
+                {/* Animation Intensity. Scales how often the picture changes and
+                    how strong the camera moves are. */}
+                {uiMode === "advanced" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="animation-intensity-select-label">Animation Intensity</InputLabel>
+                      <Select
+                        labelId="animation-intensity-select-label"
+                        id="animation-intensity-select"
+                        label="Animation Intensity"
+                        value={animationIntensity}
+                        onChange={(e) => setAnimationIntensity(e.target.value as "low" | "balanced" | "high")}
+                      >
+                        <MenuItem value="low">Calm - fewer cuts, gentle moves</MenuItem>
+                        <MenuItem value="balanced">Balanced</MenuItem>
+                        <MenuItem value="high">Energetic - faster cuts, stronger moves</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
                 {/* Visual Mode */}
                 {uiMode === "advanced" && (
                   <Grid item xs={12} sm={6} md={3}>
@@ -1121,7 +1199,16 @@ const VideoCreator: React.FC = () => {
               }
             >
               <Stack spacing={2}>
-                {uploadedProducts.length > 0 && (
+                {usableProducts.length === 0 && (
+                  <Alert severity="warning">
+                    A Product Ad is built around your product photo, so it cannot be
+                    produced without one. Upload a product image above
+                    {unusableProducts.length > 0
+                      ? ` — ${unusableProducts.length} stored item${unusableProducts.length === 1 ? " is" : "s are"} too small or unreadable to use.`
+                      : "."}
+                  </Alert>
+                )}
+                {usableProducts.length > 0 && (
                   <FormControl fullWidth size="small">
                     <InputLabel id="product-media-select-label">Select Product Asset</InputLabel>
                     <Select
@@ -1130,13 +1217,20 @@ const VideoCreator: React.FC = () => {
                       value={selectedProductMediaId}
                       onChange={(e) => setSelectedProductMediaId(e.target.value)}
                     >
-                      {uploadedProducts.map((prod) => (
+                      {usableProducts.map((prod) => (
                         <MenuItem key={prod.id} value={prod.id}>
-                          {prod.originalName} ({prod.width}x{prod.height}) · {prod.nobgArtifactId ? "Background Removed ✓" : "Original"}
+                          {prod.originalName} ({prod.width}x{prod.height}) · {prod.nobgArtifactId ? "Background Removed" : "Original"}
                         </MenuItem>
                       ))}
                     </Select>
                   </FormControl>
+                )}
+                {unusableProducts.length > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    {unusableProducts.length} stored item{unusableProducts.length === 1 ? "" : "s"} cannot be used
+                    in a video and {unusableProducts.length === 1 ? "is" : "are"} not offered here. They are kept in
+                    your Media library, where the reason is shown.
+                  </Typography>
                 )}
 
                 <Grid container spacing={2}>

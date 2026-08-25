@@ -177,10 +177,39 @@ export function transitionBetween(previous: VisualShot | undefined, next: Visual
   return "cut";
 }
 
-/** Alternating gentle motion, so consecutive shots never push the same way. */
-function motionForIndex(index: number, intent: ShotIntent): string {
-  if (intent === "cta") return "static";
-  return index % 2 === 0 ? "punch_in" : "drift_out";
+/**
+ * Camera move for a shot, chosen by what the shot is doing.
+ *
+ * The rejected build alternated `punch_in` / `drift_out` on shot index, which
+ * produced a mechanical A/B/A/B rhythm across the whole video regardless of what
+ * any scene was about. Meaning leads here: a hook pushes in, a reveal pulls out,
+ * a proof beat holds still. The index is used only to break a tie between two
+ * neighbouring shots of the same intent, so the move never repeats immediately
+ * without a reason.
+ */
+export const MOTION_BY_INTENT: Record<ShotIntent, string[]> = {
+  hook: ["punch_in", "whip_in"],
+  problem: ["slow_zoom", "drift_left"],
+  contrast_before: ["static", "slow_zoom"],
+  contrast_after: ["punch_in", "drift_out"],
+  solution: ["drift_out", "slow_zoom"],
+  proof: ["static", "slow_zoom"],
+  detail: ["punch_in", "drift_right"],
+  cta: ["static", "static"],
+};
+
+export function motionForShot(
+  intent: ShotIntent,
+  indexInScene: number,
+  previousMotion?: string,
+): string {
+  const options = MOTION_BY_INTENT[intent] || ["slow_zoom", "drift_out"];
+  const preferred = options[indexInScene % options.length];
+  if (preferred !== previousMotion) return preferred;
+  // Same move twice in a row reads as a stall; take the other option for this
+  // intent rather than inventing an unrelated one.
+  const alternative = options.find((option) => option !== previousMotion);
+  return alternative || preferred;
 }
 
 export type BuildEdlOptions = {
@@ -234,7 +263,7 @@ export function buildEditDecisionList(options: BuildEdlOptions): EditDecisionLis
         intent: shotIntent,
         start,
         duration: 0,
-        motion: motionForIndex(i, shotIntent),
+        motion: motionForShot(shotIntent, i, shots[shots.length - 1]?.motion),
         beatHint: beat,
         searchTerms: scene.searchTerms,
       };

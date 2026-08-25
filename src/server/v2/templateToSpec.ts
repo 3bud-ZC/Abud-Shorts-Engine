@@ -5,6 +5,11 @@ import {
 } from "../../short-creator/business-templates";
 import { applyBusinessTemplateToScenes } from "../../short-creator/templateEnrichment";
 import {
+  creativeProfileForTemplate,
+  scenePlanAt,
+} from "../../short-creator/templateCreativeProfiles";
+import { buildStockQueryFamilies, queryFamilyTerms } from "./creative/stockQueryFamilies";
+import {
   OrientationEnum,
   type RenderConfig,
 } from "../../types/shorts";
@@ -27,6 +32,11 @@ export type ConvertTemplateParams = {
   duration?: number;
 };
 
+/**
+ * Fallback purpose sequence, used only when a template has no creative profile.
+ * Every shipped template has one, so this exists for forward compatibility with
+ * a template added without a profile rather than as the normal path.
+ */
 const SCENE_PURPOSES: ScenePurpose[] = ["hook", "problem", "solution", "cta"];
 
 function isArabicText(text: string): boolean {
@@ -50,17 +60,46 @@ export function convertTemplateToProductionSpec(
   const targetDuration = explicitDuration || template.targetDurationSeconds || 28;
   const sceneDuration = Math.round((targetDuration / Math.max(enrichedScenes.length, 1)) * 10) / 10;
 
-  const scenes: ProductionSceneSpec[] = enrichedScenes.map((scene, idx) => ({
-    sceneIndex: idx,
-    purpose: SCENE_PURPOSES[idx] || "custom",
-    durationSeconds: sceneDuration,
-    narration: scene.text,
-    onScreenText: scene.text.length > 50 ? scene.text.slice(0, 47) + "..." : scene.text,
-    stockSearchTerms: scene.searchTerms && scene.searchTerms.length > 0 ? scene.searchTerms : template.pexelsSearchHints,
-    visualSource: "stock",
-    visualProvider: "pexels",
-    transition: idx === 0 ? "cut" : "fade",
-  }));
+  // The creative profile is what makes one template differ from another: it
+  // supplies the scene roles, the treatment each scene should use and the
+  // editorial pace. Without it every template collapsed to the same
+  // hook/problem/solution/cta stock sequence.
+  const profile = creativeProfileForTemplate(params.templateId);
+
+  const scenes: ProductionSceneSpec[] = enrichedScenes.map((scene, idx) => {
+    const plan = profile
+      ? scenePlanAt(profile, idx, enrichedScenes.length)
+      : { purpose: SCENE_PURPOSES[idx] || "custom", treatment: undefined, intent: "" };
+
+    // Query families give the stock router several angles on the scene instead
+    // of one literal phrase; the template's own hints stay in the list.
+    const families = buildStockQueryFamilies({
+      narration: scene.text,
+      purpose: plan.purpose,
+      industryHint: profile?.industryHint,
+      providedTerms: scene.searchTerms,
+      maxQueries: 8,
+    });
+
+    return {
+      sceneIndex: idx,
+      purpose: (plan.purpose || "custom") as ScenePurpose,
+      durationSeconds: sceneDuration,
+      narration: scene.text,
+      onScreenText: scene.text.length > 50 ? scene.text.slice(0, 47) + "..." : scene.text,
+      stockSearchTerms:
+        queryFamilyTerms(families).length > 0
+          ? queryFamilyTerms(families)
+          : scene.searchTerms && scene.searchTerms.length > 0
+            ? scene.searchTerms
+            : template.pexelsSearchHints,
+      treatmentHint: plan.treatment,
+      visualSource: "stock",
+      visualProvider: "pexels",
+      transition: idx === 0 ? "cut" : "fade",
+      notes: plan.intent || undefined,
+    };
+  });
 
   const sampleNarration = scenes.map((s) => s.narration).join(" ");
   const isArabic = isArabicText(sampleNarration);
@@ -77,6 +116,7 @@ export function convertTemplateToProductionSpec(
     real_estate_listing: "product_showcase",
     educational_tip: "educational",
     viral_curiosity: "viral_curiosity",
+    event_promo: "advertisement",
   };
 
   const contactValue =
@@ -99,7 +139,9 @@ export function convertTemplateToProductionSpec(
     resolution: "1080p",
     quality: "standard",
     sceneCount: scenes.length,
-    productionMode: "auto_hybrid",
+    productionMode: profile?.productionMode || "auto_hybrid",
+    creativeStyle: profile?.stylePreset,
+    animationIntensity: profile?.motionIntensity,
     visualMode: "stock",
     // Arabic templates route to ElevenLabs; the voice ID is resolved from the
     // customer's own ElevenLabs account, never hardcoded.
@@ -142,6 +184,16 @@ export function convertTemplateToProductionSpec(
     metadata: {
       sourceTemplateId: params.templateId,
       templateData: params.templateData,
+      creativeProfile: profile
+        ? {
+            stylePreset: profile.stylePreset,
+            pacingProfile: profile.pacingProfile,
+            motionIntensity: profile.motionIntensity,
+            industryHint: profile.industryHint,
+            requiresProductMedia: profile.requiresProductMedia,
+            editorialSummary: profile.editorialSummary,
+          }
+        : undefined,
     },
   };
 

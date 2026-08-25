@@ -127,7 +127,11 @@ export type V2Brand = {
   name: string;
   watermarkText?: string;
   primaryColor?: string;
+  secondaryColor?: string;
   accentColor?: string;
+  logoUrl?: string;
+  websiteUrl?: string;
+  socialHandle?: string;
   captionStyle?: "none" | "clean" | "bold" | "minimal";
   includeOutro?: boolean;
   outroText?: string;
@@ -232,8 +236,28 @@ export type VideoItem = {
     averageShotSeconds?: number;
     sourceTypeCounts?: Record<string, number>;
     beatMapUsed?: boolean;
+    beatAlignedCutCount?: number;
+    beatCount?: number;
+    bpm?: number;
     pacingProfile?: string;
   };
+  /** Resolved creative intent, summarised in the Creative card. */
+  creativePlan?: {
+    stylePreset?: string;
+    pacing?: string;
+    motionIntensity?: string;
+    treatmentCounts?: Record<string, number>;
+    runtimeCounts?: Record<string, number>;
+  };
+  /** What the Brand Profile actually contributed, field by field. */
+  brandStyle?: {
+    hasBrand?: boolean;
+    presence?: string;
+    palette?: Record<string, string>;
+    sources?: Record<string, string>;
+    contrast?: Array<{ pair: string; ratio: number; passes: boolean }>;
+  };
+  stockQueryPlan?: Array<Record<string, unknown>>;
   visualIntentPolicy?: Array<Record<string, unknown>>;
   stockAttributions?: Array<Record<string, unknown>>;
   /** Resolved narration voice name, when the engine reported one. */
