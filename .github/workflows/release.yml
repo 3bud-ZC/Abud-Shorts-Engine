@@ -102,6 +102,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Set up the CPU quality runtime the test suite shells out to
+        run: bash scripts/install-quality-pack.sh
+
       - name: Typecheck, test and build
         run: |
           pnpm typecheck

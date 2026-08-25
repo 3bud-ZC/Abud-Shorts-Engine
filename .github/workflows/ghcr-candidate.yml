@@ -114,6 +114,10 @@ jobs:
         if: inputs.mode == 'candidate'
         run: pnpm install --frozen-lockfile
 
+      - name: Set up the CPU quality runtime the test suite shells out to
+        if: inputs.mode == 'candidate'
+        run: bash scripts/install-quality-pack.sh
+
       - name: Typecheck, test and build
         if: inputs.mode == 'candidate'
         run: |

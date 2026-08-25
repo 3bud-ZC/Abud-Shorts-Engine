@@ -69,6 +69,13 @@ for (const name of tarballs) {
     const roots = fs.readdirSync(extractDir);
     const packageRoot = roots.length === 1 ? path.join(extractDir, roots[0]) : extractDir;
     const required = [
+      "START-HERE.txt",
+      "INSTALL-ABUD-SHORTS.bat",
+      "START-ABUD-SHORTS.bat",
+      "STOP-ABUD-SHORTS.bat",
+      "UPDATE-ABUD-SHORTS.bat",
+      "BACKUP-ABUD-SHORTS.bat",
+      "DIAGNOSTICS-ABUD-SHORTS.bat",
       "install.sh",
       "install.ps1",
       "docker-compose.prod.yml",

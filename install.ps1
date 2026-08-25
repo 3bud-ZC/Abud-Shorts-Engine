@@ -29,7 +29,8 @@ param(
     # Used by the isolated F4 rehearsal so a test installation cannot collide
     # with a real one on the same machine.
     [string]$ComposeProject = "abud-shorts",
-    [switch]$NoShortcuts
+    [switch]$NoShortcuts,
+    [switch]$NoBrowser
 )
 
 $ErrorActionPreference = "Stop"
@@ -421,4 +422,10 @@ Write-Host ""
 if (-not $ready) {
     Write-Host "  The system is taking longer than usual to start. Check it with the Status shortcut." -ForegroundColor Yellow
     Write-Host ""
+}
+
+# Leave the customer at the Setup Wizard rather than a terminal window - this is
+# the one moment a double-click installer has to hand off to a browser tab.
+if ($ready -and -not $NoBrowser) {
+    try { Start-Process "$PublicUrl/setup" | Out-Null } catch { }
 }

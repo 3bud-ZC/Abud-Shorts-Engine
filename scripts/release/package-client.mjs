@@ -38,6 +38,13 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * customer's hands by being forgotten in .gitignore.
  */
 export const PACKAGE_INCLUDE = [
+  "START-HERE.txt",
+  "INSTALL-ABUD-SHORTS.bat",
+  "START-ABUD-SHORTS.bat",
+  "STOP-ABUD-SHORTS.bat",
+  "UPDATE-ABUD-SHORTS.bat",
+  "BACKUP-ABUD-SHORTS.bat",
+  "DIAGNOSTICS-ABUD-SHORTS.bat",
   "install.sh",
   "install.ps1",
   "uninstall.sh",
