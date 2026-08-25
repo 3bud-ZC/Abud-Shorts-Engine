@@ -150,38 +150,99 @@ Release update manifest in F5. F4 prepared `.github/workflows/release.yml`,
 `scripts/release/package-client.mjs`, `scripts/release/verify-package.mjs`,
 `docker-compose.prod.yml`, host updater scripts and client documentation.
 
-### Update and rollback proof
+### Update and rollback proof — live isolated rehearsal
 
-Local mock release assets were generated in a temp directory with a dummy image
-digest; they were not published. The package verifier reported:
+An earlier F4 pass exercised the host scripts against a **mocked Docker CLI**
+with a dummy image digest. That was re-run against real infrastructure, and the
+live run found four defects the mocked run could not surface. All four are
+fixed and carry regression tests.
 
-- package SHA-256 verified
-- no secrets, source, dependencies or developer data
-- installer, updater, compose and documentation present
-- manifest matched the package
+Isolated environment (now removed):
 
-Isolated Linux/container updater verification: **PASS**. Executed the real shell
-host scripts in an Alpine container with a temp installation and mocked Docker
-daemon. Covered `status`, `backup`, `update --check`, successful update from
-fixture `2.1.0` to `2.2.0`, manual rollback to `2.1.0`, failed update,
-automatic rollback, transaction state and data sentinel preservation.
+- A local OCI registry on port 5001 holding real images built from this build,
+  tagged `2.2.0`, `2.2.1` and a deliberately broken `2.2.9`.
+- A local release server on port 5002 serving a real `update-manifest.json` and
+  real client packages produced by `scripts/release/package-client.mjs`.
+- A separate installation root, Docker Compose project `abud-f4`, container
+  prefix `abud-f4-`, its own volumes and host port 3131. The primary
+  development installation on 3130 was never stopped, altered or
+  fault-injected.
 
-Windows updater verification: **PASS**. Executed `install.ps1` from the staged
-client package plus the real Windows host updater in a temp installation with a
-local manifest server and mocked Docker CLI. Covered install, status, backup,
-update check, successful `-TargetVersion 2.2.0` update, manual rollback, failed
-update, automatic rollback and data sentinel preservation.
+Windows verification: **LIVE, NATIVE, VERIFIED**. Run on Windows 11 with Docker
+Desktop and Windows PowerShell 5.1, against a real Docker daemon:
+
+| Step | Result |
+| --- | --- |
+| Fresh install from the client package (`install.ps1`) | 2.2.0 running, all services healthy |
+| Reinstall over a running installation | config, secrets and data preserved |
+| `update -Check` | reported 2.2.1 available, changed nothing |
+| Online update 2.2.0 -> 2.2.1 | manifest, SHA-256, image digest, backup, switch, migrations, health, version, schema and worker all verified |
+| Customer data across the update | brand row and media file intact |
+| Failed update 2.2.1 -> 2.2.9 (injected version mismatch) | detected at the post-update version check |
+| Automatic rollback | restored 2.2.1, healthy again, recorded with reason |
+| Manual rollback 2.2.1 -> 2.2.0 | restored, healthy, recorded |
+| Update lock | second updater refused with "Update already in progress" |
+| `status`, `backup`, `diagnostics`, `stop`, `start` | all correct; data intact across stop/start |
+| Support bundle | contains update facts; none of the six installation secrets appear in it |
+
+Linux verification: **CONTAINER / STATIC VERIFIED, NOT NATIVE**. The shell host
+scripts are syntax-checked (`bash -n`) and their safety invariants are asserted
+by `src/test/clientDelivery.test.ts`, and an earlier pass exercised them in an
+Alpine container against a **mocked** Docker daemon. They have **not** been run
+on a native Linux host against a real Docker daemon in this environment. The
+Linux and Windows updaters share one design and one set of manifest, checksum,
+digest, lock, transaction and rollback rules, and the defects found on Windows
+were fixed in both — but native VPS execution remains unverified and is not
+claimed.
+
+### Defects found by the live rehearsal, and fixed
+
+1. **The Windows installer aborted mid-run on every image pull.** Windows
+   PowerShell turns a native program's stderr into a terminating error under
+   `$ErrorActionPreference = 'Stop'`, and Docker writes all progress to stderr.
+   Both Windows scripts now route Docker through `Invoke-Docker`, which relaxes
+   the preference and judges success by exit code.
+2. **The image reference was cut at the first colon**, so a registry carrying a
+   port (`registry:5000/name:tag`) collapsed to the bare hostname and the digest
+   pull failed. Both updaters now strip only a real tag.
+3. **The Update Center reported "no update has ever run here" on Windows even
+   after a successful update.** PowerShell writes UTF-8 with a byte order mark
+   and `JSON.parse` rejects it. The updater now writes BOM-free UTF-8 and the
+   reader strips a leading mark defensively.
+4. **The image digest and package checksum leaked into the ordinary client
+   view** through the update transaction records, which the normal panel
+   renders. They are now stripped unless Advanced Technical Details asks.
+
+Two smaller corrections came out of the same run: the success and rollback
+banners could print "ABUD Shorts: Problem" on a healthy installation because
+Docker had not yet re-run its own healthcheck, and an administrator's own
+rollback was described as an update that "did not complete".
+
+A separate defect was found outside the rehearsal: `.gitignore` carried an
+unanchored `release/` rule, which also matched `scripts/release/` and had
+silently excluded the packaging and package-audit scripts from every commit.
+The rule is now anchored to the repository root and those scripts are tracked.
+
+### Client package
+
+Built and audited from this build: 48 KB, no source, no build output, no
+dependencies, no `.env`, no customer data, no developer state. The application
+ships as an immutable image; the package carries installer, updater, production
+compose, n8n workflows and client documentation only.
 
 ### Security and data safety
 
 - The normal app container is not given `/var/run/docker.sock`.
 - No generic web/API command execution route (`exec`, `shell`, `command`,
-  `run-command`, `eval`) is exposed.
+  `run-command`, `eval`) is exposed. The one host-facing addition is a
+  read-only diagnostics bundle route on the internal, token-authenticated
+  router, used by `abud-shorts diagnostics`; it executes nothing.
 - Host update scripts stop only app and render-worker during version switch;
   PostgreSQL and n8n data remain attached.
 - Normal install/update/restart paths do not run `docker compose down -v`,
   remove Docker volumes or prune Docker state.
-- Pre-update backup is created before switching versions.
+- Pre-update backup is created before switching versions, and a failure to
+  create it stops the update before anything changes.
 - Package allow-list excludes `.env`, secrets, Provider Vault data, customer
   media/data, backups, logs, coverage, `node_modules`, `.git`, source/build
   output and scratch files.
@@ -191,8 +252,9 @@ update, automatic rollback and data sentinel preservation.
 F4 adds canonical public URL resolution and explicit trusted-proxy handling.
 Defaults stay local (`http://localhost:3130`); online installs can use a domain
 such as `https://shorts.customer.com`. OAuth callback URLs derive from the
-configured canonical public URL. Forwarded headers are ignored unless
-`TRUSTED_PROXY` is explicitly configured.
+configured canonical public URL — verified live: the isolated installation on
+port 3131 rendered all three provider callback URLs against its own address.
+Forwarded headers are ignored unless `TRUSTED_PROXY` is explicitly configured.
 
 `nginx.conf.reference` covers HTTPS redirect/termination, SSE, video range
 requests, OAuth callback paths, uploads and long render-related requests. Only
@@ -200,21 +262,30 @@ the ABUD app is public; PostgreSQL, n8n and render worker stay internal.
 
 ### Browser QA
 
-Settings -> Updates was verified through the current source UI with Playwright
-at 1366x768 and 390x844. Verified visible labels: Current Version, Channel,
-Last Checked, Latest Version, Update Status and Release Notes. The Check for
-Updates action rendered, public address callbacks followed the canonical URL,
-advanced details were opt-in, there was no horizontal overflow and no raw
-Docker operation text leaked into the normal UI.
+Verified against the live isolated installation at `http://localhost:3131`,
+desktop (1280x720) and mobile (375x812):
+
+- Settings -> Updates showed Current Version, Channel, Last Checked, Latest
+  Version, Update Status, the release notes link and Check for Updates.
+- The install action was the Windows Start Menu shortcut — no Docker command.
+- Advanced Technical Details was collapsed by default and, when opened, showed
+  schema, image, digest, package checksum and signature status.
+- Settings -> Backup & Restore created a backup from the browser showing
+  createdAt, type, size, version, schema and checksum.
+- System Health reported the real version 2.2.0 with no hardcoded fallback.
+- No horizontal overflow at 375px, no secret and no undefined version.
 
 ### Verification
 
-- Targeted F4 tests: 3 files, 76 tests, PASS.
-- Full tests: 47 files, 701 tests, PASS.
+- Full tests: **47 files, 715 tests, PASS** (F3 baseline was 44 files, 625).
 - `pnpm typecheck`: PASS.
 - `pnpm build`: PASS.
-- Docker after verification: app, render-worker, n8n and PostgreSQL healthy;
-  only app exposed on `localhost:3130`.
+- Primary Docker installation after the rehearsal: `abud-shorts-app`,
+  `abud-shorts-render-worker`, `abud-shorts-n8n` and `abud-shorts-postgres` all
+  healthy, only the app exposed on `localhost:3130`. Its data was not touched;
+  it still runs its pre-F4 image and reports v2.1.0 until it is rebuilt.
+- The isolated rehearsal environment — containers, volumes, images, registry
+  and files — was removed afterwards. Nothing outside it was deleted.
 
 **F4 is closed. V2.2 is still NOT RELEASED.**
 
