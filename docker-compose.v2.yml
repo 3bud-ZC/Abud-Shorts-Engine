@@ -45,16 +45,20 @@ services:
       - abud-shorts-n8n-data:/home/node/.n8n
       - ./integrations/n8n:/workflows:ro
     entrypoint: ["/bin/sh", "-c"]
-    # n8n 2.23 exposes workflow activation only through update:workflow.
-    # publish:workflow registers the production version, but did not reliably activate
-    # the imported webhook during first-run Golden Path verification without this step.
+    # Workflow activation is only exposed through update:workflow. The pinned
+    # n8n reads an import file and calls .map() on it, so a single-workflow
+    # object fails with "workflows.map is not a function"; the two files keep
+    # the object shape the n8n editor uses and are concatenated into one JSON
+    # array here. publish:workflow does not exist in this version.
     command: >
-      "n8n import:workflow --input=/workflows/abud-shorts-v2-control-plane-workflow.json || true;
-      n8n import:workflow --input=/workflows/abud-shorts-v2-publishing-workflow.json || true;
+      "printf '[' > /tmp/abud-workflows.json;
+      cat /workflows/abud-shorts-v2-control-plane-workflow.json >> /tmp/abud-workflows.json;
+      printf ',' >> /tmp/abud-workflows.json;
+      cat /workflows/abud-shorts-v2-publishing-workflow.json >> /tmp/abud-workflows.json;
+      printf ']' >> /tmp/abud-workflows.json;
+      n8n import:workflow --input=/tmp/abud-workflows.json || true;
       n8n update:workflow --id=abud-shorts-v2-control-plane --active=true || true;
       n8n update:workflow --id=abud-shorts-v2-publishing --active=true || true;
-      n8n publish:workflow --id=abud-shorts-v2-control-plane || true;
-      n8n publish:workflow --id=abud-shorts-v2-publishing || true;
       n8n start"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1"]

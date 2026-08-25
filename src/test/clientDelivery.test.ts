@@ -270,6 +270,35 @@ describe("F4 - update security posture", () => {
     expect(compose).toMatch(/image:\s*\$\{ABUD_IMAGE/);
   });
 
+  it("imports the n8n control plane in the array shape the importer accepts", () => {
+    // n8n's import:workflow calls .map() on whatever the input file parses to,
+    // so handing it one of these single-workflow objects fails with
+    // "workflows.map is not a function". Every import step is `|| true`, so the
+    // failure is silent and a fresh installation comes up with no control
+    // plane: the orchestration webhook 404s and every video job fails. The
+    // files keep the object shape the n8n editor reads, and the compose files
+    // concatenate them into one JSON array before importing.
+    // Only the tracked compose files: docker-compose.reltest.yml is a local
+    // rehearsal file and is not in the repository.
+    for (const name of ["docker-compose.prod.yml", "docker-compose.v2.yml"]) {
+      const compose = read(name);
+      expect(compose).not.toMatch(/import:workflow --input=\/workflows\//);
+      expect(compose).toMatch(/import:workflow --input=\/tmp\/abud-workflows\.json/);
+      // publish:workflow is not a command in the pinned n8n and only ever
+      // logged "command publish:workflow not found".
+      expect(compose).not.toMatch(/n8n publish:workflow/);
+    }
+
+    for (const name of [
+      "integrations/n8n/abud-shorts-v2-control-plane-workflow.json",
+      "integrations/n8n/abud-shorts-v2-publishing-workflow.json",
+    ]) {
+      const workflow = JSON.parse(read(name));
+      expect(Array.isArray(workflow)).toBe(false);
+      expect(typeof workflow.id).toBe("string");
+    }
+  });
+
   it("pulls the application image by digest, not by a movable tag", () => {
     for (const script of ["scripts/host/abud-update.sh", "scripts/host/abud-shorts.ps1"]) {
       const source = read(script);
