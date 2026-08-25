@@ -2,34 +2,38 @@
 
 > **Canonical status file.** This file, at the repository root
 > (`source/ABUD_SHORTS_ENGINE_STATUS.md`), is the single status document used for
-> ongoing work. Copies kept outside the repository are snapshots and are not
-> maintained. Everything under "Current Product State" describes the state right
-> now; every section below it is a historical milestone record and is preserved
-> as written at the time, including superseded Piper and provider evidence.
+> ongoing work, and it is tracked: `.gitignore` ignores
+> `ABUD_SHORTS_ENGINE_STATUS*.md` but carries an explicit `!` exception for this
+> exact filename, so timestamped snapshots and backups stay ignored while the
+> canonical file survives a fresh clone without `git add -f`. Copies kept outside
+> the repository are snapshots and are not maintained. Everything under "Current
+> Product State" describes the state right now; every section below it is a
+> historical milestone record, preserved as written at the time, including
+> superseded Piper and provider evidence.
 
 ## Current Product State
 
 Product: ABUD Shorts Engine V2
 
-Stable release: **v2.1.0**
+Stable public release: **v2.1.0**
 
-Development target: **v2.2.0**
+Target: **v2.2.0**
 
-Development branch: **`v2.2-finalization`**
+Branch: **`v2.2-finalization`**
 
-Release status: **V2.1 GENERAL AVAILABILITY; V2.2 NOT RELEASED** (not merged, not tagged, not packaged)
+V2.2: **NOT RELEASED** — not merged, not tagged, not packaged
+
+Schema: **2.11.0**
 
 Current milestone: V2.2 — Creative Quality Engine & Provider Vault
 
-Version: 2.1.0 stable baseline; schema 2.11.0 in the development source
+Arabic production: **ElevenLabs** — Arabic of any dialect routes to ElevenLabs,
+and a job is blocked before execution when ElevenLabs is not configured rather
+than falling back to another engine
 
-Arabic provider: **ElevenLabs** (Arabic of any dialect routes to ElevenLabs; a
-job is blocked before execution when ElevenLabs is not configured, rather than
-falling back to another engine)
+Default Arabic voice: **Mamdoh** (`68MRVrnQAt8vLbu0FCzw`)
 
-Arabic default voice: **Mamdoh** (`68MRVrnQAt8vLbu0FCzw`)
-
-Arabic preset: **Energetic Ad**, model `eleven_multilingual_v2`, persisted in
+Preset: **Energetic Ad**, model `eleven_multilingual_v2`, persisted in
 `app_settings.arabic_voice_default` with `selectedBy: human`
 
 Human Arabic voice acceptance: **APPROVED** — accepted by the product owner and
@@ -41,8 +45,8 @@ Finalization track:
 | --- | --- | --- |
 | F1 | Product UI, ABUD design system, no-code client experience | **PASS** |
 | F1.5 | Product polish and client safety gate | **PASS** |
-| F2 | Creative and animation engine finalization | **PASS (closed by F2.1)** |
-| F2.1 | Creative closure and evidence gate | **PARTIAL** — engine work complete and verified; authenticated browser QA outstanding |
+| F2 | Creative and animation engine finalization | **PASS / CLOSED** |
+| F2.1 | Creative closure and evidence gate | **PASS** |
 | F3 | Integrations and real publishing closure | NOT STARTED |
 
 Final complete-product / client acceptance: PENDING
@@ -157,18 +161,74 @@ make the acceptance table green. The code path is covered by automated tests and
 the creator now states plainly that a Product Ad requires a product photo,
 offering only assets the library reports as usable.
 
+### Authenticated browser QA
+
+Run against the rebuilt image on `localhost:3130` with a real operator session,
+at 1920x1080, 1366x768 and 390x844. Pages covered: Dashboard, Create Video
+(Simple and Advanced), Productions, Video Library, Video Details (including
+Revision Studio), Brands, Templates, Media, Publishing, Integrations, Settings
+and System Health.
+
+| Condition | Result |
+| --- | --- |
+| Fatal console errors | 0 — the only console noise is the Publishing SSE stream reconnecting after each navigation, which returns 200 and re-establishes itself |
+| Unexpected 401 | 0 across every authenticated endpoint |
+| Blank pages | 0 |
+| Horizontal overflow | 0 at all three widths, sampled throughout load rather than only once settled |
+| Broken controls | 0 |
+| Raw treatment enum names in Simple mode | 0 |
+| Raw model or provider ids in the normal client UI | 0 |
+| Invalid media represented as valid | 0 |
+| Stale Piper-as-Arabic-production wording | 0 |
+| Arabic route | ElevenLabs / Mamdoh / Energetic Ad, unchanged |
+| Motion Graphics copy | "Text and graphics led, no stock footage" — no stock requirement claimed |
+| Animated Explainer copy | "Explains an idea with animation rather than footage" — no GPU requirement claimed |
+
+Verified live: the eight creative-style options match the presets the planner
+implements; the three animation intensities match what the plan accepts; the
+Product Ad picker offers only assets the library reports as usable and
+auto-selects a usable one; the Media page labels an unusable 1x1 asset as
+Invalid Media with its reason and offers Replace/Remove rather than "Use in
+video", and labels a byte-identical asset as a Duplicate; Video Details shows
+the Creative summary with the technical plan collapsed; and the video preview
+plays at 1080x1920.
+
+Scope note: the container media library was empty at QA time, so the valid /
+invalid / duplicate rendering was exercised by intercepting the media response
+in the browser rather than by writing assets into the customer store. No media
+was created, modified or deleted.
+
+### Defects found by browser QA and fixed
+
+1. **Publishing overflowed a phone frame.** A five-label tab strip in the default
+   fixed variant, plus a nowrap filter row holding a 280px search box beside a
+   platform select, pushed the document to 450px inside a 390px viewport. The
+   tabs are now scrollable and the filter row stacks below `sm`.
+2. **An unknown URL rendered an empty shell.** The library is at `/videos` and a
+   single video at `/video/:id`, so `/videos/:id` is an easy address to land on;
+   with no catch-all route it produced the chrome with a blank main area. There
+   is now a real "Page not found" page.
+3. **Internal identifiers reached the customer.** `motion_canvas`, `punch_in`,
+   `zoom_out` and `clean_professional` were printed verbatim in the normal Video
+   Details view. They are now mapped to readable labels, with an unknown value
+   degrading to a de-underscored form rather than being dropped.
+4. **Loading placeholders caused a transient overflow.** A 380px text skeleton in
+   a 390px frame widened the dashboard by 6px for the first second of every load.
+   Placeholder widths are capped at their container.
+
+Each of the four is pinned by a regression test in
+`src/ui/creativeConfigContract.test.ts`.
+
 ### Verification
 
-- Tests: 43 files, 556 tests, all passing (F2 baseline was 40 files / 453 tests).
+- Tests: 43 files, 561 tests, all passing (F2 baseline was 40 files / 453 tests).
 - `pnpm typecheck` and `pnpm build`: pass.
 - Docker: `abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n` and
   `abud-shorts-postgres` all healthy on the rebuilt image; migration 2.11.0
   applied cleanly. No new ports exposed.
-- Browser QA: **NOT COMPLETED.** The dashboard requires an operator sign-in that
-  was not available in this pass. This is the one remaining blocker on the F2.1
-  gate.
+- New ElevenLabs synthesis calls in this pass: 0.
 
----
+**F2 is closed.**
 
 ---
 

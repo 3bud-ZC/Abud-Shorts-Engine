@@ -21,6 +21,8 @@ import { TEMPLATE_CREATIVE_PROFILES } from "../short-creator/templateCreativePro
 const UI_DIR = path.resolve(__dirname, "pages");
 const creatorSource = fs.readFileSync(path.join(UI_DIR, "VideoCreator.tsx"), "utf8");
 const detailsSource = fs.readFileSync(path.join(UI_DIR, "VideoDetails.tsx"), "utf8");
+const publishingSource = fs.readFileSync(path.join(UI_DIR, "PublishingPage.tsx"), "utf8");
+const appSource = fs.readFileSync(path.resolve(__dirname, "App.tsx"), "utf8");
 
 /** Options inside a specific `<Select>` in the creator page. */
 function selectOptions(source: string, selectId: string): string[] {
@@ -125,5 +127,70 @@ describe("Creative evidence in Video Details", () => {
   it("reports brand fields honestly rather than implying the engine knew them", () => {
     expect(detailsSource).toContain("suppliedBrandFields");
     expect(detailsSource).toMatch(/ABUD defaults/);
+  });
+});
+
+/**
+ * Defects found during the F2.1 authenticated browser QA sweep. Each one is
+ * pinned here so the specific regression cannot come back silently.
+ */
+describe("Browser QA regressions", () => {
+  it("keeps every tab strip scrollable so none of them widens a phone frame", () => {
+    // Five Publishing tab labels need roughly 560px. As the default fixed
+    // variant they pushed the document to 450px inside a 390px viewport - the
+    // only horizontal overflow in the whole client.
+    const tabStrips = [
+      ["PublishingPage.tsx", publishingSource],
+      ["VideoDetails.tsx", detailsSource],
+    ] as const;
+    tabStrips.forEach(([name, source]) => {
+      source.split("<Tabs").slice(1).forEach((chunk) => {
+        // Props run until the first child <Tab; an arrow function in onChange
+        // means the first ">" is not the end of the opening tag.
+        const childIndex = chunk.indexOf("<Tab ");
+        const props = chunk.slice(0, childIndex === -1 ? 400 : childIndex);
+        expect(`${name}: ${props}`).toContain('variant="scrollable"');
+      });
+    });
+  });
+
+  it("caps every loading placeholder at its container instead of a fixed pixel width", () => {
+    // A 380px text skeleton inside a 390px phone frame pushed the dashboard 6px
+    // wide for the first second of every load.
+    const componentsSource = fs.readFileSync(
+      path.resolve(__dirname, "components", "v2.tsx"),
+      "utf8",
+    );
+    const fixedWidths = Array.from(componentsSource.matchAll(/<Skeleton[^>]*\swidth=\{\d+\}/g));
+    expect(fixedWidths.map((m) => m[0])).toEqual([]);
+  });
+
+  it("renders a real not-found page instead of an empty shell for an unknown path", () => {
+    // /videos is the library and /video/:id is one video, so /videos/:id is an
+    // easy address to land on. Without a catch-all it rendered the chrome with
+    // a completely empty main area.
+    expect(appSource).toContain('<Route path="*"');
+    expect(appSource).toContain("NotFoundPage");
+    expect(appSource).toMatch(/Page not found/);
+  });
+
+  it("never prints an internal identifier in the normal Video Details view", () => {
+    // These four reached the customer verbatim: a provider id, two motion preset
+    // ids and a caption style id.
+    ["PROVIDER_LABELS", "MOTION_LABELS", "CAPTION_LABELS", "labelWith", "labelList"].forEach(
+      (symbol) => expect(detailsSource).toContain(symbol),
+    );
+    // The raw joins that produced them must be gone.
+    expect(detailsSource).not.toContain("video.visualProvidersUsed?.join(");
+    expect(detailsSource).not.toContain("video.motionPresetsUsed.join(");
+    expect(detailsSource).not.toContain("video.transitionPresetsUsed.join(");
+    expect(detailsSource).not.toContain("Caption Style: {video.captionStyle");
+  });
+
+  it("maps the identifiers the sweep actually caught", () => {
+    ["motion_canvas", "punch_in", "zoom_out", "clean_professional"].forEach((id) => {
+      // Present as a map key, and therefore never rendered raw.
+      expect(detailsSource).toMatch(new RegExp(`${id}:\\s*"`));
+    });
   });
 });

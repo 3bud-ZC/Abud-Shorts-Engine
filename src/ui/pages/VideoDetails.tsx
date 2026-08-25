@@ -67,6 +67,66 @@ function captionTimingLabel(video: any): string {
   return CAPTION_TIMING_LABELS[source] || String(source);
 }
 
+/**
+ * Internal identifiers are how the engine talks to itself; a customer reading
+ * Video Details should not meet them. Browser QA found `motion_canvas`,
+ * `punch_in`, `zoom_out` and `clean_professional` rendered verbatim in the
+ * normal (non-collapsed) view. Anything not in a map degrades to a
+ * de-underscored, capitalised form rather than being dropped.
+ */
+const PROVIDER_LABELS: Record<string, string> = {
+  motion_canvas: "ABUD Motion",
+  abud_motion: "ABUD Motion",
+  abud_mockup: "ABUD Mockup",
+  pexels: "Pexels",
+  pixabay: "Pixabay",
+  uploaded_media: "Your uploads",
+  product_composition: "Product composition",
+  local_image: "Local image",
+};
+
+const MOTION_LABELS: Record<string, string> = {
+  punch_in: "Punch in",
+  slow_zoom: "Slow zoom",
+  zoom_in: "Zoom in",
+  zoom_out: "Zoom out",
+  drift_out: "Drift out",
+  drift_left: "Drift left",
+  drift_right: "Drift right",
+  pan_left: "Pan left",
+  pan_right: "Pan right",
+  whip_in: "Whip in",
+  static: "Hold",
+};
+
+const CAPTION_LABELS: Record<string, string> = {
+  social_ad: "Social Ad",
+  clean_professional: "Clean Professional",
+  kinetic_phrase: "Kinetic Phrase",
+  minimal: "Minimal",
+  bold: "Bold",
+  clean: "Clean",
+  none: "None",
+};
+
+function humanise(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+function labelWith(map: Record<string, string>, value?: string): string {
+  if (!value) return "";
+  const key = String(value).toLowerCase();
+  return map[key] || humanise(String(value));
+}
+
+function labelList(map: Record<string, string>, values?: string[]): string {
+  return (values || []).map((v) => labelWith(map, v)).filter(Boolean).join(", ");
+}
+
 /** Distinct visual treatments the plan actually used, most used first. */
 function creativeTreatments(video: any): string {
   const counts = video?.creativePlan?.treatmentCounts as Record<string, number> | undefined;
@@ -660,7 +720,7 @@ const VideoDetailsContent: React.FC = () => {
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Visual Provider</Typography>
                     <Typography fontWeight={700}>
-                      {video.visualProvidersUsed?.join(", ") || "Pexels"}
+                      {labelList(PROVIDER_LABELS, video.visualProvidersUsed) || "Pexels"}
                     </Typography>
                   </Stack>
                   <Divider />
@@ -741,8 +801,8 @@ const VideoDetailsContent: React.FC = () => {
                   <Divider />
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Caption Preset</Typography>
-                    <Typography fontWeight={700} sx={{ textTransform: "capitalize" }}>
-                      {video.captionProfileUsed || video.captionStyle || "Bold"}
+                    <Typography fontWeight={700}>
+                      {labelWith(CAPTION_LABELS, video.captionProfileUsed || video.captionStyle) || "Bold"}
                     </Typography>
                   </Stack>
                   {video.musicTrack && (
@@ -757,7 +817,7 @@ const VideoDetailsContent: React.FC = () => {
                     <Stack direction="row" justifyContent="space-between">
                       <Typography color="text.secondary">Motion Presets</Typography>
                       <Typography fontWeight={700}>
-                        {video.motionPresetsUsed.join(", ")}
+                        {labelList(MOTION_LABELS, video.motionPresetsUsed)}
                       </Typography>
                     </Stack>
                   )}
@@ -765,7 +825,7 @@ const VideoDetailsContent: React.FC = () => {
                     <Stack direction="row" justifyContent="space-between">
                       <Typography color="text.secondary">Transitions</Typography>
                       <Typography fontWeight={700}>
-                        {video.transitionPresetsUsed.join(", ")}
+                        {labelList(MOTION_LABELS, video.transitionPresetsUsed)}
                       </Typography>
                     </Stack>
                   )}
@@ -836,7 +896,7 @@ const VideoDetailsContent: React.FC = () => {
                 <Stack spacing={1}>
                   <Typography>Brand Name: {video.brandName || "None"}</Typography>
                   <Typography>Watermark: {video.watermarkText || "None"}</Typography>
-                  <Typography>Caption Style: {video.captionStyle || "Bold"}</Typography>
+                  <Typography>Caption Style: {labelWith(CAPTION_LABELS, video.captionStyle) || "Bold"}</Typography>
                   {video.brandStyle?.sources && (
                     <Typography variant="caption" color="text.secondary">
                       Colours you supplied: {suppliedBrandFields(video) || "none - ABUD defaults were used"}.

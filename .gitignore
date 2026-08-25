@@ -22,6 +22,11 @@ test-results/
 release/
 whisper-bin-x64.zip
 ABUD_SHORTS_ENGINE_STATUS*.md
+# ...except the canonical one. It is the single status document the project is
+# worked from, so it has to survive a fresh clone rather than needing `git add -f`
+# forever. The wildcard above still catches timestamped snapshots and backups
+# such as ABUD_SHORTS_ENGINE_STATUS_2026-08-25.md.
+!ABUD_SHORTS_ENGINE_STATUS.md
 
 # n8n local data and credential exports
 .n8n/

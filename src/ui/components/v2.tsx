@@ -565,12 +565,20 @@ export function LoadingState({ label = "Loading..." }: { label?: string }) {
   );
 }
 
+/**
+ * Loading placeholders.
+ *
+ * Widths are capped at the container rather than set in fixed pixels: a 380px
+ * text skeleton inside a 390px phone frame pushed the whole document 6px wide,
+ * so the dashboard showed a horizontal scrollbar for the first second of every
+ * load. Browser QA caught it as a transient overflow.
+ */
 export function DashboardSkeleton() {
   return (
     <Stack spacing={3}>
       <Stack spacing={1}>
-        <Skeleton variant="text" width={220} height={36} />
-        <Skeleton variant="text" width={380} height={20} />
+        <Skeleton variant="text" height={36} sx={{ width: "min(220px, 100%)" }} />
+        <Skeleton variant="text" height={20} sx={{ width: "min(380px, 100%)" }} />
       </Stack>
       <Grid container spacing={2}>
         {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -596,10 +604,10 @@ export function JobDetailsSkeleton() {
     <Stack spacing={3}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
-          <Skeleton variant="text" width={300} height={40} />
-          <Skeleton variant="text" width={200} height={20} />
+          <Skeleton variant="text" height={40} sx={{ width: "min(300px, 100%)" }} />
+          <Skeleton variant="text" height={20} sx={{ width: "min(200px, 100%)" }} />
         </Box>
-        <Skeleton variant="rectangular" width={120} height={36} sx={{ borderRadius: 1 }} />
+        <Skeleton variant="rectangular" height={36} sx={{ borderRadius: 1, width: "min(120px, 100%)" }} />
       </Stack>
       <Grid container spacing={2}>
         <Grid item xs={12} lg={7}>
@@ -622,7 +630,7 @@ export function JobDetailsSkeleton() {
 export function JobsListSkeleton() {
   return (
     <Stack spacing={2}>
-      <Skeleton variant="text" width={200} height={36} />
+      <Skeleton variant="text" height={36} sx={{ width: "min(200px, 100%)" }} />
       <Skeleton variant="rectangular" height={60} sx={{ borderRadius: 2 }} />
       {[1, 2, 3, 4].map((i) => (
         <Skeleton key={i} variant="rectangular" height={120} sx={{ borderRadius: 2 }} />

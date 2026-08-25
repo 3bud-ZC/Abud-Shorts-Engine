@@ -17,9 +17,10 @@ import SettingsPage from "./pages/SettingsPage";
 import PublishingPage from "./pages/PublishingPage";
 import SetupWizard from "./pages/SetupWizard";
 import LoginPage from "./pages/LoginPage";
-import { ErrorBoundary } from "./components/v2";
+import { Button } from "@mui/material";
+import { EmptyState, ErrorBoundary, PageHeader } from "./components/v2";
 
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { getSessionToken } from "./utils/auth";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -36,6 +37,25 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
   }
 
   return <>{children}</>;
+};
+
+/** Shown for any path the router does not recognise. */
+const NotFoundPage: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <PageHeader
+        title="Page not found"
+        description="That address does not match anything in ABUD Shorts."
+      />
+      <EmptyState
+        title={`Nothing lives at ${location.pathname}`}
+        description="The link may be out of date. Use the menu to go to your videos, productions or settings."
+        action={<Button variant="contained" onClick={() => navigate("/")}>Go to Dashboard</Button>}
+      />
+    </>
+  );
 };
 
 const App: React.FC = () => {
@@ -64,6 +84,11 @@ const App: React.FC = () => {
             <Route path="/providers/technical" element={<ProtectedRoute><ProvidersPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
             <Route path="/system" element={<ProtectedRoute><SystemPage /></ProtectedRoute>} />
+            {/* The library lives at /videos and a single video at /video/:id, so
+                /videos/:id is an easy URL to land on by hand or from an old
+                bookmark. Without a catch-all every unmatched path rendered the
+                shell with an empty main area, which reads as a broken page. */}
+            <Route path="*" element={<ProtectedRoute><NotFoundPage /></ProtectedRoute>} />
           </Routes>
         </ErrorBoundary>
       </Layout>

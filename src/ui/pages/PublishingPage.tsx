@@ -330,9 +330,16 @@ export const PublishingPage: React.FC = () => {
       </Grid>
 
       {/* Tabs */}
+      {/* Five tab labels need about 560px. Left as the default fixed variant
+          they pushed the whole page to 450px wide inside a 390px phone frame,
+          which is the one horizontal overflow in the client. Every other Tabs
+          in the app is already scrollable. */}
       <Tabs
         value={tab}
         onChange={(_, val) => setTab(val)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
         sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
       >
         <Tab value="overview" label="Overview" />
@@ -342,21 +349,28 @@ export const PublishingPage: React.FC = () => {
         <Tab value="accounts" label={`Social Accounts (${accounts.length})`} />
       </Tabs>
 
-      {/* Filter Bar */}
+      {/* Filter Bar. A 280px search box beside a platform select cannot sit on
+          one row in a 390px phone frame; as a nowrap row it pushed the page 60px
+          wide. It stacks on small screens and sits side by side from `sm` up. */}
       {tab !== "accounts" && (
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          sx={{ mb: 2, flexWrap: "wrap" }}
+        >
           <TextField
             size="small"
             placeholder="Search by title, prompt, or video ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            sx={{ minWidth: 280 }}
+            sx={{ minWidth: { xs: 0, sm: 280 }, width: { xs: "100%", sm: "auto" } }}
           />
           <Select
             size="small"
             displayEmpty
             value={filterPlatform}
             onChange={(e) => setFilterPlatform(e.target.value)}
+            sx={{ width: { xs: "100%", sm: "auto" } }}
           >
             <MenuItem value="">All Platforms</MenuItem>
             <MenuItem value="youtube">YouTube</MenuItem>
