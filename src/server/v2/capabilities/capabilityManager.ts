@@ -112,14 +112,21 @@ export class CapabilityManager {
   }
 
   public isPythonQualityVenvInstalled(): boolean {
+    // The container image installs the quality packs into /opt/pyruntime and
+    // exposes it as PYTHON_BIN, while a developer workstation uses a local
+    // .venv-quality. Only the workstation paths were checked here, so beat
+    // analysis and scene detection reported "not installed" inside Docker even
+    // with librosa and PySceneDetect present - and silently never ran.
     const paths = [
       path.resolve(process.cwd(), ".venv-quality/Scripts/python.exe"),
       path.resolve(process.cwd(), ".venv-quality/bin/python"),
       path.resolve(process.cwd(), "../.venv-quality/Scripts/python.exe"),
       process.env.QUALITY_PYTHON_BIN,
+      process.env.PYTHON_BIN,
+      "/opt/pyruntime/bin/python",
     ].filter(Boolean) as string[];
 
-    return paths.some((p) => fs.existsSync(p));
+    return paths.some((candidate) => fs.existsSync(candidate));
   }
 
   public getQualityPythonPath(): string | null {

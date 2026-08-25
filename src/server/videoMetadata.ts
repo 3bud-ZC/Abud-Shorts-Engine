@@ -31,6 +31,10 @@ export interface VideoMetadata {
   voiceProvider?: string;
   voiceProvidersUsed?: string[];
   /** How caption word timings were produced for this video. */
+  /** Resolved creative intent for this production (creative.v1). */
+  creativePlan?: Record<string, unknown>;
+  /** Objective facts about the creative plan - never a self-awarded score. */
+  creativeFacts?: Record<string, unknown>;
   captionTimingSource?: string;
   captionTimingSources?: string[];
   /** Which engine drew the spoken captions: libass or the Remotion layer. */

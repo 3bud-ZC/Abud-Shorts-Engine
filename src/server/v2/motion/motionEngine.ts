@@ -124,24 +124,32 @@ font_mid = None
 font_small = None
 
 font_candidates = [
-    os.path.join(os.getcwd(), "node_modules/@fontsource/cairo/files/cairo-arabic-700-normal.woff"),
-    os.path.join(os.getcwd(), "node_modules/@fontsource/cairo/files/cairo-latin-700-normal.woff"),
+    os.environ.get("ABUD_FONT_DIR", "/usr/share/fonts/truetype/abud") + "/IBMPlexSansArabic-Bold.ttf",
+    os.environ.get("ABUD_FONT_DIR", "/usr/share/fonts/truetype/abud") + "/IBMPlexSansArabic-SemiBold.ttf",
+    os.environ.get("ABUD_FONT_DIR", "/usr/share/fonts/truetype/abud") + "/NotoKufiArabic-Bold.ttf",
+    os.environ.get("ABUD_FONT_DIR", "/usr/share/fonts/truetype/abud") + "/Cairo-Bold.ttf",
+    os.path.join(os.getcwd(), "assets/fonts/IBMPlexSansArabic-Bold.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "C:/Windows/Fonts/segoeui.ttf",
     "C:/Windows/Fonts/arial.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 ]
 
+loaded_font_path = None
 for fc in font_candidates:
     if os.path.exists(fc):
         try:
             font_large = ImageFont.truetype(fc, 68)
             font_mid = ImageFont.truetype(fc, 44)
             font_small = ImageFont.truetype(fc, 32)
+            loaded_font_path = fc
             break
         except Exception:
             pass
 
 if not font_large:
+    # Pillow's default bitmap font has no Arabic coverage and renders tofu.
+    # Say so on stderr rather than silently producing unreadable frames.
+    print("ABUD_MOTION_FONT_MISSING: no usable TTF found", file=sys.stderr)
     font_large = ImageFont.load_default()
     font_mid = font_large
     font_small = font_large

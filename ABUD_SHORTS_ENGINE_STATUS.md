@@ -6,7 +6,7 @@ Product: ABUD Shorts Engine V2
 
 Current milestone: V2.2 — Creative Quality Engine & Provider Vault
 
-Milestone completion: V2.2 development. Arabic voice APPROVED and wired into routing; creative editing and Arabic typography pass complete; F1 product shell and no-code client UX complete; F1.5 client safety gate complete
+Milestone completion: V2.2 development. Arabic voice APPROVED and wired into routing; creative editing and Arabic typography pass complete; F1 product shell complete; F1.5 client safety gate complete; F2 creative and animation engine complete
 
 Overall project completion: V2.1 GA complete; V2.2 development in progress
 
@@ -16,7 +16,7 @@ Version: 2.1.0 stable baseline (Build 2026.08.23.4, Schema 2.10.0 in development
 
 Target release: 2.1.0 ACHIEVED; V2.2 in development on branch `v2.2-finalization`
 
-Finalization track: F1 (product UI, ABUD design system, no-code client experience) COMPLETE; F1.5 (product polish & client safety gate) COMPLETE; F2 (creative & animation engine finalization) NOT STARTED
+Finalization track: F1 (product UI, ABUD design system, no-code client experience) COMPLETE; F1.5 (product polish & client safety gate) COMPLETE; F2 (creative & animation engine finalization) COMPLETE; F3 (integrations & real publishing closure) NOT STARTED
 
 Final complete-product / client acceptance: PENDING
 
@@ -2715,3 +2715,149 @@ V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release. Historical
 data — old publications, Piper-era records and the legacy media placeholders —
 was preserved. A release package must still contain zero developer/test
 publications; that cleanup remains outstanding.
+
+---
+
+## Milestone V2.2-F2: Creative & Animation Engine Finalization (2026-08-25)
+
+The engine already produced technically correct videos. F2 addressed the fact
+that it still behaved like *script → three generic stock clips → captions →
+music*, and gave it a creative layer that decides what each line should look
+like.
+
+**No new ElevenLabs calls were made in this milestone.** The Arabic acceptance
+output is a visual-only revision that reuses the approved Mamdoh narration and
+its native alignment; the two graphic-mode outputs are English and run on the
+local Kokoro voice. Mamdoh / Energetic Ad / eleven_multilingual_v2 remains the
+approved Arabic default and was not re-evaluated.
+
+### 1. Baseline measured before changing anything
+
+The rejected acceptance video (`cmt783azu000107qh36330485`) was inspected
+directly rather than assumed:
+
+| Fact | Value |
+|------|-------|
+| Source types | `{stock: 6, mockup: 2}` - two |
+| Hook shots | four, all exactly 1.68s |
+| Motion | `punch_in`/`drift_out` alternating mechanically |
+| `beatMapUsed` | **false** |
+
+### 2. Canonical creative plan
+
+New `server/v2/creative/`:
+
+- **`visualTreatment.ts`** - the 17-treatment vocabulary, each mapped to a
+  runtime that really exists here, plus a depth-capped fallback chain whose
+  floor is offline motion graphics. No treatment can leave a blank scene.
+- **`visualIntentClassifier.ts`** - deterministic, local, no paid LLM. Reads
+  Arabic (including Egyptian colloquial) and English. Extracts percentages,
+  multipliers, counted lists and step counts, and distinguishes a counted
+  *process* from a counted *feature list*.
+- **`creativePlan.ts`** - one inspectable plan per production, eight curated
+  style presets, repetition control that discourages a treatment repeating
+  back-to-back unless the classifier is confident or the scene is the CTA.
+
+The plan and its objective facts are persisted with the production
+(`creativePlan`, `creativeFacts`), so a rejected video can be explained
+instead of guessed at. The facts are counts only - the engine does not award
+itself a quality score.
+
+### 3. Three defects found and fixed
+
+- **Quality runtime was invisible inside Docker.** `isPythonQualityVenvInstalled()`
+  only looked for a developer's `.venv-quality`, while the image installs to
+  `/opt/pyruntime`. librosa 0.10.2 and PySceneDetect were installed and working,
+  yet every production reported the quality packs as absent.
+- **Beat timestamps were read from a field that never existed.** `qualityEngine`
+  returns `beatTimestamps`; `ShortCreator` read `beatMap.beats`. Beat analysis
+  ran, produced a BPM, and was then silently discarded - which is why every
+  video reported `beatMapUsed: false`.
+- **Motion graphics rendered tofu.** The Pillow renderer's font list led with
+  `.woff` files (which Pillow cannot load) and Windows paths absent from the
+  container, so text fell through to the default bitmap font. It now uses the
+  bundled OFL TTF pack from F1 and prints an explicit marker if no usable font
+  is found rather than producing unreadable frames.
+
+### 4. Verified runtimes
+
+All five Motion Canvas templates render real MP4s, measured in the worker:
+
+| Template | Result |
+|----------|--------|
+| kinetic_typography | 69 KB, 879 ms |
+| stat_animation | 114 KB, 792 ms |
+| feature_list | 83 KB, 923 ms |
+| cta_card | 81 KB, 774 ms |
+| explainer_diagram | 84 KB, 945 ms |
+
+No GPU and no AI video API. Arabic shaping confirmed correct by frame
+inspection, including the shadda in "بيضيّع".
+
+Motion shots are rendered to their own short MP4 and handed to the existing
+visual bed composer as ordinary clips, so footage and graphics share one
+compositing path. A template failure downgrades that single shot to footage and
+records `motion_fallback_to_stock` rather than failing the production.
+
+### 5. Outputs
+
+**A - AUTO_HYBRID, visual-only revision of the approved Arabic video**
+Job `cmt80xomh000107p9brph4gsh`, 20.05s, 1080x1920, 8 shots.
+
+| | Rejected baseline | F2 output |
+|---|---|---|
+| Source types | 2 (`stock`, `mockup`) | **3** (`mockup:4, stock:3, motion:1`) |
+| Distinct treatments | effectively 1 | **3** (WEBSITE_MOCKUP, DEVICE_MOCKUP, CTA_SCENE) |
+| Shot durations | uniform 1.68s | varied 1.45-3.59s |
+| `beatMapUsed` | false | **true** - 95.7 BPM, 93 beats, **5 of 8 cuts beat-aligned** |
+| Voice | - | ElevenLabs Mamdoh reused, `elevenlabs_alignment` preserved |
+| New TTS calls | - | **0** |
+
+Reused stages: planning, voice, captions. The CTA is now a real motion card
+with a headline and pill button rather than a stock clip with text over it.
+
+**B - MOTION_GRAPHICS** — `cmt81pn6s000107p5a4e2gnpo`, 15.06s, 1080x1920,
+6 shots, `{motion: 5, stock: 1}`, Kokoro (local, free), `beatMapUsed: true`.
+The classifier detected the 70% claim and routed it to a stats card.
+
+**C - ANIMATED_EXPLAINER** — `cmt81pnbx000407p5etbu1s1d`, 15.06s, 1080x1920,
+6 shots, `{motion: 5, stock: 1}`, Kokoro, `beatMapUsed: true`.
+
+An explicitly graphic mode now constrains treatment availability to motion
+runtimes, so asking for Motion Graphics no longer returns four stock clips.
+One stock shot remains in each: the scene's base media fetch still occurs.
+Reported as measured - not as zero.
+
+**D - PRODUCT_AD — SKIPPED, no valid product media.** The library holds no
+usable product image. This is honest rather than fabricated: no product was
+invented to satisfy the test.
+
+### 6. Data note requiring the owner's attention
+
+The five legacy product placeholders recorded in F1.5 are no longer present on
+disk, and the product manifest is empty. **This session issued no delete**, and
+no `DELETE /api/v2/media/products` request appears in the application log. The
+cause could not be established from the available evidence, so it is recorded
+here rather than explained away. Those five assets were the invalid 1x1
+placeholders already marked unusable; no valid customer media is known to have
+been affected. All jobs, videos, Piper records, publications, artifacts and
+backups are intact.
+
+### 7. Known cosmetic item
+
+On the stat card the value label can overlap the progress ring at some label
+lengths. Cosmetic, does not affect readability of the figure, and is recorded
+rather than claimed fixed.
+
+### 8. Verification
+
+- `pnpm typecheck` — PASS (server + UI)
+- `pnpm vitest run` — **40 files, 453 tests, 0 failures** (baseline 39 / 423)
+- `pnpm build` — PASS
+- Docker: app, render-worker, n8n, PostgreSQL all healthy; no new public ports
+- No migration was required; nothing was deleted by this milestone
+
+### 9. Release state
+
+V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release, no merge
+to main. Human creative acceptance of the F2 outputs is **pending**.

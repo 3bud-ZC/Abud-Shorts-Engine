@@ -23,6 +23,19 @@ import {
 } from "../server/v2/editing/editDecisionList";
 import { composeVisualBed } from "../server/v2/editing/visualBedComposer";
 import { mockupForIntent } from "../server/v2/mockups/websiteMockupRenderer";
+import {
+  buildCreativePlan,
+  creativePlanFacts,
+  type CreativePlan,
+  type CreativeStylePresetId,
+} from "../server/v2/creative/creativePlan";
+import {
+  isMotionTreatment,
+  TREATMENT_MOTION_TEMPLATE,
+  TREATMENT_RUNTIME,
+  type VisualTreatment,
+} from "../server/v2/creative/visualTreatment";
+import { splitNarrationBeats } from "../server/v2/creative/visualIntentClassifier";
 import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
 import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
@@ -316,9 +329,68 @@ export class ShortCreator {
         logger.warn(beatErr, "Beat analysis notice; proceeding with standard timeline");
       }
     }
-    const beatTimestamps: number[] = Array.isArray(beatMap?.beats)
-      ? (beatMap.beats as number[])
-      : [];
+    // qualityEngine returns beatTimestamps; this previously read beatMap.beats,
+    // which never existed, so every production reported beatMapUsed:false and
+    // no cut was ever beat-aware even with librosa installed and working.
+    const beatTimestamps: number[] = Array.isArray(beatMap?.beatTimestamps)
+      ? (beatMap.beatTimestamps as number[])
+      : Array.isArray((beatMap as any)?.beats)
+        ? ((beatMap as any).beats as number[])
+        : [];
+
+    // ------------------------------------------------------------------
+    // CREATIVE PLAN
+    // One resolved description of creative intent for the whole production,
+    // built before any scene work so every shot decision can be traced back to
+    // it. Availability is reported honestly: a treatment whose runtime is not
+    // configured is never planned, it falls back and records why.
+    // ------------------------------------------------------------------
+    const hasUploadedMediaForProduction = Boolean(
+      (spec.metadata as any)?.uploadedMediaId ||
+      spec.scenes.some((scene: any) => scene.uploadedMediaId || scene.visualProvider === "uploaded_media"),
+    );
+    const hasProductMediaForProduction = Boolean(
+      (spec.metadata as any)?.productImageId || spec.productionMode === "product_ad",
+    );
+    const motionRuntimeAvailable = capabilityManager.isPythonQualityVenvInstalled();
+    const stockRuntimeAvailable = Boolean(this.config.pexelsApiKey) || Boolean(process.env.PIXABAY_API_KEY);
+
+    // An explicitly graphic production must not depend on stock footage: asking
+    // for Motion Graphics and receiving four stock clips is not the mode the
+    // customer chose. Auto Hybrid keeps every source available.
+    const graphicOnlyMode =
+      spec.productionMode === "motion_graphics" || spec.productionMode === "animated_explainer";
+
+    const isTreatmentAvailable = (treatment: VisualTreatment): boolean => {
+      const runtime = TREATMENT_RUNTIME[treatment];
+      if (graphicOnlyMode) return runtime === "motion";
+      if (runtime === "motion") return motionRuntimeAvailable;
+      if (runtime === "stock") return stockRuntimeAvailable;
+      if (runtime === "upload") return hasUploadedMediaForProduction;
+      if (runtime === "product") return hasProductMediaForProduction;
+      // Mockups are rendered locally and always available.
+      return true;
+    };
+
+    const creativePlan: CreativePlan = buildCreativePlan({
+      productionMode: spec.productionMode,
+      stylePreset: ((spec as any).creativeStyle as CreativeStylePresetId) || undefined,
+      motionIntensity: ((spec as any).animationIntensity as any) || undefined,
+      scenes: spec.scenes.map((scene: any, sceneIdx: number) => ({
+        sceneIndex: sceneIdx,
+        narration: String(scene.narration || ""),
+        purpose: scene.purpose,
+        durationSeconds: Number(scene.durationSeconds) || 0,
+      })),
+      hasProductMedia: hasProductMediaForProduction,
+      hasUploadedMedia: hasUploadedMediaForProduction,
+      hasBrandProfile: Boolean(spec.brandKit?.brandName),
+      isTreatmentAvailable,
+    });
+    logger.info(
+      { facts: creativePlanFacts(creativePlan), preset: creativePlan.stylePreset },
+      "Creative plan resolved",
+    );
 
     /**
      * True when the production is advertising websites or web design. Only then
@@ -1264,6 +1336,30 @@ export class ShortCreator {
             pacingProfile: "editorial_ad",
             beats: beatTimestamps,
             assignSource: (shot, indexInScene) => {
+              // The creative plan already decided what this narration scene
+              // should look like. The first shot of a scene carries that
+              // treatment; later shots in the same scene vary so a single
+              // narration beat is not four copies of the same card.
+              const planned = creativePlan.sceneTreatments.find(
+                (entry) => entry.sceneIndex === index,
+              );
+
+              if (planned && isMotionTreatment(planned.treatment) && (indexInScene === 0 || graphicOnlyMode)) {
+                return {
+                  sourceType: "motion",
+                  provider: "abud_motion",
+                  routingReason: `creative_plan:${planned.treatment}:${planned.signal}`,
+                };
+              }
+
+              if (planned && indexInScene === 0 && TREATMENT_RUNTIME[planned.treatment] === "mockup") {
+                return {
+                  sourceType: "mockup",
+                  provider: "abud_mockup",
+                  routingReason: `creative_plan:${planned.treatment}`,
+                };
+              }
+
               // A website-design ad is better served by a real mockup than by
               // more generic footage, but only where the intent calls for it
               // and never for every shot in the scene.
@@ -1278,7 +1374,60 @@ export class ShortCreator {
           // Pick a clean window inside the downloaded clip rather than its
           // first seconds, which are often a logo card or a fade.
           const detection = await detectShots(tempVideoPath, { scriptDir: this.config.tempDirPath });
-          const shotInputs = sceneEdl.shots.map((shot, shotIndex) => {
+          const shotInputs = await Promise.all(sceneEdl.shots.map(async (shot, shotIndex) => {
+            // A motion-treated shot is rendered to its own short MP4 and then
+            // handed to the composer as an ordinary clip, so graphic scenes and
+            // footage go through exactly one compositing path.
+            if (shot.sourceType === "motion") {
+              const planned = creativePlan.sceneTreatments.find((entry) => entry.sceneIndex === index);
+              const template = planned
+                ? TREATMENT_MOTION_TEMPLATE[planned.treatment] || "kinetic_typography"
+                : "kinetic_typography";
+              try {
+                const motionScene = await motionEngine.renderMotionScene({
+                  template: template as MotionTemplateType,
+                  title: String(originalSceneSpec.onScreenText || sceneTimeline.narration || spec.title || ""),
+                  subtitle: String((originalSceneSpec as any).displayText || ""),
+                  numberStat: planned?.extracted?.statValue
+                    ? {
+                        value: planned.extracted.statValue,
+                        label: String(originalSceneSpec.onScreenText || ""),
+                        suffix: planned.extracted.statSuffix,
+                      }
+                    : undefined,
+                  features: planned?.extracted?.stepCount
+                    ? splitNarrationBeats(String(sceneTimeline.narration || "")).slice(
+                        0,
+                        planned.extracted.stepCount,
+                      )
+                    : undefined,
+                  ctaText: String(spec.cta?.text || ""),
+                  contactText: String(spec.contact || ""),
+                  durationSeconds: shot.duration,
+                  width: orientation === "portrait" ? 1080 : 1920,
+                  height: orientation === "portrait" ? 1920 : 1080,
+                  fps: 25,
+                  brandColors: {
+                    primary: spec.brandKit?.primaryColor,
+                    accent: spec.brandKit?.accentColor,
+                  },
+                  language: spec.language,
+                });
+                if (fs.existsSync(motionScene.absolutePath)) {
+                  return { shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 };
+                }
+              } catch (motionError) {
+                // A motion template failing must not fail the production; the
+                // shot falls back to the scene's stock footage below and the
+                // reason is recorded rather than swallowed.
+                logger.warn(
+                  { err: String(motionError), sceneIndex: index, template },
+                  "Motion scene render failed; falling back to footage for this shot",
+                );
+                shot.routingReason = `${shot.routingReason || ""}|motion_fallback_to_stock`;
+                shot.sourceType = "stock";
+              }
+            }
             if (shot.sourceType === "mockup") {
               return {
                 shot,
@@ -1298,7 +1447,7 @@ export class ShortCreator {
               window.startSeconds + shotIndex * shot.duration,
             );
             return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset };
-          });
+          }));
 
           if (shotInputs.length > 1) {
             const bedPath = path.join(this.config.tempDirPath, `${tempId}.bed.mp4`);
@@ -1606,6 +1755,10 @@ export class ShortCreator {
         captionProfileUsed: mediaPlan.captionPreset || spec.captionStyle || "bold",
         captionRenderer,
         // Canonical shot plan: what the viewer actually looks at, and why.
+        // The creative plan that produced this edit, kept so a rejected video
+        // can be explained rather than guessed at.
+        creativePlan,
+        creativeFacts: creativePlanFacts(creativePlan),
         editDecisionList: {
           version: 'edl.v1',
           totalDurationSeconds,
