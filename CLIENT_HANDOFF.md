@@ -9,8 +9,7 @@
 
 ## Install
 
-Windows: extract the package, then right-click `install.ps1` and choose **Run
-with PowerShell**.
+Windows: extract the package, then double-click `INSTALL-ABUD-SHORTS.bat`.
 
 Linux/VPS:
 
@@ -31,8 +30,9 @@ sudo abud-shorts restart
 sudo abud-shorts rollback
 ```
 
-Windows: use the **ABUD Shorts** Start Menu shortcuts for Status, Update,
-Backup and Diagnostics.
+Windows: double-click `START-ABUD-SHORTS.bat` / `UPDATE-ABUD-SHORTS.bat` /
+`BACKUP-ABUD-SHORTS.bat` / `DIAGNOSTICS-ABUD-SHORTS.bat` in the install
+folder, or use the **ABUD Shorts** Start Menu shortcuts.
 
 ## First Setup
 
