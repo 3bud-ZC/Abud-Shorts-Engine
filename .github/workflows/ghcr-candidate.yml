@@ -1,0 +1,203 @@
+# ==============================================================================
+# ABUD Shorts Engine - GHCR candidate image workflow
+# ==============================================================================
+# Manual-only candidate gate for F5.1. It uses the repository GITHUB_TOKEN with
+# package write permission, publishes only sha-<commit> candidate tags, and can
+# later promote an already accepted digest without rebuilding application bytes.
+# ==============================================================================
+
+name: GHCR Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Full commit SHA that this run must build or promote"
+        required: true
+        type: string
+      source_ref:
+        description: "Git ref to check out before building or promoting"
+        required: true
+        default: v2.2-finalization
+        type: string
+      mode:
+        description: "Build candidate image or promote an accepted digest"
+        required: true
+        default: candidate
+        type: choice
+        options: [candidate, promote]
+      digest:
+        description: "Accepted image digest for promote mode, sha256:<64 hex>"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Resolve candidate identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          EXPECTED_SHA="${{ inputs.expected_sha }}"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::This workflow resolved $ACTUAL_SHA, not the requested $EXPECTED_SHA."
+            exit 1
+          fi
+
+          VERSION="$(node -p "require('./package.json').version")"
+          SOURCE_VERSION="$(grep -oP 'PRODUCT_VERSION\s*=\s*"\K[^"]+' src/version.ts)"
+          SCHEMA_VERSION="$(grep -oP 'DATABASE_SCHEMA_VERSION\s*=\s*"\K[^"]+' src/version.ts)"
+          if [ "$SOURCE_VERSION" != "$VERSION" ]; then
+            echo "::error::package.json is $VERSION but src/version.ts is $SOURCE_VERSION."
+            exit 1
+          fi
+          if [ "$VERSION" != "2.2.0" ]; then
+            echo "::error::F5.1 can only publish 2.2.0 candidates, found $VERSION."
+            exit 1
+          fi
+
+          IMAGE_NAME="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          SHORT_SHA="${ACTUAL_SHA:0:7}"
+          CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          {
+            echo "sha=$ACTUAL_SHA"
+            echo "short_sha=$SHORT_SHA"
+            echo "tag=sha-$SHORT_SHA"
+            echo "version=$VERSION"
+            echo "schema=$SCHEMA_VERSION"
+            echo "image=${{ env.REGISTRY }}/$IMAGE_NAME"
+            echo "source=${{ github.server_url }}/${{ github.repository }}"
+            echo "created=$CREATED"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate promote input
+        if: inputs.mode == 'promote'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "${{ inputs.digest }}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::promote mode requires digest=sha256:<64 hex>."
+            exit 1
+          fi
+
+      - name: Set up Node
+        if: inputs.mode == 'candidate'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        if: inputs.mode == 'candidate'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        if: inputs.mode == 'candidate'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck, test and build
+        if: inputs.mode == 'candidate'
+        run: |
+          pnpm typecheck
+          pnpm vitest run
+          pnpm build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the base image
+        if: inputs.mode == 'candidate'
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --file main-tiny.Dockerfile \
+            --tag abud-shorts-engine-base:${{ steps.identity.outputs.tag }} \
+            --load \
+            .
+
+      - name: Build and push candidate image
+        id: push
+        if: inputs.mode == 'candidate'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.tag }}"
+          docker buildx build \
+            --platform linux/amd64 \
+            --file v2.Dockerfile \
+            --build-arg BASE_IMAGE=abud-shorts-engine-base:${{ steps.identity.outputs.tag }} \
+            --tag "$IMAGE" \
+            --label "org.opencontainers.image.title=ABUD Shorts Engine" \
+            --label "org.opencontainers.image.description=Client-installed short-video production system" \
+            --label "org.opencontainers.image.version=${{ steps.identity.outputs.version }}" \
+            --label "org.opencontainers.image.revision=${{ steps.identity.outputs.sha }}" \
+            --label "org.opencontainers.image.source=${{ steps.identity.outputs.source }}" \
+            --label "org.opencontainers.image.created=${{ steps.identity.outputs.created }}" \
+            --label "org.opencontainers.image.licenses=MIT" \
+            --push \
+            .
+
+      - name: Resolve pushed candidate digest
+        id: digest
+        if: inputs.mode == 'candidate'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.tag }}"
+          DIGEST="$(docker buildx imagetools inspect "$IMAGE" | awk '/^Digest:/ {print $2; exit}')"
+          if ! [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Could not resolve a valid digest for $IMAGE."
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo "### GHCR candidate"
+            echo ""
+            echo "- Image: \`${{ steps.identity.outputs.image }}\`"
+            echo "- Tag: \`${{ steps.identity.outputs.tag }}\`"
+            echo "- Digest: \`$DIGEST\`"
+            echo "- Revision: \`${{ steps.identity.outputs.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Promote accepted digest without rebuild
+        if: inputs.mode == 'promote'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.identity.outputs.image }}"
+          docker buildx imagetools create \
+            --tag "$IMAGE:${{ steps.identity.outputs.version }}" \
+            --tag "$IMAGE:stable" \
+            "$IMAGE@${{ inputs.digest }}"
+          {
+            echo "### GHCR promotion"
+            echo ""
+            echo "- Image: \`$IMAGE\`"
+            echo "- Version tag: \`${{ steps.identity.outputs.version }}\`"
+            echo "- Stable tag: \`stable\`"
+            echo "- Digest: \`${{ inputs.digest }}\`"
+            echo "- Revision: \`${{ steps.identity.outputs.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
