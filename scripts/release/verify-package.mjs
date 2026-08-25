@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Independently re-checks a built client package before it can be published.
  *

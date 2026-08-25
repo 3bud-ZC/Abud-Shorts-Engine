@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Builds the ABUD Shorts CLIENT package.
  *
