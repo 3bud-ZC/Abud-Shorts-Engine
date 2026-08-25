@@ -71,39 +71,60 @@ import type {
 import { withMediaAccessToken } from "../utils/auth";
 import { externalCostLabel } from "../../types/costDisplay";
 import { ProductionSummary } from "../components/ProductionSummary";
-import { VIDEO_TYPES, videoTypeById, videoTypeByMode } from "./videoTypes";
+import { CAPTION_STYLE_LABELS, DURATION_OPTIONS, VIDEO_TYPES, videoTypeById, videoTypeByMode } from "./videoTypes";
 
 const EXAMPLE_PROMPTS = [
   {
-    title: "Egyptian Streetwear Ad (ملابس شبابي)",
-    tag: "Arabic · Egyptian",
+    title: "براند ملابس شبابي",
+    tag: "Arabic",
     prompt:
-      "اعمل إعلان 20 ثانية باللهجة المصرية لبراند ملابس شبابي، البداية تكون Hook قوي، ركز على الخامة القطنية والشكل والراحة، وفي النهاية CTA للطلب على واتساب مع خصم خاص.",
+      "اعمل Reel سريع مدته 20 ثانية لبراند ملابس شبابي. البداية Hook قوي، ركز على الشكل والخامة والراحة، واختم بدعوة واضحة للطلب.",
   },
   {
-    title: "Cairo Modern Café (كافيه قهوة)",
-    tag: "Arabic · Egyptian",
+    title: "كافيه جديد في القاهرة",
+    tag: "Arabic",
     prompt:
-      "اعمل فيديو 20 ثانية لكافيه عصري في القاهرة، ركز على ريحة وتحضير القهوة الإسبريسو والقعدة الرايقة وعرض الفطار، والختام دعوة للزيارة.",
+      "اعمل Reel مدته 15 ثانية لكافيه جديد في القاهرة. ابدأ بلقطة جذابة للقهوة، أظهر الأجواء والقعدة، واختم بدعوة للزيارة.",
   },
   {
-    title: "Cairo Burger Restaurant (مطعم برجر)",
-    tag: "Arabic · Egyptian",
+    title: "Restaurant Reel",
+    tag: "English",
     prompt:
-      "اعمل فيديو 15 ثانية لمطعم برجر في القاهرة، سريع وحماسي، ركز على الجبنة والجرل والعرض الحالي، واختم بـ CTA للطلب دليفري دلوقتي.",
+      "Create a 15-second vertical Restaurant Reel for a new dinner offer. Open with a strong food hook, show atmosphere and freshness, and end with a clear booking CTA.",
   },
   {
-    title: "Tech Educational Short (Backups)",
-    tag: "English · Educational",
+    title: "SaaS / AI Tool Promo",
+    tag: "English",
     prompt:
-      "Create a 30-second English educational short explaining why automated backups protect small businesses from data loss, with modern technology visuals and a strong hook.",
+      "Create a 20-second vertical promo for an AI tool that helps small teams answer customer messages faster. Make it sharp, modern, and benefit-led.",
   },
   {
-    title: "Real Estate Listing (عقارات التجمع)",
-    tag: "Arabic · Egyptian",
+    title: "معلومة غريبة",
+    tag: "Arabic",
     prompt:
-      "اعمل فيديو إعلان 30 ثانية لشقة مودرن في التجمع الخامس، ركز على المساحة والتشطيب الراقي وأنظمة السداد المرنة، والختام حجز معاينة على واتساب.",
+      "اعمل فيديو قصير بأسلوب Viral curiosity عن معلومة غريبة ومفيدة في الحياة اليومية. ابدأ بسؤال مثير، ثم اشرحها ببساطة واختم بجملة قابلة للمشاركة.",
   },
+  {
+    title: "Real Estate Reel",
+    tag: "English",
+    prompt:
+      "Create a 20-second vertical real estate Reel for a bright apartment listing. Highlight space, finish quality, neighborhood convenience, and a viewing CTA.",
+  },
+];
+
+const CAPTION_STYLES = [
+  { id: "clean_professional", label: "Clean" },
+  { id: "karaoke", label: "Karaoke" },
+  { id: "social_ad", label: "Bold Social" },
+  { id: "minimal", label: "Minimal" },
+  { id: "cinematic", label: "Cinematic" },
+];
+
+const QUALITY_OPTIONS = [
+  { id: "draft", label: "Fast", description: "720p render with the quickest local route." },
+  { id: "standard", label: "Balanced", description: "1080p render with normal media intelligence." },
+  { id: "high", label: "High", description: "Richer pacing and multi-asset scene search where available." },
+  { id: "max_quality_local", label: "Maximum", description: "Strongest local quality processors available; no paid AI video by default." },
 ];
 
 type SceneFormData = { text: string; searchTerms: string };
@@ -195,7 +216,7 @@ const VideoCreator: React.FC = () => {
   // prompt and a handful of obvious choices. Advanced reveals the full control
   // surface without changing any underlying contract.
   const [uiMode, setUiMode] = useState<"simple" | "advanced">("simple");
-  const [videoTypeId, setVideoTypeId] = useState<string>("social_ad");
+  const [videoTypeId, setVideoTypeId] = useState<string>("auto");
 
   /** Applies the friendly type's canonical mode and companion defaults. */
   function applyVideoType(nextId: string) {
@@ -203,16 +224,29 @@ const VideoCreator: React.FC = () => {
     if (!entry) return;
     setVideoTypeId(nextId);
     setProductionMode(entry.mode);
-    if (entry.suggestedVisualMode) setVisualMode(entry.suggestedVisualMode as any);
+    if (entry.suggestedVisualMode) {
+      setVisualMode(entry.suggestedVisualMode as any);
+      if (entry.suggestedVisualMode === "stock") setVisualSource("stock");
+      else if (entry.suggestedVisualMode === "uploaded_media") setVisualSource("uploaded_media");
+      else if (entry.suggestedVisualMode === "ai") setVisualSource("ai_generated");
+      else if (entry.suggestedVisualMode === "hybrid") setVisualSource("mixed");
+      else if (entry.suggestedVisualMode === "auto") setVisualSource("auto_best");
+    }
     if (entry.suggestedCaptionStyle) setCaptionStyle(entry.suggestedCaptionStyle as any);
   }
   const [visualMode, setVisualMode] = useState("auto");
+  const [visualSource, setVisualSource] = useState<"auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
+  const [stockProvider, setStockProvider] = useState<"auto_stock" | "pexels" | "pixabay">("auto_stock");
+  const [mediaPolicy, setMediaPolicy] = useState<"auto_use_selected" | "only_selected">("auto_use_selected");
+  const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
+  const [aiVisualProvider, setAiVisualProvider] = useState("auto");
   const [voiceProvider, setVoiceProvider] = useState("auto");
   const [voiceId, setVoiceId] = useState("");
   const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
   const [resolvedVoiceProvider, setResolvedVoiceProvider] = useState<string>("auto");
   const [voiceWarnings, setVoiceWarnings] = useState<string[]>([]);
   const [arabicVoiceBlocked, setArabicVoiceBlocked] = useState(false);
+  const [captionEnabled, setCaptionEnabled] = useState(true);
   const [captionStyle, setCaptionStyle] = useState<string>("social_ad");
 
   // Enhancement & Preview states
@@ -223,6 +257,7 @@ const VideoCreator: React.FC = () => {
   const [previewing, setPreviewing] = useState(false);
   const [previewSpec, setPreviewSpec] = useState<any>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimateData | null>(null);
+  const [previewReadiness, setPreviewReadiness] = useState<any>(null);
   const [voicePreviewing, setVoicePreviewing] = useState(false);
   const [voicePreview, setVoicePreview] = useState<any>(null);
   const [providers, setProviders] = useState<ProviderItem[]>([]);
@@ -315,13 +350,24 @@ const VideoCreator: React.FC = () => {
   useEffect(() => {
     axios
       .get("/api/v2/system/readiness", {
-        params: { mode: productionMode, visualMode },
+        params: {
+          mode: productionMode,
+          visualMode,
+          visualSource,
+          stockProvider,
+          mediaPolicy,
+          aiVisualProvider,
+          selectedMediaIds: selectedMediaIds.join(","),
+          language,
+          dialect: language === "ar" || language === "auto" ? dialect : "none",
+          captionEnabled,
+        },
       })
       .then((res) => {
         setModeReadiness(res.data);
       })
       .catch(() => {});
-  }, [productionMode, visualMode]);
+  }, [productionMode, visualMode, visualSource, stockProvider, mediaPolicy, aiVisualProvider, selectedMediaIds, language, dialect, captionEnabled]);
 
   async function handleProductFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -449,6 +495,56 @@ const VideoCreator: React.FC = () => {
     [uploadedProducts],
   );
 
+  // A video type or an older job can carry a style the curated list folds into
+  // another entry. Keeping it selectable shows the real value instead of blank.
+  const captionStyleChoices = useMemo(
+    () =>
+      CAPTION_STYLES.some((style) => style.id === captionStyle)
+        ? CAPTION_STYLES
+        : [...CAPTION_STYLES, { id: captionStyle, label: CAPTION_STYLE_LABELS[captionStyle] || captionStyle }],
+    [captionStyle],
+  );
+
+  // A default duration saved before this list changed must still render, so
+  // an off-list value joins the choices instead of blanking the Select.
+  const durationChoices = useMemo(
+    () =>
+      DURATION_OPTIONS.includes(duration)
+        ? DURATION_OPTIONS
+        : [...DURATION_OPTIONS, duration].sort((a, b) => a - b),
+    [duration],
+  );
+
+  const configuredStockProviders = useMemo(
+    () => providers.filter((provider) => provider.category === "Visuals" && provider.tier === "stock" && provider.configured !== false),
+    [providers],
+  );
+  const aiVideoProviders = useMemo(
+    () => providers.filter((provider) => provider.category === "Visuals" && provider.tier === "ai_video"),
+    [providers],
+  );
+  const configuredAiVideoProviders = useMemo(
+    () => aiVideoProviders.filter((provider) => provider.configured !== false),
+    [aiVideoProviders],
+  );
+
+  function toggleSelectedMedia(id: string) {
+    setSelectedMediaIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+    if (!selectedProductMediaId) setSelectedProductMediaId(id);
+  }
+
+  function readinessMessage(): string | null {
+    if (!prompt.trim()) return "Write a prompt to create a video.";
+    if (arabicBlocked) return "Arabic narration requires ElevenLabs. Configure ElevenLabs before creating.";
+    if (selectedProviderUnavailable) return "The selected voice provider is not configured.";
+    if (modeReadiness && !modeReadiness.ready) {
+      return modeReadiness.missingRequirements?.[0] || "The selected production setup is not runnable yet.";
+    }
+    return null;
+  }
+
   const selectedVoiceProvider = useMemo(() => {
     if (voiceProvider === "auto") return null;
     return providers.find(
@@ -532,8 +628,14 @@ const VideoCreator: React.FC = () => {
         resolution,
         contentStyle,
         visualMode,
+        visualSource,
+        stockProvider,
+        mediaPolicy,
+        selectedMediaIds,
+        aiVisualProvider,
         voiceProvider,
         voiceId,
+        captionEnabled,
         captionStyle,
         productionMode,
         creativeStyle,
@@ -543,6 +645,7 @@ const VideoCreator: React.FC = () => {
       });
       setPreviewSpec(response.data.spec);
       setCostEstimate(response.data.costEstimate);
+      setPreviewReadiness(response.data.readiness || null);
     } catch (err: any) {
       setError(err?.response?.data?.message || "Production spec preview failed.");
     } finally {
@@ -586,6 +689,11 @@ const VideoCreator: React.FC = () => {
       setError("The selected voice provider is not configured. Choose a local provider or configure it in Providers first.");
       return;
     }
+    const blockedReason = readinessMessage();
+    if (blockedReason) {
+      setError(blockedReason);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -605,8 +713,14 @@ const VideoCreator: React.FC = () => {
           creativeStyle,
           animationIntensity,
           visualMode,
+          visualSource,
+          stockProvider,
+          mediaPolicy,
+          selectedMediaIds,
+          aiVisualProvider,
           voiceProvider,
           voiceId,
+          captionEnabled,
           captionStyle,
           brandId: selectedBrandId || undefined,
           brandName: config.brandKit?.brandName,
@@ -618,6 +732,10 @@ const VideoCreator: React.FC = () => {
             productPrice,
             productCta,
             productPlacement,
+            selectedMediaIds,
+            mediaPolicy,
+            stockProvider,
+            aiVisualProvider,
           },
         },
         {
@@ -710,8 +828,8 @@ const VideoCreator: React.FC = () => {
       {mode === "prompt" && (
         <Stack spacing={3}>
           <SectionCard
-            title="AI Creative Director Prompt"
-            description="Describe the video you want to produce. Include audience, style, goal, offer, language, and any key details."
+            title="What do you want to create?"
+            description="A prompt is enough. The engine will resolve the type, visuals, voice, captions and providers automatically unless you choose otherwise."
             actions={
               <Stack direction="row" spacing={1}>
                 {prompt.length > 0 && (
@@ -797,8 +915,8 @@ const VideoCreator: React.FC = () => {
 
           {/* Video type: friendly labels over the canonical production modes. */}
           <SectionCard
-            title="What kind of video?"
-            description="Pick the closest match. You can fine-tune everything under Advanced."
+            title="Video type (optional)"
+            description="Auto lets the Creative Director infer the right treatment from the prompt and available capabilities."
           >
             <Grid container spacing={1.5}>
               {VIDEO_TYPES.map((entry) => {
@@ -827,7 +945,7 @@ const VideoCreator: React.FC = () => {
                       }}
                     >
                       <Typography variant="body2" fontWeight={650}>
-                        {entry.label}
+                        {entry.label}{entry.id === "auto" ? " · Optional" : ""}
                       </Typography>
                       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                         {entry.description}
@@ -902,11 +1020,11 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="duration-select-label">Duration</InputLabel>
                     <Select labelId="duration-select-label" id="duration-select" label="Duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
-                      <MenuItem value={15}>15s</MenuItem>
-                      <MenuItem value={20}>20s</MenuItem>
-                      <MenuItem value={30}>30s</MenuItem>
-                      <MenuItem value={45}>45s</MenuItem>
-                      <MenuItem value={60}>60s</MenuItem>
+                      {durationChoices.map((seconds) => (
+                        <MenuItem key={seconds} value={seconds}>
+                          {seconds}s
+                        </MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -923,21 +1041,68 @@ const VideoCreator: React.FC = () => {
                   </FormControl>
                 </Grid>
 
+                {/* Captions */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="captions-enabled-select-label">Captions</InputLabel>
+                    <Select
+                      labelId="captions-enabled-select-label"
+                      id="captions-enabled-select"
+                      label="Captions"
+                      value={captionEnabled ? "on" : "off"}
+                      onChange={(e) => setCaptionEnabled(e.target.value === "on")}
+                    >
+                      <MenuItem value="on">On</MenuItem>
+                      <MenuItem value="off">Off</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Visual Source */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="visual-source-select-label">Visual Source</InputLabel>
+                    <Select
+                      labelId="visual-source-select-label"
+                      id="visual-source-select"
+                      label="Visual Source"
+                      value={visualSource}
+                      onChange={(e) => {
+                        const next = e.target.value as typeof visualSource;
+                        setVisualSource(next);
+                        if (next === "stock") setVisualMode("stock");
+                        else if (next === "uploaded_media") setVisualMode("uploaded_media");
+                        else if (next === "ai_generated") setVisualMode("ai");
+                        else if (next === "mixed") setVisualMode("hybrid");
+                        else setVisualMode("auto");
+                      }}
+                    >
+                      <MenuItem value="auto_best">Auto Best</MenuItem>
+                      <MenuItem value="stock">Stock</MenuItem>
+                      <MenuItem value="uploaded_media">Uploaded Media</MenuItem>
+                      <MenuItem value="ai_generated" disabled={configuredAiVideoProviders.length === 0}>
+                        AI Generated{configuredAiVideoProviders.length === 0 ? " · Configure an AI Video Provider" : ""}
+                      </MenuItem>
+                      <MenuItem value="mixed">Mixed</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
                 {/* Production Mode */}
                 {uiMode === "advanced" && (
                   <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel id="production-mode-select-label">Production Mode</InputLabel>
-                    <Select labelId="production-mode-select-label" id="production-mode-select" label="Production Mode" value={productionMode} onChange={(e) => setProductionMode(e.target.value)}>
-                      <MenuItem value="auto_hybrid">AUTO HYBRID - smart mixed source</MenuItem>
-                      <MenuItem value="stock_cinematic">STOCK CINEMATIC - polished stock edit</MenuItem>
-                      <MenuItem value="product_ad">PRODUCT AD - product composition</MenuItem>
-                      <MenuItem value="motion_graphics">MOTION GRAPHICS - animated graphics</MenuItem>
-                      <MenuItem value="animated_explainer">ANIMATED EXPLAINER - Motion Canvas</MenuItem>
-                      <MenuItem value="ai_generated">AI GENERATED - optional GPU/cloud only</MenuItem>
-                      <MenuItem value="social_viral">SOCIAL VIRAL - fast hooks and pacing</MenuItem>
-                      <MenuItem value="educational">EDUCATIONAL - clear teaching flow</MenuItem>
-                      <MenuItem value="custom_media">CUSTOM MEDIA - uploaded-media first</MenuItem>
+                    <InputLabel id="production-mode-select-label">Video Type</InputLabel>
+                    <Select labelId="production-mode-select-label" id="production-mode-select" label="Video Type" value={productionMode} onChange={(e) => setProductionMode(e.target.value)}>
+                      <MenuItem value="auto_hybrid">Auto</MenuItem>
+                      <MenuItem value="stock_cinematic">Cinematic</MenuItem>
+                      <MenuItem value="product_ad">Product Ad</MenuItem>
+                      <MenuItem value="motion_graphics">Motion Graphics</MenuItem>
+                      <MenuItem value="animated_explainer">Animated Explainer</MenuItem>
+                      <MenuItem value="ai_generated">AI Generated</MenuItem>
+                      <MenuItem value="social_viral">Social / Reel</MenuItem>
+                      <MenuItem value="educational">Educational</MenuItem>
+                      <MenuItem value="custom_media">Custom Media</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -948,11 +1113,11 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="quality-select-label">Quality Profile</InputLabel>
                     <Select labelId="quality-select-label" id="quality-select" label="Quality Profile" value={quality} onChange={(e) => setQuality(e.target.value)}>
-                      <MenuItem value="draft">FAST - quick local production</MenuItem>
-                      <MenuItem value="standard">BALANCED - recommended quality/time balance</MenuItem>
-                      <MenuItem value="high">BALANCED+ - richer visual pacing</MenuItem>
-                      <MenuItem value="max_quality_local">MAX QUALITY LOCAL - strongest free/local route</MenuItem>
-                      <MenuItem value="premium">PREMIUM - configured premium services only</MenuItem>
+                      {QUALITY_OPTIONS.map((option) => (
+                        <MenuItem key={option.id} value={option.id}>
+                          {option.label} - {option.description}
+                        </MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -1041,20 +1206,85 @@ const VideoCreator: React.FC = () => {
                 {uiMode === "advanced" && (
                   <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel id="visual-mode-select-label">Visual Mode</InputLabel>
-                    <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
-                      <MenuItem value="auto">Auto source router</MenuItem>
-                      <MenuItem value="stock">Stock cinematic (Pexels)</MenuItem>
-                      <MenuItem value="uploaded_media">Uploaded media first</MenuItem>
-                      <MenuItem value="motion_graphics">Motion graphics</MenuItem>
-                      <MenuItem value="animated_explainer">Animated explainer</MenuItem>
-                      <MenuItem value="product_ad">Product composition</MenuItem>
-                      <MenuItem value="image_animation">Image animation</MenuItem>
-                      <MenuItem value="hybrid">Mixed source</MenuItem>
-                      <MenuItem value="ai">AI video (configured optional providers only)</MenuItem>
+                    <InputLabel id="visual-mode-select-label">Source Provider</InputLabel>
+                    <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Source Provider" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
+                      <MenuItem value="auto">Auto Provider</MenuItem>
+                      <MenuItem value="stock">Stock</MenuItem>
+                      <MenuItem value="uploaded_media">Uploaded Media</MenuItem>
+                      <MenuItem value="motion_graphics">Motion Graphics</MenuItem>
+                      <MenuItem value="animated_explainer">Animated Explainer</MenuItem>
+                      <MenuItem value="product_ad">Product Composition</MenuItem>
+                      <MenuItem value="image_animation">Image Animation</MenuItem>
+                      <MenuItem value="hybrid">Mixed</MenuItem>
+                      <MenuItem value="ai" disabled={configuredAiVideoProviders.length === 0}>
+                        AI Generated{configuredAiVideoProviders.length === 0 ? " · Configure" : ""}
+                      </MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
+
+                {uiMode === "advanced" && (visualSource === "stock" || visualSource === "auto_best") && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="stock-provider-select-label">Stock Provider</InputLabel>
+                      <Select
+                        labelId="stock-provider-select-label"
+                        id="stock-provider-select"
+                        label="Stock Provider"
+                        value={stockProvider}
+                        onChange={(e) => setStockProvider(e.target.value as typeof stockProvider)}
+                      >
+                        <MenuItem value="auto_stock">Auto Stock</MenuItem>
+                        <MenuItem value="pexels" disabled={!providers.some((p) => p.id === "pexels" && p.configured !== false)}>
+                          Pexels{providers.some((p) => p.id === "pexels" && p.configured !== false) ? " · Available" : " · Configure"}
+                        </MenuItem>
+                        <MenuItem value="pixabay" disabled={!providers.some((p) => p.id === "pixabay" && p.configured !== false)}>
+                          Pixabay{providers.some((p) => p.id === "pixabay" && p.configured !== false) ? " · Available" : " · Configure"}
+                        </MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
+                {uiMode === "advanced" && visualSource === "ai_generated" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="ai-provider-select-label">AI Visual Provider</InputLabel>
+                      <Select
+                        labelId="ai-provider-select-label"
+                        id="ai-provider-select"
+                        label="AI Visual Provider"
+                        value={aiVisualProvider}
+                        onChange={(e) => setAiVisualProvider(e.target.value)}
+                      >
+                        <MenuItem value="auto">Auto Provider</MenuItem>
+                        {aiVideoProviders.map((provider) => (
+                          <MenuItem key={provider.id} value={provider.id} disabled={provider.configured === false}>
+                            {provider.name}{provider.configured === false ? " · Configure" : " · Available"}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
+                {uiMode === "advanced" && (visualSource === "uploaded_media" || visualSource === "mixed") && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="media-policy-select-label">Media Selection</InputLabel>
+                      <Select
+                        labelId="media-policy-select-label"
+                        id="media-policy-select"
+                        label="Media Selection"
+                        value={mediaPolicy}
+                        onChange={(e) => setMediaPolicy(e.target.value as typeof mediaPolicy)}
+                      >
+                        <MenuItem value="auto_use_selected">Auto-use selected media</MenuItem>
+                        <MenuItem value="only_selected">Use only selected media</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
                 )}
 
                 {/* Voice Provider */}
@@ -1113,18 +1343,14 @@ const VideoCreator: React.FC = () => {
                 )}
 
                 {/* Captions Style */}
-                {uiMode === "advanced" && (
+                {captionEnabled && (
                   <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel id="captions-style-select-label">Captions Style</InputLabel>
+                    <InputLabel id="captions-style-select-label">Caption Style</InputLabel>
                     <Select labelId="captions-style-select-label" id="captions-style-select" label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
-                      <MenuItem value="social_ad">Social Ad — bold Kufi, karaoke highlight</MenuItem>
-                      <MenuItem value="clean_professional">Clean Professional — IBM Plex, subtle</MenuItem>
-                      <MenuItem value="minimal">Minimal — light, no highlight</MenuItem>
-                      <MenuItem value="kinetic_phrase">Kinetic Phrase — whole-phrase emphasis</MenuItem>
-                      <MenuItem value="karaoke">Karaoke — word-by-word fill</MenuItem>
-                      <MenuItem value="legacy_cairo">Legacy (Cairo)</MenuItem>
-                      <MenuItem value="none">None</MenuItem>
+                      {captionStyleChoices.map((style) => (
+                        <MenuItem key={style.id} value={style.id}>{style.label}</MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -1177,15 +1403,24 @@ const VideoCreator: React.FC = () => {
                       {modeReadiness.missingRequirements.join(" • ")}
                     </Typography>
                   )}
+                  {modeReadiness.externalUsage?.length > 0 && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+                      External Usage: {modeReadiness.externalUsage.join(" • ")}
+                    </Typography>
+                  )}
                 </Box>
               )}
             </AccordionDetails>
           </Accordion>
 
-          {productionMode === "product_ad" && (
+          {(productionMode === "product_ad" || visualSource === "uploaded_media" || visualSource === "mixed") && (
             <SectionCard
-              title="Product Media & Presentation"
-              description="Upload your product image or select an existing asset. Background removal is automatically applied."
+              title={productionMode === "product_ad" ? "Product Media & Presentation" : "Selected Media"}
+              description={
+                productionMode === "product_ad"
+                  ? "Upload your product image or select an existing asset. Background removal is automatically applied."
+                  : "Choose usable media from your library. Invalid items are kept in Media but cannot be selected here."
+              }
               actions={
                 <Button
                   variant="contained"
@@ -1201,29 +1436,54 @@ const VideoCreator: React.FC = () => {
               <Stack spacing={2}>
                 {usableProducts.length === 0 && (
                   <Alert severity="warning">
-                    A Product Ad is built around your product photo, so it cannot be
-                    produced without one. Upload a product image above
+                    {productionMode === "product_ad"
+                      ? "A Product Ad is built around your product photo, so it cannot be produced without one. Upload or add media above"
+                      : "This source needs usable media before Create can run. Upload or add media above"}
                     {unusableProducts.length > 0
                       ? ` — ${unusableProducts.length} stored item${unusableProducts.length === 1 ? " is" : "s are"} too small or unreadable to use.`
                       : "."}
                   </Alert>
                 )}
                 {usableProducts.length > 0 && (
-                  <FormControl fullWidth size="small">
-                    <InputLabel id="product-media-select-label">Select Product Asset</InputLabel>
-                    <Select
-                      labelId="product-media-select-label"
-                      label="Select Product Asset"
-                      value={selectedProductMediaId}
-                      onChange={(e) => setSelectedProductMediaId(e.target.value)}
-                    >
-                      {usableProducts.map((prod) => (
-                        <MenuItem key={prod.id} value={prod.id}>
-                          {prod.originalName} ({prod.width}x{prod.height}) · {prod.nobgArtifactId ? "Background Removed" : "Original"}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                  <Grid container spacing={1.5}>
+                    {usableProducts.map((prod) => {
+                      const selected = selectedMediaIds.includes(prod.id) || selectedProductMediaId === prod.id;
+                      return (
+                        <Grid item xs={12} sm={6} md={4} key={prod.id}>
+                          <Card
+                            variant="outlined"
+                            onClick={() => {
+                              toggleSelectedMedia(prod.id);
+                              setSelectedProductMediaId(prod.id);
+                            }}
+                            sx={{
+                              p: 1.25,
+                              cursor: "pointer",
+                              borderColor: selected ? "primary.main" : "divider",
+                              bgcolor: selected ? "action.selected" : "background.paper",
+                            }}
+                          >
+                            <Stack direction="row" spacing={1.25} alignItems="center">
+                              <Box
+                                component="img"
+                                src={withMediaAccessToken(`/api/v2/media/uploads/${prod.filename}`)}
+                                alt={prod.originalName || prod.filename}
+                                sx={{ width: 56, height: 56, objectFit: "cover", borderRadius: 1 }}
+                              />
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography variant="body2" fontWeight={700} noWrap>
+                                  {prod.originalName || prod.filename}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  Image · {prod.width}x{prod.height} · Usable
+                                </Typography>
+                              </Box>
+                            </Stack>
+                          </Card>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
                 )}
                 {unusableProducts.length > 0 && (
                   <Typography variant="caption" color="text.secondary">
@@ -1233,7 +1493,7 @@ const VideoCreator: React.FC = () => {
                   </Typography>
                 )}
 
-                <Grid container spacing={2}>
+                {productionMode === "product_ad" && <Grid container spacing={2}>
                   <Grid item xs={12} sm={6}>
                     <TextField
                       label="Headline Banner"
@@ -1289,7 +1549,7 @@ const VideoCreator: React.FC = () => {
                       </Select>
                     </FormControl>
                   </Grid>
-                </Grid>
+                </Grid>}
               </Stack>
             </SectionCard>
           )}
@@ -1374,8 +1634,8 @@ const VideoCreator: React.FC = () => {
 
           {/* Cost Estimate & Live Spec Preview */}
           <SectionCard
-            title="Production Spec & Cost Breakdown"
-            description="Review the planned scenes and external API cost estimate before launching generation."
+            title="Production Summary"
+            description="Plain-language summary of what will be produced. Technical details stay under Advanced."
             actions={
               <Button
                 variant="outlined"
@@ -1420,7 +1680,7 @@ const VideoCreator: React.FC = () => {
 
                 {/* One canonical summary of what the engine resolved: voice,
                     captions, visuals, quality and cost, in plain language. */}
-                <ProductionSummary spec={previewSpec} costEstimate={costEstimate as any} />
+                <ProductionSummary spec={previewSpec} costEstimate={costEstimate as any} readiness={previewReadiness} />
 
                 <Grid container spacing={1.5}>
                   {previewSpec.scenes?.map((scene: any, idx: number) => (
@@ -1459,13 +1719,27 @@ const VideoCreator: React.FC = () => {
             )}
           </SectionCard>
 
+          {readinessMessage() && (
+            <Alert severity="warning" action={modeReadiness?.capabilities?.find((cap: any) => cap.required && !cap.ready)?.action ? (
+              <Button
+                size="small"
+                color="inherit"
+                onClick={() => navigate(modeReadiness.capabilities.find((cap: any) => cap.required && !cap.ready).action.href)}
+              >
+                {modeReadiness.capabilities.find((cap: any) => cap.required && !cap.ready).action.label}
+              </Button>
+            ) : undefined}>
+              {readinessMessage()}
+            </Alert>
+          )}
+
           {/* Submit Action */}
           <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
             <Button
               variant="contained"
               size="large"
               startIcon={<SendIcon />}
-              disabled={submitting || !prompt.trim() || arabicBlocked || Boolean(modeReadiness && !modeReadiness.ready)}
+              disabled={submitting || Boolean(readinessMessage())}
               onClick={submitPromptJob}
             >
               {submitting ? "Creating..." : "Create Video"}

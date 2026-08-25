@@ -135,16 +135,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build the base image
-        if: inputs.mode == 'candidate'
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --file main-tiny.Dockerfile \
-            --tag abud-shorts-engine-base:${{ steps.identity.outputs.tag }} \
-            --load \
-            .
-
+      # v2.Dockerfile builds every layer it needs, so the candidate image
+      # comes out of one build with no separate base tag to stay in step with.
       - name: Build and push candidate image
         id: push
         if: inputs.mode == 'candidate'
@@ -154,7 +146,6 @@ jobs:
           docker buildx build \
             --platform linux/amd64 \
             --file v2.Dockerfile \
-            --build-arg BASE_IMAGE=abud-shorts-engine-base:${{ steps.identity.outputs.tag }} \
             --tag "$IMAGE" \
             --label "org.opencontainers.image.title=ABUD Shorts Engine" \
             --label "org.opencontainers.image.description=Client-installed short-video production system" \

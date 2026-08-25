@@ -57,7 +57,7 @@
 /* Arabic fallback. Variable, so one file covers every weight the scale uses. */
 @font-face {
   font-family: "Noto Sans Arabic";
-  src: url("../assets/fonts/NotoSansArabic-Variable.ttf") format("truetype-variations");
+  src: url("../assets/fonts/NotoSansArabic-Variable.ttf") format("truetype");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;

@@ -455,6 +455,156 @@ describe("V2 routes", () => {
     expect(res.body.job.productionSpec).toBeDefined();
   });
 
+  it("accepts prompt-only creation and resolves safe automatic defaults", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 10-second vertical Reel about three quick ways to make a small business website look more professional.",
+      })
+      .expect(201);
+
+    expect(res.body.job.creationMode).toBe("prompt");
+    expect(res.body.job.productionSpec.durationSeconds).toBeGreaterThanOrEqual(5);
+    expect(res.body.job.productionSpec.visualMode).toBe("auto");
+    expect(res.body.job.productionSpec.voiceProvider).toBe("kokoro");
+    expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_best");
+  });
+
+  it("supports captions off without requiring caption artifacts", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 10-second English Reel about a cleaner homepage.",
+        language: "en",
+        captionEnabled: false,
+      })
+      .expect(201);
+
+    expect(res.body.job.productionSpec.captionStyle).toBe("none");
+    expect(res.body.job.productionSpec.metadata.uiContract.captionEnabled).toBe(false);
+  });
+
+  it("blocks stock-only creation when no selected stock provider is configured", async () => {
+    const previousPexels = process.env.PEXELS_API_KEY;
+    delete process.env.PEXELS_API_KEY;
+    const config = makeConfig();
+    config.pexelsApiKey = "";
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create an English stock-only Reel about a restaurant offer.",
+        language: "en",
+        visualSource: "stock",
+        stockProvider: "pexels",
+      })
+      .expect(409);
+
+    expect(res.body.error).toBe("production_not_runnable");
+    expect(res.body.message).toMatch(/Stock provider required/i);
+
+    if (previousPexels === undefined) delete process.env.PEXELS_API_KEY;
+    else process.env.PEXELS_API_KEY = previousPexels;
+  });
+
+  it("blocks uploaded-media-only creation until usable media is selected", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create an English Reel using only my uploaded product media.",
+        language: "en",
+        visualSource: "uploaded_media",
+        mediaPolicy: "only_selected",
+      })
+      .expect(409);
+
+    expect(res.body.error).toBe("production_not_runnable");
+    expect(res.body.message).toMatch(/Select usable media/i);
+  });
+
+  it("locks AI Generated visuals when no AI video provider is configured", async () => {
+    const previousVeo = process.env.VEO_API_KEY;
+    const previousGoogle = process.env.GOOGLE_AI_API_KEY;
+    const previousFal = process.env.FAL_KEY;
+    delete process.env.VEO_API_KEY;
+    delete process.env.GOOGLE_AI_API_KEY;
+    delete process.env.FAL_KEY;
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create an English Reel with AI generated visuals.",
+        language: "en",
+        visualSource: "ai_generated",
+      })
+      .expect(409);
+
+    expect(res.body.message).toMatch(/AI video provider/i);
+
+    if (previousVeo === undefined) delete process.env.VEO_API_KEY;
+    else process.env.VEO_API_KEY = previousVeo;
+    if (previousGoogle === undefined) delete process.env.GOOGLE_AI_API_KEY;
+    else process.env.GOOGLE_AI_API_KEY = previousGoogle;
+    if (previousFal === undefined) delete process.env.FAL_KEY;
+    else process.env.FAL_KEY = previousFal;
+  });
+
+  it("keeps a generic Auto Reel out of geometric motion graphics by default", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const preview = await request(app)
+      .post("/api/v2/production-spec/preview")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 10-second vertical Reel about three quick ways to make a small business website look more professional.",
+        language: "en",
+      })
+      .expect(200);
+
+    expect(preview.body.spec.productionMode).not.toBe("motion_graphics");
+    expect(preview.body.spec.productionMode).not.toBe("animated_explainer");
+    expect(preview.body.spec.scenes.map((scene: any) => scene.visualSource)).not.toContain("motion_graphics");
+  });
+
   it("lists categorized providers and tests connection endpoints", async () => {
     nock("http://127.0.0.1:1").get("/healthz").reply(200, { ok: true });
     nock("http://127.0.0.1:1").get("/health").reply(200, { ok: true });

@@ -38,6 +38,7 @@ import { ContentAIRegistry } from "./content-ai/registry";
 import { estimateProductionCost } from "./cost-estimator";
 import {
   productionSpecSchema,
+  type ProductionSpec,
   validateContentQuality,
   validateProductionSpec,
 } from "../../types/productionSpec";
@@ -302,6 +303,39 @@ export type ProductionSpecDefaults = {
   arabicVoice?: PersistedArabicVoiceDefault | null;
 };
 
+type CreateVisualSource = "auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
+type StockProviderChoice = "auto_stock" | "pexels" | "pixabay";
+type MediaPolicyChoice = "auto_use_selected" | "only_selected";
+
+function visualModeForSource(source?: string): string | undefined {
+  switch (source) {
+    case "stock":
+      return "stock";
+    case "uploaded_media":
+      return "uploaded_media";
+    case "ai_generated":
+      return "ai";
+    case "mixed":
+      return "hybrid";
+    case "auto_best":
+    default:
+      return undefined;
+  }
+}
+
+function selectedMediaIdsFromControls(controls: any): string[] {
+  const explicit = Array.isArray(controls.selectedMediaIds) ? controls.selectedMediaIds : [];
+  const metadataIds = Array.isArray(controls.metadata?.selectedMediaIds) ? controls.metadata.selectedMediaIds : [];
+  const singleProduct = controls.metadata?.productImageId || controls.productImageId;
+  return Array.from(
+    new Set(
+      [...explicit, ...metadataIds, singleProduct]
+        .filter((value) => typeof value === "string" && value.trim().length > 0)
+        .map((value) => String(value).trim()),
+    ),
+  );
+}
+
 function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
   const parsed = voicePresetEnum.safeParse(value);
   return parsed.success ? parsed.data : undefined;
@@ -345,6 +379,15 @@ export function canonicalizeProductionSpecContract(
     : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
   const voicePreset = arabicVoice ? arabicVoice.preset : coerceRequestedPreset(controls.voicePreset);
   const voiceModelId = arabicVoice ? arabicVoice.modelId : undefined;
+  const captionEnabled = controls.captionEnabled !== false && controls.captions !== false;
+  const visualSource = (controls.visualSource || "auto_best") as CreateVisualSource;
+  const selectedMediaIds = selectedMediaIdsFromControls(controls);
+  const sourceVisualMode = visualModeForSource(visualSource);
+  const resolvedVisualMode = sourceVisualMode || controls.visualMode || spec.visualMode;
+  const stockProvider = (controls.stockProvider || controls.metadata?.stockProvider || "auto_stock") as StockProviderChoice;
+  const mediaPolicy = (controls.mediaPolicy || controls.metadata?.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
+  const aiVisualProvider = controls.aiVisualProvider || controls.metadata?.aiVisualProvider || "auto";
+  const productImageId = controls.metadata?.productImageId || controls.productImageId;
   return validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -361,14 +404,16 @@ export function canonicalizeProductionSpecContract(
         ? controls.creativeStyle
         : spec.creativeStyle,
     animationIntensity: controls.animationIntensity || spec.animationIntensity,
-    visualMode: controls.visualMode || spec.visualMode,
+    visualMode: resolvedVisualMode,
     voiceProvider: resolvedVoiceProvider,
     voiceId,
     voicePreset,
     voiceModelId,
-    captionStyle: controls.captionStyle || spec.captionStyle,
+    captionStyle: captionEnabled ? controls.captionStyle || spec.captionStyle : "none",
     metadata: {
       ...(spec.metadata || {}),
+      ...(productImageId ? { productImageId } : {}),
+      ...(selectedMediaIds.length > 0 ? { selectedMediaIds } : {}),
       uiContract: {
         durationSeconds: controls.durationSeconds ?? controls.requestedDurationSeconds ?? controls.duration ?? spec.durationSeconds,
         language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -376,7 +421,23 @@ export function canonicalizeProductionSpecContract(
         aspectRatio: controls.aspectRatio || spec.aspectRatio,
         resolution: controls.resolution || spec.resolution,
         quality: controls.quality || spec.quality,
-        visualMode: controls.visualMode || spec.visualMode,
+        visualMode: resolvedVisualMode,
+        visualSource,
+        sourceStrategy:
+          visualSource === "auto_best"
+            ? "Auto Best"
+            : visualSource === "stock"
+              ? "Stock"
+              : visualSource === "uploaded_media"
+                ? "Uploaded Media"
+                : visualSource === "ai_generated"
+                  ? "AI Generated"
+                  : "Mixed",
+        stockProvider,
+        mediaPolicy,
+        selectedMediaIds,
+        aiVisualProvider,
+        captionEnabled,
         requestedVoiceProvider: controls.voiceProvider || spec.voiceProvider || "auto",
         resolvedVoiceProvider,
         voiceId,
@@ -776,6 +837,165 @@ export function createV2PublicRouter(
     void providerSecrets.refreshElevenLabsApiKey();
   }
 
+  async function configuredProviderIds(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    if (config.pexelsApiKey && config.pexelsApiKey !== "dummy-key" && !config.pexelsApiKey.includes("your_")) ids.add("pexels");
+    if (process.env.PIXABAY_API_KEY) ids.add("pixabay");
+    if (process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("veo");
+    if (process.env.FAL_KEY) ids.add("fal");
+    if (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("gemini");
+    if (new ElevenLabsVoiceProvider().isConfigured()) ids.add("elevenlabs");
+    if (providerVault.isAvailable()) {
+      const vaultCredentials = await providerVault.list().catch(() => []);
+      vaultCredentials.forEach((credential) => {
+        if (credential.configured) ids.add(credential.providerId);
+      });
+    }
+    return ids;
+  }
+
+  async function selectedMediaStatus(ids: string[]) {
+    if (ids.length === 0) return { usable: [], missing: [], unusable: [] };
+    const all = await mediaUploadService.listProductImages().catch(() => []);
+    const byId = new Map(all.map((item) => [item.id, item]));
+    return {
+      usable: ids.map((id) => byId.get(id)).filter((item) => item?.usable !== false),
+      missing: ids.filter((id) => !byId.has(id)),
+      unusable: ids.map((id) => byId.get(id)).filter((item) => item && item.usable === false),
+    };
+  }
+
+  async function checkCreateReadiness(controls: any, spec?: ProductionSpec) {
+    const providerIds = await configuredProviderIds();
+    const contract = (spec?.metadata as any)?.uiContract || {};
+    const visualSource = (controls.visualSource || contract.visualSource || "auto_best") as CreateVisualSource;
+    const stockProvider = (controls.stockProvider || contract.stockProvider || "auto_stock") as StockProviderChoice;
+    const mediaPolicy = (controls.mediaPolicy || contract.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
+    const aiVisualProvider = String(controls.aiVisualProvider || contract.aiVisualProvider || "auto");
+    const selectedMediaIds = selectedMediaIdsFromControls({
+      ...controls,
+      metadata: {
+        ...(controls.metadata || {}),
+        selectedMediaIds: controls.selectedMediaIds || contract.selectedMediaIds,
+        productImageId: controls.metadata?.productImageId || (spec?.metadata as any)?.productImageId,
+      },
+    });
+    const missingRequirements: string[] = [];
+    const capabilities: { id: string; name: string; ready: boolean; required: boolean; action?: { label: string; href: string } }[] = [];
+    const add = (id: string, name: string, ready: boolean, required: boolean, message?: string, action?: { label: string; href: string }) => {
+      capabilities.push({ id, name, ready, required, action });
+      if (required && !ready) missingRequirements.push(message || `${name} is required.`);
+    };
+
+    const anyStock = providerIds.has("pexels") || providerIds.has("pixabay");
+    if (visualSource === "stock") {
+      if (stockProvider === "pexels") {
+        add("pexels", "Pexels", providerIds.has("pexels"), true, "Stock provider required: configure Pexels.", { label: "Configure Stock Provider", href: "/providers" });
+      } else if (stockProvider === "pixabay") {
+        add("pixabay", "Pixabay", providerIds.has("pixabay"), true, "Stock provider required: configure Pixabay.", { label: "Configure Stock Provider", href: "/providers" });
+      } else {
+        add("stock", "Stock provider", anyStock, true, "Stock provider required.", { label: "Configure Stock Provider", href: "/providers" });
+      }
+    } else {
+      add("stock", "Stock provider", anyStock, false);
+    }
+
+    if (visualSource === "ai_generated") {
+      const aiProviders = ["veo", "fal"].filter((id) => providerIds.has(id));
+      const ready = aiVisualProvider === "auto" ? aiProviders.length > 0 : providerIds.has(aiVisualProvider);
+      add(
+        "ai_video",
+        "AI video provider",
+        ready,
+        true,
+        "Connect an AI video provider to use AI Generated visuals.",
+        { label: "Configure an AI Video Provider", href: "/providers" },
+      );
+    }
+
+    const mediaRequired =
+      visualSource === "uploaded_media" ||
+      (visualSource === "mixed" && mediaPolicy === "only_selected") ||
+      controls.productionMode === "custom_media" ||
+      spec?.productionMode === "custom_media";
+    if (mediaRequired || selectedMediaIds.length > 0) {
+      const status = await selectedMediaStatus(selectedMediaIds);
+      const ready = selectedMediaIds.length > 0 && status.usable.length === selectedMediaIds.length;
+      add(
+        "uploaded_media",
+        "Selected uploaded media",
+        ready,
+        mediaRequired,
+        selectedMediaIds.length === 0
+          ? "Select usable media before creating with uploaded-media-only."
+          : "One or more selected media items are missing or unusable.",
+        { label: "Open Media Library", href: "/media" },
+      );
+    }
+
+    if (isArabicLanguage(spec?.language || controls.language, (spec?.dialect || controls.dialect) as any)) {
+      add(
+        "elevenlabs",
+        "ElevenLabs Arabic voice",
+        providerIds.has("elevenlabs"),
+        true,
+        ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+        { label: "Configure ElevenLabs", href: "/providers" },
+      );
+    } else {
+      add("kokoro", "Built-in English voice", true, false);
+    }
+
+    const captionEnabled = controls.captionEnabled !== false && contract.captionEnabled !== false && spec?.captionStyle !== "none";
+    add("captions", captionEnabled ? "Captions enabled" : "Captions disabled", true, false);
+
+    return {
+      mode: controls.productionMode || spec?.productionMode || "auto_hybrid",
+      visualSource,
+      stockProvider,
+      mediaPolicy,
+      selectedMediaIds,
+      ready: missingRequirements.length === 0,
+      missingRequirements,
+      capabilities,
+      externalUsage: expectedExternalUsage({
+        providerIds,
+        visualSource,
+        stockProvider,
+        aiVisualProvider,
+        voiceProvider: spec?.voiceProvider || controls.voiceProvider,
+        contentAIProvider: String(controls.contentAIProvider || "auto"),
+      }),
+    };
+  }
+
+  function expectedExternalUsage(input: {
+    providerIds: Set<string>;
+    visualSource: CreateVisualSource;
+    stockProvider: StockProviderChoice;
+    aiVisualProvider: string;
+    voiceProvider?: string;
+    contentAIProvider: string;
+  }): string[] {
+    const usage: string[] = [];
+    if (input.voiceProvider === "elevenlabs") usage.push("ElevenLabs · Usage Based");
+    if (input.contentAIProvider === "gemini") usage.push("Gemini · Usage Based");
+    if (input.visualSource === "ai_generated") {
+      const ai = input.aiVisualProvider !== "auto"
+        ? input.aiVisualProvider
+        : input.providerIds.has("veo")
+          ? "Google Veo"
+          : input.providerIds.has("fal")
+            ? "fal.ai"
+            : "AI Video Provider";
+      usage.push(`${ai} · Usage Based`);
+    }
+    if (input.visualSource === "stock") {
+      usage.push(input.stockProvider === "pixabay" ? "Pixabay · Stock API" : input.stockProvider === "pexels" ? "Pexels · Stock API" : "Stock provider · API");
+    }
+    return usage.length ? usage : ["Local / No Paid API"];
+  }
+
   if (config.serviceRole === "app") {
     publishingScheduler.start();
   }
@@ -1085,12 +1305,14 @@ export function createV2PublicRouter(
       const mediaPlan = mediaIntelligenceService.generateMediaPlan(resolvedSpec, {
         captionPreset: (resolvedSpec.captionStyle as any) || "bold",
       });
+      const readiness = await checkCreateReadiness(parsed.data, resolvedSpec);
 
       res.status(200).json({
         spec: resolvedSpec,
         costEstimate,
         quality,
         mediaPlan,
+        readiness,
       });
     } catch (error) {
       res.status(500).json({
@@ -1195,9 +1417,11 @@ export function createV2PublicRouter(
       return;
     }
     try {
-      const qualityMap: Record<string, "draft" | "standard" | "premium" | "max_quality_local"> = {
+      const qualityMap: Record<string, "draft" | "standard" | "high" | "premium" | "max_quality_local"> = {
         fast: "draft",
         balanced: "standard",
+        high: "high",
+        maximum: "max_quality_local",
         premium: "premium",
         max_quality_local: "max_quality_local",
       };
@@ -1224,6 +1448,16 @@ export function createV2PublicRouter(
       const arabicBlock = await arabicProductionBlocker(canonicalSpec);
       if (arabicBlock) {
         res.status(409).json(arabicBlock);
+        return;
+      }
+      const readiness = await checkCreateReadiness(parsed.data, canonicalSpec);
+      if (!readiness.ready) {
+        res.status(409).json({
+          error: "production_not_runnable",
+          message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+          readiness,
+          action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+        });
         return;
       }
       const job = await jobs.createVideoJob({
@@ -1334,6 +1568,21 @@ export function createV2PublicRouter(
         const provider = contentAIRegistry.getProvider();
         const generatedSpec = await provider.generateProductionSpec(rawPayload as any);
         const canonicalSpec = await canonicalizeProductionSpecForRequest(db, generatedSpec, rawPayload);
+        const arabicBlock = await arabicProductionBlocker(canonicalSpec);
+        if (arabicBlock) {
+          res.status(409).json(arabicBlock);
+          return;
+        }
+        const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
+        if (!readiness.ready) {
+          res.status(409).json({
+            error: "production_not_runnable",
+            message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+            readiness,
+            action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+          });
+          return;
+        }
         resolvedPayload = {
           type: "video",
           creationMode: "prompt",
@@ -1347,6 +1596,21 @@ export function createV2PublicRouter(
           (rawPayload as any).productionSpec,
           rawPayload,
         );
+        const arabicBlock = await arabicProductionBlocker(canonicalSpec);
+        if (arabicBlock) {
+          res.status(409).json(arabicBlock);
+          return;
+        }
+        const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
+        if (!readiness.ready) {
+          res.status(409).json({
+            error: "production_not_runnable",
+            message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+            readiness,
+            action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+          });
+          return;
+        }
         resolvedPayload = {
           ...resolvedPayload,
           title: (rawPayload as any).title || canonicalSpec.title,
@@ -2945,10 +3209,24 @@ export function createV2PublicRouter(
   });
 
   router.get("/system/readiness", (req, res) => {
-    const mode = String(req.query.mode || "auto_hybrid");
-    const visualMode = typeof req.query.visualMode === "string" ? req.query.visualMode : undefined;
-    const readiness = capabilityManager.checkModeReadiness(mode, visualMode);
-    res.status(200).json(readiness);
+    const controls = {
+      productionMode: String(req.query.mode || req.query.productionMode || "auto_hybrid"),
+      visualMode: typeof req.query.visualMode === "string" ? req.query.visualMode : undefined,
+      visualSource: typeof req.query.visualSource === "string" ? req.query.visualSource : "auto_best",
+      stockProvider: typeof req.query.stockProvider === "string" ? req.query.stockProvider : "auto_stock",
+      mediaPolicy: typeof req.query.mediaPolicy === "string" ? req.query.mediaPolicy : "auto_use_selected",
+      aiVisualProvider: typeof req.query.aiVisualProvider === "string" ? req.query.aiVisualProvider : "auto",
+      selectedMediaIds:
+        typeof req.query.selectedMediaIds === "string"
+          ? req.query.selectedMediaIds.split(",").map((item) => item.trim()).filter(Boolean)
+          : [],
+      language: typeof req.query.language === "string" ? req.query.language : "auto",
+      dialect: typeof req.query.dialect === "string" ? req.query.dialect : "none",
+      captionEnabled: req.query.captionEnabled !== "false",
+    };
+    checkCreateReadiness(controls)
+      .then((readiness) => res.status(200).json(readiness))
+      .catch((error) => res.status(500).json({ error: "Failed to check readiness.", message: String(error) }));
   });
 
   // 7. Product Media Management

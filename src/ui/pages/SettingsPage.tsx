@@ -27,6 +27,14 @@ import {
 import UpdateCenter from "../components/UpdateCenter";
 import PublicAddressPanel from "../components/PublicAddressPanel";
 import type { ApiTokenItem, BusinessTemplateOption, V2Brand } from "./v2Types";
+import { DURATION_OPTIONS } from "./videoTypes";
+
+/** Keeps a duration saved under an older option list selectable. */
+function durationChoicesFor(saved: number): number[] {
+  return DURATION_OPTIONS.includes(saved)
+    ? DURATION_OPTIONS
+    : [...DURATION_OPTIONS, saved].sort((a, b) => a - b);
+}
 
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState<any>(null);
@@ -37,6 +45,8 @@ const SettingsPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const savedDuration = Number(draft?.defaultDuration) || 30;
+  const durationChoices = durationChoicesFor(savedDuration);
 
   useEffect(() => {
     Promise.all([
@@ -153,14 +163,14 @@ const SettingsPage: React.FC = () => {
                   <InputLabel>Default Duration</InputLabel>
                   <Select
                     label="Default Duration"
-                    value={draft.defaultDuration || 30}
+                    value={savedDuration}
                     onChange={(e) => setDraft({ ...draft, defaultDuration: Number(e.target.value) })}
                   >
-                    <MenuItem value={15}>15 Seconds</MenuItem>
-                    <MenuItem value={20}>20 Seconds</MenuItem>
-                    <MenuItem value={30}>30 Seconds</MenuItem>
-                    <MenuItem value={45}>45 Seconds</MenuItem>
-                    <MenuItem value={60}>60 Seconds</MenuItem>
+                    {durationChoices.map((seconds) => (
+                      <MenuItem key={seconds} value={seconds}>
+                        {seconds} Seconds
+                      </MenuItem>
+                    ))}
                   </Select>
                 </FormControl>
               </Grid>
