@@ -78,16 +78,17 @@ describe("Advanced creative controls", () => {
 });
 
 describe("Product Ad media contract", () => {
-  it("only offers product assets the library reports as usable", () => {
-    expect(creatorSource).toContain("usableProducts");
-    expect(creatorSource).toContain("prod?.usable !== false");
-    // The picker must iterate the filtered list, never the raw one.
-    expect(creatorSource).toContain("usableProducts.map((prod)");
-    expect(creatorSource).not.toContain("uploadedProducts.map((prod)");
+  it("only offers media assets the library reports as usable", () => {
+    expect(creatorSource).toContain("selectableMediaAssets");
+    expect(creatorSource).toContain("asset?.usability?.usableForVideo");
+    // The picker must iterate filtered lists, never the raw one.
+    expect(creatorSource).toContain("selectableMediaAssets).map((asset)");
+    expect(creatorSource).not.toContain("mediaAssets.map((asset)");
   });
 
-  it("auto-selects a usable asset rather than whichever happens to be first", () => {
-    expect(creatorSource).toContain("prods.find((prod: any) => prod.usable !== false)");
+  it("auto-selects a product-capable asset rather than whichever happens to be first", () => {
+    expect(creatorSource).toContain("assets.find((asset) => asset.usability?.usableForProduct");
+    expect(creatorSource).toContain("productCapableAssets");
   });
 
   it("tells the customer plainly that a Product Ad needs a product photo", () => {

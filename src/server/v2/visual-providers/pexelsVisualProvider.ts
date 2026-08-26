@@ -21,6 +21,19 @@ export class PexelsVisualProvider implements VisualProvider {
     return Boolean(key && key !== "dummy-key" && !key.includes("your_pexels"));
   }
 
+  public getCapabilities() {
+    return {
+      textToImage: false,
+      imageToImage: false,
+      textToVideo: false,
+      imageToVideo: false,
+      referenceImage: false,
+      multipleReferenceImages: false,
+      seed: false,
+      nativeCharacterIdentity: false,
+    };
+  }
+
   public async fetchOrGenerateScene(
     scene: ProductionSceneSpec,
     options: VisualRenderOptions,

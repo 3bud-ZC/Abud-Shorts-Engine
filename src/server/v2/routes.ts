@@ -108,7 +108,11 @@ import {
 import { capabilityManager } from "./capabilities/capabilityManager";
 import type { CapabilityId } from "./capabilities/types";
 import { qualityEngine } from "./quality/qualityEngine";
-import { mediaUploadService } from "./media/mediaUploadService";
+import {
+  mediaUploadService,
+  type MediaAsset,
+  type UploadedProductMedia,
+} from "./media/mediaUploadService";
 import { motionEngine } from "./motion/motionEngine";
 
 type BrandRow = {
@@ -219,6 +223,40 @@ function withoutTechnicalFields(
   return rest;
 }
 
+export type ClientMediaAsset = Omit<
+  MediaAsset,
+  "checksum" | "storagePath" | "relativePath" | "nobgArtifactId" | "nobgRelativePath"
+>;
+
+export type ClientProductMedia = Omit<
+  UploadedProductMedia,
+  "checksum" | "storagePath" | "relativePath" | "nobgArtifactId" | "nobgRelativePath"
+>;
+
+export function serializeMediaAssetForApi(asset: MediaAsset): ClientMediaAsset {
+  const {
+    checksum: _checksum,
+    storagePath: _storagePath,
+    relativePath: _relativePath,
+    nobgArtifactId: _nobgArtifactId,
+    nobgRelativePath: _nobgRelativePath,
+    ...safeAsset
+  } = asset;
+  return safeAsset;
+}
+
+export function serializeProductMediaForApi(media: UploadedProductMedia): ClientProductMedia {
+  const {
+    checksum: _checksum,
+    storagePath: _storagePath,
+    relativePath: _relativePath,
+    nobgArtifactId: _nobgArtifactId,
+    nobgRelativePath: _nobgRelativePath,
+    ...safeMedia
+  } = media;
+  return safeMedia;
+}
+
 async function writeAppSettings(db: V2Database, value: Record<string, unknown>) {
   const rows = await db.query<SettingRow>(
     `INSERT INTO app_settings (key, value, updated_at)
@@ -307,6 +345,26 @@ type CreateVisualSource = "auto_best" | "stock" | "uploaded_media" | "ai_generat
 type StockProviderChoice = "auto_stock" | "pexels" | "pixabay";
 type MediaPolicyChoice = "auto_use_selected" | "only_selected";
 
+function characterProfileIdFromControls(controls: any): string {
+  const value =
+    controls.characterProfileId ||
+    controls.metadata?.characterProfileId ||
+    controls.productionSpec?.metadata?.characterProfileId ||
+    controls.productionSpec?.metadata?.characterSnapshot?.profileId;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function referenceCapableVisualProviders(providerIds: Set<string>): string[] {
+  const configured: string[] = [];
+  // Existing real adapters in this branch do not expose a truthful reference
+  // image contract yet. A hidden deterministic test provider exercises payload
+  // propagation without claiming Veo/fal/Pexels can preserve identity.
+  if (process.env.ENABLE_TEST_PROVIDERS === "true" || process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER === "true") {
+    configured.push("test_reference_visual");
+  }
+  return configured.filter((id) => id === "test_reference_visual" || providerIds.has(id));
+}
+
 function visualModeForSource(source?: string): string | undefined {
   switch (source) {
     case "stock":
@@ -388,6 +446,7 @@ export function canonicalizeProductionSpecContract(
   const mediaPolicy = (controls.mediaPolicy || controls.metadata?.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
   const aiVisualProvider = controls.aiVisualProvider || controls.metadata?.aiVisualProvider || "auto";
   const productImageId = controls.metadata?.productImageId || controls.productImageId;
+  const characterProfileId = characterProfileIdFromControls(controls);
   return validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -414,6 +473,7 @@ export function canonicalizeProductionSpecContract(
       ...(spec.metadata || {}),
       ...(productImageId ? { productImageId } : {}),
       ...(selectedMediaIds.length > 0 ? { selectedMediaIds } : {}),
+      ...(characterProfileId ? { characterProfileId } : {}),
       uiContract: {
         durationSeconds: controls.durationSeconds ?? controls.requestedDurationSeconds ?? controls.duration ?? spec.durationSeconds,
         language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -437,6 +497,8 @@ export function canonicalizeProductionSpecContract(
         mediaPolicy,
         selectedMediaIds,
         aiVisualProvider,
+        characterProfileId,
+        characterConsistencyMode: characterProfileId ? "Provider capability required" : "None",
         captionEnabled,
         requestedVoiceProvider: controls.voiceProvider || spec.voiceProvider || "auto",
         resolvedVoiceProvider,
@@ -465,7 +527,37 @@ async function canonicalizeProductionSpecForRequest(
   controls: any,
 ) {
   const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
-  return canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
+  const canonical = canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
+  const characterProfileId = characterProfileIdFromControls(controls);
+  if (!characterProfileId) return canonical;
+
+  const providerIds = new Set<string>();
+  const aiVisualProvider = String(controls.aiVisualProvider || (canonical.metadata as any)?.uiContract?.aiVisualProvider || "auto");
+  if (aiVisualProvider !== "auto") providerIds.add(aiVisualProvider);
+  const referenceProviders = referenceCapableVisualProviders(providerIds);
+  const snapshot = await mediaUploadService.snapshotCharacter(characterProfileId, {
+    id: referenceProviders[0],
+    supportsReferenceImages: referenceProviders.length > 0,
+  });
+  if (!snapshot) return canonical;
+  return validateProductionSpec({
+    ...canonical,
+    metadata: {
+      ...(canonical.metadata || {}),
+      characterProfileId,
+      characterSnapshot: snapshot,
+      uiContract: {
+        ...((canonical.metadata as any)?.uiContract || {}),
+        characterProfileId,
+        characterConsistencyMode:
+          snapshot.consistencyMode === "reference_guided"
+            ? "Reference Guided"
+            : snapshot.consistencyMode === "provider_native"
+              ? "Provider Native"
+              : "Unavailable",
+      },
+    },
+  });
 }
 
 /**
@@ -738,8 +830,8 @@ function scopeForRequest(req: ExpressRequest): ApiTokenScope | null {
   if (routePath.startsWith("/production-spec") || routePath.startsWith("/prompt") || routePath.startsWith("/cost-estimate")) {
     return "production:create";
   }
-  if (routePath.startsWith("/media/upload")) return "production:create";
-  if (routePath.startsWith("/media/uploads") || routePath.startsWith("/media/products")) return "videos:read";
+  if (routePath.startsWith("/media/upload") || routePath.startsWith("/media/product-upload") || routePath.startsWith("/media/assets")) return "production:create";
+  if (routePath.startsWith("/media/uploads") || routePath.startsWith("/media/products") || routePath.startsWith("/media/folders") || routePath.startsWith("/media/characters")) return "videos:read";
   if (routePath.startsWith("/system/capabilities") || routePath.startsWith("/system/readiness")) return "production:read";
   return null;
 }
@@ -856,12 +948,12 @@ export function createV2PublicRouter(
 
   async function selectedMediaStatus(ids: string[]) {
     if (ids.length === 0) return { usable: [], missing: [], unusable: [] };
-    const all = await mediaUploadService.listProductImages().catch(() => []);
+    const all = await mediaUploadService.listAssets().catch(() => []);
     const byId = new Map(all.map((item) => [item.id, item]));
     return {
-      usable: ids.map((id) => byId.get(id)).filter((item) => item?.usable !== false),
+      usable: ids.map((id) => byId.get(id)).filter((item) => item?.usability?.usableForVideo),
       missing: ids.filter((id) => !byId.has(id)),
-      unusable: ids.map((id) => byId.get(id)).filter((item) => item && item.usable === false),
+      unusable: ids.map((id) => byId.get(id)).filter((item) => item && !item.usability?.usableForVideo),
     };
   }
 
@@ -872,6 +964,13 @@ export function createV2PublicRouter(
     const stockProvider = (controls.stockProvider || contract.stockProvider || "auto_stock") as StockProviderChoice;
     const mediaPolicy = (controls.mediaPolicy || contract.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
     const aiVisualProvider = String(controls.aiVisualProvider || contract.aiVisualProvider || "auto");
+    const characterProfileId = characterProfileIdFromControls({
+      ...controls,
+      metadata: {
+        ...(controls.metadata || {}),
+        characterProfileId: controls.characterProfileId || contract.characterProfileId || (spec?.metadata as any)?.characterProfileId,
+      },
+    });
     const selectedMediaIds = selectedMediaIdsFromControls({
       ...controls,
       metadata: {
@@ -911,6 +1010,50 @@ export function createV2PublicRouter(
         "Connect an AI video provider to use AI Generated visuals.",
         { label: "Configure an AI Video Provider", href: "/providers" },
       );
+    }
+
+    if (characterProfileId) {
+      const profile = (await mediaUploadService.listCharacters().catch(() => [])).find((item) => item.id === characterProfileId && item.status !== "archived");
+      const referenceCapable = referenceCapableVisualProviders(providerIds);
+      const compatible =
+        referenceCapable.length > 0 &&
+        (aiVisualProvider === "auto" || referenceCapable.includes(aiVisualProvider));
+      add(
+        "character_profile",
+        "Character Profile",
+        Boolean(profile),
+        true,
+        "Select an active Character Profile.",
+        { label: "Open Characters", href: "/media" },
+      );
+      if (visualSource === "stock") {
+        add(
+          "character_stock_incompatible",
+          "Character with stock footage",
+          false,
+          true,
+          "Stock footage cannot guarantee a recurring character identity. Use Mixed or AI Generated with a compatible provider.",
+          { label: "Change visual source", href: "/create" },
+        );
+      } else if (visualSource === "ai_generated" || visualSource === "mixed") {
+        add(
+          "character_reference_provider",
+          "Reference-capable visual provider",
+          compatible,
+          true,
+          "Character consistency is not available with the currently configured visual providers.",
+          { label: "Configure compatible provider", href: "/providers" },
+        );
+      } else if (visualSource === "auto_best") {
+        add(
+          "character_reference_provider",
+          "Reference-capable visual provider",
+          compatible,
+          false,
+          "Character consistency is not available with the currently configured visual providers.",
+          { label: "Configure compatible provider", href: "/providers" },
+        );
+      }
     }
 
     const mediaRequired =
@@ -955,6 +1098,8 @@ export function createV2PublicRouter(
       stockProvider,
       mediaPolicy,
       selectedMediaIds,
+      characterProfileId,
+      characterConsistencyAvailable: characterProfileId ? referenceCapableVisualProviders(providerIds).length > 0 : false,
       ready: missingRequirements.length === 0,
       missingRequirements,
       capabilities,
@@ -1528,11 +1673,16 @@ export function createV2PublicRouter(
     });
   });
 
-  router.get("/media/uploads/:filename", (req, res) => {
+  router.get("/media/uploads/:filename", async (req, res) => {
     const filename = path.basename(req.params.filename);
-    const targetPath = path.join(mediaCache.getUploadsDir(), filename);
-    if (!fs.existsSync(targetPath)) {
-      res.status(404).json({ error: "File not found" });
+    const targetPath = await mediaUploadService.resolveUploadPath(filename);
+    if (!targetPath || !fs.existsSync(targetPath)) {
+      const fallback = path.join(mediaCache.getUploadsDir(), filename);
+      if (!fs.existsSync(fallback)) {
+        res.status(404).json({ error: "File not found" });
+        return;
+      }
+      res.sendFile(fallback);
       return;
     }
     res.sendFile(targetPath);
@@ -2077,6 +2227,18 @@ export function createV2PublicRouter(
         isDefault: true,
         message: pexelsComp?.message || "Pexels stock footage integration.",
         checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
+        details: {
+          visualCapabilities: {
+            textToImage: false,
+            imageToImage: false,
+            textToVideo: false,
+            imageToVideo: false,
+            referenceImage: false,
+            multipleReferenceImages: false,
+            seed: false,
+            nativeCharacterIdentity: false,
+          },
+        },
       },
       {
         // Optional second free stock source. Absence never blocks readiness, so
@@ -2104,6 +2266,9 @@ export function createV2PublicRouter(
           ? "Google Veo AI video generation configured."
           : "VEO_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new VeoVisualProvider().getCapabilities(),
+        },
       },
       {
         id: "fal",
@@ -2117,6 +2282,9 @@ export function createV2PublicRouter(
           ? "fal.ai multi-model video generation configured."
           : "FAL_KEY is not configured.",
         checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new FalVisualProvider().getCapabilities(),
+        },
       },
       // Voice
       {
@@ -3216,6 +3384,7 @@ export function createV2PublicRouter(
       stockProvider: typeof req.query.stockProvider === "string" ? req.query.stockProvider : "auto_stock",
       mediaPolicy: typeof req.query.mediaPolicy === "string" ? req.query.mediaPolicy : "auto_use_selected",
       aiVisualProvider: typeof req.query.aiVisualProvider === "string" ? req.query.aiVisualProvider : "auto",
+      characterProfileId: typeof req.query.characterProfileId === "string" ? req.query.characterProfileId : "",
       selectedMediaIds:
         typeof req.query.selectedMediaIds === "string"
           ? req.query.selectedMediaIds.split(",").map((item) => item.trim()).filter(Boolean)
@@ -3229,7 +3398,202 @@ export function createV2PublicRouter(
       .catch((error) => res.status(500).json({ error: "Failed to check readiness.", message: String(error) }));
   });
 
-  // 7. Product Media Management
+  // 7. Unified Media Library
+  router.post("/media/assets", async (req, res) => {
+    try {
+      const rawBase64 = String(req.body?.fileBase64 || req.body?.imageBase64 || "").replace(/^data:[^;]+;base64,/, "");
+      const filename = typeof req.body?.filename === "string" ? req.body.filename : "asset";
+      if (!rawBase64) {
+        res.status(400).json({ error: "Missing file payload. Provide fileBase64." });
+        return;
+      }
+      const asset = await mediaUploadService.saveAsset(Buffer.from(rawBase64, "base64"), filename, {
+        purpose: req.body?.purpose,
+        displayName: req.body?.displayName,
+        folderId: req.body?.folderId,
+        tags: Array.isArray(req.body?.tags) ? req.body.tags : typeof req.body?.tags === "string" ? req.body.tags.split(",") : [],
+        removeBackground: req.body?.removeBackground !== false,
+      });
+      res.status(201).json({ asset: serializeMediaAssetForApi(asset) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Asset upload failed." });
+    }
+  });
+
+  router.get("/media/assets", async (req, res) => {
+    const assets = await mediaUploadService.listAssets({
+      search: typeof req.query.search === "string" ? req.query.search : undefined,
+      type: typeof req.query.type === "string" ? req.query.type : undefined,
+      purpose: typeof req.query.purpose === "string" ? req.query.purpose : undefined,
+      folderId: typeof req.query.folderId === "string" ? req.query.folderId : undefined,
+      tag: typeof req.query.tag === "string" ? req.query.tag : undefined,
+      includeArchived: req.query.includeArchived === "true",
+    });
+    res.status(200).json({ assets: assets.map(serializeMediaAssetForApi) });
+  });
+
+  router.get("/media/assets/:id", async (req, res) => {
+    const asset = await mediaUploadService.getAsset(req.params.id);
+    if (!asset) {
+      res.status(404).json({ error: "Asset not found." });
+      return;
+    }
+    res.status(200).json({ asset: serializeMediaAssetForApi(asset) });
+  });
+
+  router.patch("/media/assets/:id", async (req, res) => {
+    try {
+      const asset = await mediaUploadService.updateAsset(req.params.id, {
+        displayName: typeof req.body?.displayName === "string" ? req.body.displayName : undefined,
+        purpose: req.body?.purpose,
+        folderId: req.body?.folderId === null || typeof req.body?.folderId === "string" ? req.body.folderId : undefined,
+        tags: Array.isArray(req.body?.tags) ? req.body.tags : undefined,
+        archived: typeof req.body?.archived === "boolean" ? req.body.archived : undefined,
+      });
+      if (!asset) {
+        res.status(404).json({ error: "Asset not found." });
+        return;
+      }
+      res.status(200).json({ asset: serializeMediaAssetForApi(asset) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Asset update failed." });
+    }
+  });
+
+  router.post("/media/assets/:id/replace", async (req, res) => {
+    try {
+      const rawBase64 = String(req.body?.fileBase64 || req.body?.imageBase64 || "").replace(/^data:[^;]+;base64,/, "");
+      if (!rawBase64) {
+        res.status(400).json({ error: "Missing replacement payload." });
+        return;
+      }
+      const asset = await mediaUploadService.replaceAsset(req.params.id, Buffer.from(rawBase64, "base64"), String(req.body?.filename || "replacement"));
+      if (!asset) {
+        res.status(404).json({ error: "Asset not found." });
+        return;
+      }
+      res.status(200).json({ asset: serializeMediaAssetForApi(asset) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Asset replacement failed." });
+    }
+  });
+
+  router.delete("/media/assets/:id", async (req, res) => {
+    try {
+      const deleted = await mediaUploadService.deleteAsset(req.params.id, "user_request", typeof req.body?.note === "string" ? req.body.note : undefined);
+      if (!deleted) {
+        res.status(404).json({ error: "Asset not found." });
+        return;
+      }
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "Asset deletion failed." });
+    }
+  });
+
+  router.get("/media/folders", async (_req, res) => {
+    res.status(200).json({ folders: await mediaUploadService.listFolders() });
+  });
+
+  router.post("/media/folders", async (req, res) => {
+    try {
+      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+      if (!name) {
+        res.status(400).json({ error: "Folder name is required." });
+        return;
+      }
+      res.status(201).json({ folder: await mediaUploadService.createFolder(name) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Folder creation failed." });
+    }
+  });
+
+  router.patch("/media/folders/:id", async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const folder = name ? await mediaUploadService.renameFolder(req.params.id, name) : null;
+    if (!folder) {
+      res.status(404).json({ error: "Folder not found." });
+      return;
+    }
+    res.status(200).json({ folder });
+  });
+
+  router.delete("/media/folders/:id", async (req, res) => {
+    try {
+      const archived = await mediaUploadService.archiveFolder(req.params.id);
+      if (!archived) {
+        res.status(404).json({ error: "Folder not found." });
+        return;
+      }
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "Folder archive failed." });
+    }
+  });
+
+  router.get("/media/characters", async (_req, res) => {
+    const providerIds = await configuredProviderIds();
+    const referenceProviders = referenceCapableVisualProviders(providerIds);
+    const characters = (await mediaUploadService.listCharacters()).map((profile) => ({
+      ...profile,
+      readinessLabel:
+        profile.status === "archived"
+          ? "Archived"
+          : referenceProviders.length > 0
+            ? `Ready with ${referenceProviders[0]}`
+            : "Saved - compatible AI provider not configured",
+    }));
+    res.status(200).json({ characters, referenceCapableProviders: referenceProviders });
+  });
+
+  router.post("/media/characters", async (req, res) => {
+    try {
+      const profile = await mediaUploadService.createCharacter({
+        name: String(req.body?.name || ""),
+        referenceAssetIds: Array.isArray(req.body?.referenceAssetIds) ? req.body.referenceAssetIds : [],
+        primaryReferenceAssetId: typeof req.body?.primaryReferenceAssetId === "string" ? req.body.primaryReferenceAssetId : undefined,
+        description: typeof req.body?.description === "string" ? req.body.description : undefined,
+        visualTraits: typeof req.body?.visualTraits === "string" ? req.body.visualTraits : undefined,
+        promptAnchor: String(req.body?.promptAnchor || ""),
+        negativeNotes: typeof req.body?.negativeNotes === "string" ? req.body.negativeNotes : undefined,
+      });
+      res.status(201).json({ character: profile });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Character creation failed." });
+    }
+  });
+
+  router.put("/media/characters/:id", async (req, res) => {
+    try {
+      const profile = await mediaUploadService.updateCharacter(req.params.id, {
+        name: typeof req.body?.name === "string" ? req.body.name : undefined,
+        referenceAssetIds: Array.isArray(req.body?.referenceAssetIds) ? req.body.referenceAssetIds : undefined,
+        primaryReferenceAssetId: typeof req.body?.primaryReferenceAssetId === "string" ? req.body.primaryReferenceAssetId : undefined,
+        description: typeof req.body?.description === "string" ? req.body.description : undefined,
+        visualTraits: typeof req.body?.visualTraits === "string" ? req.body.visualTraits : undefined,
+        promptAnchor: typeof req.body?.promptAnchor === "string" ? req.body.promptAnchor : undefined,
+        negativeNotes: typeof req.body?.negativeNotes === "string" ? req.body.negativeNotes : undefined,
+      });
+      if (!profile) {
+        res.status(404).json({ error: "Character not found." });
+        return;
+      }
+      res.status(200).json({ character: profile });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Character update failed." });
+    }
+  });
+
+  router.delete("/media/characters/:id", async (req, res) => {
+    const archived = await mediaUploadService.archiveCharacter(req.params.id);
+    if (!archived) {
+      res.status(404).json({ error: "Character not found." });
+      return;
+    }
+    res.status(200).json({ success: true });
+  });
+
+  // Product Media Management compatibility paths
   router.post("/media/product-upload", async (req, res) => {
     try {
       let buffer: Buffer;
@@ -3248,7 +3612,7 @@ export function createV2PublicRouter(
       }
 
       const record = await mediaUploadService.saveProductImage(buffer, originalName, { removeBackground: removeBg });
-      res.status(201).json({ success: true, media: record });
+      res.status(201).json({ success: true, media: serializeProductMediaForApi(record) });
     } catch (err: any) {
       res.status(400).json({ error: err.message || "Product media upload failed" });
     }
@@ -3256,7 +3620,7 @@ export function createV2PublicRouter(
 
   router.get("/media/products", async (req, res) => {
     const products = await mediaUploadService.listProductImages();
-    res.status(200).json({ products });
+    res.status(200).json({ products: products.map(serializeProductMediaForApi) });
   });
 
   router.delete("/media/products/:id", async (req, res) => {
@@ -3292,7 +3656,7 @@ export function createV2PublicRouter(
         res.status(404).json({ error: "Media item not found." });
         return;
       }
-      res.status(200).json({ media: record });
+      res.status(200).json({ media: serializeProductMediaForApi(record) });
     } catch (error) {
       res.status(500).json({
         error: "Could not rename this media item.",
@@ -3307,7 +3671,7 @@ export function createV2PublicRouter(
       res.status(404).json({ error: "Product media not found." });
       return;
     }
-    res.status(200).json(product);
+    res.status(200).json(serializeProductMediaForApi(product));
   });
 
   return router;

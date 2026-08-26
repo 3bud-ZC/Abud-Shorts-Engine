@@ -4027,3 +4027,28 @@ source, caption and quality controls resolve to the same canonical
 A temporary QA session credential was accidentally committed. The credential was
 revoked, the diagnostic script was removed, the latest development commit was
 rewritten, and no production/customer secret remains in the branch.
+
+### V2.3-04 Media Library and Character Consistency
+
+Implemented the reusable Media Library and Character Profiles milestone on
+`v2.3-product-overhaul`: the app now stores unified media assets with metadata,
+folders, tags, search/filtering, duplicate detection, archive/delete safeguards
+and character profiles with reference assets, revision history and job snapshots.
+Create Video can select uploaded media and character profiles, readiness blocks
+stock-only character use, and provider capability metadata stays truthful until
+a real reference-capable provider is configured.
+
+Runtime API QA found that media endpoints were returning internal service
+records. The route layer now serializes both `/media/assets` and legacy
+`/media/products` responses so filesystem paths, checksums and background-removal
+artifact internals are not exposed while public preview URLs remain available.
+
+Verification after the fix:
+
+- `pnpm typecheck` — **PASS**
+- `npm run test -- --run` — **PASS** (53 files, 834 tests)
+- `pnpm build` — **PASS**
+- Docker health before the serialization rebuild request: app, render worker,
+  n8n and PostgreSQL were healthy. The running app image was built before the
+  serializer fix, so a final Docker rebuild/recreate and authenticated API smoke
+  require fresh explicit approval.

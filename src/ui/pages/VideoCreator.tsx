@@ -69,6 +69,7 @@ import type {
   V2Brand,
 } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
+import { useI18n } from "../i18n";
 import { externalCostLabel } from "../../types/costDisplay";
 import { ProductionSummary } from "../components/ProductionSummary";
 import { CAPTION_STYLE_LABELS, DURATION_OPTIONS, VIDEO_TYPES, videoTypeById, videoTypeByMode } from "./videoTypes";
@@ -140,6 +141,83 @@ type VoiceOption = {
   sampleRate?: number;
 };
 
+type MediaLibraryAsset = {
+  id: string;
+  filename: string;
+  originalName?: string;
+  displayName?: string;
+  mediaType: "image" | "video" | "audio";
+  purpose?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+  previewUrl?: string;
+  tags?: string[];
+  usability?: {
+    usableForVideo?: boolean;
+    usableForProduct?: boolean;
+    usableForLogo?: boolean;
+    usableForCharacterReference?: boolean;
+  };
+  usable?: boolean;
+  unusableReason?: string;
+};
+
+const creatorCopy = {
+  en: {
+    character: "Character",
+    none: "None",
+    refs: "refs",
+    referenceReady: "Reference-guided character consistency is available for the selected provider path.",
+    referenceUnavailable: "Character consistency requires a compatible AI visual provider. The profile remains saved and reusable.",
+    selectedMediaTitle: "Selected Media",
+    productMediaTitle: "Product Media & Presentation",
+    selectedMediaDescription: "Choose usable media from your library. Invalid items are kept in Media but cannot be selected here.",
+    productMediaDescription: "Upload your product image or select a product-capable image asset. Background removal is automatically applied to new product uploads.",
+    uploadProduct: "Upload Product Image",
+    uploadingProduct: "Uploading & Removing Background...",
+    missingProduct: "A Product Ad is built around your product photo, so it cannot be produced without one. Upload or select a product-capable image.",
+    missingMedia: "This source needs usable media before Create can run. Upload or select media above.",
+    unusableKept: "stored items cannot be used in a video and are not offered here. They are kept in your Media library, where the reason is shown.",
+    image: "Image",
+    video: "Video",
+    audio: "Audio",
+    usable: "Usable",
+  },
+  ar: {
+    character: "الشخصية",
+    none: "بدون",
+    refs: "مراجع",
+    referenceReady: "اتساق الشخصية بالمراجع متاح لمسار المزوّد المحدد.",
+    referenceUnavailable: "اتساق الشخصية يتطلب مزوّد ذكاء اصطناعي متوافق. سيبقى ملف الشخصية محفوظًا وقابلًا لإعادة الاستخدام.",
+    selectedMediaTitle: "الوسائط المحددة",
+    productMediaTitle: "وسائط المنتج والعرض",
+    selectedMediaDescription: "اختر وسائط صالحة من مكتبتك. العناصر غير الصالحة تبقى في الوسائط ولا يمكن تحديدها هنا.",
+    productMediaDescription: "ارفع صورة المنتج أو اختر صورة مناسبة للمنتج. إزالة الخلفية تطبق تلقائيًا على الرفع الجديد.",
+    uploadProduct: "رفع صورة منتج",
+    uploadingProduct: "جارٍ الرفع وإزالة الخلفية...",
+    missingProduct: "إعلان المنتج يعتمد على صورة المنتج، لذلك لا يمكن إنتاجه بدون صورة مناسبة. ارفع أو اختر صورة صالحة.",
+    missingMedia: "هذا المصدر يحتاج وسائط صالحة قبل الإنشاء. ارفع أو اختر وسائط أعلاه.",
+    unusableKept: "عناصر مخزنة لا يمكن استخدامها في الفيديو ولن تظهر هنا. هي محفوظة في مكتبة الوسائط مع سبب الرفض.",
+    image: "صورة",
+    video: "فيديو",
+    audio: "صوت",
+    usable: "صالحة",
+  },
+};
+
+function mediaTypeLabel(strings: typeof creatorCopy.en, mediaType: string) {
+  if (mediaType === "image") return strings.image;
+  if (mediaType === "video") return strings.video;
+  if (mediaType === "audio") return strings.audio;
+  return mediaType;
+}
+
+function mediaPreviewUrl(asset: MediaLibraryAsset) {
+  return withMediaAccessToken(asset.previewUrl || `/api/v2/media/uploads/${asset.filename}`);
+}
+
 const defaultConfig: RenderConfig = {
   paddingBack: 1500,
   music: MusicMoodEnum.chill,
@@ -194,6 +272,8 @@ function costLabel(costEstimate: CostEstimateData | null): string {
 const VideoCreator: React.FC = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const { locale } = useI18n();
+  const ui = creatorCopy[locale === "ar" ? "ar" : "en"];
 
   // Mode Selection: "prompt" vs "template"
   const [mode, setMode] = useState<"prompt" | "template">("prompt");
@@ -239,6 +319,8 @@ const VideoCreator: React.FC = () => {
   const [stockProvider, setStockProvider] = useState<"auto_stock" | "pexels" | "pixabay">("auto_stock");
   const [mediaPolicy, setMediaPolicy] = useState<"auto_use_selected" | "only_selected">("auto_use_selected");
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
+  const [characterProfiles, setCharacterProfiles] = useState<any[]>([]);
+  const [selectedCharacterProfileId, setSelectedCharacterProfileId] = useState("");
   const [aiVisualProvider, setAiVisualProvider] = useState("auto");
   const [voiceProvider, setVoiceProvider] = useState("auto");
   const [voiceId, setVoiceId] = useState("");
@@ -280,7 +362,7 @@ const VideoCreator: React.FC = () => {
 
   // Product Media & Readiness states
   const [selectedProductMediaId, setSelectedProductMediaId] = useState<string>("");
-  const [uploadedProducts, setUploadedProducts] = useState<any[]>([]);
+  const [mediaAssets, setMediaAssets] = useState<MediaLibraryAsset[]>([]);
   const [productHeadline, setProductHeadline] = useState("عرض حصري لفترة محدودة");
   const [productOffer, setProductOffer] = useState("خصم 25%");
   const [productPrice, setProductPrice] = useState("");
@@ -295,8 +377,9 @@ const VideoCreator: React.FC = () => {
       axios.get("/api/v2/brands"),
       axios.get("/api/v2/settings"),
       axios.get("/api/v2/providers").catch(() => ({ data: { providers: [] } })),
+      axios.get("/api/v2/media/characters").catch(() => ({ data: { characters: [] } })),
     ])
-      .then(([templateResponse, brandResponse, settingsResponse, providerResponse]) => {
+      .then(([templateResponse, brandResponse, settingsResponse, providerResponse, characterResponse]) => {
         const nextTemplates = templateResponse.data.templates || [];
         const nextBrands = brandResponse.data.brands || [];
         const appSettings = settingsResponse.data.settings || {};
@@ -304,6 +387,11 @@ const VideoCreator: React.FC = () => {
         setTemplates(nextTemplates);
         setBrands(nextBrands);
         setProviders(providerResponse.data.providers || []);
+        setCharacterProfiles(characterResponse.data.characters || []);
+        const queryCharacter = params.get("character");
+        if (queryCharacter && (characterResponse.data.characters || []).some((profile: any) => profile.id === queryCharacter)) {
+          setSelectedCharacterProfileId(queryCharacter);
+        }
 
         // Apply settings defaults if present
         if (appSettings.defaultCreationMode === "template") {
@@ -334,13 +422,13 @@ const VideoCreator: React.FC = () => {
       .catch(() => setError("Failed to load V2 templates or configuration."))
       .finally(() => setLoading(false));
 
-    axios.get("/api/v2/media/products").then((res) => {
-      const prods = res.data.products || [];
-      setUploadedProducts(prods);
+    axios.get("/api/v2/media/assets").then((res) => {
+      const assets: MediaLibraryAsset[] = res.data.assets || [];
+      setMediaAssets(assets);
       // A 1x1 placeholder is a structurally valid PNG and used to be offered as
       // a product photo, and auto-selected because it happened to be first. Only
       // an asset the library reports as usable may be chosen.
-      const firstUsable = prods.find((prod: any) => prod.usable !== false);
+      const firstUsable = assets.find((asset) => asset.usability?.usableForProduct || (asset.mediaType === "image" && asset.usable !== false));
       if (firstUsable && !selectedProductMediaId) {
         setSelectedProductMediaId(firstUsable.id);
       }
@@ -358,6 +446,7 @@ const VideoCreator: React.FC = () => {
           mediaPolicy,
           aiVisualProvider,
           selectedMediaIds: selectedMediaIds.join(","),
+          characterProfileId: selectedCharacterProfileId,
           language,
           dialect: language === "ar" || language === "auto" ? dialect : "none",
           captionEnabled,
@@ -367,7 +456,7 @@ const VideoCreator: React.FC = () => {
         setModeReadiness(res.data);
       })
       .catch(() => {});
-  }, [productionMode, visualMode, visualSource, stockProvider, mediaPolicy, aiVisualProvider, selectedMediaIds, language, dialect, captionEnabled]);
+  }, [productionMode, visualMode, visualSource, stockProvider, mediaPolicy, aiVisualProvider, selectedMediaIds, selectedCharacterProfileId, language, dialect, captionEnabled]);
 
   async function handleProductFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -386,7 +475,7 @@ const VideoCreator: React.FC = () => {
           });
           const newMedia = res.data.media;
           setSelectedProductMediaId(newMedia.id);
-          setUploadedProducts((prev) => [newMedia, ...prev.filter((p) => p.id !== newMedia.id)]);
+          axios.get("/api/v2/media/assets").then((assetRes) => setMediaAssets(assetRes.data.assets || [])).catch(() => undefined);
         } catch (uploadErr: any) {
           setError(uploadErr?.response?.data?.error || "Product image upload failed.");
         } finally {
@@ -486,13 +575,17 @@ const VideoCreator: React.FC = () => {
 
   // The library reports usability per asset; the creator only ever offers the
   // assets that can actually appear in a video.
-  const usableProducts = useMemo(
-    () => uploadedProducts.filter((prod) => prod?.usable !== false),
-    [uploadedProducts],
+  const selectableMediaAssets = useMemo(
+    () => mediaAssets.filter((asset) => asset?.usability?.usableForVideo || asset?.usable !== false),
+    [mediaAssets],
   );
-  const unusableProducts = useMemo(
-    () => uploadedProducts.filter((prod) => prod?.usable === false),
-    [uploadedProducts],
+  const unusableMediaAssets = useMemo(
+    () => mediaAssets.filter((asset) => !(asset?.usability?.usableForVideo || asset?.usable !== false)),
+    [mediaAssets],
+  );
+  const productCapableAssets = useMemo(
+    () => selectableMediaAssets.filter((asset) => asset.mediaType === "image" && (asset.usability?.usableForProduct || asset.usable !== false)),
+    [selectableMediaAssets],
   );
 
   // A video type or an older job can carry a style the curated list folds into
@@ -532,7 +625,18 @@ const VideoCreator: React.FC = () => {
     setSelectedMediaIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
     );
-    if (!selectedProductMediaId) setSelectedProductMediaId(id);
+  }
+
+  function selectMediaAsset(asset: MediaLibraryAsset) {
+    const wasSelected = selectedMediaIds.includes(asset.id);
+    toggleSelectedMedia(asset.id);
+    if (wasSelected && selectedProductMediaId === asset.id) {
+      setSelectedProductMediaId("");
+      return;
+    }
+    if (asset.mediaType === "image" && (asset.usability?.usableForProduct || asset.usable !== false)) {
+      setSelectedProductMediaId(asset.id);
+    }
   }
 
   function readinessMessage(): string | null {
@@ -632,6 +736,7 @@ const VideoCreator: React.FC = () => {
         stockProvider,
         mediaPolicy,
         selectedMediaIds,
+        characterProfileId: selectedCharacterProfileId || undefined,
         aiVisualProvider,
         voiceProvider,
         voiceId,
@@ -717,6 +822,7 @@ const VideoCreator: React.FC = () => {
           stockProvider,
           mediaPolicy,
           selectedMediaIds,
+          characterProfileId: selectedCharacterProfileId || undefined,
           aiVisualProvider,
           voiceProvider,
           voiceId,
@@ -733,6 +839,7 @@ const VideoCreator: React.FC = () => {
             productCta,
             productPlacement,
             selectedMediaIds,
+            characterProfileId: selectedCharacterProfileId || undefined,
             mediaPolicy,
             stockProvider,
             aiVisualProvider,
@@ -1379,7 +1486,36 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="character-profile-select-label">{ui.character}</InputLabel>
+                    <Select
+                      labelId="character-profile-select-label"
+                      id="character-profile-select"
+                      label={ui.character}
+                      value={selectedCharacterProfileId}
+                      onChange={(event) => setSelectedCharacterProfileId(event.target.value)}
+                    >
+                      <MenuItem value="">{ui.none}</MenuItem>
+                      {characterProfiles
+                        .filter((profile) => profile.status !== "archived")
+                        .map((profile) => (
+                          <MenuItem key={profile.id} value={profile.id}>
+                            {profile.name} · {profile.referenceAssetIds?.length || 0} {ui.refs}
+                          </MenuItem>
+                        ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
               </Grid>
+
+              {selectedCharacterProfileId && (
+                <Alert severity={modeReadiness?.characterConsistencyAvailable ? "success" : "warning"} sx={{ mt: 2 }}>
+                  {modeReadiness?.characterConsistencyAvailable
+                    ? ui.referenceReady
+                    : ui.referenceUnavailable}
+                </Alert>
+              )}
 
               {modeReadiness && (
                 <Box sx={{ mt: 2, p: 1.5, bgcolor: modeReadiness.ready ? "rgba(36,84,90,0.06)" : "rgba(220,38,38,0.08)", borderRadius: 2, border: "1px solid", borderColor: modeReadiness.ready ? "rgba(36,84,90,0.2)" : "rgba(220,38,38,0.3)" }}>
@@ -1415,11 +1551,11 @@ const VideoCreator: React.FC = () => {
 
           {(productionMode === "product_ad" || visualSource === "uploaded_media" || visualSource === "mixed") && (
             <SectionCard
-              title={productionMode === "product_ad" ? "Product Media & Presentation" : "Selected Media"}
+              title={productionMode === "product_ad" ? ui.productMediaTitle : ui.selectedMediaTitle}
               description={
                 productionMode === "product_ad"
-                  ? "Upload your product image or select an existing asset. Background removal is automatically applied."
-                  : "Choose usable media from your library. Invalid items are kept in Media but cannot be selected here."
+                  ? ui.productMediaDescription
+                  : ui.selectedMediaDescription
               }
               actions={
                 <Button
@@ -1428,33 +1564,32 @@ const VideoCreator: React.FC = () => {
                   size="small"
                   disabled={uploadingProduct}
                 >
-                  {uploadingProduct ? "Uploading & Removing Background..." : "Upload Product Image"}
+                  {uploadingProduct ? ui.uploadingProduct : ui.uploadProduct}
                   <input type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleProductFileUpload} />
                 </Button>
               }
             >
               <Stack spacing={2}>
-                {usableProducts.length === 0 && (
+                {(productionMode === "product_ad" ? productCapableAssets.length === 0 : selectableMediaAssets.length === 0) && (
                   <Alert severity="warning">
                     {productionMode === "product_ad"
-                      ? "A Product Ad is built around your product photo, so it cannot be produced without one. Upload or add media above"
-                      : "This source needs usable media before Create can run. Upload or add media above"}
-                    {unusableProducts.length > 0
-                      ? ` — ${unusableProducts.length} stored item${unusableProducts.length === 1 ? " is" : "s are"} too small or unreadable to use.`
+                      ? ui.missingProduct
+                      : ui.missingMedia}
+                    {unusableMediaAssets.length > 0
+                      ? ` ${unusableMediaAssets.length} ${ui.unusableKept}`
                       : "."}
                   </Alert>
                 )}
-                {usableProducts.length > 0 && (
+                {(productionMode === "product_ad" ? productCapableAssets : selectableMediaAssets).length > 0 && (
                   <Grid container spacing={1.5}>
-                    {usableProducts.map((prod) => {
-                      const selected = selectedMediaIds.includes(prod.id) || selectedProductMediaId === prod.id;
+                    {(productionMode === "product_ad" ? productCapableAssets : selectableMediaAssets).map((asset) => {
+                      const selected = selectedMediaIds.includes(asset.id) || selectedProductMediaId === asset.id;
                       return (
-                        <Grid item xs={12} sm={6} md={4} key={prod.id}>
+                        <Grid item xs={12} sm={6} md={4} key={asset.id}>
                           <Card
                             variant="outlined"
                             onClick={() => {
-                              toggleSelectedMedia(prod.id);
-                              setSelectedProductMediaId(prod.id);
+                              selectMediaAsset(asset);
                             }}
                             sx={{
                               p: 1.25,
@@ -1464,18 +1599,27 @@ const VideoCreator: React.FC = () => {
                             }}
                           >
                             <Stack direction="row" spacing={1.25} alignItems="center">
-                              <Box
-                                component="img"
-                                src={withMediaAccessToken(`/api/v2/media/uploads/${prod.filename}`)}
-                                alt={prod.originalName || prod.filename}
-                                sx={{ width: 56, height: 56, objectFit: "cover", borderRadius: 1 }}
-                              />
+                              {asset.mediaType === "image" ? (
+                                <Box
+                                  component="img"
+                                  src={mediaPreviewUrl(asset)}
+                                  alt={asset.displayName || asset.originalName || asset.filename}
+                                  sx={{ width: 56, height: 56, objectFit: "cover", borderRadius: 1, bgcolor: "action.hover" }}
+                                />
+                              ) : (
+                                <Box sx={{ width: 56, height: 56, borderRadius: 1, bgcolor: "action.hover", display: "grid", placeItems: "center", fontWeight: 800 }}>
+                                  {mediaTypeLabel(ui, asset.mediaType).slice(0, 1)}
+                                </Box>
+                              )}
                               <Box sx={{ minWidth: 0 }}>
                                 <Typography variant="body2" fontWeight={700} noWrap>
-                                  {prod.originalName || prod.filename}
+                                  {asset.displayName || asset.originalName || asset.filename}
                                 </Typography>
                                 <Typography variant="caption" color="text.secondary">
-                                  Image · {prod.width}x{prod.height} · Usable
+                                  {mediaTypeLabel(ui, asset.mediaType)}
+                                  {asset.width && asset.height ? ` · ${asset.width}x${asset.height}` : ""}
+                                  {asset.tags?.length ? ` · ${asset.tags.slice(0, 2).join(", ")}` : ""}
+                                  {` · ${ui.usable}`}
                                 </Typography>
                               </Box>
                             </Stack>
@@ -1485,11 +1629,9 @@ const VideoCreator: React.FC = () => {
                     })}
                   </Grid>
                 )}
-                {unusableProducts.length > 0 && (
+                {unusableMediaAssets.length > 0 && (
                   <Typography variant="caption" color="text.secondary">
-                    {unusableProducts.length} stored item{unusableProducts.length === 1 ? "" : "s"} cannot be used
-                    in a video and {unusableProducts.length === 1 ? "is" : "are"} not offered here. They are kept in
-                    your Media library, where the reason is shown.
+                    {unusableMediaAssets.length} {ui.unusableKept}
                   </Typography>
                 )}
 

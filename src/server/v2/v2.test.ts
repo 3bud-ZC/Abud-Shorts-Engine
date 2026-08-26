@@ -10,7 +10,12 @@ import { ShortCreator } from "../../short-creator/ShortCreator";
 import { Server } from "../server";
 import { listVideoFiles, mergeMetadata, readMetadata, writeMetadata } from "../videoMetadata";
 import { validatePexelsProvider } from "./health";
-import { createV2InternalRouter, createV2PublicRouter } from "./routes";
+import {
+  createV2InternalRouter,
+  createV2PublicRouter,
+  serializeMediaAssetForApi,
+  serializeProductMediaForApi,
+} from "./routes";
 import { isValidJobTransition, JobService, sanitizeIdempotencyKey } from "./jobs";
 import {
   assertPathInside,
@@ -390,6 +395,69 @@ describe("V2 routes", () => {
     await request(app).post("/internal/v1/render/jobs/test/start").send({}).expect(401);
   });
 
+  it("keeps media API responses free of internal storage details", () => {
+    const asset = serializeMediaAssetForApi({
+      id: "asset_1",
+      filename: "asset.png",
+      originalName: "asset.png",
+      displayName: "Reference image",
+      mediaType: "image",
+      purpose: "character_reference",
+      mimeType: "image/png",
+      sizeBytes: 1024,
+      width: 1024,
+      height: 1024,
+      checksum: "private-checksum",
+      storagePath: "C:\\private\\uploads\\asset.png",
+      relativePath: "uploads/asset.png",
+      previewUrl: "/media/uploads/asset.png",
+      folderId: "folder_1",
+      tags: ["hero"],
+      status: "ready",
+      usable: true,
+      usageCount: 0,
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+      uploadedAt: "2026-08-27T00:00:00.000Z",
+      nobgArtifactId: "artifact_private",
+      nobgRelativePath: "uploads/asset-nobg.png",
+      usability: {
+        usableForVideo: true,
+        usableForProduct: true,
+        usableForLogo: true,
+        usableForCharacterReference: true,
+        reasons: {},
+      },
+    });
+
+    const product = serializeProductMediaForApi({
+      id: "product_1",
+      filename: "product.png",
+      originalName: "Product",
+      mimeType: "image/png",
+      sizeBytes: 2048,
+      width: 1200,
+      height: 1200,
+      checksum: "private-product-checksum",
+      storagePath: "/app/data/uploads/product.png",
+      relativePath: "uploads/product.png",
+      uploadedAt: "2026-08-27T00:00:00.000Z",
+      nobgArtifactId: "product_artifact_private",
+      nobgRelativePath: "uploads/product-nobg.png",
+      usable: true,
+    });
+
+    const body = JSON.stringify({ asset, product });
+    expect(asset.previewUrl).toBe("/media/uploads/asset.png");
+    expect(body).not.toContain("storagePath");
+    expect(body).not.toContain("relativePath");
+    expect(body).not.toContain("checksum");
+    expect(body).not.toContain("nobgArtifactId");
+    expect(body).not.toContain("nobgRelativePath");
+    expect(body).not.toContain("C:\\");
+    expect(body).not.toContain("/app/data");
+  });
+
   it("validates public job payloads and redacts settings secrets", async () => {
     const config = makeConfig();
     const db = new FakeDb();
@@ -585,6 +653,56 @@ describe("V2 routes", () => {
     else process.env.FAL_KEY = previousFal;
   });
 
+  it("blocks Stock Only when a Character Profile is selected", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .get("/api/v2/system/readiness")
+      .set(authHeader)
+      .query({
+        productionMode: "auto_hybrid",
+        visualSource: "stock",
+        stockProvider: "pexels",
+        characterProfileId: "char_missing",
+        language: "en",
+      })
+      .expect(200);
+
+    expect(res.body.ready).toBe(false);
+    expect(res.body.characterConsistencyAvailable).toBe(false);
+    expect(res.body.missingRequirements.join(" ")).toMatch(/Stock footage cannot guarantee/i);
+  });
+
+  it("reports reference capability only through the hidden compatible test provider", async () => {
+    const previous = process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER;
+    process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER = "true";
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .get("/api/v2/system/readiness")
+      .set(authHeader)
+      .query({
+        productionMode: "auto_hybrid",
+        visualSource: "mixed",
+        characterProfileId: "char_missing",
+        language: "en",
+      })
+      .expect(200);
+
+    expect(res.body.characterConsistencyAvailable).toBe(true);
+    expect(res.body.capabilities.find((cap: any) => cap.id === "character_reference_provider")?.ready).toBe(true);
+    expect(res.body.missingRequirements.join(" ")).toMatch(/active Character Profile/i);
+
+    if (previous === undefined) delete process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER;
+    else process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER = previous;
+  });
+
   it("keeps a generic Auto Reel out of geometric motion graphics by default", async () => {
     const config = makeConfig();
     const db = new FakeDb();
@@ -618,6 +736,12 @@ describe("V2 routes", () => {
     expect(res.body.providers.some((p: any) => p.category === "Content AI")).toBe(true);
     expect(res.body.providers.some((p: any) => p.category === "Visuals")).toBe(true);
     expect(res.body.providers.some((p: any) => p.category === "Voice")).toBe(true);
+    const pexels = res.body.providers.find((p: any) => p.id === "pexels");
+    const veo = res.body.providers.find((p: any) => p.id === "veo");
+    const fal = res.body.providers.find((p: any) => p.id === "fal");
+    expect(pexels.details.visualCapabilities.referenceImage).toBe(false);
+    expect(veo.details.visualCapabilities.referenceImage).toBe(false);
+    expect(fal.details.visualCapabilities.nativeCharacterIdentity).toBe(false);
 
     const valGemini = await request(app).post("/api/v2/providers/gemini/validate").set(authHeader).expect(200);
     expect(valGemini.body.provider).toBe("Google Gemini");

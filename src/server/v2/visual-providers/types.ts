@@ -40,6 +40,17 @@ export type VisualProviderValidationResult = {
   latencyMs?: number;
 };
 
+export type VisualProviderCapabilities = {
+  textToImage: boolean;
+  imageToImage: boolean;
+  textToVideo: boolean;
+  imageToVideo: boolean;
+  referenceImage: boolean;
+  multipleReferenceImages: boolean;
+  seed: boolean;
+  nativeCharacterIdentity: boolean;
+};
+
 export interface VisualProvider {
   readonly id: string;
   readonly displayName: string;
@@ -52,4 +63,5 @@ export interface VisualProvider {
   ): Promise<VisualAssetResult>;
   estimateCost(scene: ProductionSceneSpec): SceneCostEstimate;
   validate(): Promise<VisualProviderValidationResult>;
+  getCapabilities?(): VisualProviderCapabilities;
 }
