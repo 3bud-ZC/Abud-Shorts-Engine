@@ -61,6 +61,10 @@ export const AdvancedCaptions: React.FC<AdvancedCaptionsProps> = ({
     containerStyle.transform = "translateY(-50%)";
   }
 
+  if (captionPreset === "none") {
+    return null;
+  }
+
   return (
     <div style={containerStyle}>
       {page.lines.map((line, k) => (
@@ -93,28 +97,53 @@ export const AdvancedCaptions: React.FC<AdvancedCaptionsProps> = ({
               case "cinematic":
                 wordStyle = {
                   ...wordStyle,
-                  color: "#f8fafc",
+                  color: active ? "#f59e0b" : "#f8fafc",
                   fontWeight: active ? 900 : 800,
-                  backgroundColor: active ? "rgba(15,23,42,0.72)" : "rgba(15,23,42,0.45)",
-                  padding: "5px 14px",
-                  borderRadius: "6px",
-                  WebkitTextStroke: "1.2px rgba(0,0,0,0.85)",
-                  textShadow: "0px 5px 14px rgba(0,0,0,0.85)",
+                  letterSpacing: "0.03em",
+                  WebkitTextStroke: "1.2px rgba(0,0,0,0.9)",
+                  textShadow: active
+                    ? "0px 0px 14px rgba(245,158,11,0.65), 0px 4px 12px rgba(0,0,0,0.9)"
+                    : "0px 4px 10px rgba(0,0,0,0.85)",
                   transform: active ? "scale(1.06)" : "scale(1.0)",
                 };
                 break;
 
-              case "viral_bold":
-              case "viral":
+              case "karaoke":
                 wordStyle = {
                   ...wordStyle,
-                  color: active ? "#facc15" : "#ffffff", // Vibrant Yellow
-                  fontWeight: 900,
-                  WebkitTextStroke: "2.5px #000000",
+                  color: active ? "#22c55e" : "rgba(255,255,255,0.82)",
+                  fontWeight: 800,
+                  WebkitTextStroke: active ? "1.5px #000000" : "1.2px rgba(0,0,0,0.85)",
                   textShadow: active
-                    ? "0px 0px 18px rgba(250,204,21,0.9), 0px 4px 8px #000000"
-                    : "0px 3px 8px #000000",
-                  transform: active ? "scale(1.15)" : "scale(1.0)",
+                    ? "0px 0px 16px rgba(34,197,94,0.8), 0px 3px 8px #000000"
+                    : "0px 2px 6px #000000",
+                  transform: active ? "scale(1.10)" : "scale(1.0)",
+                };
+                break;
+
+              case "clean":
+              case "clean_professional":
+                wordStyle = {
+                  ...wordStyle,
+                  color: active ? "#38bdf8" : "#ffffff",
+                  fontWeight: 700,
+                  WebkitTextStroke: "1px rgba(0,0,0,0.85)",
+                  textShadow: active
+                    ? "0px 0px 12px rgba(56,189,248,0.7), 0px 3px 8px rgba(0,0,0,0.9)"
+                    : "0px 2px 8px rgba(0,0,0,0.85)",
+                  transform: active ? "scale(1.05)" : "scale(1.0)",
+                };
+                break;
+
+              case "minimal":
+                wordStyle = {
+                  ...wordStyle,
+                  color: active ? "#ffffff" : "rgba(241,245,249,0.75)",
+                  fontWeight: active ? 700 : 600,
+                  fontSize: "0.92em",
+                  WebkitTextStroke: "1px rgba(0,0,0,0.8)",
+                  textShadow: "0px 2px 6px rgba(0,0,0,0.85)",
+                  transform: active ? "scale(1.03)" : "scale(1.0)",
                 };
                 break;
 
@@ -146,30 +175,6 @@ export const AdvancedCaptions: React.FC<AdvancedCaptionsProps> = ({
                 };
                 break;
 
-              case "clean":
-                wordStyle = {
-                  ...wordStyle,
-                  color: "#ffffff",
-                  fontWeight: 700,
-                  backgroundColor: active ? "rgba(15, 23, 42, 0.85)" : "rgba(0,0,0,0.5)",
-                  padding: "4px 12px",
-                  borderRadius: "8px",
-                  border: active ? "1.5px solid rgba(56,189,248,0.8)" : "none",
-                  WebkitTextStroke: "1px #000000",
-                };
-                break;
-
-              case "minimal":
-                wordStyle = {
-                  ...wordStyle,
-                  color: active ? "#ffffff" : "rgba(255,255,255,0.75)",
-                  fontWeight: 600,
-                  fontSize: "0.9em",
-                  WebkitTextStroke: "1px rgba(0,0,0,0.8)",
-                  textShadow: "0px 2px 6px rgba(0,0,0,0.8)",
-                };
-                break;
-
               case "brand":
                 wordStyle = {
                   ...wordStyle,
@@ -183,15 +188,19 @@ export const AdvancedCaptions: React.FC<AdvancedCaptionsProps> = ({
                 };
                 break;
 
+              case "bold_social":
+              case "social_ad":
+              case "viral_bold":
+              case "viral":
               case "bold":
               default:
                 wordStyle = {
                   ...wordStyle,
-                  color: active ? "#38bdf8" : "#ffffff", // Cyan pop
+                  color: active ? "#facc15" : "#ffffff", // Punchy Yellow
                   fontWeight: 900,
-                  WebkitTextStroke: "2px #000000",
+                  WebkitTextStroke: "2.2px #000000",
                   textShadow: active
-                    ? "0px 0px 14px rgba(56,189,248,0.8), 0px 4px 10px #000000"
+                    ? "0px 0px 16px rgba(250,204,21,0.85), 0px 4px 8px #000000"
                     : "0px 3px 8px #000000",
                   transform: active ? "scale(1.12)" : "scale(1.0)",
                 };

@@ -306,38 +306,33 @@ margin = int(width * 0.08)
 safe_width = width - margin * 2
 
 def draw_background(draw, t, style):
-    """Each template gets its own generated ground, so a graphic scene never
-    needs a stock clip behind it."""
+    """Each template gets its own clean editorial ground, avoiding meaningless geometric shapes."""
     draw.rectangle([(0, 0), (width, height)], fill=c_bg)
-    if style == "orbit":
-        gx = int(width * 0.5 + math.sin(t * 1.4) * width * 0.08)
-        gy = int(height * 0.42 + math.cos(t * 1.1) * height * 0.06)
-        radius = int(width * 0.42 + math.sin(t * 1.9) * width * 0.02)
-        draw.ellipse(
-            [(gx - radius, gy - radius), (gx + radius, gy + radius)],
-            fill=(int(c_pri[0] * 0.45), int(c_pri[1] * 0.45), int(c_pri[2] * 0.45)),
-        )
-    elif style == "grid":
-        step = int(height / 12)
-        for y in range(step, height, step):
-            shade = 26 + int(10 * math.sin(t * 1.4 + y * 0.01))
-            draw.line([(margin // 2, y), (width - margin // 2, y)], fill=(shade, shade + 12, shade + 22), width=1)
-        draw.rectangle(
-            [(0, 0), (width, int(height * 0.16))],
-            fill=(int(c_sec[0] * 0.7), int(c_sec[1] * 0.7), int(c_sec[2] * 0.7)),
-        )
-    elif style == "column":
-        band = int(width * (0.18 + 0.02 * math.sin(t * 1.2)))
-        draw.rectangle([(0, 0), (band, height)], fill=c_sec)
-        draw.rectangle([(width - band, 0), (width, height)], fill=c_sec)
-    else:
-        for i in range(0, height, int(height / 26)):
-            shade = 18 + int(8 * math.sin(t * 0.8 + i * 0.02))
-            draw.line([(0, i), (width, i)], fill=(shade, shade + 6, shade + 14), width=2)
+    # Subtle dark gradient / tone ramp
+    step_count = 18
+    for i in range(step_count):
+        y1 = int(height * (i / float(step_count)))
+        y2 = int(height * ((i + 1) / float(step_count)))
+        ratio = i / float(step_count)
+        # Gentle gradient from c_bg into deep surface tone
+        r = int(c_bg[0] + (c_surface[0] - c_bg[0]) * 0.45 * ratio)
+        g = int(c_bg[1] + (c_surface[1] - c_bg[1]) * 0.45 * ratio)
+        b = int(c_bg[2] + (c_surface[2] - c_bg[2]) * 0.45 * ratio)
+        draw.rectangle([(0, y1), (width, y2)], fill=(r, g, b))
+    
+    # Tasteful restrained accent lines
+    if style == "editorial_top":
+        draw.rectangle([(margin, sized(40)), (width - margin, sized(44))], fill=c_pri)
+    elif style == "editorial_bottom":
+        draw.rectangle([(margin, height - sized(60)), (width - margin, height - sized(56))], fill=c_sec)
+    elif style == "subtle_lines":
+        for i in range(0, 3):
+            line_y = int(height * (0.82 + i * 0.03))
+            draw.line([(margin, line_y), (width - margin, line_y)], fill=(int(c_surface[0] * 1.2), int(c_surface[1] * 1.2), int(c_surface[2] * 1.2)), width=1)
 
 def draw_brand_footer(img, draw):
     """Brand identity sits in the lower band, drawn only from supplied fields."""
-    y = int(height * 0.9)
+    y = int(height * 0.92)
     line = "   ".join([v for v in [brand_name, website, social] if v])
     if line:
         draw_text(draw, (width // 2, y), line, font_small, c_muted, anchor="mm")
@@ -349,15 +344,15 @@ for frame_index in range(total_frames):
     progress = frame_index / float(total_frames)
 
     if template == "stat_animation":
-        bg_style = "orbit"
+        bg_style = "editorial_top"
     elif template == "feature_list":
-        bg_style = "grid"
+        bg_style = "subtle_lines"
     elif template == "explainer_diagram":
-        bg_style = "column"
+        bg_style = "editorial_top"
     elif template == "cta_card":
-        bg_style = "orbit"
+        bg_style = "editorial_bottom"
     else:
-        bg_style = "lines"
+        bg_style = "subtle_lines"
 
     img = Image.new("RGB", (width, height), color=c_bg)
     draw = ImageDraw.Draw(img)
@@ -365,15 +360,31 @@ for frame_index in range(total_frames):
 
     if template == "stat_animation":
         eased = ease_out(t / max(0.1, duration_s * 0.7))
-        cx, cy = width // 2, int(height * 0.42)
-        radius = int(min(width, height) * 0.21)
-        draw.ellipse([(cx - radius, cy - radius), (cx + radius, cy + radius)], outline=c_surface, width=sized(16))
-        sweep = int(eased * 360)
-        if sweep > 0:
-            draw.arc(
-                [(cx - radius, cy - radius), (cx + radius, cy + radius)],
-                start=-90, end=-90 + sweep, fill=c_acc, width=sized(20),
+        cx, cy = width // 2, int(height * 0.44)
+        card_w = safe_width
+        card_h = int(height * 0.38)
+        
+        # Clean editorial metric container
+        draw.rounded_rectangle(
+            [(cx - card_w // 2, cy - card_h // 2), (cx + card_w // 2, cy + card_h // 2)],
+            radius=sized(28), fill=c_surface, outline=c_sec, width=sized(2),
+        )
+        
+        # Category / Context pill badge at top of card
+        if stat_label:
+            badge_font = fit_font(stat_label, sized(32), card_w - sized(80))
+            bw, bh = text_size(stat_label, badge_font)
+            badge_y = cy - card_h // 2 + sized(50)
+            badge_pad_x = sized(32)
+            badge_pad_y = sized(14)
+            draw.rounded_rectangle(
+                [(cx - bw // 2 - badge_pad_x, badge_y - bh // 2 - badge_pad_y),
+                 (cx + bw // 2 + badge_pad_x, badge_y + bh // 2 + badge_pad_y)],
+                radius=sized(16), fill=c_pri,
             )
+            draw_text(draw, (cx, badge_y), stat_label, badge_font, c_on_accent)
+        
+        # Main numeric counter
         display_value = stat_value
         try:
             numeric = float(str(stat_value).replace("%", "").replace(",", ""))
@@ -382,9 +393,25 @@ for frame_index in range(total_frames):
             display_value = stat_value
         headline = (display_value + stat_suffix) if display_value else ""
         if headline:
-            draw_text(draw, (cx, cy), headline, fit_font(headline, sized(96), radius * 1.6), c_text)
-        if stat_label:
-            draw_text(draw, (cx, cy + radius + sized(60)), stat_label, fit_font(stat_label, sized(46), safe_width), c_acc)
+            num_font = fit_font(headline, sized(110), card_w - sized(80))
+            draw_text(draw, (cx, cy + sized(10)), headline, num_font, c_text)
+        
+        # Sleek progress indicator line
+        bar_w = int((card_w - sized(120)) * eased)
+        bar_y = cy + card_h // 2 - sized(45)
+        draw.rounded_rectangle(
+            [(cx - (card_w - sized(120)) // 2, bar_y - sized(4)),
+             (cx + (card_w - sized(120)) // 2, bar_y + sized(4))],
+            radius=sized(4), fill=c_sec,
+        )
+        if bar_w > 0:
+            draw.rounded_rectangle(
+                [(cx - (card_w - sized(120)) // 2, bar_y - sized(4)),
+                 (cx - (card_w - sized(120)) // 2 + bar_w, bar_y + sized(4))],
+                radius=sized(4), fill=c_acc,
+            )
+        
+        # Context Title below card
         if title:
             draw_text(draw, (cx, int(height * 0.72)), title, fit_font(title, sized(50), safe_width), c_text)
 
@@ -392,11 +419,9 @@ for frame_index in range(total_frames):
         if title:
             draw_text(draw, (width // 2, int(height * 0.2)), title, fit_font(title, sized(64), safe_width), c_text)
         card_h = sized(112)
-        gap = sized(38)
-        start_y = int(height * 0.32)
+        gap = sized(36)
+        start_y = int(height * 0.30)
         shown_features = features[:5]
-        # The stagger is scaled to the clip, so a short scene still lands every
-        # item instead of cutting before the last one appears.
         step_delay = (duration_s * 0.55) / max(1, len(shown_features))
         for idx, item in enumerate(shown_features):
             reveal = ease_out((t - idx * step_delay) / max(0.18, step_delay * 0.8))
@@ -406,30 +431,29 @@ for frame_index in range(total_frames):
             x = margin + int((1.0 - reveal) * margin)
             draw.rounded_rectangle(
                 [(x, y), (x + safe_width, y + card_h)],
-                radius=sized(24),
+                radius=sized(20),
                 fill=c_surface,
                 outline=c_acc if reveal > 0.8 else c_sec,
-                width=sized(3),
+                width=sized(2),
             )
             marker = (x + safe_width - sized(58)) if params.get("rtl") else (x + sized(58))
-            draw.ellipse(
-                [(marker - sized(28), y + card_h // 2 - sized(28)), (marker + sized(28), y + card_h // 2 + sized(28))],
+            draw.rounded_rectangle(
+                [(marker - sized(24), y + card_h // 2 - sized(24)), (marker + sized(24), y + card_h // 2 + sized(24))],
+                radius=sized(10),
                 fill=c_acc,
             )
             draw_text(draw, (marker, y + card_h // 2), str(idx + 1), font_small, c_on_accent)
-            # Arabic reads from the right, so the label hangs off the far edge
-            # of the pill rather than being pushed against the marker.
             if params.get("rtl"):
-                label_x = marker - sized(58)
+                label_x = marker - sized(54)
                 label_anchor = "rm"
             else:
-                label_x = marker + sized(58)
+                label_x = marker + sized(54)
                 label_anchor = "lm"
             draw_text(
                 draw,
                 (label_x, y + card_h // 2),
                 item,
-                fit_font(item, sized(42), safe_width - sized(190)),
+                fit_font(item, sized(40), safe_width - sized(180)),
                 c_text,
                 anchor=label_anchor,
             )
@@ -438,8 +462,8 @@ for frame_index in range(total_frames):
         if title:
             draw_text(draw, (width // 2, int(height * 0.17)), title, fit_font(title, sized(62), safe_width), c_text)
         items = steps if steps else features
-        box_h = sized(130)
-        gap = sized(84)
+        box_h = sized(124)
+        gap = sized(64)
         start_y = int(height * 0.28)
         shown_steps = items[:4]
         step_delay = (duration_s * 0.6) / max(1, len(shown_steps))
@@ -452,59 +476,52 @@ for frame_index in range(total_frames):
             cx = width // 2
             draw.rounded_rectangle(
                 [(cx - box_w // 2, y), (cx + box_w // 2, y + box_h)],
-                radius=sized(24), fill=c_surface, outline=c_acc, width=sized(3),
+                radius=sized(20), fill=c_surface, outline=c_acc if reveal > 0.8 else c_sec, width=sized(2),
             )
-            draw_text(draw, (cx, y + box_h // 2), item, fit_font(item, sized(42), safe_width - sized(60)), c_text)
+            draw_text(draw, (cx, y + box_h // 2), item, fit_font(item, sized(40), safe_width - sized(60)), c_text)
             if idx < len(shown_steps) - 1:
                 arrow_y = y + box_h + gap // 2
-                draw.line([(cx, y + box_h + sized(10)), (cx, arrow_y + sized(14))], fill=c_acc, width=sized(6))
-                draw.polygon(
-                    [
-                        (cx - sized(16), arrow_y + sized(10)),
-                        (cx + sized(16), arrow_y + sized(10)),
-                        (cx, arrow_y + sized(34)),
-                    ],
-                    fill=c_acc,
-                )
+                draw.line([(cx, y + box_h + sized(6)), (cx, arrow_y + sized(10))], fill=c_acc, width=sized(4))
 
     elif template == "cta_card":
-        pulse = 1.0 + math.sin(t * 3.6) * 0.03
         cx, cy = width // 2, height // 2
-        card_w = int(safe_width * pulse)
-        card_h = int(height * 0.34 * pulse)
+        card_w = safe_width
+        card_h = int(height * 0.36)
         draw.rounded_rectangle(
             [(cx - card_w // 2, cy - card_h // 2), (cx + card_w // 2, cy + card_h // 2)],
-            radius=sized(36), fill=c_surface, outline=c_acc, width=sized(6),
+            radius=sized(32), fill=c_surface, outline=c_sec, width=sized(3),
         )
         if title:
-            draw_text(draw, (cx, cy - card_h // 4), title, fit_font(title, sized(60), card_w - sized(80)), c_text)
+            draw_text(draw, (cx, cy - card_h // 3), title, fit_font(title, sized(56), card_w - sized(80)), c_text)
         if subtitle:
-            draw_text(draw, (cx, cy), subtitle, fit_font(subtitle, sized(40), card_w - sized(80)), c_muted)
+            draw_text(draw, (cx, cy - sized(10)), subtitle, fit_font(subtitle, sized(38), card_w - sized(80)), c_muted)
         if cta:
-            btn_w = min(card_w - sized(60), int(width * 0.7))
-            btn_h = sized(112)
-            btn_y = cy + card_h // 2 - btn_h
+            btn_w = min(card_w - sized(60), int(width * 0.72))
+            btn_h = sized(104)
+            btn_y = cy + card_h // 2 - btn_h // 2 - sized(36)
             draw.rounded_rectangle(
                 [(cx - btn_w // 2, btn_y - btn_h // 2), (cx + btn_w // 2, btn_y + btn_h // 2)],
-                radius=sized(28), fill=c_acc,
+                radius=sized(24), fill=c_acc,
             )
-            draw_text(draw, (cx, btn_y), cta, fit_font(cta, sized(52), btn_w - sized(50)), c_on_accent)
+            draw_text(draw, (cx, btn_y), cta, fit_font(cta, sized(48), btn_w - sized(50)), c_on_accent)
         if contact:
-            draw_text(draw, (cx, cy + card_h // 2 + sized(60)), contact, font_small, c_muted)
+            draw_text(draw, (cx, cy + card_h // 2 + sized(50)), contact, font_small, c_muted)
 
     elif template == "logo_reveal":
         reveal = ease_out(t / max(0.4, duration_s * 0.6))
         cx, cy = width // 2, height // 2
-        ring = int(min(width, height) * 0.18 * reveal)
-        draw.ellipse([(cx - ring, cy - ring), (cx + ring, cy + ring)], outline=c_acc, width=sized(8))
+        box_size = int(sized(260) * reveal)
+        draw.rounded_rectangle(
+            [(cx - box_size // 2, cy - box_size // 2), (cx + box_size // 2, cy + box_size // 2)],
+            radius=sized(28), fill=c_surface, outline=c_acc, width=sized(3),
+        )
         if title:
-            draw_text(draw, (cx, cy + ring + sized(80)), title, fit_font(title, sized(64), safe_width), c_text)
+            draw_text(draw, (cx, cy + box_size // 2 + sized(60)), title, fit_font(title, sized(56), safe_width), c_text)
 
     else:
-        # Kinetic typography: the line lands word by word rather than fading in
-        # as one block, which is what makes it read as motion rather than a card.
+        # Kinetic typography: clean word-by-word reveal
         words = [w for w in title.split(" ") if w]
-        line_font = fit_font(title, sized(74), safe_width)
+        line_font = fit_font(title, sized(70), safe_width)
         if words:
             per_word = max(0.12, (duration_s * 0.55) / len(words))
             shown = [w for i, w in enumerate(words) if t >= i * per_word]
@@ -513,10 +530,11 @@ for frame_index in range(total_frames):
         if subtitle:
             sub_reveal = ease_out((t - duration_s * 0.45) / max(0.3, duration_s * 0.3))
             if sub_reveal > 0:
-                draw_text(draw, (width // 2, int(height * 0.58)), subtitle, fit_font(subtitle, sized(44), safe_width), c_acc)
+                draw_text(draw, (width // 2, int(height * 0.58)), subtitle, fit_font(subtitle, sized(42), safe_width), c_acc)
         underline_w = int(safe_width * min(1.0, progress * 1.4))
-        draw.rectangle(
-            [(margin, int(height * 0.52)), (margin + underline_w, int(height * 0.52) + sized(6))],
+        draw.rounded_rectangle(
+            [(margin, int(height * 0.52)), (margin + underline_w, int(height * 0.52) + sized(4))],
+            radius=sized(2),
             fill=c_acc,
         )
 

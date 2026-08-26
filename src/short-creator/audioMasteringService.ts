@@ -22,8 +22,90 @@ export type FinalAudioQaResult = {
   issues: string[];
 };
 
+export type DeadAirInterval = {
+  sceneIndexBefore: number;
+  sceneIndexAfter: number;
+  gapMs: number;
+  startMs: number;
+  endMs: number;
+  suspicious: boolean;
+  severity: "none" | "warning" | "defect";
+  reason: string;
+};
+
+export type DeadAirReport = {
+  hasDeadAir: boolean;
+  hasSuspiciousPauses: boolean;
+  maxNarrationSilenceMs: number;
+  totalNarrationSilenceMs: number;
+  gaps: DeadAirInterval[];
+  issues: string[];
+  warnings: string[];
+};
+
 export class AudioMasteringService {
   constructor(private ffmpeg: FFMpeg) {}
+
+  public analyzeDeadAir(
+    speechWindows: Array<{ sceneIndex: number; startMs: number; endMs: number }>,
+    options: {
+      warningThresholdMs?: number;
+      defectThresholdMs?: number;
+    } = {},
+  ): DeadAirReport {
+    const warningThresholdMs = options.warningThresholdMs ?? 600;
+    const defectThresholdMs = options.defectThresholdMs ?? 1500;
+
+    const gaps: DeadAirInterval[] = [];
+    const issues: string[] = [];
+    const warnings: string[] = [];
+    let maxNarrationSilenceMs = 0;
+    let totalNarrationSilenceMs = 0;
+
+    for (let i = 0; i < speechWindows.length - 1; i++) {
+      const current = speechWindows[i];
+      const next = speechWindows[i + 1];
+      const gapMs = Math.max(0, next.startMs - current.endMs);
+      totalNarrationSilenceMs += gapMs;
+      if (gapMs > maxNarrationSilenceMs) {
+        maxNarrationSilenceMs = gapMs;
+      }
+
+      let severity: "none" | "warning" | "defect" = "none";
+      let reason = "Normal conversational pause";
+
+      if (gapMs >= defectThresholdMs) {
+        severity = "defect";
+        reason = `Excessive dead-air gap (${gapMs}ms) between scene ${current.sceneIndex + 1} and ${next.sceneIndex + 1}`;
+        issues.push(reason);
+      } else if (gapMs >= warningThresholdMs) {
+        severity = "warning";
+        reason = `Suspiciously long silence gap (${gapMs}ms) between scene ${current.sceneIndex + 1} and ${next.sceneIndex + 1}`;
+        warnings.push(reason);
+      }
+
+      gaps.push({
+        sceneIndexBefore: current.sceneIndex,
+        sceneIndexAfter: next.sceneIndex,
+        gapMs,
+        startMs: current.endMs,
+        endMs: next.startMs,
+        suspicious: severity !== "none",
+        severity,
+        reason,
+      });
+    }
+
+    return {
+      hasDeadAir: issues.length > 0,
+      hasSuspiciousPauses: warnings.length > 0,
+      maxNarrationSilenceMs,
+      totalNarrationSilenceMs,
+      gaps,
+      issues,
+      warnings,
+    };
+  }
 
   public async masterVoice(inputPath: string, outputPath: string): Promise<VoiceMasteringResult> {
     const inputMetrics = await this.ffmpeg.measureAudioLoudness(inputPath);

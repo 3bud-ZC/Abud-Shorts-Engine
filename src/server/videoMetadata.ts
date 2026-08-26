@@ -72,6 +72,12 @@ export interface VideoMetadata {
   stageTimings?: Record<string, number>;
   qualityScore?: number;
   technicalScore?: number;
+  creativeScore?: number;
+  creativeGrade?: string;
+  creativeDiagnostics?: Record<string, unknown>;
+  creativeWarnings?: string[];
+  maxNarrationSilenceMs?: number;
+  deadAirReport?: Record<string, unknown>;
   mediaPlanScore?: number;
   overallProductionScore?: number;
   qualityScoreV2?: Record<string, unknown>;

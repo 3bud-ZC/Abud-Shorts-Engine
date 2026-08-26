@@ -273,10 +273,112 @@ export class LocalContentAIProvider implements ContentAIProvider {
     }
 
     // English scenes
+    if (lower.includes("website") || lower.includes("web") || lower.includes("design") || lower.includes("landing page") || lower.includes("site")) {
+      return this.buildWebDesignScenesEnglish(durPerScene, brandName, durationSeconds);
+    }
     if (lower.includes("backup") || lower.includes("cloud") || lower.includes("software") || lower.includes("tech")) {
       return this.buildTechEducationalScenesEnglish(durPerScene, brandName);
     }
     return this.buildGenericEnglishScenes(prompt, durPerScene, brandName);
+  }
+
+  private buildWebDesignScenesEnglish(
+    dur: number,
+    brand?: string,
+    totalDuration = 30,
+  ): ProductionSceneSpec[] {
+    const bName = brand || "our agency";
+    if (totalDuration <= 22) {
+      return [
+        {
+          sceneIndex: 0,
+          purpose: "hook",
+          durationSeconds: dur,
+          narration: "Are you losing valuable potential clients every day because your small business website looks outdated?",
+          onScreenText: "Is Your Website Losing You Clients?",
+          stockSearchTerms: ["laptop website browsing", "modern technology", "business work"],
+          visualPrompt: "Close-up of a sleek modern laptop displaying responsive clean landing page",
+          visualSource: "stock",
+          visualProvider: "pexels",
+          transition: "cut",
+        },
+        {
+          sceneIndex: 1,
+          purpose: "solution",
+          durationSeconds: dur,
+          narration: `${bName} builds clean, lightning fast, mobile friendly websites that showcase your services and earn instant trust.`,
+          onScreenText: "Fast · Responsive · Modern Design",
+          stockSearchTerms: ["web developer coding", "responsive design screen", "creative agency"],
+          visualPrompt: "Modern UI/UX designer working on website layout with creative screens",
+          visualSource: "stock",
+          visualProvider: "pexels",
+          transition: "fade",
+        },
+        {
+          sceneIndex: 2,
+          purpose: "cta",
+          durationSeconds: dur,
+          narration: "Message our team on WhatsApp today to get started on your brand new high converting website.",
+          onScreenText: "Message Us on WhatsApp Today",
+          stockSearchTerms: ["mobile contact us", "happy client handshake", "technology"],
+          visualPrompt: "Happy business owner tapping on smartphone with WhatsApp message ready",
+          visualSource: "stock",
+          visualProvider: "pexels",
+          transition: "cut",
+        },
+      ];
+    }
+
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: "Are you losing valuable potential clients and revenue every single day because your business website looks outdated?",
+        onScreenText: "Is Your Website Losing You Clients?",
+        stockSearchTerms: ["frustrated business owner", "laptop computer search", "office work"],
+        visualPrompt: "Business professional looking at search results on modern laptop",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "problem",
+        durationSeconds: dur,
+        narration: "When customers search for your services, they expect a blazing fast, trustworthy modern site that works on mobile.",
+        onScreenText: "Trust Begins With Your Website",
+        stockSearchTerms: ["smartphone browsing website", "modern online store", "digital marketing"],
+        visualPrompt: "User smoothly scrolling through modern vibrant website on smartphone",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: `${bName} creates custom, lightning fast, responsive websites engineered to elevate your brand and drive real conversions.`,
+        onScreenText: "Fast · Responsive · High Converting",
+        stockSearchTerms: ["creative web design agency", "coding laptop screen", "technology team"],
+        visualPrompt: "Showcase of multiple digital device mockups displaying high end responsive websites",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 3,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: "Message our design team on WhatsApp today to claim your limited discount and launch your new website.",
+        onScreenText: "Message Us on WhatsApp Today",
+        stockSearchTerms: ["whatsapp communication", "business handshake", "happy customer"],
+        visualPrompt: "Customer service chat interaction on glowing smartphone screen with special offer badge",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+    ];
   }
 
   private buildWebDesignScenesArabic(

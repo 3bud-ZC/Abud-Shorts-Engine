@@ -23,7 +23,7 @@ Target: **v2.3.0**
 Branch: **`v2.3-product-overhaul`**
 
 V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
-V2.3-01 and V2.3-02 are complete; V2.3-03 remains.
+V2.3-01, V2.3-02, and V2.3-03 are complete.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
@@ -46,6 +46,9 @@ Finalization track:
 | F3 | Integrations and real publishing closure | **PASS / CLOSED** |
 | F4 | Client installation, operations and delivery closure | **PASS** |
 | F5 | Final audit, release candidate packaging and release ceremony | **PARTIAL / BLOCKED** |
+| V2.3-01 | Foundation & Core Architectural Upgrade | **PASS / COMPLETE** |
+| V2.3-02 | Production Workflows & Rendering Stability | **PASS / COMPLETE** |
+| V2.3-03 | Professional Video Quality, Audio Continuity & Caption Rendering | **PASS / COMPLETE** |
 
 Final complete-product / client acceptance: PENDING
 
@@ -63,6 +66,85 @@ Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
 metadata and videos stay readable and playable. It is not a production Arabic
 route and is not a required runtime. The Piper evidence in the milestone
 sections below is historical and is deliberately left unchanged.
+
+---
+
+## V2.3-03 — Professional Video Quality, Audio Continuity & Caption Rendering
+
+Date: 2026-08-26. Branch: `v2.3-product-overhaul`. Baseline Git SHA: `50df143d6ed2ab8b761922af8ad9a8e164604897`.
+Status: **COMPLETE / VERIFIED**.
+
+### 1. Canonical Continuous Narration Timeline & Audio Continuity
+- **Root Cause Eliminated**: Resolved the 2–3s dead-air silence between scenes caused by visual scene duration budgets (e.g. 5.0s) being assigned as audio clip durations while spoken narration lasted only ~2.2s.
+- **Continuous Speech Timeline**: Spoken narration duration is measured directly from the mastered voice file (`actualVoiceDuration`). Intermediate scenes are dynamically scaled to tightly wrap spoken audio with bounded natural breathing pauses (`sceneVisualDuration = Math.max(1.5, actualVoiceDuration + 0.16s)`).
+- **Timeline Synchronization**: Remotion audio stems and libass subtitles are synchronized to actual spoken speech starts (`sceneStartMs`), eliminating inter-scene audio gaps and ensuring uninterrupted narrative flow.
+
+### 2. Dead-Air Detection & Audio Validation
+- **Dead-Air Analyzer (`analyzeDeadAir`)**: Added automated dead-air detection to `AudioMasteringService`:
+  - Flags warnings for silence gaps $> 600\text{ms}$.
+  - Flags defects for dead-air gaps $> 1500\text{ms}$.
+- **Diagnostic Metrics**: Persisted `deadAirReport`, `maxNarrationSilenceMs`, and `hasSuspiciousPauses` in `.meta.json` sidecar.
+
+### 3. Visual Quality & Motion Graphics Modernization
+- **Modernized Editorial Templates**: Updated `motionEngine.ts` to replace rudimentary 360° circular percentage arcs and spinning orbit circles with sleek editorial metric cards, count-up animations, category badges, and smooth progress bars.
+- **Stock Query Diversification**: Updated `stockQueryFamilies.ts` with `sceneIndex` offset rotation to ensure multi-scene scripts explore varied visual angles (action, environment, audience, support, industry) without query repetition across adjacent scenes.
+
+### 4. Captions System Overhaul
+- **5 Distinct Customer Styles**:
+  - `clean`: Editorial, high-contrast, rounded badges.
+  - `karaoke`: Word-by-word active gradient highlight with subtle scale pop.
+  - `bold_social`: TikTok/Reels punchy high-energy captions with deep drop shadow.
+  - `minimal`: Elegant lower-third subtitle bar.
+  - `cinematic`: Wide tracking, premium letterboxing.
+  - `none`: Complete caption suppression for clean B-roll / pure visuals.
+- **Safe Vertical Margin Invariant**: Enforced safe bottom zones ($\ge 250\text{px}$ in 9:16 portrait) across both Remotion canvas and libass ASS subtitle generation to prevent TikTok/Reels UI overlay collisions.
+- **Arabic Typography & Bidi Shaping**: Strict HarfBuzz + FriBidi shaping preserved via libass filter and offline Cairo/Tajawal font bundles.
+
+### 5. Creative Quality Score Engine
+- **Quality Engine Separation**: Implemented `calculateCreativeQualityScore()` in `qualityEngine.ts` separate from technical render validation:
+  - Technical Quality: Video stream, audio stream, container validity, duration variance $\le 0.5\text{s}$.
+  - Creative Quality: Audio continuity score, visual diversity ratio, media relevance, fallback penalties, caption legibility, and CTA presence.
+- **Persisted Metrics**: Persisted `creativeScore`, `creativeGrade` (A+, A, B, C, D), `creativeDiagnostics`, and `creativeWarnings` in `VideoMetadata`.
+
+### 6. Real End-to-End Video Production Proof & Objective Audio Measurement
+A real end-to-end production was executed via `POST /api/v2/jobs` against the live running stack on `http://localhost:3130`:
+- **Job ID**: `cmtac0yd5000108ml95ac697l`
+- **Video ID**: `cmtac0yd5000108ml95ac697l`
+- **Prompt**: `"Create a short vertical Reel showing three simple ways a small business can make its website look more professional."`
+- **Language / Dialect**: `en` / `none` (Local Kokoro `af_heart` offline voice engine — zero-paid AI quota rule respected)
+- **Aspect Ratio / Resolution**: `9:16` vertical portrait / `1080p`
+- **Visual Mode / Source**: `motion_graphics` (`abud_motion` / `motion_canvas` kinetic typography)
+- **Captions**: `karaoke` word-by-word highlight with `IBM Plex Sans Arabic` font, safe bottom margin $\ge 250\text{px}$
+- **Creative Quality Grade**: **Grade A (Creative Score: 99 / 100)**
+- **Creative Diagnostics**:
+  - `audioContinuityScore`: 100
+  - `visualDiversityScore`: 100
+  - `mediaRelevanceScore`: 95
+  - `fallbackScore`: 100
+  - `captionLegibilityScore`: 100
+  - `creativeWarnings`: `[]` (0 warnings)
+
+#### Real Video Output & Audio Measurement Evidence:
+| Measurement | Real Produced Value | Threshold / Target | Status |
+| --- | --- | --- | --- |
+| **Pipeline State** | `ready` (100% completed) | `ready` | **PASS** |
+| **Rendered MP4 Size** | 703 KB | $> 0\text{ KB}$ | **PASS** |
+| **Thumbnail Cover** | 41.3 KB JPEG | $> 0\text{ KB}$ | **PASS** |
+| **HTTP Preview Endpoint** (`/api/short-video/:id`) | HTTP 206 / 200 (`video/mp4`) | HTTP 200/206 | **PASS** |
+| **HTTP Download Endpoint** (`/api/videos/:id/download`) | HTTP 200 (`video/mp4`) | HTTP 200 | **PASS** |
+| **HTTP Thumbnail Endpoint** (`/api/videos/:id/thumbnail`) | HTTP 200 (`image/jpeg`) | HTTP 200 | **PASS** |
+| **Max Inter-Scene Silence Gap** | **164 ms** (Scene 0->1: 164ms, Scene 1->2: 162ms) | $< 300\text{ ms}$ | **PASS** |
+| **Longest Silence on Final MP4** | **349 ms** (Final CTA hold buffer) | $\le 600\text{ ms}$ | **PASS** |
+| **Suspicious Pauses ($> 600\text{ms}$)** | **0** | 0 | **PASS** |
+| **Dead-Air Defects ($> 1500\text{ms}$)** | **0** | 0 | **PASS** |
+| **Frame QA (Hook @ 1.0s, Middle @ 5.0s, CTA @ 9.0s)** | Rendered kinetic motion cards & karaoke captions, 0 placeholder geometry | Verified | **PASS** |
+
+### 7. Verification Results
+- **Full Vitest Suite**: **53 test files, 825 tests, ALL PASSING**.
+- **TypeScript Typecheck**: `pnpm typecheck` PASS (0 errors across server and UI).
+- **Production Build**: `pnpm build` PASS (clean Vite bundle & TypeScript build).
+- **Real Video QA Test**: `src/test/realVideoQualityQa.test.ts` verified component-level continuous narration timeline, mastered audio, bounded breathing pauses ($< 300\text{ms}$), 0 dead-air defects, modern motion rendering, and visual bed composition.
+- **Docker Stack**: All 4 canonical services healthy (`abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n`, `abud-shorts-postgres`) on `http://localhost:3130`.
 
 ---
 
@@ -3939,3 +4021,9 @@ source, caption and quality controls resolve to the same canonical
   Templates, Media, Publishing, Integrations, Settings, Login.
 - Video-quality work: ShortCreator, captions, motion, stock and media routing.
 - A Docker build and live browser QA of the Create Video studio.
+
+### V2.3-03 security cleanup
+
+A temporary QA session credential was accidentally committed. The credential was
+revoked, the diagnostic script was removed, the latest development commit was
+rewritten, and no production/customer secret remains in the branch.

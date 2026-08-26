@@ -58,6 +58,8 @@ export type QueryFamilyResult = {
 export type QueryFamilyInput = {
   narration: string;
   onScreenText?: string;
+  /** Scene index in the production, used for angle diversification. */
+  sceneIndex?: number;
   /** Scene role from the production spec: hook, problem, solution, cta. */
   purpose?: string;
   /** Media-intelligence visual intent, when one was resolved. */
@@ -305,7 +307,8 @@ export function buildStockQueryFamilies(input: QueryFamilyInput): QueryFamilyRes
 
   // The rotation offset makes each scene of a production ask a different member
   // of the same family, rather than every scene asking for the first entry.
-  const offset = concepts.length + text.length;
+  const sceneIdx = input.sceneIndex ?? 0;
+  const offset = concepts.length + text.length + sceneIdx * 3;
 
   const queries: StockQuery[] = [];
   const addQuery = (

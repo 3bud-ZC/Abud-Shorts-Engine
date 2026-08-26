@@ -562,8 +562,8 @@ export class ShortCreator {
       });
 
       const brandVoiceProfile = spec.brandKit?.voiceProfile as any;
-      const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || sceneTimeline.narration);
-      const targetSceneDuration = sceneTimeline.durationSeconds;
+      const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || originalSceneSpec.narration || sceneTimeline.narration);
+      let targetSceneDuration = sceneTimeline.durationSeconds;
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
       const requestedVoiceProvider = ((brandVoiceProfile?.provider || spec.voiceProvider || "auto") as VoiceProviderId | "auto");
       const requestedVoiceId = pinnedVoiceId || brandVoiceProfile?.voiceId || spec.voiceId || undefined;
@@ -702,13 +702,26 @@ export class ShortCreator {
         actualVoiceDuration = await this.ffmpeg.getMediaDuration(tempMasteredWavPath);
         captionAudioPath = tempMasteredWavPath;
       }
-      sceneTimeline.actualSpeechDurationSeconds = actualVoiceDuration || targetSceneDuration;
+
+      // Canonical continuous narration timeline calculation:
+      // Chain spoken scenes with bounded natural breath pauses (160ms)
+      // and eliminate dead silence between scenes.
+      const isLastScene = index === timeline.scenes.length - 1;
+      const interSceneGapSeconds = 0.16;
+      const sceneSpeechDuration = actualVoiceDuration || sceneTimeline.durationSeconds;
+      let calculatedVisualDuration: number;
+      if (!isLastScene) {
+        calculatedVisualDuration = Math.max(0.5, Math.round((sceneSpeechDuration + interSceneGapSeconds) * 100) / 100);
+      } else {
+        const lastSceneCtaHoldSeconds = 0.35;
+        calculatedVisualDuration = Math.max(0.5, Math.round((sceneSpeechDuration + lastSceneCtaHoldSeconds) * 100) / 100);
+      }
+      targetSceneDuration = calculatedVisualDuration;
+      sceneTimeline.actualSpeechDurationSeconds = sceneSpeechDuration;
+      sceneTimeline.durationSeconds = calculatedVisualDuration;
       sceneTimeline.audioSpeedFactor = speedFactor;
       const speechWindowStartMs = 0;
-      const speechWindowEndMs = Math.min(
-        Math.round((actualVoiceDuration || targetSceneDuration) * 1000),
-        Math.round(targetSceneDuration * 1000),
-      );
+      const speechWindowEndMs = Math.round(sceneSpeechDuration * 1000);
 
       if (!voiceArtifact && voiceAudio && voiceMastering) {
         voiceProvidersUsed.add(voiceAudio.provider || voiceAudio.decision.providerId);
@@ -1736,7 +1749,7 @@ export class ShortCreator {
       index++;
     }
 
-    const totalDurationSeconds = timeline.finalExpectedDurationSeconds;
+    const totalDurationSeconds = Math.round(scenes.reduce((acc, curr) => acc + (curr.audio?.duration || 0), 0) * 100) / 100;
 
 
     await this.emitProgress(onProgress, {
@@ -1802,8 +1815,11 @@ export class ShortCreator {
         checkpointStatus: "running",
       });
       // Scene captions are scene-relative; shift them onto the video timeline.
+      const sceneStartMs = scenes.map((_s, i) =>
+        scenes.slice(0, i).reduce((acc, curr) => acc + (curr.audio?.duration || 0) * 1000, 0),
+      );
       const timelineWords = sceneCaptionWords.flatMap((words, sceneIndex) => {
-        const offsetMs = Math.round((timeline.scenes[sceneIndex]?.startSeconds || 0) * 1000);
+        const offsetMs = Math.round(sceneStartMs[sceneIndex] || 0);
         return (words || [])
           .map((word) => ({
             text: word.text.trim(),
@@ -1932,6 +1948,29 @@ export class ShortCreator {
         0,
       );
 
+      const sceneStartMsForQa = scenes.map((_s, i) =>
+        scenes.slice(0, i).reduce((acc, curr) => acc + (curr.audio?.duration || 0) * 1000, 0),
+      );
+      const speechWindowsForDeadAir = scenes.map((s, i) => ({
+        sceneIndex: i,
+        startMs: Math.round(sceneStartMsForQa[i] || 0),
+        endMs: Math.round((sceneStartMsForQa[i] || 0) + (s.speechWindowsMs?.[0]?.endMs || (s.audio?.duration || 0) * 1000)),
+      }));
+      const deadAirReport = this.audioMastering.analyzeDeadAir(speechWindowsForDeadAir);
+
+      const creativeQualityResult = qualityEngine.calculateCreativeQualityScore({
+        deadAirDurationMs: deadAirReport.totalNarrationSilenceMs,
+        maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
+        totalDurationSeconds: validationResult.durationSeconds,
+        sceneCount: scenes.length,
+        distinctAssetCount: new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size,
+        fallbackCount: selectedVisuals.filter((item) => item.metadata?.fallback || item.metadata?.fallbackReason).length,
+        hasCta: spec.scenes.some((s) => s.purpose === "cta" || (spec.cta && spec.cta.text)),
+        captionStyle: spec.captionStyle,
+        hasCaptions: spec.captionStyle !== "none",
+        mediaRelevanceScores: sceneQa.map((item) => Number(item.visualRelevanceScore) || 90),
+      });
+
       const metadata: VideoMetadata = {
         videoId,
         filename: `${videoId}.mp4`,
@@ -2033,6 +2072,12 @@ export class ShortCreator {
         },
         qualityScore: validationResult.technicalScore,
         technicalScore: validationResult.technicalScore,
+        creativeScore: creativeQualityResult.creativeScore,
+        creativeGrade: creativeQualityResult.creativeGrade,
+        creativeDiagnostics: creativeQualityResult.diagnostics,
+        creativeWarnings: creativeQualityResult.warnings,
+        maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
+        deadAirReport,
         mediaPlanScore: mediaPlan.qualityReview?.overallScore || 90,
         qualityScoreV2: {
           technical: validationResult.technicalScore,
