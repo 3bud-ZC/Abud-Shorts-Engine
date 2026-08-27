@@ -24,6 +24,7 @@ import { videoCostLabel, type CostEstimateLike } from "../../types/costDisplay";
 export type ProductionSummaryProps = {
   spec: any;
   costEstimate?: CostEstimateLike;
+  readiness?: any;
 };
 
 type SummaryRow = { label: string; value: string; hint?: string };
@@ -64,7 +65,7 @@ function captionRow(spec: any): SummaryRow | null {
   return { label: "Captions", value: font ? `${styleLabel} · ${font}` : styleLabel };
 }
 
-export const ProductionSummary: React.FC<ProductionSummaryProps> = ({ spec, costEstimate }) => {
+export const ProductionSummary: React.FC<ProductionSummaryProps> = ({ spec, costEstimate, readiness }) => {
   const theme = useTheme();
   const t = theme.abud;
   if (!spec) return null;
@@ -76,8 +77,18 @@ export const ProductionSummary: React.FC<ProductionSummaryProps> = ({ spec, cost
   if (captions) rows.push(captions);
 
   const visualMode = spec.visualMode;
-  if (visualMode) {
-    rows.push({ label: "Visuals", value: VISUAL_MODE_LABELS[visualMode] || String(visualMode) });
+  const contract = spec?.metadata?.uiContract || {};
+  if (contract.sourceStrategy || visualMode) {
+    rows.push({
+      label: "Visuals",
+      value: contract.sourceStrategy || VISUAL_MODE_LABELS[visualMode] || String(visualMode),
+      hint:
+        contract.stockProvider && contract.stockProvider !== "auto_stock"
+          ? String(contract.stockProvider)
+          : contract.aiVisualProvider && contract.aiVisualProvider !== "auto"
+            ? String(contract.aiVisualProvider)
+            : undefined,
+    });
   }
 
   const resolution = spec.resolution;
@@ -95,7 +106,15 @@ export const ProductionSummary: React.FC<ProductionSummaryProps> = ({ spec, cost
   }
 
   // Always shown, and never as a raw number that might be undefined.
-  rows.push({ label: "Estimated External Cost", value: videoCostLabel(costEstimate) });
+  rows.push({
+    label: "External Usage",
+    value: readiness?.externalUsage?.length ? readiness.externalUsage.join(" · ") : videoCostLabel(costEstimate),
+  });
+  rows.push({
+    label: "Readiness",
+    value: readiness ? (readiness.ready ? "Ready" : "Blocked") : "Preview not required",
+    hint: readiness && !readiness.ready ? readiness.missingRequirements?.[0] : undefined,
+  });
 
   return (
     <Card sx={{ p: 2.5, borderColor: t.primaryMuted }}>

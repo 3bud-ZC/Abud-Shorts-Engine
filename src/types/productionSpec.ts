@@ -285,8 +285,12 @@ export function calculateNarrationBudget(
   targetDurationSeconds: number,
   isArabic = false,
 ): { maxWords: number; maxChars: number; recommendedWords: number } {
-  const wordRate = isArabic ? 2.2 : 2.4;
-  const charRate = isArabic ? 11 : 13.5;
+  // Calibrated against the shipped local voice (Kokoro af_heart) and ElevenLabs
+  // connected-speech rates. The earlier 2.2 / 2.4 assumed a slower delivery, so
+  // scene narration was over-compacted and the timeline collapsed below the
+  // requested duration.
+  const wordRate = isArabic ? 2.7 : 2.9;
+  const charRate = isArabic ? 13 : 15.5;
   const safeDuration = Math.max(2, targetDurationSeconds);
   return {
     maxWords: Math.max(4, Math.floor(safeDuration * wordRate)),
@@ -309,13 +313,59 @@ export function compactNarrationToBudget(
     return trimmed;
   }
 
-  const compactedWords = words.slice(0, budget.maxWords);
+  // Prefer to end on a clause boundary (comma / semicolon / sentence end) within
+  // budget rather than chop mid-thought, so the shortened line still reads as a
+  // complete phrase.
+  let cutAt = budget.maxWords;
+  for (let i = Math.min(budget.maxWords, words.length) - 1; i >= Math.ceil(budget.maxWords * 0.5); i -= 1) {
+    if (/[.!?؟,،؛]$/.test(words[i])) {
+      cutAt = i + 1;
+      break;
+    }
+  }
+
+  const compactedWords = words.slice(0, cutAt);
   let result = compactedWords.join(" ").trim();
   result = result.replace(/[,،؛-]\s*$/, "");
   if (!/[.!?؟]$/.test(result)) {
     result += isArabic ? "..." : ".";
   }
   return result;
+}
+
+/**
+ * The visual (on-screen) duration for one scene, given the measured spoken audio
+ * and the scene's resolved budget.
+ *
+ * The V2.3-03 continuous-narration rule sizes a scene to `speech + a small
+ * breath` so there is no dead air between scenes. On its own that collapses the
+ * whole video when the generated narration lands far short of the requested
+ * duration (a 12s request rendering ~5s). This keeps the no-dead-air floor but
+ * lets a scene hold toward its resolved budget, capped so any residual silent
+ * gap stays below the dead-air defect threshold and the scene's own motion
+ * keeps playing - never black or silent padding.
+ */
+export function planSceneVisualDurationSeconds(params: {
+  speechSeconds: number;
+  resolvedSceneBudgetSeconds: number;
+  isLastScene: boolean;
+  interSceneGapSeconds?: number;
+  lastSceneHoldSeconds?: number;
+  maxVisualHoldSeconds?: number;
+}): number {
+  const gap = params.isLastScene
+    ? params.lastSceneHoldSeconds ?? 0.35
+    : params.interSceneGapSeconds ?? 0.16;
+  const speechFloor = Math.max(0, params.speechSeconds) + gap;
+  const budget = Math.max(1.5, params.resolvedSceneBudgetSeconds || speechFloor);
+  // A scene may hold its own motion/visual past the speech, up to its resolved
+  // budget, to keep the video on the requested duration. The hold is discounted
+  // from dead-air analysis (music + animation keep playing), so it is bounded
+  // only by the budget itself - a genuinely tiny narration still cannot push a
+  // single scene past its share of the timeline.
+  const maxHold = params.maxVisualHoldSeconds ?? 3.0;
+  const value = Math.max(0.5, speechFloor, Math.min(budget, speechFloor + maxHold));
+  return Math.round(value * 100) / 100;
 }
 
 export function resolveProductionTimeline(

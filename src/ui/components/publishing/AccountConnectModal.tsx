@@ -24,18 +24,15 @@ import TelegramIcon from "@mui/icons-material/Telegram";
 import CloudUploadIcon from "@mui/icons-material/CloudUploadOutlined";
 import MusicNoteIcon from "@mui/icons-material/MusicNoteOutlined";
 import type { PublishingPlatform, SocialAccount } from "../../pages/v2Types";
+import { useI18n } from "../../i18n";
 
 /**
  * PUBLISHING CONNECTION
  * ---------------------
- * Each destination gets the form it actually needs.
- *
- * The previous single generic form asked every customer for
- * "Account ID / Handle / Chat ID" and an "API Key / Access Token / Bot Token
- * (Optional if set in environment)" - developer vocabulary that also told the
- * customer to go and edit a file they are never meant to touch. Where the
- * engine has OAuth, we send them to it; where a service genuinely needs a
- * token (Telegram bots, Upload-Post), we ask for that and nothing else.
+ * Each destination gets the form it actually needs. Where the engine has OAuth
+ * we send the customer to it; where a service genuinely needs a token (Telegram
+ * bots, Upload-Post) we ask for that and nothing else. All customer-visible
+ * prose is resolved from the i18n catalogue.
  */
 
 interface AccountConnectModalProps {
@@ -48,24 +45,26 @@ type FieldKey = "accountName" | "accountId" | "token";
 
 type DestinationField = {
   key: FieldKey;
-  label: string;
+  labelKey: string;
   placeholder?: string;
-  helper?: string;
+  placeholderKey?: string;
+  helperKey?: string;
   secret?: boolean;
   required: boolean;
 };
 
 type Destination = {
   id: string;
+  /** Proper-noun name, or an i18n key when the label is descriptive. */
   label: string;
-  blurb: string;
+  labelKey?: string;
+  blurbKey: string;
   icon: React.ReactNode;
   platform: PublishingPlatform;
   provider: string;
-  /** OAuth destinations never ask for a pasted credential. */
   connection: "oauth" | "token";
   oauthProvider?: string;
-  oauthLabel?: string;
+  oauthLabelKey?: string;
   fields: DestinationField[];
 };
 
@@ -73,43 +72,44 @@ const DESTINATIONS: Destination[] = [
   {
     id: "youtube",
     label: "YouTube",
-    blurb: "Publish Shorts straight to your channel.",
+    blurbKey: "publishing.connect.dest.youtube.blurb",
     icon: <YouTubeIcon />,
     platform: "youtube",
     provider: "youtube_direct",
     connection: "oauth",
     oauthProvider: "youtube",
-    oauthLabel: "Connect with Google",
+    oauthLabelKey: "publishing.connect.dest.youtube.oauth",
     fields: [],
   },
   {
     id: "meta",
     label: "Instagram & Facebook",
-    blurb: "Publish Reels to your connected pages.",
+    labelKey: "publishing.connect.dest.meta.label",
+    blurbKey: "publishing.connect.dest.meta.blurb",
     icon: <InstagramIcon />,
     platform: "instagram",
     provider: "meta_direct",
     connection: "oauth",
     oauthProvider: "meta",
-    oauthLabel: "Connect Meta Account",
+    oauthLabelKey: "publishing.connect.dest.meta.oauth",
     fields: [],
   },
   {
     id: "tiktok",
     label: "TikTok",
-    blurb: "Publish videos to your TikTok account.",
+    blurbKey: "publishing.connect.dest.tiktok.blurb",
     icon: <MusicNoteIcon />,
     platform: "tiktok",
     provider: "tiktok_direct",
     connection: "oauth",
     oauthProvider: "tiktok",
-    oauthLabel: "Connect TikTok",
+    oauthLabelKey: "publishing.connect.dest.tiktok.oauth",
     fields: [],
   },
   {
     id: "telegram",
     label: "Telegram",
-    blurb: "Send finished videos to a channel or chat.",
+    blurbKey: "publishing.connect.dest.telegram.blurb",
     icon: <TelegramIcon />,
     platform: "telegram",
     provider: "telegram_bot",
@@ -117,32 +117,33 @@ const DESTINATIONS: Destination[] = [
     fields: [
       {
         key: "accountName",
-        label: "Display name",
-        placeholder: "My Brand Channel",
+        labelKey: "publishing.connect.field.displayName",
+        placeholderKey: "publishing.connect.field.displayNamePlaceholderTelegram",
         required: true,
-        helper: "Only used to label this connection in ABUD Shorts.",
+        helperKey: "publishing.connect.field.displayNameHelp",
       },
       {
         key: "accountId",
-        label: "Channel or chat",
+        labelKey: "publishing.connect.field.channelChat",
         placeholder: "@MyChannel",
         required: true,
-        helper: "The channel username, or the numeric chat id for a private group.",
+        helperKey: "publishing.connect.field.channelChatHelp",
       },
       {
         key: "token",
-        label: "Bot token",
-        placeholder: "Paste the token from @BotFather",
+        labelKey: "publishing.connect.field.botToken",
+        placeholderKey: "publishing.connect.field.botTokenPlaceholder",
         secret: true,
         required: true,
-        helper: "Stored encrypted and never shown again.",
+        helperKey: "publishing.connect.field.secretHelp",
       },
     ],
   },
   {
     id: "upload_post",
     label: "Upload-Post",
-    blurb: "Publish to several platforms through one service.",
+    labelKey: "publishing.connect.dest.uploadPost.label",
+    blurbKey: "publishing.connect.dest.uploadPost.blurb",
     icon: <CloudUploadIcon />,
     platform: "youtube",
     provider: "upload_post",
@@ -150,18 +151,18 @@ const DESTINATIONS: Destination[] = [
     fields: [
       {
         key: "accountName",
-        label: "Display name",
-        placeholder: "My Upload-Post account",
+        labelKey: "publishing.connect.field.displayName",
+        placeholderKey: "publishing.connect.field.displayNamePlaceholderUploadPost",
         required: true,
-        helper: "Only used to label this connection in ABUD Shorts.",
+        helperKey: "publishing.connect.field.displayNameHelp",
       },
       {
         key: "token",
-        label: "Upload-Post API key",
-        placeholder: "Paste your API key",
+        labelKey: "publishing.connect.field.uploadPostKey",
+        placeholderKey: "publishing.connect.field.uploadPostKeyPlaceholder",
         secret: true,
         required: true,
-        helper: "Stored encrypted and never shown again.",
+        helperKey: "publishing.connect.field.secretHelp",
       },
     ],
   },
@@ -174,6 +175,7 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
 }) => {
   const theme = useTheme();
   const t = theme.abud;
+  const { t: tr } = useI18n();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<FieldKey, string>>({
     accountName: "",
@@ -189,6 +191,8 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
     () => DESTINATIONS.find((entry) => entry.id === selectedId) || null,
     [selectedId],
   );
+
+  const destinationLabel = (entry: Destination) => (entry.labelKey ? tr(entry.labelKey) : entry.label);
 
   const reset = () => {
     setSelectedId(null);
@@ -221,14 +225,14 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
       const healthy = res.data?.healthy ?? res.data?.ok ?? false;
       setTestResult(
         healthy
-          ? "Connection succeeded."
-          : res.data?.message || "The service did not accept these details.",
+          ? tr("publishing.connect.testSucceeded")
+          : res.data?.message || tr("publishing.connect.testRejected"),
       );
     } catch (err: unknown) {
       const message =
         axios.isAxiosError(err) && err.response?.data?.message
           ? String(err.response.data.message)
-          : "Could not reach the service.";
+          : tr("publishing.connect.unreachable");
       setTestResult(message);
     } finally {
       setTesting(false);
@@ -237,7 +241,9 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
 
   const submit = async () => {
     if (!destination || missingField) {
-      setError(missingField ? `${missingField.label} is required.` : null);
+      setError(
+        missingField ? tr("publishing.connect.required", { field: tr(missingField.labelKey) }) : null,
+      );
       return;
     }
     setLoading(true);
@@ -257,7 +263,7 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
       const message =
         axios.isAxiosError(err) && err.response?.data?.message
           ? String(err.response.data.message)
-          : "Could not connect this account.";
+          : tr("publishing.connect.connectFailed");
       setError(message);
     } finally {
       setLoading(false);
@@ -267,7 +273,9 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
   return (
     <Dialog open={open} onClose={close} maxWidth="sm" fullWidth>
       <DialogTitle>
-        {destination ? `Connect ${destination.label}` : "Connect a publishing account"}
+        {destination
+          ? tr("publishing.connect.titleFor", { destination: destinationLabel(destination) })
+          : tr("publishing.connect.title")}
       </DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2.5} sx={{ mt: 1 }}>
@@ -276,7 +284,7 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
           {!destination && (
             <>
               <Typography variant="body2" sx={{ color: t.textSecondary }}>
-                Choose where you want your finished videos to go.
+                {tr("publishing.connect.choose")}
               </Typography>
               <Grid container spacing={1.5}>
                 {DESTINATIONS.map((entry) => (
@@ -302,10 +310,10 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
                         <Box sx={{ color: t.primary, display: "flex" }}>{entry.icon}</Box>
                         <Box sx={{ minWidth: 0 }}>
                           <Typography variant="body2" fontWeight={650}>
-                            {entry.label}
+                            {destinationLabel(entry)}
                           </Typography>
                           <Typography variant="caption" sx={{ color: t.textSecondary }}>
-                            {entry.blurb}
+                            {tr(entry.blurbKey)}
                           </Typography>
                         </Box>
                       </Stack>
@@ -319,14 +327,16 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
           {destination?.connection === "oauth" && (
             <Stack spacing={2} alignItems="flex-start">
               <Typography variant="body2" sx={{ color: t.textSecondary }}>
-                {destination.blurb} You will be taken to {destination.label} to approve access, and
-                sent straight back here.
+                {tr("publishing.connect.oauthIntro", {
+                  blurb: tr(destination.blurbKey),
+                  destination: destinationLabel(destination),
+                })}
               </Typography>
               <Button variant="contained" size="large" onClick={startOauth}>
-                {destination.oauthLabel}
+                {destination.oauthLabelKey ? tr(destination.oauthLabelKey) : tr("publishing.connectAccount")}
               </Button>
               <Typography variant="caption" sx={{ color: t.muted }}>
-                ABUD Shorts never sees your password.
+                {tr("publishing.connect.noPassword")}
               </Typography>
             </Stack>
           )}
@@ -334,18 +344,18 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
           {destination?.connection === "token" && (
             <Stack spacing={2}>
               <Typography variant="body2" sx={{ color: t.textSecondary }}>
-                {destination.blurb}
+                {tr(destination.blurbKey)}
               </Typography>
               {destination.fields.map((field) => (
                 <TextField
                   key={field.key}
-                  label={field.label}
+                  label={tr(field.labelKey)}
                   size="small"
                   fullWidth
                   required={field.required}
                   type={field.secret ? "password" : "text"}
-                  placeholder={field.placeholder}
-                  helperText={field.helper}
+                  placeholder={field.placeholderKey ? tr(field.placeholderKey) : field.placeholder}
+                  helperText={field.helperKey ? tr(field.helperKey) : undefined}
                   value={values[field.key]}
                   onChange={(event) =>
                     setValues((prev) => ({ ...prev, [field.key]: event.target.value }))
@@ -360,12 +370,12 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
       <DialogActions sx={{ px: 3, py: 2 }}>
         {destination && (
           <Button startIcon={<ArrowBackIcon />} onClick={reset} disabled={loading}>
-            Back
+            {tr("common.back")}
           </Button>
         )}
         <Box sx={{ flexGrow: 1 }} />
         <Button onClick={close} disabled={loading}>
-          Cancel
+          {tr("common.cancel")}
         </Button>
         {destination?.connection === "token" && (
           <>
@@ -375,7 +385,9 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
               disabled={testing || Boolean(missingField)}
               startIcon={testing ? <CircularProgress size={16} /> : undefined}
             >
-              {destination.id === "telegram" ? "Test bot" : "Test connection"}
+              {destination.id === "telegram"
+                ? tr("publishing.connect.testBot")
+                : tr("common.testConnection")}
             </Button>
             <Button
               variant="contained"
@@ -383,7 +395,7 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
               onClick={submit}
               disabled={loading || Boolean(missingField)}
             >
-              {loading ? "Connecting..." : "Connect"}
+              {loading ? tr("publishing.connect.connecting") : tr("publishing.connect.connect")}
             </Button>
           </>
         )}

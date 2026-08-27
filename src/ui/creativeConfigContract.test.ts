@@ -78,16 +78,17 @@ describe("Advanced creative controls", () => {
 });
 
 describe("Product Ad media contract", () => {
-  it("only offers product assets the library reports as usable", () => {
-    expect(creatorSource).toContain("usableProducts");
-    expect(creatorSource).toContain("prod?.usable !== false");
-    // The picker must iterate the filtered list, never the raw one.
-    expect(creatorSource).toContain("usableProducts.map((prod)");
-    expect(creatorSource).not.toContain("uploadedProducts.map((prod)");
+  it("only offers media assets the library reports as usable", () => {
+    expect(creatorSource).toContain("selectableMediaAssets");
+    expect(creatorSource).toContain("asset?.usability?.usableForVideo");
+    // The picker must iterate filtered lists, never the raw one.
+    expect(creatorSource).toContain("selectableMediaAssets).map((asset)");
+    expect(creatorSource).not.toContain("mediaAssets.map((asset)");
   });
 
-  it("auto-selects a usable asset rather than whichever happens to be first", () => {
-    expect(creatorSource).toContain("prods.find((prod: any) => prod.usable !== false)");
+  it("auto-selects a product-capable asset rather than whichever happens to be first", () => {
+    expect(creatorSource).toContain("assets.find((asset) => asset.usability?.usableForProduct");
+    expect(creatorSource).toContain("productCapableAssets");
   });
 
   it("tells the customer plainly that a Product Ad needs a product photo", () => {
@@ -171,7 +172,10 @@ describe("Browser QA regressions", () => {
     // a completely empty main area.
     expect(appSource).toContain('<Route path="*"');
     expect(appSource).toContain("NotFoundPage");
-    expect(appSource).toMatch(/Page not found/);
+    // The copy itself moved into the translation catalogue in V2.3-01, so the
+    // page is now asserted by the key it renders rather than by an English
+    // literal that would only ever be right in one of the two languages.
+    expect(appSource).toMatch(/common\.pageNotFound/);
   });
 
   it("never prints an internal identifier in the normal Video Details view", () => {

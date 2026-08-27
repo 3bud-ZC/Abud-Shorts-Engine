@@ -1,9 +1,16 @@
 # ==============================================================================
 # ABUD Shorts Engine - GHCR candidate image workflow
 # ==============================================================================
-# Manual-only candidate gate for F5.1. It uses the repository GITHUB_TOKEN with
-# package write permission, publishes only sha-<commit> candidate tags, and can
-# later promote an already accepted digest without rebuilding application bytes.
+# Manual-only candidate gate. It uses the repository GITHUB_TOKEN with package
+# write permission, publishes only sha-<commit> candidate tags, and can later
+# promote an already accepted digest onto the version and stable tags without
+# rebuilding application bytes.
+#
+# The workflow is version-agnostic: it checks only that package.json and
+# src/version.ts agree on PRODUCT_VERSION, so the same gate serves every
+# release candidate. Candidate mode never creates a Git tag or a GitHub
+# Release and never moves the version or stable tag - that is promote mode,
+# run only after the release is approved.
 # ==============================================================================
 
 name: GHCR Candidate
@@ -18,7 +25,7 @@ on:
       source_ref:
         description: "Git ref to check out before building or promoting"
         required: true
-        default: v2.2-finalization
+        default: v2.3-product-overhaul
         type: string
       mode:
         description: "Build candidate image or promote an accepted digest"
@@ -68,8 +75,8 @@ jobs:
             echo "::error::package.json is $VERSION but src/version.ts is $SOURCE_VERSION."
             exit 1
           fi
-          if [ "$VERSION" != "2.2.0" ]; then
-            echo "::error::F5.1 can only publish 2.2.0 candidates, found $VERSION."
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::PRODUCT_VERSION $VERSION is not a plain semantic version."
             exit 1
           fi
 
@@ -135,23 +142,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Both builds are pinned to the "default" builder, which uses the Docker
-      # driver and so shares the daemon's image store. The container driver
-      # that setup-buildx-action makes current keeps its own isolated store, so
-      # a base image loaded there is invisible to the next build and its FROM
-      # falls through to Docker Hub. Pinning the builder is what lets the
-      # runtime image resolve the base image built one step earlier.
-      - name: Build the base image
-        if: inputs.mode == 'candidate'
-        run: |
-          docker buildx build \
-            --builder default \
-            --platform linux/amd64 \
-            --file main-tiny.Dockerfile \
-            --tag abud-shorts-engine-base:${{ steps.identity.outputs.tag }} \
-            --load \
-            .
-
+      # v2.Dockerfile builds every layer it needs, so the candidate image
+      # comes out of one build with no separate base tag to stay in step with.
       - name: Build and push candidate image
         id: push
         if: inputs.mode == 'candidate'
@@ -159,10 +151,8 @@ jobs:
           set -euo pipefail
           IMAGE="${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.tag }}"
           docker buildx build \
-            --builder default \
             --platform linux/amd64 \
             --file v2.Dockerfile \
-            --build-arg BASE_IMAGE=abud-shorts-engine-base:${{ steps.identity.outputs.tag }} \
             --tag "$IMAGE" \
             --label "org.opencontainers.image.title=ABUD Shorts Engine" \
             --label "org.opencontainers.image.description=Client-installed short-video production system" \
@@ -171,11 +161,8 @@ jobs:
             --label "org.opencontainers.image.source=${{ steps.identity.outputs.source }}" \
             --label "org.opencontainers.image.created=${{ steps.identity.outputs.created }}" \
             --label "org.opencontainers.image.licenses=MIT" \
-            --load \
+            --push \
             .
-          # The Docker driver builds into the daemon rather than exporting
-          # straight to a registry, so publishing is its own step.
-          docker push "$IMAGE"
 
       - name: Resolve pushed candidate digest
         id: digest

@@ -27,16 +27,28 @@ import {
 import UpdateCenter from "../components/UpdateCenter";
 import PublicAddressPanel from "../components/PublicAddressPanel";
 import type { ApiTokenItem, BusinessTemplateOption, V2Brand } from "./v2Types";
+import { DURATION_OPTIONS } from "./videoTypes";
+import { useI18n } from "../i18n";
+
+/** Keeps a duration saved under an older option list selectable. */
+function durationChoicesFor(saved: number): number[] {
+  return DURATION_OPTIONS.includes(saved)
+    ? DURATION_OPTIONS
+    : [...DURATION_OPTIONS, saved].sort((a, b) => a - b);
+}
 
 const SettingsPage: React.FC = () => {
+  const { t: tr, format } = useI18n();
   const [settings, setSettings] = useState<any>(null);
   const [brands, setBrands] = useState<V2Brand[]>([]);
-  const [templates, setTemplates] = useState<BusinessTemplateOption[]>([]);
+  const [, setTemplates] = useState<BusinessTemplateOption[]>([]);
   const [draft, setDraft] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const savedDuration = Number(draft?.defaultDuration) || 30;
+  const durationChoices = durationChoicesFor(savedDuration);
 
   useEffect(() => {
     Promise.all([
@@ -50,8 +62,9 @@ const SettingsPage: React.FC = () => {
         setBrands(brandsResponse.data.brands || []);
         setTemplates(templatesResponse.data.templates || []);
       })
-      .catch(() => setError("Failed to load settings."))
+      .catch(() => setError(tr("settings.loadFailed")))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = async () => {
@@ -59,22 +72,24 @@ const SettingsPage: React.FC = () => {
     try {
       const response = await axios.put("/api/v2/settings", draft);
       setDraft(response.data.settings || {});
-      setMessage("Production defaults saved.");
+      setMessage(tr("settings.saved"));
     } catch (err: any) {
-      setError(err?.response?.data?.error || "Settings could not be saved.");
+      setError(err?.response?.data?.error || tr("settings.saveFailed"));
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <LoadingState label="Loading settings..." />;
+  if (loading) return <LoadingState label={tr("settings.loading")} />;
+
+  const integrationStatus = (configured?: boolean) => (configured ? "configured" : "not_configured");
 
   return (
     <>
       <PageHeader
-        title="Settings"
-        eyebrow="Configuration"
-        description="Defaults for new videos, your brand, publishing, security and backups."
+        title={tr("settings.title")}
+        eyebrow={tr("settings.eyebrow")}
+        description={tr("settings.description")}
         actions={
           <Button
             variant="contained"
@@ -82,7 +97,7 @@ const SettingsPage: React.FC = () => {
             disabled={saving}
             onClick={save}
           >
-            {saving ? "Saving..." : "Save Defaults"}
+            {saving ? tr("common.saving") : tr("settings.saveDefaults")}
           </Button>
         }
       />
@@ -98,132 +113,133 @@ const SettingsPage: React.FC = () => {
         {/* Production Defaults */}
         <Grid item xs={12} lg={7}>
           <SectionCard
-            title="Production Defaults"
-            description="Default initializers when opening the Create Video Studio."
+            title={tr("settings.defaults.title")}
+            description={tr("settings.defaults.description")}
           >
             <Grid container spacing={2}>
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Creation Mode</InputLabel>
+                  <InputLabel>{tr("settings.field.creationMode")}</InputLabel>
                   <Select
-                    label="Default Creation Mode"
+                    label={tr("settings.field.creationMode")}
                     value={draft.defaultCreationMode || "prompt"}
                     onChange={(e) => setDraft({ ...draft, defaultCreationMode: e.target.value })}
                   >
-                    <MenuItem value="prompt">Prompt Mode (AI Studio)</MenuItem>
-                    <MenuItem value="template">Template Mode</MenuItem>
+                    <MenuItem value="prompt">{tr("settings.field.creationModePrompt")}</MenuItem>
+                    <MenuItem value="template">{tr("settings.field.creationModeTemplate")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Language</InputLabel>
+                  <InputLabel>{tr("settings.field.language")}</InputLabel>
                   <Select
-                    label="Default Language"
+                    label={tr("settings.field.language")}
                     value={draft.defaultLanguage || "ar"}
                     onChange={(e) => setDraft({ ...draft, defaultLanguage: e.target.value })}
                   >
-                    <MenuItem value="auto">Auto Detect</MenuItem>
-                    <MenuItem value="ar">Arabic (العربية)</MenuItem>
-                    <MenuItem value="en">English</MenuItem>
+                    <MenuItem value="auto">{tr("settings.field.languageAuto")}</MenuItem>
+                    <MenuItem value="ar">{tr("settings.field.languageArabic")}</MenuItem>
+                    <MenuItem value="en">{tr("settings.field.languageEnglish")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Arabic Dialect</InputLabel>
+                  <InputLabel>{tr("settings.field.arabicDialect")}</InputLabel>
                   <Select
-                    label="Default Arabic Dialect"
+                    label={tr("settings.field.arabicDialect")}
                     value={draft.defaultArabicDialect || "egyptian"}
                     onChange={(e) => setDraft({ ...draft, defaultArabicDialect: e.target.value })}
                   >
-                    <MenuItem value="egyptian">Egyptian Arabic (المصرية)</MenuItem>
-                    <MenuItem value="msa">Modern Standard Arabic (الفصحى)</MenuItem>
-                    <MenuItem value="saudi">Saudi Arabic (السعودية)</MenuItem>
-                    <MenuItem value="gulf">Gulf Arabic (الخليجية)</MenuItem>
-                    <MenuItem value="levantine">Levantine Arabic (الشامية)</MenuItem>
+                    <MenuItem value="egyptian">{tr("settings.field.dialectEgyptian")}</MenuItem>
+                    <MenuItem value="msa">{tr("settings.field.dialectMsa")}</MenuItem>
+                    <MenuItem value="saudi">{tr("settings.field.dialectSaudi")}</MenuItem>
+                    <MenuItem value="gulf">{tr("settings.field.dialectGulf")}</MenuItem>
+                    <MenuItem value="levantine">{tr("settings.field.dialectLevantine")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Duration</InputLabel>
+                  <InputLabel>{tr("settings.field.duration")}</InputLabel>
                   <Select
-                    label="Default Duration"
-                    value={draft.defaultDuration || 30}
+                    label={tr("settings.field.duration")}
+                    value={savedDuration}
                     onChange={(e) => setDraft({ ...draft, defaultDuration: Number(e.target.value) })}
                   >
-                    <MenuItem value={15}>15 Seconds</MenuItem>
-                    <MenuItem value={20}>20 Seconds</MenuItem>
-                    <MenuItem value={30}>30 Seconds</MenuItem>
-                    <MenuItem value={45}>45 Seconds</MenuItem>
-                    <MenuItem value={60}>60 Seconds</MenuItem>
+                    {durationChoices.map((seconds) => (
+                      <MenuItem key={seconds} value={seconds}>
+                        {tr("settings.field.durationSeconds", { count: seconds })}
+                      </MenuItem>
+                    ))}
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Aspect Ratio</InputLabel>
+                  <InputLabel>{tr("settings.field.aspectRatio")}</InputLabel>
                   <Select
-                    label="Default Aspect Ratio"
+                    label={tr("settings.field.aspectRatio")}
                     value={draft.defaultAspectRatio || "9:16"}
                     onChange={(e) => setDraft({ ...draft, defaultAspectRatio: e.target.value })}
                   >
-                    <MenuItem value="9:16">9:16 (Vertical Short)</MenuItem>
-                    <MenuItem value="16:9">16:9 (Landscape)</MenuItem>
-                    <MenuItem value="1:1">1:1 (Square)</MenuItem>
+                    <MenuItem value="9:16">{tr("settings.field.aspectVertical")}</MenuItem>
+                    <MenuItem value="16:9">{tr("settings.field.aspectLandscape")}</MenuItem>
+                    <MenuItem value="1:1">{tr("settings.field.aspectSquare")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Quality Profile</InputLabel>
+                  <InputLabel>{tr("settings.field.quality")}</InputLabel>
                   <Select
-                    label="Default Quality Profile"
+                    label={tr("settings.field.quality")}
                     value={draft.defaultQuality || "standard"}
                     onChange={(e) => setDraft({ ...draft, defaultQuality: e.target.value })}
                   >
-                    <MenuItem value="draft">Draft (Fastest)</MenuItem>
-                    <MenuItem value="standard">Standard (1080p Balanced)</MenuItem>
-                    <MenuItem value="high">High Quality</MenuItem>
-                    <MenuItem value="premium">Premium</MenuItem>
+                    <MenuItem value="draft">{tr("settings.field.qualityDraft")}</MenuItem>
+                    <MenuItem value="standard">{tr("settings.field.qualityStandard")}</MenuItem>
+                    <MenuItem value="high">{tr("settings.field.qualityHigh")}</MenuItem>
+                    <MenuItem value="premium">{tr("settings.field.qualityPremium")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Visual Mode</InputLabel>
+                  <InputLabel>{tr("settings.field.visualMode")}</InputLabel>
                   <Select
-                    label="Default Visual Mode"
+                    label={tr("settings.field.visualMode")}
                     value={draft.defaultVisualMode || "auto"}
                     onChange={(e) => setDraft({ ...draft, defaultVisualMode: e.target.value })}
                   >
-                    <MenuItem value="auto">Auto (Stock / AI)</MenuItem>
-                    <MenuItem value="stock">Stock Only (Pexels)</MenuItem>
-                    <MenuItem value="ai">AI Video</MenuItem>
-                    <MenuItem value="hybrid">Hybrid</MenuItem>
+                    <MenuItem value="auto">{tr("settings.field.visualAuto")}</MenuItem>
+                    <MenuItem value="stock">{tr("settings.field.visualStock")}</MenuItem>
+                    <MenuItem value="ai">{tr("settings.field.visualAi")}</MenuItem>
+                    <MenuItem value="hybrid">{tr("settings.field.visualHybrid")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Brand Profile</InputLabel>
+                  <InputLabel>{tr("settings.field.brand")}</InputLabel>
                   <Select
-                    label="Default Brand Profile"
+                    label={tr("settings.field.brand")}
                     value={draft.defaultBrandId || ""}
                     onChange={(e) => setDraft({ ...draft, defaultBrandId: e.target.value || null })}
                   >
-                    <MenuItem value="">None / Custom</MenuItem>
+                    <MenuItem value="">{tr("settings.field.brandNone")}</MenuItem>
                     {brands.map((brand) => (
                       <MenuItem key={brand.id} value={brand.id}>
-                        {brand.name} {brand.isDefault ? "(Default)" : ""}
+                        {brand.name}
+                        {brand.isDefault ? ` ${tr("settings.field.brandDefaultSuffix")}` : ""}
                       </MenuItem>
                     ))}
                   </Select>
@@ -236,58 +252,58 @@ const SettingsPage: React.FC = () => {
         {/* Secure Provider Credentials Summary */}
         <Grid item xs={12} lg={5}>
           <SectionCard
-            title="Integrations"
-            description="Keys are stored encrypted and are never shown again after saving. Add or replace them on the Integrations page."
+            title={tr("settings.integrations.title")}
+            description={tr("settings.integrations.description")}
           >
             <Stack spacing={1.5}>
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography>Pexels API</Typography>
-                <StatusBadge
-                  status={settings?.pexels?.configured ? "ready" : "missing"}
-                  label={settings?.pexels?.configured ? "Configured" : "Missing"}
-                />
+                <Typography>{tr("settings.integrations.pexels")}</Typography>
+                <StatusBadge status={integrationStatus(settings?.pexels?.configured)} />
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                Key: {settings?.pexels?.redactedKey || "Not configured"}
+                {tr("settings.integrations.key", {
+                  value: settings?.pexels?.redactedKey || tr("settings.integrations.notConfigured"),
+                })}
               </Typography>
 
               <Divider />
 
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography>Google Gemini AI</Typography>
+                <Typography>{tr("settings.integrations.gemini")}</Typography>
                 <StatusBadge
-                  status={settings?.gemini?.configured ? "ready" : "missing"}
-                  label={settings?.gemini?.configured ? "Configured" : "Local AI Fallback"}
+                  status={settings?.gemini?.configured ? "configured" : "not_configured"}
+                  label={settings?.gemini?.configured ? undefined : tr("settings.integrations.localAiFallback")}
                 />
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                Key: {settings?.gemini?.redactedKey || "Not configured (Local AI active)"}
+                {tr("settings.integrations.key", {
+                  value:
+                    settings?.gemini?.redactedKey || tr("settings.integrations.notConfiguredLocalAi"),
+                })}
               </Typography>
 
               <Divider />
 
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography>Upload-Post API</Typography>
-                <StatusBadge
-                  status={settings?.uploadPost?.configured ? "ready" : "missing"}
-                  label={settings?.uploadPost?.configured ? "Configured" : "Missing"}
-                />
+                <Typography>{tr("settings.integrations.uploadPost")}</Typography>
+                <StatusBadge status={integrationStatus(settings?.uploadPost?.configured)} />
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                Key: {settings?.uploadPost?.redactedKey || "Not configured"}
+                {tr("settings.integrations.key", {
+                  value: settings?.uploadPost?.redactedKey || tr("settings.integrations.notConfigured"),
+                })}
               </Typography>
 
               <Divider />
 
               <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography>Telegram Bot Token</Typography>
-                <StatusBadge
-                  status={settings?.telegram?.configured ? "ready" : "missing"}
-                  label={settings?.telegram?.configured ? "Configured" : "Missing"}
-                />
+                <Typography>{tr("settings.integrations.telegram")}</Typography>
+                <StatusBadge status={integrationStatus(settings?.telegram?.configured)} />
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                Token: {settings?.telegram?.redactedKey || "Not configured"}
+                {tr("settings.integrations.token", {
+                  value: settings?.telegram?.redactedKey || tr("settings.integrations.notConfigured"),
+                })}
               </Typography>
             </Stack>
           </SectionCard>
@@ -296,45 +312,45 @@ const SettingsPage: React.FC = () => {
         {/* Publishing & Distribution Defaults */}
         <Grid item xs={12}>
           <SectionCard
-            title="Publishing"
-            description="Control default publication modes, privacy, and scheduling timezone."
+            title={tr("settings.publishing.title")}
+            description={tr("settings.publishing.description")}
           >
             <Grid container spacing={2}>
               <Grid item xs={12} sm={4}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Publishing Mode</InputLabel>
+                  <InputLabel>{tr("settings.field.publishingMode")}</InputLabel>
                   <Select
-                    label="Default Publishing Mode"
+                    label={tr("settings.field.publishingMode")}
                     value={draft.defaultPublishingMode || "draft"}
                     onChange={(e) => setDraft({ ...draft, defaultPublishingMode: e.target.value })}
                   >
-                    <MenuItem value="draft">Draft (Review before publishing)</MenuItem>
-                    <MenuItem value="direct">Direct Auto-Publish</MenuItem>
-                    <MenuItem value="scheduled">Scheduled by Default</MenuItem>
+                    <MenuItem value="draft">{tr("settings.field.publishingModeDraft")}</MenuItem>
+                    <MenuItem value="direct">{tr("settings.field.publishingModeDirect")}</MenuItem>
+                    <MenuItem value="scheduled">{tr("settings.field.publishingModeScheduled")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={4}>
                 <FormControl fullWidth>
-                  <InputLabel>Default YouTube Privacy</InputLabel>
+                  <InputLabel>{tr("settings.field.youtubePrivacy")}</InputLabel>
                   <Select
-                    label="Default YouTube Privacy"
+                    label={tr("settings.field.youtubePrivacy")}
                     value={draft.defaultYouTubePrivacy || "unlisted"}
                     onChange={(e) => setDraft({ ...draft, defaultYouTubePrivacy: e.target.value })}
                   >
-                    <MenuItem value="unlisted">Unlisted (Recommended)</MenuItem>
-                    <MenuItem value="private">Private</MenuItem>
-                    <MenuItem value="public">Public</MenuItem>
+                    <MenuItem value="unlisted">{tr("settings.field.youtubeUnlisted")}</MenuItem>
+                    <MenuItem value="private">{tr("settings.field.youtubePrivate")}</MenuItem>
+                    <MenuItem value="public">{tr("settings.field.youtubePublic")}</MenuItem>
                   </Select>
                 </FormControl>
               </Grid>
 
               <Grid item xs={12} sm={4}>
                 <FormControl fullWidth>
-                  <InputLabel>Default Timezone</InputLabel>
+                  <InputLabel>{tr("settings.field.timezone")}</InputLabel>
                   <Select
-                    label="Default Timezone"
+                    label={tr("settings.field.timezone")}
                     value={draft.defaultTimezone || "Africa/Cairo"}
                     onChange={(e) => setDraft({ ...draft, defaultTimezone: e.target.value })}
                   >
@@ -350,11 +366,12 @@ const SettingsPage: React.FC = () => {
             </Grid>
           </SectionCard>
         </Grid>
-        {/* Backup & Restore Management */}
+
+        {/* Access tokens */}
         <Grid item xs={12}>
           <SectionCard
-            title="Security"
-            description="Access tokens for connecting other tools to ABUD Shorts. Not needed for normal use."
+            title={tr("settings.security.title")}
+            description={tr("settings.security.description")}
           >
             <ApiTokenManager />
           </SectionCard>
@@ -364,8 +381,8 @@ const SettingsPage: React.FC = () => {
             the one action that installs an update on this platform. */}
         <Grid item xs={12}>
           <SectionCard
-            title="Updates"
-            description="Which version you are running, and how to move to the latest one."
+            title={tr("settings.updates.title")}
+            description={tr("settings.updates.description")}
           >
             <UpdateCenter />
           </SectionCard>
@@ -374,8 +391,8 @@ const SettingsPage: React.FC = () => {
         {/* The address this installation serves. OAuth callbacks follow it. */}
         <Grid item xs={12}>
           <SectionCard
-            title="Public Address"
-            description="Where customers reach this installation, and the callback URLs that follow from it."
+            title={tr("settings.publicAddress.title")}
+            description={tr("settings.publicAddress.description")}
           >
             <PublicAddressPanel />
           </SectionCard>
@@ -383,8 +400,8 @@ const SettingsPage: React.FC = () => {
 
         <Grid item xs={12}>
           <SectionCard
-            title="Backup & Restore"
-            description="Save a copy of your settings, brands, templates and videos - and restore them later."
+            title={tr("settings.backup.title")}
+            description={tr("settings.backup.description")}
             actions={
               <Button
                 variant="outlined"
@@ -399,11 +416,11 @@ const SettingsPage: React.FC = () => {
                     a.download = `abud_config_export_${Date.now()}.json`;
                     a.click();
                   } catch {
-                    setError("Failed to export configuration.");
+                    setError(tr("settings.backup.exportFailed"));
                   }
                 }}
               >
-                Export Config (JSON)
+                {tr("settings.backup.exportConfig")}
               </Button>
             }
           >
@@ -413,18 +430,24 @@ const SettingsPage: React.FC = () => {
 
         {/* System & Storage Stats */}
         <Grid item xs={12} md={4}>
-          <StatCard label="V2 Runtime" value={settings?.app?.v2Enabled ? "Active" : "Inactive"} />
-        </Grid>
-        <Grid item xs={12} md={4}>
-          <StatCard label="Docker Environment" value={settings?.app?.docker ? "Containerized" : "Native"} />
+          <StatCard
+            label={tr("settings.stat.v2Runtime")}
+            value={settings?.app?.v2Enabled ? tr("settings.stat.active") : tr("settings.stat.inactive")}
+          />
         </Grid>
         <Grid item xs={12} md={4}>
           <StatCard
-            label="Video Storage"
+            label={tr("settings.stat.environment")}
+            value={settings?.app?.docker ? tr("settings.stat.containerized") : tr("settings.stat.native")}
+          />
+        </Grid>
+        <Grid item xs={12} md={4}>
+          <StatCard
+            label={tr("settings.stat.videoStorage")}
             value={
               typeof settings?.storage?.bytes === "number"
-                ? `${(settings.storage.bytes / (1024 * 1024)).toFixed(1)} MB`
-                : "Unknown"
+                ? format.bytes(settings.storage.bytes)
+                : tr("common.unknown")
             }
           />
         </Grid>
@@ -436,6 +459,7 @@ const SettingsPage: React.FC = () => {
 const API_SCOPES = ["production:create", "production:read", "videos:read", "publishing:write"];
 
 const ApiTokenManager: React.FC = () => {
+  const { t: tr, format } = useI18n();
   const [tokens, setTokens] = useState<ApiTokenItem[]>([]);
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["production:create", "production:read"]);
@@ -448,7 +472,8 @@ const ApiTokenManager: React.FC = () => {
   };
 
   useEffect(() => {
-    load().catch(() => setError("Failed to load API tokens."));
+    load().catch(() => setError(tr("settings.token.loadFailed")));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleScope = (scope: string) => {
@@ -465,7 +490,7 @@ const ApiTokenManager: React.FC = () => {
       setName("");
       await load();
     } catch (err: any) {
-      setError(err?.response?.data?.message || "API token could not be created.");
+      setError(err?.response?.data?.message || tr("settings.token.createFailed"));
     }
   };
 
@@ -479,12 +504,18 @@ const ApiTokenManager: React.FC = () => {
       {error && <Alert severity="error">{error}</Alert>}
       {shownToken && (
         <Alert severity="warning" onClose={() => setShownToken(null)}>
-          New token, shown once: <code>{shownToken}</code>
+          {tr("settings.token.newOnce")}{" "}
+          <Box component="code" dir="ltr" sx={{ display: "inline-block" }}>{shownToken}</Box>
         </Alert>
       )}
       <Grid container spacing={1.5}>
         <Grid item xs={12} md={4}>
-          <TextField fullWidth label="Token name" value={name} onChange={(e) => setName(e.target.value)} />
+          <TextField
+            fullWidth
+            label={tr("settings.token.name")}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
         </Grid>
         <Grid item xs={12} md={6}>
           <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -492,14 +523,14 @@ const ApiTokenManager: React.FC = () => {
               <FormControlLabel
                 key={scope}
                 control={<Checkbox checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} />}
-                label={scope}
+                label={<Box component="span" dir="ltr">{scope}</Box>}
               />
             ))}
           </Stack>
         </Grid>
         <Grid item xs={12} md={2}>
           <Button fullWidth variant="contained" disabled={!name || scopes.length === 0} onClick={createToken}>
-            Create
+            {tr("settings.token.create")}
           </Button>
         </Grid>
       </Grid>
@@ -509,12 +540,15 @@ const ApiTokenManager: React.FC = () => {
             <Box>
               <Typography variant="body2" fontWeight={800}>{token.name}</Typography>
               <Typography variant="caption" color="text.secondary">
-                {token.scopes.join(", ")} · Created {new Date(token.createdAt).toLocaleString()}
-                {token.lastUsedAt ? ` · Last used ${new Date(token.lastUsedAt).toLocaleString()}` : ""}
+                <Box component="span" dir="ltr">{token.scopes.join(", ")}</Box> ·{" "}
+                {tr("settings.token.createdOn", { time: format.dateTime(token.createdAt) })}
+                {token.lastUsedAt
+                  ? ` · ${tr("settings.token.lastUsed", { time: format.dateTime(token.lastUsedAt) })}`
+                  : ""}
               </Typography>
             </Box>
             <Button size="small" color="error" disabled={Boolean(token.revokedAt)} onClick={() => revoke(token.id)}>
-              {token.revokedAt ? "Revoked" : "Revoke"}
+              {token.revokedAt ? tr("settings.token.revoked") : tr("settings.token.revoke")}
             </Button>
           </Box>
         ))}
@@ -524,6 +558,7 @@ const ApiTokenManager: React.FC = () => {
 };
 
 const BackupManager: React.FC = () => {
+  const { t: tr, format } = useI18n();
   const [backups, setBackups] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -550,52 +585,59 @@ const BackupManager: React.FC = () => {
     setStatusMsg(null);
     try {
       const res = await axios.post("/api/v2/backups", { type });
-      setStatusMsg(`Backup created successfully: ${res.data.backup.filename}`);
+      setStatusMsg(tr("settings.backup.created", { name: res.data.backup.filename }));
       loadBackups();
     } catch {
-      setStatusMsg("Failed to create backup.");
+      setStatusMsg(tr("settings.backup.createFailed"));
     } finally {
       setCreating(false);
     }
   };
 
   const handleRestore = async (id: string) => {
-    if (!window.confirm("Are you sure you want to restore this backup? A pre-restore safety snapshot will be automatically created.")) {
+    if (!window.confirm(tr("settings.backup.restoreConfirm"))) {
       return;
     }
     setLoading(true);
     try {
       const res = await axios.post(`/api/v2/backups/${id}/restore`);
-      alert(res.data.message || "Backup restored successfully!");
+      alert(res.data.message || tr("settings.backup.restored"));
       loadBackups();
     } catch (err: any) {
-      alert(err.response?.data?.message || "Restore failed.");
+      alert(err.response?.data?.message || tr("settings.backup.restoreFailed"));
     } finally {
       setLoading(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm("Delete this backup?")) return;
+    if (!window.confirm(tr("settings.backup.deleteConfirm"))) return;
     try {
       await axios.delete(`/api/v2/backups/${id}`);
       loadBackups();
     } catch {
-      alert("Failed to delete backup.");
+      alert(tr("settings.backup.deleteFailed"));
     }
   };
+
+  const backupTypeLabel = (type: string) =>
+    type === "full"
+      ? tr("settings.backup.typeFull")
+      : type === "config_db"
+        ? tr("settings.backup.typeDbConfig")
+        : tr("settings.backup.typeConfig");
 
   return (
     <Stack spacing={2}>
       {statusMsg && <Alert severity="info">{statusMsg}</Alert>}
-      <Stack direction="row" spacing={1.5}>
+      <Stack direction="row" spacing={1.5} flexWrap="wrap" gap={1}>
         <Button
           variant="contained"
           size="small"
           disabled={creating}
           onClick={() => handleCreateBackup("config_db")}
         >
-          {creating ? "Creating..." : "Create Database + Config Backup"}
+          {creating ? tr("settings.backup.creating") : tr("settings.backup.createDbConfig")}
         </Button>
         <Button
           variant="outlined"
@@ -603,17 +645,17 @@ const BackupManager: React.FC = () => {
           disabled={creating}
           onClick={() => handleCreateBackup("full")}
         >
-          Create Full Media Backup
+          {tr("settings.backup.createFull")}
         </Button>
       </Stack>
 
       <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 2 }}>
-        Backup History ({backups.length})
+        {tr("settings.backup.history", { count: backups.length })}
       </Typography>
 
       {backups.length === 0 ? (
         <Typography variant="body2" color="text.secondary">
-          No backups created yet. Click above to create your first safety backup.
+          {tr("settings.backup.empty")}
         </Typography>
       ) : (
         <Stack spacing={1}>
@@ -624,36 +666,32 @@ const BackupManager: React.FC = () => {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
+                gap: 1,
                 p: 1.5,
                 border: "1px solid",
                 borderColor: "divider",
                 borderRadius: 2,
-                bgcolor: "#fcfdfd",
+                bgcolor: "background.paper",
               }}
             >
-              <Box>
-                <Typography variant="body2" fontWeight={700}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="body2" fontWeight={700} dir="ltr" sx={{ textAlign: "start", wordBreak: "break-all" }}>
                   {b.filename}
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-                  {new Date(b.createdAt).toLocaleString()} ·{" "}
-                  {b.type === "full"
-                    ? "Full media"
-                    : b.type === "config_db"
-                      ? "Database + config"
-                      : "Config only"}{" "}
-                  ·{" "}
-                  {b.sizeBytes >= 1048576
-                    ? `${(b.sizeBytes / 1048576).toFixed(1)} MB`
-                    : `${(b.sizeBytes / 1024).toFixed(1)} KB`}
+                  {format.dateTime(b.createdAt)} · {backupTypeLabel(b.type)} ·{" "}
+                  {format.bytes(b.sizeBytes)}
                 </Typography>
                 <Typography
                   variant="caption"
                   color="text.secondary"
-                  sx={{ display: "block", wordBreak: "break-all" }}
+                  dir="ltr"
+                  sx={{ display: "block", wordBreak: "break-all", textAlign: "start" }}
                 >
-                  Version {b.version}
-                  {b.manifest?.schemaVersion ? ` · Schema ${b.manifest.schemaVersion}` : ""}
+                  {tr("settings.backup.versionLine", { version: b.version })}
+                  {b.manifest?.schemaVersion
+                    ? tr("settings.backup.schemaSuffix", { schema: b.manifest.schemaVersion })
+                    : ""}
                   {b.checksumSha256 && b.checksumSha256 !== "local"
                     ? ` · SHA-256 ${String(b.checksumSha256).slice(0, 16)}…`
                     : ""}
@@ -661,13 +699,13 @@ const BackupManager: React.FC = () => {
               </Box>
               <Stack direction="row" spacing={1}>
                 <Button size="small" variant="text" href={`/api/v2/backups/${b.id}/download`}>
-                  Download
+                  {tr("common.download")}
                 </Button>
                 <Button size="small" variant="outlined" color="warning" onClick={() => handleRestore(b.id)}>
-                  Restore
+                  {tr("settings.backup.restore")}
                 </Button>
                 <Button size="small" variant="text" color="error" onClick={() => handleDelete(b.id)}>
-                  Delete
+                  {tr("common.delete")}
                 </Button>
               </Stack>
             </Box>

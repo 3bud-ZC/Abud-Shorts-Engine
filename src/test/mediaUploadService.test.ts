@@ -43,15 +43,15 @@ describe("MediaUploadService", () => {
     const invalidBuffer = Buffer.from("THIS_IS_NOT_AN_IMAGE_FILE");
     await expect(
       service.saveProductImage(invalidBuffer, "test.txt", { removeBackground: false }),
-    ).rejects.toThrow("Invalid image file format");
+    ).rejects.toThrow("Unsupported file");
   });
 
-  it("accepts a real image and generates a server ID with the prod_ prefix", async () => {
+  it("accepts a real image and generates a canonical asset ID", async () => {
     const media = await service.saveProductImage(pngWithSize(512, 512), "sample_item.png", {
       removeBackground: false,
     });
 
-    expect(media.id).toMatch(/^prod_/);
+    expect(media.id).toMatch(/^asset_/);
     expect(media.mimeType).toBe("image/png");
     expect(media.originalName).toBe("sample_item.png");
     // Dimensions come from the file itself, not from a default.
@@ -71,7 +71,7 @@ describe("MediaUploadService", () => {
     );
     await expect(
       service.saveProductImage(placeholder, "luxury_smartwatch.png", { removeBackground: false }),
-    ).rejects.toThrow(/too small/i);
+    ).rejects.toThrow(/at least 32px/i);
   });
 
   it("returns the existing record instead of storing byte-identical duplicates", async () => {
@@ -85,6 +85,129 @@ describe("MediaUploadService", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.duplicateOf).toBe(first.id);
+  });
+
+  it("stores general images, video clips and audio with purpose-aware usability", async () => {
+    const image = await service.saveAsset(pngWithSize(512, 512), "logo.png", {
+      purpose: "brand_logo",
+      tags: ["Brand", "Logo"],
+    });
+    const mp4 = Buffer.concat([Buffer.alloc(4), Buffer.from("ftypisom"), Buffer.alloc(16)]);
+    const video = await service.saveAsset(mp4, "clip.mp4", { purpose: "background_media" });
+    const wav = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVE"), Buffer.alloc(16)]);
+    const audio = await service.saveAsset(wav, "music.wav", { purpose: "music" });
+
+    expect(image.mediaType).toBe("image");
+    expect(image.usability.usableForLogo).toBe(true);
+    expect(image.tags).toContain("brand");
+    expect(video.mediaType).toBe("video");
+    expect(video.usability.usableForVideo).toBe(true);
+    expect(audio.mediaType).toBe("audio");
+    expect(audio.usability.usableForVideo).toBe(true);
+    expect(audio.usability.usableForCharacterReference).toBe(false);
+  });
+
+  it("supports metadata folders and search filters without moving bytes", async () => {
+    const folder = await service.createFolder("Campaign A");
+    const asset = await service.saveAsset(pngWithSize(512, 512), "hero.png", {
+      purpose: "general",
+      folderId: folder.id,
+      tags: ["office"],
+    });
+
+    const inFolder = await service.listAssets({ folderId: folder.id });
+    const tagged = await service.listAssets({ tag: "office" });
+
+    expect(inFolder.map((item) => item.id)).toContain(asset.id);
+    expect(tagged.map((item) => item.id)).toContain(asset.id);
+    await expect(service.archiveFolder(folder.id)).rejects.toThrow(/empty folders/i);
+  });
+
+  it("creates character profiles from suitable library references and snapshots revisions", async () => {
+    const first = await service.saveAsset(pngWithSize(512, 512), "person-a.png", {
+      purpose: "character_reference",
+    });
+    const second = await service.saveAsset(pngWithSize(768, 512), "person-b.png", {
+      purpose: "character_reference",
+    });
+
+    const profile = await service.createCharacter({
+      name: "Mona",
+      referenceAssetIds: [first.id, second.id],
+      primaryReferenceAssetId: first.id,
+      promptAnchor: "Young Egyptian designer with short dark hair.",
+    });
+    const updated = await service.updateCharacter(profile.id, {
+      promptAnchor: "Young Egyptian designer with short dark curly hair.",
+    });
+    const snapshot = await service.snapshotCharacter(profile.id, {
+      id: "test_reference_visual",
+      supportsReferenceImages: true,
+    });
+
+    expect(profile.revision).toBe(1);
+    expect(updated?.revision).toBe(2);
+    expect(updated?.revisions).toHaveLength(2);
+    expect(snapshot?.revision).toBe(2);
+    expect(snapshot?.referenceAssetIds).toEqual([first.id, second.id]);
+    expect(snapshot?.consistencyMode).toBe("reference_guided");
+  });
+
+  it("blocks deleting assets that active character profiles reference", async () => {
+    const reference = await service.saveAsset(pngWithSize(512, 512), "person.png", {
+      purpose: "character_reference",
+    });
+    await service.createCharacter({
+      name: "Safe Character",
+      referenceAssetIds: [reference.id],
+      promptAnchor: "Recurring character.",
+    });
+
+    await expect(service.deleteAsset(reference.id, "user_request")).rejects.toThrow(/character profile/i);
+    expect(await fs.pathExists(reference.storagePath)).toBe(true);
+  });
+
+  it("blocks archiving assets that active character profiles reference", async () => {
+    const reference = await service.saveAsset(pngWithSize(512, 512), "person.png", {
+      purpose: "character_reference",
+    });
+    await service.createCharacter({
+      name: "Archive Safe Character",
+      referenceAssetIds: [reference.id],
+      promptAnchor: "Recurring character.",
+    });
+
+    await expect(service.updateAsset(reference.id, { archived: true })).rejects.toThrow(/character profile/i);
+    const stillListed = await service.getAsset(reference.id);
+    expect(stillListed?.status).toBe("ready");
+  });
+
+  it("keeps historical character snapshots stable after later profile edits", async () => {
+    const reference = await service.saveAsset(pngWithSize(512, 512), "person.png", {
+      purpose: "character_reference",
+    });
+    const profile = await service.createCharacter({
+      name: "Stable Character",
+      referenceAssetIds: [reference.id],
+      promptAnchor: "Original identity anchor.",
+    });
+    const firstSnapshot = await service.snapshotCharacter(profile.id, {
+      id: "test_reference_visual",
+      supportsReferenceImages: true,
+    });
+
+    await service.updateCharacter(profile.id, {
+      promptAnchor: "Edited identity anchor.",
+    });
+    const secondSnapshot = await service.snapshotCharacter(profile.id, {
+      id: "test_reference_visual",
+      supportsReferenceImages: true,
+    });
+
+    expect(firstSnapshot?.revision).toBe(1);
+    expect(firstSnapshot?.promptAnchor).toBe("Original identity anchor.");
+    expect(secondSnapshot?.revision).toBe(2);
+    expect(secondSnapshot?.promptAnchor).toBe("Edited identity anchor.");
   });
 
   describe("persistent media safety", () => {
@@ -141,7 +264,7 @@ describe("MediaUploadService", () => {
       const listed = await service.listProductImages();
       expect(listed).toHaveLength(1);
       expect(listed[0].usable).toBe(false);
-      expect(listed[0].unusableReason).toMatch(/too small/i);
+      expect(listed[0].unusableReason).toMatch(/at least 32px/i);
       // Marked, not deleted: the bytes and the manifest entry both survive.
       expect(await fs.pathExists(media.storagePath)).toBe(true);
     });
@@ -150,7 +273,7 @@ describe("MediaUploadService", () => {
       const media = await service.saveProductImage(pngWithSize(512, 512), "precious.png", {
         removeBackground: false,
       });
-      const manifestPath = path.join(root, "uploads", "products_manifest.json");
+      const manifestPath = path.join(root, "uploads", "media_assets.json");
       await fs.writeFile(manifestPath, "{ this is not json", "utf8");
 
       // The old behaviour was to read the damaged index as empty and then

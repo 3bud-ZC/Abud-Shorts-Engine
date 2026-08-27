@@ -41,6 +41,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SendIcon from "@mui/icons-material/Send";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import SaveIcon from "@mui/icons-material/Save";
 import {
   CaptionPositionEnum,
   MusicMoodEnum,
@@ -69,41 +70,63 @@ import type {
   V2Brand,
 } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
+import { useI18n } from "../i18n";
 import { externalCostLabel } from "../../types/costDisplay";
 import { ProductionSummary } from "../components/ProductionSummary";
-import { VIDEO_TYPES, videoTypeById, videoTypeByMode } from "./videoTypes";
+import { CAPTION_STYLE_LABELS, DURATION_OPTIONS, VIDEO_TYPES, videoTypeById, videoTypeByMode } from "./videoTypes";
 
 const EXAMPLE_PROMPTS = [
   {
-    title: "Egyptian Streetwear Ad (ملابس شبابي)",
-    tag: "Arabic · Egyptian",
+    title: "براند ملابس شبابي",
+    tag: "Arabic",
     prompt:
-      "اعمل إعلان 20 ثانية باللهجة المصرية لبراند ملابس شبابي، البداية تكون Hook قوي، ركز على الخامة القطنية والشكل والراحة، وفي النهاية CTA للطلب على واتساب مع خصم خاص.",
+      "اعمل Reel سريع مدته 20 ثانية لبراند ملابس شبابي. البداية Hook قوي، ركز على الشكل والخامة والراحة، واختم بدعوة واضحة للطلب.",
   },
   {
-    title: "Cairo Modern Café (كافيه قهوة)",
-    tag: "Arabic · Egyptian",
+    title: "كافيه جديد في القاهرة",
+    tag: "Arabic",
     prompt:
-      "اعمل فيديو 20 ثانية لكافيه عصري في القاهرة، ركز على ريحة وتحضير القهوة الإسبريسو والقعدة الرايقة وعرض الفطار، والختام دعوة للزيارة.",
+      "اعمل Reel مدته 15 ثانية لكافيه جديد في القاهرة. ابدأ بلقطة جذابة للقهوة، أظهر الأجواء والقعدة، واختم بدعوة للزيارة.",
   },
   {
-    title: "Cairo Burger Restaurant (مطعم برجر)",
-    tag: "Arabic · Egyptian",
+    title: "Restaurant Reel",
+    tag: "English",
     prompt:
-      "اعمل فيديو 15 ثانية لمطعم برجر في القاهرة، سريع وحماسي، ركز على الجبنة والجرل والعرض الحالي، واختم بـ CTA للطلب دليفري دلوقتي.",
+      "Create a 15-second vertical Restaurant Reel for a new dinner offer. Open with a strong food hook, show atmosphere and freshness, and end with a clear booking CTA.",
   },
   {
-    title: "Tech Educational Short (Backups)",
-    tag: "English · Educational",
+    title: "SaaS / AI Tool Promo",
+    tag: "English",
     prompt:
-      "Create a 30-second English educational short explaining why automated backups protect small businesses from data loss, with modern technology visuals and a strong hook.",
+      "Create a 20-second vertical promo for an AI tool that helps small teams answer customer messages faster. Make it sharp, modern, and benefit-led.",
   },
   {
-    title: "Real Estate Listing (عقارات التجمع)",
-    tag: "Arabic · Egyptian",
+    title: "معلومة غريبة",
+    tag: "Arabic",
     prompt:
-      "اعمل فيديو إعلان 30 ثانية لشقة مودرن في التجمع الخامس، ركز على المساحة والتشطيب الراقي وأنظمة السداد المرنة، والختام حجز معاينة على واتساب.",
+      "اعمل فيديو قصير بأسلوب Viral curiosity عن معلومة غريبة ومفيدة في الحياة اليومية. ابدأ بسؤال مثير، ثم اشرحها ببساطة واختم بجملة قابلة للمشاركة.",
   },
+  {
+    title: "Real Estate Reel",
+    tag: "English",
+    prompt:
+      "Create a 20-second vertical real estate Reel for a bright apartment listing. Highlight space, finish quality, neighborhood convenience, and a viewing CTA.",
+  },
+];
+
+const CAPTION_STYLES = [
+  { id: "clean_professional", label: "Clean" },
+  { id: "karaoke", label: "Karaoke" },
+  { id: "social_ad", label: "Bold Social" },
+  { id: "minimal", label: "Minimal" },
+  { id: "cinematic", label: "Cinematic" },
+];
+
+const QUALITY_OPTIONS = [
+  { id: "draft", label: "Fast", description: "720p render with the quickest local route." },
+  { id: "standard", label: "Balanced", description: "1080p render with normal media intelligence." },
+  { id: "high", label: "High", description: "Richer pacing and multi-asset scene search where available." },
+  { id: "max_quality_local", label: "Maximum", description: "Strongest local quality processors available; no paid AI video by default." },
 ];
 
 type SceneFormData = { text: string; searchTerms: string };
@@ -118,6 +141,83 @@ type VoiceOption = {
   voiceFamily?: string;
   sampleRate?: number;
 };
+
+type MediaLibraryAsset = {
+  id: string;
+  filename: string;
+  originalName?: string;
+  displayName?: string;
+  mediaType: "image" | "video" | "audio";
+  purpose?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+  previewUrl?: string;
+  tags?: string[];
+  usability?: {
+    usableForVideo?: boolean;
+    usableForProduct?: boolean;
+    usableForLogo?: boolean;
+    usableForCharacterReference?: boolean;
+  };
+  usable?: boolean;
+  unusableReason?: string;
+};
+
+const creatorCopy = {
+  en: {
+    character: "Character",
+    none: "None",
+    refs: "refs",
+    referenceReady: "Reference-guided character consistency is available for the selected provider path.",
+    referenceUnavailable: "Character consistency requires a compatible AI visual provider. The profile remains saved and reusable.",
+    selectedMediaTitle: "Selected Media",
+    productMediaTitle: "Product Media & Presentation",
+    selectedMediaDescription: "Choose usable media from your library. Invalid items are kept in Media but cannot be selected here.",
+    productMediaDescription: "Upload your product image or select a product-capable image asset. Background removal is automatically applied to new product uploads.",
+    uploadProduct: "Upload Product Image",
+    uploadingProduct: "Uploading & Removing Background...",
+    missingProduct: "A Product Ad is built around your product photo, so it cannot be produced without one. Upload or select a product-capable image.",
+    missingMedia: "This source needs usable media before Create can run. Upload or select media above.",
+    unusableKept: "stored items cannot be used in a video and are not offered here. They are kept in your Media library, where the reason is shown.",
+    image: "Image",
+    video: "Video",
+    audio: "Audio",
+    usable: "Usable",
+  },
+  ar: {
+    character: "الشخصية",
+    none: "بدون",
+    refs: "مراجع",
+    referenceReady: "اتساق الشخصية بالمراجع متاح لمسار المزوّد المحدد.",
+    referenceUnavailable: "اتساق الشخصية يتطلب مزوّد ذكاء اصطناعي متوافق. سيبقى ملف الشخصية محفوظًا وقابلًا لإعادة الاستخدام.",
+    selectedMediaTitle: "الوسائط المحددة",
+    productMediaTitle: "وسائط المنتج والعرض",
+    selectedMediaDescription: "اختر وسائط صالحة من مكتبتك. العناصر غير الصالحة تبقى في الوسائط ولا يمكن تحديدها هنا.",
+    productMediaDescription: "ارفع صورة المنتج أو اختر صورة مناسبة للمنتج. إزالة الخلفية تطبق تلقائيًا على الرفع الجديد.",
+    uploadProduct: "رفع صورة منتج",
+    uploadingProduct: "جارٍ الرفع وإزالة الخلفية...",
+    missingProduct: "إعلان المنتج يعتمد على صورة المنتج، لذلك لا يمكن إنتاجه بدون صورة مناسبة. ارفع أو اختر صورة صالحة.",
+    missingMedia: "هذا المصدر يحتاج وسائط صالحة قبل الإنشاء. ارفع أو اختر وسائط أعلاه.",
+    unusableKept: "عناصر مخزنة لا يمكن استخدامها في الفيديو ولن تظهر هنا. هي محفوظة في مكتبة الوسائط مع سبب الرفض.",
+    image: "صورة",
+    video: "فيديو",
+    audio: "صوت",
+    usable: "صالحة",
+  },
+};
+
+function mediaTypeLabel(strings: typeof creatorCopy.en, mediaType: string) {
+  if (mediaType === "image") return strings.image;
+  if (mediaType === "video") return strings.video;
+  if (mediaType === "audio") return strings.audio;
+  return mediaType;
+}
+
+function mediaPreviewUrl(asset: MediaLibraryAsset) {
+  return withMediaAccessToken(asset.previewUrl || `/api/v2/media/uploads/${asset.filename}`);
+}
 
 const defaultConfig: RenderConfig = {
   paddingBack: 1500,
@@ -173,6 +273,8 @@ function costLabel(costEstimate: CostEstimateData | null): string {
 const VideoCreator: React.FC = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const { locale } = useI18n();
+  const ui = creatorCopy[locale === "ar" ? "ar" : "en"];
 
   // Mode Selection: "prompt" vs "template"
   const [mode, setMode] = useState<"prompt" | "template">("prompt");
@@ -195,7 +297,7 @@ const VideoCreator: React.FC = () => {
   // prompt and a handful of obvious choices. Advanced reveals the full control
   // surface without changing any underlying contract.
   const [uiMode, setUiMode] = useState<"simple" | "advanced">("simple");
-  const [videoTypeId, setVideoTypeId] = useState<string>("social_ad");
+  const [videoTypeId, setVideoTypeId] = useState<string>("auto");
 
   /** Applies the friendly type's canonical mode and companion defaults. */
   function applyVideoType(nextId: string) {
@@ -203,16 +305,31 @@ const VideoCreator: React.FC = () => {
     if (!entry) return;
     setVideoTypeId(nextId);
     setProductionMode(entry.mode);
-    if (entry.suggestedVisualMode) setVisualMode(entry.suggestedVisualMode as any);
+    if (entry.suggestedVisualMode) {
+      setVisualMode(entry.suggestedVisualMode as any);
+      if (entry.suggestedVisualMode === "stock") setVisualSource("stock");
+      else if (entry.suggestedVisualMode === "uploaded_media") setVisualSource("uploaded_media");
+      else if (entry.suggestedVisualMode === "ai") setVisualSource("ai_generated");
+      else if (entry.suggestedVisualMode === "hybrid") setVisualSource("mixed");
+      else if (entry.suggestedVisualMode === "auto") setVisualSource("auto_best");
+    }
     if (entry.suggestedCaptionStyle) setCaptionStyle(entry.suggestedCaptionStyle as any);
   }
   const [visualMode, setVisualMode] = useState("auto");
+  const [visualSource, setVisualSource] = useState<"auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
+  const [stockProvider, setStockProvider] = useState<"auto_stock" | "pexels" | "pixabay">("auto_stock");
+  const [mediaPolicy, setMediaPolicy] = useState<"auto_use_selected" | "only_selected">("auto_use_selected");
+  const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
+  const [characterProfiles, setCharacterProfiles] = useState<any[]>([]);
+  const [selectedCharacterProfileId, setSelectedCharacterProfileId] = useState("");
+  const [aiVisualProvider, setAiVisualProvider] = useState("auto");
   const [voiceProvider, setVoiceProvider] = useState("auto");
   const [voiceId, setVoiceId] = useState("");
   const [voiceOptions, setVoiceOptions] = useState<VoiceOption[]>([]);
   const [resolvedVoiceProvider, setResolvedVoiceProvider] = useState<string>("auto");
   const [voiceWarnings, setVoiceWarnings] = useState<string[]>([]);
   const [arabicVoiceBlocked, setArabicVoiceBlocked] = useState(false);
+  const [captionEnabled, setCaptionEnabled] = useState(true);
   const [captionStyle, setCaptionStyle] = useState<string>("social_ad");
 
   // Enhancement & Preview states
@@ -223,6 +340,7 @@ const VideoCreator: React.FC = () => {
   const [previewing, setPreviewing] = useState(false);
   const [previewSpec, setPreviewSpec] = useState<any>(null);
   const [costEstimate, setCostEstimate] = useState<CostEstimateData | null>(null);
+  const [previewReadiness, setPreviewReadiness] = useState<any>(null);
   const [voicePreviewing, setVoicePreviewing] = useState(false);
   const [voicePreview, setVoicePreview] = useState<any>(null);
   const [providers, setProviders] = useState<ProviderItem[]>([]);
@@ -238,6 +356,9 @@ const VideoCreator: React.FC = () => {
     { text: "A concise video narration for a local business.", searchTerms: "business, retail, customer" },
   ]);
   const [config, setConfig] = useState<RenderConfig>(defaultConfig);
+  const [saveTemplateDialog, setSaveTemplateDialog] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
+  const [saveTemplateDescription, setSaveTemplateDescription] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -245,7 +366,7 @@ const VideoCreator: React.FC = () => {
 
   // Product Media & Readiness states
   const [selectedProductMediaId, setSelectedProductMediaId] = useState<string>("");
-  const [uploadedProducts, setUploadedProducts] = useState<any[]>([]);
+  const [mediaAssets, setMediaAssets] = useState<MediaLibraryAsset[]>([]);
   const [productHeadline, setProductHeadline] = useState("عرض حصري لفترة محدودة");
   const [productOffer, setProductOffer] = useState("خصم 25%");
   const [productPrice, setProductPrice] = useState("");
@@ -260,8 +381,9 @@ const VideoCreator: React.FC = () => {
       axios.get("/api/v2/brands"),
       axios.get("/api/v2/settings"),
       axios.get("/api/v2/providers").catch(() => ({ data: { providers: [] } })),
+      axios.get("/api/v2/media/characters").catch(() => ({ data: { characters: [] } })),
     ])
-      .then(([templateResponse, brandResponse, settingsResponse, providerResponse]) => {
+      .then(([templateResponse, brandResponse, settingsResponse, providerResponse, characterResponse]) => {
         const nextTemplates = templateResponse.data.templates || [];
         const nextBrands = brandResponse.data.brands || [];
         const appSettings = settingsResponse.data.settings || {};
@@ -269,6 +391,11 @@ const VideoCreator: React.FC = () => {
         setTemplates(nextTemplates);
         setBrands(nextBrands);
         setProviders(providerResponse.data.providers || []);
+        setCharacterProfiles(characterResponse.data.characters || []);
+        const queryCharacter = params.get("character");
+        if (queryCharacter && (characterResponse.data.characters || []).some((profile: any) => profile.id === queryCharacter)) {
+          setSelectedCharacterProfileId(queryCharacter);
+        }
 
         // Apply settings defaults if present
         if (appSettings.defaultCreationMode === "template") {
@@ -282,14 +409,28 @@ const VideoCreator: React.FC = () => {
         if (appSettings.defaultVisualMode) setVisualMode(appSettings.defaultVisualMode);
 
         const queryTemplate = params.get("template");
+        let templateBrandId = "";
         if (queryTemplate) {
           setMode("template");
           setSelectedTemplateId(queryTemplate);
+          const template = nextTemplates.find((item: BusinessTemplateOption) => item.id === queryTemplate);
+          if (template) {
+            applyTemplateDefaults(template);
+            templateBrandId = template.config?.brandId || "";
+          }
         } else {
-          setSelectedTemplateId(appSettings.defaultTemplateId || nextTemplates[0]?.id || "");
+          const fallbackTemplate = nextTemplates.find((item: BusinessTemplateOption) => item.id === appSettings.defaultTemplateId) || nextTemplates[0];
+          setSelectedTemplateId(fallbackTemplate?.id || "");
+          if (fallbackTemplate) {
+            applyTemplateDefaults(fallbackTemplate);
+            templateBrandId = fallbackTemplate.config?.brandId || "";
+          }
         }
 
+        const queryBrand = params.get("brand");
         const defaultBrand =
+          nextBrands.find((b: V2Brand) => b.id === queryBrand) ||
+          nextBrands.find((b: V2Brand) => b.id === templateBrandId) ||
           nextBrands.find((b: V2Brand) => b.id === appSettings.defaultBrandId) ||
           nextBrands.find((b: V2Brand) => b.isDefault) ||
           nextBrands[0];
@@ -299,13 +440,13 @@ const VideoCreator: React.FC = () => {
       .catch(() => setError("Failed to load V2 templates or configuration."))
       .finally(() => setLoading(false));
 
-    axios.get("/api/v2/media/products").then((res) => {
-      const prods = res.data.products || [];
-      setUploadedProducts(prods);
+    axios.get("/api/v2/media/assets").then((res) => {
+      const assets: MediaLibraryAsset[] = res.data.assets || [];
+      setMediaAssets(assets);
       // A 1x1 placeholder is a structurally valid PNG and used to be offered as
       // a product photo, and auto-selected because it happened to be first. Only
       // an asset the library reports as usable may be chosen.
-      const firstUsable = prods.find((prod: any) => prod.usable !== false);
+      const firstUsable = assets.find((asset) => asset.usability?.usableForProduct || (asset.mediaType === "image" && asset.usable !== false));
       if (firstUsable && !selectedProductMediaId) {
         setSelectedProductMediaId(firstUsable.id);
       }
@@ -315,13 +456,25 @@ const VideoCreator: React.FC = () => {
   useEffect(() => {
     axios
       .get("/api/v2/system/readiness", {
-        params: { mode: productionMode, visualMode },
+        params: {
+          mode: productionMode,
+          visualMode,
+          visualSource,
+          stockProvider,
+          mediaPolicy,
+          aiVisualProvider,
+          selectedMediaIds: selectedMediaIds.join(","),
+          characterProfileId: selectedCharacterProfileId,
+          language,
+          dialect: language === "ar" || language === "auto" ? dialect : "none",
+          captionEnabled,
+        },
       })
       .then((res) => {
         setModeReadiness(res.data);
       })
       .catch(() => {});
-  }, [productionMode, visualMode]);
+  }, [productionMode, visualMode, visualSource, stockProvider, mediaPolicy, aiVisualProvider, selectedMediaIds, selectedCharacterProfileId, language, dialect, captionEnabled]);
 
   async function handleProductFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -340,7 +493,7 @@ const VideoCreator: React.FC = () => {
           });
           const newMedia = res.data.media;
           setSelectedProductMediaId(newMedia.id);
-          setUploadedProducts((prev) => [newMedia, ...prev.filter((p) => p.id !== newMedia.id)]);
+          axios.get("/api/v2/media/assets").then((assetRes) => setMediaAssets(assetRes.data.assets || [])).catch(() => undefined);
         } catch (uploadErr: any) {
           setError(uploadErr?.response?.data?.error || "Product image upload failed.");
         } finally {
@@ -389,6 +542,10 @@ const VideoCreator: React.FC = () => {
 
   const generatedScenes = useMemo(() => {
     if (!selectedTemplate) return [];
+    if (!selectedTemplate.builtIn && selectedTemplate.config?.promptGuidance) {
+      const text = applyTemplateText(selectedTemplate.config.promptGuidance, templateData);
+      return [{ text, searchTerms: selectedTemplate.pexelsSearchHints || [] }];
+    }
     return generateScenesForTemplate(selectedTemplate.id as BusinessTemplateId, templateData);
   }, [selectedTemplate, templateData]);
 
@@ -407,6 +564,12 @@ const VideoCreator: React.FC = () => {
 
   function applyBrand(brand: V2Brand) {
     setSelectedBrandId(brand.id);
+    if (brand.defaultDurationSeconds) setDuration(brand.defaultDurationSeconds);
+    if (brand.defaultQuality) setQuality(brand.defaultQuality);
+    if (brand.defaultVisualSource) setVisualSource(brand.defaultVisualSource as any);
+    if (brand.captionStyle) setCaptionStyle(brand.captionStyle);
+    if (brand.defaultLanguage) setLanguage(brand.defaultLanguage);
+    if (brand.defaultCharacterProfileId) setSelectedCharacterProfileId(brand.defaultCharacterProfileId);
     setConfig((prev) => ({
       ...prev,
       brandKit: {
@@ -423,12 +586,44 @@ const VideoCreator: React.FC = () => {
         socialHandle: brand.socialHandle || undefined,
         // A brand set to "none" has no caption-style override to contribute;
         // the production spec's own captionStyle governs that case.
-        captionStyle: brand.captionStyle && brand.captionStyle !== "none" ? brand.captionStyle : "bold",
+        captionStyle: (brand.captionStyle && brand.captionStyle !== "none" ? brand.captionStyle : "bold") as any,
         includeOutro: brand.includeOutro ?? true,
         outroText: brand.outroText || "",
         contactText: brand.contactText || "",
       },
     }));
+  }
+
+  function applyTemplateDefaults(template: BusinessTemplateOption) {
+    setSelectedTemplateId(template.id);
+    const defaults = template.config || {};
+    const durationSeconds = Number(defaults.durationSeconds || template.targetDurationSeconds || template.suggestedDurationSeconds || 0);
+    if (durationSeconds > 0) setDuration(durationSeconds);
+    if (defaults.aspectRatio) setAspectRatio(String(defaults.aspectRatio));
+    if (defaults.quality) setQuality(String(defaults.quality));
+    if (defaults.visualSource) setVisualSource(String(defaults.visualSource) as any);
+    if (defaults.mediaPolicy) setMediaPolicy(String(defaults.mediaPolicy) as any);
+    if (defaults.captionStyle) setCaptionStyle(String(defaults.captionStyle));
+    if (defaults.productionMode) setProductionMode(String(defaults.productionMode));
+    if (defaults.contentStyle) setContentStyle(String(defaults.contentStyle));
+    if (defaults.creativeStyle) setCreativeStyle(String(defaults.creativeStyle));
+    if (Array.isArray(defaults.selectedMediaIds)) setSelectedMediaIds(defaults.selectedMediaIds.map(String));
+    if (defaults.characterProfileId) setSelectedCharacterProfileId(String(defaults.characterProfileId));
+    if (defaults.brandId) {
+      const brand = brands.find((item) => item.id === defaults.brandId);
+      if (brand) applyBrand(brand);
+      else setSelectedBrandId(String(defaults.brandId));
+    }
+    const seeded = Object.fromEntries(
+      (template.fields || [])
+        .map((field) => [field.key, templateData[field.key] || ""])
+        .filter(([key]) => Boolean(key)),
+    );
+    setTemplateData(seeded);
+  }
+
+  function applyTemplateText(text: string, values: Record<string, string>) {
+    return text.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g, (_match, key) => values[key] || "");
   }
 
   function updateBrandKit(field: keyof NonNullable<RenderConfig["brandKit"]>, value: string | boolean) {
@@ -440,14 +635,79 @@ const VideoCreator: React.FC = () => {
 
   // The library reports usability per asset; the creator only ever offers the
   // assets that can actually appear in a video.
-  const usableProducts = useMemo(
-    () => uploadedProducts.filter((prod) => prod?.usable !== false),
-    [uploadedProducts],
+  const selectableMediaAssets = useMemo(
+    () => mediaAssets.filter((asset) => asset?.usability?.usableForVideo || asset?.usable !== false),
+    [mediaAssets],
   );
-  const unusableProducts = useMemo(
-    () => uploadedProducts.filter((prod) => prod?.usable === false),
-    [uploadedProducts],
+  const unusableMediaAssets = useMemo(
+    () => mediaAssets.filter((asset) => !(asset?.usability?.usableForVideo || asset?.usable !== false)),
+    [mediaAssets],
   );
+  const productCapableAssets = useMemo(
+    () => selectableMediaAssets.filter((asset) => asset.mediaType === "image" && (asset.usability?.usableForProduct || asset.usable !== false)),
+    [selectableMediaAssets],
+  );
+
+  // A video type or an older job can carry a style the curated list folds into
+  // another entry. Keeping it selectable shows the real value instead of blank.
+  const captionStyleChoices = useMemo(
+    () =>
+      CAPTION_STYLES.some((style) => style.id === captionStyle)
+        ? CAPTION_STYLES
+        : [...CAPTION_STYLES, { id: captionStyle, label: CAPTION_STYLE_LABELS[captionStyle] || captionStyle }],
+    [captionStyle],
+  );
+
+  // A default duration saved before this list changed must still render, so
+  // an off-list value joins the choices instead of blanking the Select.
+  const durationChoices = useMemo(
+    () =>
+      DURATION_OPTIONS.includes(duration)
+        ? DURATION_OPTIONS
+        : [...DURATION_OPTIONS, duration].sort((a, b) => a - b),
+    [duration],
+  );
+
+  const configuredStockProviders = useMemo(
+    () => providers.filter((provider) => provider.category === "Visuals" && provider.tier === "stock" && provider.configured !== false),
+    [providers],
+  );
+  const aiVideoProviders = useMemo(
+    () => providers.filter((provider) => provider.category === "Visuals" && provider.tier === "ai_video"),
+    [providers],
+  );
+  const configuredAiVideoProviders = useMemo(
+    () => aiVideoProviders.filter((provider) => provider.configured !== false),
+    [aiVideoProviders],
+  );
+
+  function toggleSelectedMedia(id: string) {
+    setSelectedMediaIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+  }
+
+  function selectMediaAsset(asset: MediaLibraryAsset) {
+    const wasSelected = selectedMediaIds.includes(asset.id);
+    toggleSelectedMedia(asset.id);
+    if (wasSelected && selectedProductMediaId === asset.id) {
+      setSelectedProductMediaId("");
+      return;
+    }
+    if (asset.mediaType === "image" && (asset.usability?.usableForProduct || asset.usable !== false)) {
+      setSelectedProductMediaId(asset.id);
+    }
+  }
+
+  function readinessMessage(): string | null {
+    if (!prompt.trim()) return "Write a prompt to create a video.";
+    if (arabicBlocked) return "Arabic narration requires ElevenLabs. Configure ElevenLabs before creating.";
+    if (selectedProviderUnavailable) return "The selected voice provider is not configured.";
+    if (modeReadiness && !modeReadiness.ready) {
+      return modeReadiness.missingRequirements?.[0] || "The selected production setup is not runnable yet.";
+    }
+    return null;
+  }
 
   const selectedVoiceProvider = useMemo(() => {
     if (voiceProvider === "auto") return null;
@@ -532,8 +792,15 @@ const VideoCreator: React.FC = () => {
         resolution,
         contentStyle,
         visualMode,
+        visualSource,
+        stockProvider,
+        mediaPolicy,
+        selectedMediaIds,
+        characterProfileId: selectedCharacterProfileId || undefined,
+        aiVisualProvider,
         voiceProvider,
         voiceId,
+        captionEnabled,
         captionStyle,
         productionMode,
         creativeStyle,
@@ -543,6 +810,7 @@ const VideoCreator: React.FC = () => {
       });
       setPreviewSpec(response.data.spec);
       setCostEstimate(response.data.costEstimate);
+      setPreviewReadiness(response.data.readiness || null);
     } catch (err: any) {
       setError(err?.response?.data?.message || "Production spec preview failed.");
     } finally {
@@ -586,6 +854,11 @@ const VideoCreator: React.FC = () => {
       setError("The selected voice provider is not configured. Choose a local provider or configure it in Providers first.");
       return;
     }
+    const blockedReason = readinessMessage();
+    if (blockedReason) {
+      setError(blockedReason);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -605,8 +878,15 @@ const VideoCreator: React.FC = () => {
           creativeStyle,
           animationIntensity,
           visualMode,
+          visualSource,
+          stockProvider,
+          mediaPolicy,
+          selectedMediaIds,
+          characterProfileId: selectedCharacterProfileId || undefined,
+          aiVisualProvider,
           voiceProvider,
           voiceId,
+          captionEnabled,
           captionStyle,
           brandId: selectedBrandId || undefined,
           brandName: config.brandKit?.brandName,
@@ -618,6 +898,11 @@ const VideoCreator: React.FC = () => {
             productPrice,
             productCta,
             productPlacement,
+            selectedMediaIds,
+            characterProfileId: selectedCharacterProfileId || undefined,
+            mediaPolicy,
+            stockProvider,
+            aiVisualProvider,
           },
         },
         {
@@ -638,10 +923,116 @@ const VideoCreator: React.FC = () => {
     }
   }
 
+  async function saveCurrentAsTemplate() {
+    const name = saveTemplateName.trim();
+    if (!name) {
+      setError("Template name is required.");
+      return;
+    }
+    try {
+      await axios.post("/api/v2/templates", {
+        name,
+        description: saveTemplateDescription.trim(),
+        category: videoTypeId === "product_ad" ? "product" : contentStyle === "educational" ? "educational" : "social",
+        favorite: true,
+        config: {
+          productionMode,
+          contentStyle,
+          creativeStyle,
+          durationSeconds: duration,
+          aspectRatio,
+          quality,
+          visualSource,
+          mediaPolicy,
+          captionStyle,
+          brandId: selectedBrandId || undefined,
+          characterProfileId: selectedCharacterProfileId || undefined,
+          selectedMediaIds,
+          promptGuidance: prompt || selectedTemplate?.examplePrompt || "",
+        },
+        variables: selectedTemplate?.variables || selectedTemplate?.fields?.map((field) => ({
+          key: field.key,
+          label: field.label,
+          type: field.type === "number" || field.type === "date" || field.type === "url" || field.type === "media_asset" ? field.type : "text",
+          required: field.required,
+          example: field.placeholder,
+          helpText: field.helperText,
+        })) || [],
+      });
+      setSaveTemplateDialog(false);
+      setSaveTemplateName("");
+      setSaveTemplateDescription("");
+      const response = await axios.get("/api/v2/templates");
+      setTemplates(response.data.templates || []);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Template could not be saved.");
+    }
+  }
+
   async function submitTemplateJob() {
+    if (!selectedTemplate) {
+      setError("Choose a template before creating a video.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
+      const businessTemplateData = Object.fromEntries(
+        Object.entries(templateData).filter(([, value]) => value.trim().length > 0),
+      );
+      if (selectedTemplate.custom) {
+        const resolved = await axios.post(`/api/v2/templates/${selectedTemplate.id}/resolve`, {
+          variables: businessTemplateData,
+        });
+        const resolvedConfig = resolved.data.resolvedConfig || {};
+        const response = await axios.post(
+          "/api/v2/jobs",
+          {
+            creationMode: "prompt",
+            title: `${config.brandKit?.brandName || "Video"} · ${selectedTemplate.displayName}`,
+            prompt: resolvedConfig.promptGuidance || selectedTemplate.examplePrompt || selectedTemplate.description,
+            language,
+            dialect: language === "ar" || language === "auto" ? dialect : "none",
+            durationSeconds: Number(resolvedConfig.durationSeconds || duration),
+            aspectRatio: resolvedConfig.aspectRatio || aspectRatio,
+            quality: resolvedConfig.quality || quality,
+            resolution,
+            contentStyle: resolvedConfig.contentStyle || contentStyle,
+            productionMode: resolvedConfig.productionMode || productionMode,
+            creativeStyle: resolvedConfig.creativeStyle || creativeStyle,
+            animationIntensity,
+            visualMode,
+            visualSource: resolvedConfig.visualSource || visualSource,
+            stockProvider,
+            mediaPolicy: resolvedConfig.mediaPolicy || mediaPolicy,
+            selectedMediaIds: Array.isArray(resolvedConfig.selectedMediaIds) ? resolvedConfig.selectedMediaIds : selectedMediaIds,
+            characterProfileId: resolvedConfig.characterProfileId || selectedCharacterProfileId || undefined,
+            aiVisualProvider,
+            voiceProvider,
+            voiceId,
+            captionEnabled,
+            captionStyle: resolvedConfig.captionStyle || captionStyle,
+            brandId: resolvedConfig.brandId || selectedBrandId || undefined,
+            templateId: selectedTemplate.id,
+            templateVariables: businessTemplateData,
+            metadata: {
+              templateVariables: businessTemplateData,
+              selectedMediaIds,
+              characterProfileId: resolvedConfig.characterProfileId || selectedCharacterProfileId || undefined,
+              mediaPolicy: resolvedConfig.mediaPolicy || mediaPolicy,
+              stockProvider,
+              aiVisualProvider,
+            },
+          },
+          {
+            headers: {
+              "Idempotency-Key": `template-${selectedTemplate.id}-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`,
+            },
+          },
+        );
+        navigate(`/jobs/${response.data.job.id}`);
+        return;
+      }
       const apiScenes: SceneInput[] = scenes.map((scene) => ({
         text: scene.text,
         searchTerms: scene.searchTerms
@@ -649,9 +1040,6 @@ const VideoCreator: React.FC = () => {
           .map((term) => term.trim())
           .filter(Boolean),
       }));
-      const businessTemplateData = Object.fromEntries(
-        Object.entries(templateData).filter(([, value]) => value.trim().length > 0),
-      );
       const title = `${config.brandKit?.brandName || "Video"} · ${selectedTemplate?.displayName || "Manual"}`;
       const response = await axios.post("/api/v2/jobs", {
         type: "video",
@@ -661,6 +1049,8 @@ const VideoCreator: React.FC = () => {
         config,
         businessTemplateId: selectedTemplateId || undefined,
         businessTemplateData: selectedTemplateId ? businessTemplateData : undefined,
+        templateVariables: selectedTemplateId ? businessTemplateData : undefined,
+        brandId: selectedBrandId || undefined,
       });
       navigate(`/jobs/${response.data.job.id}`);
     } catch (err: any) {
@@ -683,22 +1073,31 @@ const VideoCreator: React.FC = () => {
         eyebrow="Production Studio"
         description="Start with a prompt, choose the essential video settings, preview the voice, then create a production job."
         actions={
-          <ButtonGroup variant="contained">
-            <Button
-              color={mode === "prompt" ? "primary" : "inherit"}
-              variant={mode === "prompt" ? "contained" : "outlined"}
-              onClick={() => setMode("prompt")}
-            >
-              Prompt Mode
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            <Button variant="outlined" startIcon={<SaveIcon />} onClick={() => {
+              setSaveTemplateName(prompt ? prompt.slice(0, 54) : selectedTemplate?.displayName ? `${selectedTemplate.displayName} Custom` : "");
+              setSaveTemplateDescription(selectedTemplate?.description || "");
+              setSaveTemplateDialog(true);
+            }}>
+              Save as Template
             </Button>
-            <Button
-              color={mode === "template" ? "primary" : "inherit"}
-              variant={mode === "template" ? "contained" : "outlined"}
-              onClick={() => setMode("template")}
-            >
-              Template Mode
-            </Button>
-          </ButtonGroup>
+            <ButtonGroup variant="contained">
+              <Button
+                color={mode === "prompt" ? "primary" : "inherit"}
+                variant={mode === "prompt" ? "contained" : "outlined"}
+                onClick={() => setMode("prompt")}
+              >
+                Prompt Mode
+              </Button>
+              <Button
+                color={mode === "template" ? "primary" : "inherit"}
+                variant={mode === "template" ? "contained" : "outlined"}
+                onClick={() => setMode("template")}
+              >
+                Template Mode
+              </Button>
+            </ButtonGroup>
+          </Stack>
         }
       />
 
@@ -710,8 +1109,8 @@ const VideoCreator: React.FC = () => {
       {mode === "prompt" && (
         <Stack spacing={3}>
           <SectionCard
-            title="AI Creative Director Prompt"
-            description="Describe the video you want to produce. Include audience, style, goal, offer, language, and any key details."
+            title="What do you want to create?"
+            description="A prompt is enough. The engine will resolve the type, visuals, voice, captions and providers automatically unless you choose otherwise."
             actions={
               <Stack direction="row" spacing={1}>
                 {prompt.length > 0 && (
@@ -797,8 +1196,8 @@ const VideoCreator: React.FC = () => {
 
           {/* Video type: friendly labels over the canonical production modes. */}
           <SectionCard
-            title="What kind of video?"
-            description="Pick the closest match. You can fine-tune everything under Advanced."
+            title="Video type (optional)"
+            description="Auto lets the Creative Director infer the right treatment from the prompt and available capabilities."
           >
             <Grid container spacing={1.5}>
               {VIDEO_TYPES.map((entry) => {
@@ -827,7 +1226,7 @@ const VideoCreator: React.FC = () => {
                       }}
                     >
                       <Typography variant="body2" fontWeight={650}>
-                        {entry.label}
+                        {entry.label}{entry.id === "auto" ? " · Optional" : ""}
                       </Typography>
                       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
                         {entry.description}
@@ -902,11 +1301,11 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="duration-select-label">Duration</InputLabel>
                     <Select labelId="duration-select-label" id="duration-select" label="Duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
-                      <MenuItem value={15}>15s</MenuItem>
-                      <MenuItem value={20}>20s</MenuItem>
-                      <MenuItem value={30}>30s</MenuItem>
-                      <MenuItem value={45}>45s</MenuItem>
-                      <MenuItem value={60}>60s</MenuItem>
+                      {durationChoices.map((seconds) => (
+                        <MenuItem key={seconds} value={seconds}>
+                          {seconds}s
+                        </MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -923,21 +1322,68 @@ const VideoCreator: React.FC = () => {
                   </FormControl>
                 </Grid>
 
+                {/* Captions */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="captions-enabled-select-label">Captions</InputLabel>
+                    <Select
+                      labelId="captions-enabled-select-label"
+                      id="captions-enabled-select"
+                      label="Captions"
+                      value={captionEnabled ? "on" : "off"}
+                      onChange={(e) => setCaptionEnabled(e.target.value === "on")}
+                    >
+                      <MenuItem value="on">On</MenuItem>
+                      <MenuItem value="off">Off</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {/* Visual Source */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="visual-source-select-label">Visual Source</InputLabel>
+                    <Select
+                      labelId="visual-source-select-label"
+                      id="visual-source-select"
+                      label="Visual Source"
+                      value={visualSource}
+                      onChange={(e) => {
+                        const next = e.target.value as typeof visualSource;
+                        setVisualSource(next);
+                        if (next === "stock") setVisualMode("stock");
+                        else if (next === "uploaded_media") setVisualMode("uploaded_media");
+                        else if (next === "ai_generated") setVisualMode("ai");
+                        else if (next === "mixed") setVisualMode("hybrid");
+                        else setVisualMode("auto");
+                      }}
+                    >
+                      <MenuItem value="auto_best">Auto Best</MenuItem>
+                      <MenuItem value="stock">Stock</MenuItem>
+                      <MenuItem value="uploaded_media">Uploaded Media</MenuItem>
+                      <MenuItem value="ai_generated" disabled={configuredAiVideoProviders.length === 0}>
+                        AI Generated{configuredAiVideoProviders.length === 0 ? " · Configure an AI Video Provider" : ""}
+                      </MenuItem>
+                      <MenuItem value="mixed">Mixed</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
                 {/* Production Mode */}
                 {uiMode === "advanced" && (
                   <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel id="production-mode-select-label">Production Mode</InputLabel>
-                    <Select labelId="production-mode-select-label" id="production-mode-select" label="Production Mode" value={productionMode} onChange={(e) => setProductionMode(e.target.value)}>
-                      <MenuItem value="auto_hybrid">AUTO HYBRID - smart mixed source</MenuItem>
-                      <MenuItem value="stock_cinematic">STOCK CINEMATIC - polished stock edit</MenuItem>
-                      <MenuItem value="product_ad">PRODUCT AD - product composition</MenuItem>
-                      <MenuItem value="motion_graphics">MOTION GRAPHICS - animated graphics</MenuItem>
-                      <MenuItem value="animated_explainer">ANIMATED EXPLAINER - Motion Canvas</MenuItem>
-                      <MenuItem value="ai_generated">AI GENERATED - optional GPU/cloud only</MenuItem>
-                      <MenuItem value="social_viral">SOCIAL VIRAL - fast hooks and pacing</MenuItem>
-                      <MenuItem value="educational">EDUCATIONAL - clear teaching flow</MenuItem>
-                      <MenuItem value="custom_media">CUSTOM MEDIA - uploaded-media first</MenuItem>
+                    <InputLabel id="production-mode-select-label">Video Type</InputLabel>
+                    <Select labelId="production-mode-select-label" id="production-mode-select" label="Video Type" value={productionMode} onChange={(e) => setProductionMode(e.target.value)}>
+                      <MenuItem value="auto_hybrid">Auto</MenuItem>
+                      <MenuItem value="stock_cinematic">Cinematic</MenuItem>
+                      <MenuItem value="product_ad">Product Ad</MenuItem>
+                      <MenuItem value="motion_graphics">Motion Graphics</MenuItem>
+                      <MenuItem value="animated_explainer">Animated Explainer</MenuItem>
+                      <MenuItem value="ai_generated">AI Generated</MenuItem>
+                      <MenuItem value="social_viral">Social / Reel</MenuItem>
+                      <MenuItem value="educational">Educational</MenuItem>
+                      <MenuItem value="custom_media">Custom Media</MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
@@ -948,11 +1394,11 @@ const VideoCreator: React.FC = () => {
                   <FormControl fullWidth>
                     <InputLabel id="quality-select-label">Quality Profile</InputLabel>
                     <Select labelId="quality-select-label" id="quality-select" label="Quality Profile" value={quality} onChange={(e) => setQuality(e.target.value)}>
-                      <MenuItem value="draft">FAST - quick local production</MenuItem>
-                      <MenuItem value="standard">BALANCED - recommended quality/time balance</MenuItem>
-                      <MenuItem value="high">BALANCED+ - richer visual pacing</MenuItem>
-                      <MenuItem value="max_quality_local">MAX QUALITY LOCAL - strongest free/local route</MenuItem>
-                      <MenuItem value="premium">PREMIUM - configured premium services only</MenuItem>
+                      {QUALITY_OPTIONS.map((option) => (
+                        <MenuItem key={option.id} value={option.id}>
+                          {option.label} - {option.description}
+                        </MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -1041,20 +1487,85 @@ const VideoCreator: React.FC = () => {
                 {uiMode === "advanced" && (
                   <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel id="visual-mode-select-label">Visual Mode</InputLabel>
-                    <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Visual Mode" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
-                      <MenuItem value="auto">Auto source router</MenuItem>
-                      <MenuItem value="stock">Stock cinematic (Pexels)</MenuItem>
-                      <MenuItem value="uploaded_media">Uploaded media first</MenuItem>
-                      <MenuItem value="motion_graphics">Motion graphics</MenuItem>
-                      <MenuItem value="animated_explainer">Animated explainer</MenuItem>
-                      <MenuItem value="product_ad">Product composition</MenuItem>
-                      <MenuItem value="image_animation">Image animation</MenuItem>
-                      <MenuItem value="hybrid">Mixed source</MenuItem>
-                      <MenuItem value="ai">AI video (configured optional providers only)</MenuItem>
+                    <InputLabel id="visual-mode-select-label">Source Provider</InputLabel>
+                    <Select labelId="visual-mode-select-label" id="visual-mode-select" label="Source Provider" value={visualMode} onChange={(e) => setVisualMode(e.target.value)}>
+                      <MenuItem value="auto">Auto Provider</MenuItem>
+                      <MenuItem value="stock">Stock</MenuItem>
+                      <MenuItem value="uploaded_media">Uploaded Media</MenuItem>
+                      <MenuItem value="motion_graphics">Motion Graphics</MenuItem>
+                      <MenuItem value="animated_explainer">Animated Explainer</MenuItem>
+                      <MenuItem value="product_ad">Product Composition</MenuItem>
+                      <MenuItem value="image_animation">Image Animation</MenuItem>
+                      <MenuItem value="hybrid">Mixed</MenuItem>
+                      <MenuItem value="ai" disabled={configuredAiVideoProviders.length === 0}>
+                        AI Generated{configuredAiVideoProviders.length === 0 ? " · Configure" : ""}
+                      </MenuItem>
                     </Select>
                   </FormControl>
                 </Grid>
+                )}
+
+                {uiMode === "advanced" && (visualSource === "stock" || visualSource === "auto_best") && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="stock-provider-select-label">Stock Provider</InputLabel>
+                      <Select
+                        labelId="stock-provider-select-label"
+                        id="stock-provider-select"
+                        label="Stock Provider"
+                        value={stockProvider}
+                        onChange={(e) => setStockProvider(e.target.value as typeof stockProvider)}
+                      >
+                        <MenuItem value="auto_stock">Auto Stock</MenuItem>
+                        <MenuItem value="pexels" disabled={!providers.some((p) => p.id === "pexels" && p.configured !== false)}>
+                          Pexels{providers.some((p) => p.id === "pexels" && p.configured !== false) ? " · Available" : " · Configure"}
+                        </MenuItem>
+                        <MenuItem value="pixabay" disabled={!providers.some((p) => p.id === "pixabay" && p.configured !== false)}>
+                          Pixabay{providers.some((p) => p.id === "pixabay" && p.configured !== false) ? " · Available" : " · Configure"}
+                        </MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
+                {uiMode === "advanced" && visualSource === "ai_generated" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="ai-provider-select-label">AI Visual Provider</InputLabel>
+                      <Select
+                        labelId="ai-provider-select-label"
+                        id="ai-provider-select"
+                        label="AI Visual Provider"
+                        value={aiVisualProvider}
+                        onChange={(e) => setAiVisualProvider(e.target.value)}
+                      >
+                        <MenuItem value="auto">Auto Provider</MenuItem>
+                        {aiVideoProviders.map((provider) => (
+                          <MenuItem key={provider.id} value={provider.id} disabled={provider.configured === false}>
+                            {provider.name}{provider.configured === false ? " · Configure" : " · Available"}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                )}
+
+                {uiMode === "advanced" && (visualSource === "uploaded_media" || visualSource === "mixed") && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <FormControl fullWidth>
+                      <InputLabel id="media-policy-select-label">Media Selection</InputLabel>
+                      <Select
+                        labelId="media-policy-select-label"
+                        id="media-policy-select"
+                        label="Media Selection"
+                        value={mediaPolicy}
+                        onChange={(e) => setMediaPolicy(e.target.value as typeof mediaPolicy)}
+                      >
+                        <MenuItem value="auto_use_selected">Auto-use selected media</MenuItem>
+                        <MenuItem value="only_selected">Use only selected media</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Grid>
                 )}
 
                 {/* Voice Provider */}
@@ -1113,18 +1624,14 @@ const VideoCreator: React.FC = () => {
                 )}
 
                 {/* Captions Style */}
-                {uiMode === "advanced" && (
+                {captionEnabled && (
                   <Grid item xs={12} sm={6} md={3}>
                   <FormControl fullWidth>
-                    <InputLabel id="captions-style-select-label">Captions Style</InputLabel>
+                    <InputLabel id="captions-style-select-label">Caption Style</InputLabel>
                     <Select labelId="captions-style-select-label" id="captions-style-select" label="Captions Style" value={captionStyle} onChange={(e) => setCaptionStyle(e.target.value as any)}>
-                      <MenuItem value="social_ad">Social Ad — bold Kufi, karaoke highlight</MenuItem>
-                      <MenuItem value="clean_professional">Clean Professional — IBM Plex, subtle</MenuItem>
-                      <MenuItem value="minimal">Minimal — light, no highlight</MenuItem>
-                      <MenuItem value="kinetic_phrase">Kinetic Phrase — whole-phrase emphasis</MenuItem>
-                      <MenuItem value="karaoke">Karaoke — word-by-word fill</MenuItem>
-                      <MenuItem value="legacy_cairo">Legacy (Cairo)</MenuItem>
-                      <MenuItem value="none">None</MenuItem>
+                      {captionStyleChoices.map((style) => (
+                        <MenuItem key={style.id} value={style.id}>{style.label}</MenuItem>
+                      ))}
                     </Select>
                   </FormControl>
                 </Grid>
@@ -1153,7 +1660,36 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="character-profile-select-label">{ui.character}</InputLabel>
+                    <Select
+                      labelId="character-profile-select-label"
+                      id="character-profile-select"
+                      label={ui.character}
+                      value={selectedCharacterProfileId}
+                      onChange={(event) => setSelectedCharacterProfileId(event.target.value)}
+                    >
+                      <MenuItem value="">{ui.none}</MenuItem>
+                      {characterProfiles
+                        .filter((profile) => profile.status !== "archived")
+                        .map((profile) => (
+                          <MenuItem key={profile.id} value={profile.id}>
+                            {profile.name} · {profile.referenceAssetIds?.length || 0} {ui.refs}
+                          </MenuItem>
+                        ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
               </Grid>
+
+              {selectedCharacterProfileId && (
+                <Alert severity={modeReadiness?.characterConsistencyAvailable ? "success" : "warning"} sx={{ mt: 2 }}>
+                  {modeReadiness?.characterConsistencyAvailable
+                    ? ui.referenceReady
+                    : ui.referenceUnavailable}
+                </Alert>
+              )}
 
               {modeReadiness && (
                 <Box sx={{ mt: 2, p: 1.5, bgcolor: modeReadiness.ready ? "rgba(36,84,90,0.06)" : "rgba(220,38,38,0.08)", borderRadius: 2, border: "1px solid", borderColor: modeReadiness.ready ? "rgba(36,84,90,0.2)" : "rgba(220,38,38,0.3)" }}>
@@ -1177,15 +1713,24 @@ const VideoCreator: React.FC = () => {
                       {modeReadiness.missingRequirements.join(" • ")}
                     </Typography>
                   )}
+                  {modeReadiness.externalUsage?.length > 0 && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+                      External Usage: {modeReadiness.externalUsage.join(" • ")}
+                    </Typography>
+                  )}
                 </Box>
               )}
             </AccordionDetails>
           </Accordion>
 
-          {productionMode === "product_ad" && (
+          {(productionMode === "product_ad" || visualSource === "uploaded_media" || visualSource === "mixed") && (
             <SectionCard
-              title="Product Media & Presentation"
-              description="Upload your product image or select an existing asset. Background removal is automatically applied."
+              title={productionMode === "product_ad" ? ui.productMediaTitle : ui.selectedMediaTitle}
+              description={
+                productionMode === "product_ad"
+                  ? ui.productMediaDescription
+                  : ui.selectedMediaDescription
+              }
               actions={
                 <Button
                   variant="contained"
@@ -1193,47 +1738,78 @@ const VideoCreator: React.FC = () => {
                   size="small"
                   disabled={uploadingProduct}
                 >
-                  {uploadingProduct ? "Uploading & Removing Background..." : "Upload Product Image"}
+                  {uploadingProduct ? ui.uploadingProduct : ui.uploadProduct}
                   <input type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={handleProductFileUpload} />
                 </Button>
               }
             >
               <Stack spacing={2}>
-                {usableProducts.length === 0 && (
+                {(productionMode === "product_ad" ? productCapableAssets.length === 0 : selectableMediaAssets.length === 0) && (
                   <Alert severity="warning">
-                    A Product Ad is built around your product photo, so it cannot be
-                    produced without one. Upload a product image above
-                    {unusableProducts.length > 0
-                      ? ` — ${unusableProducts.length} stored item${unusableProducts.length === 1 ? " is" : "s are"} too small or unreadable to use.`
+                    {productionMode === "product_ad"
+                      ? ui.missingProduct
+                      : ui.missingMedia}
+                    {unusableMediaAssets.length > 0
+                      ? ` ${unusableMediaAssets.length} ${ui.unusableKept}`
                       : "."}
                   </Alert>
                 )}
-                {usableProducts.length > 0 && (
-                  <FormControl fullWidth size="small">
-                    <InputLabel id="product-media-select-label">Select Product Asset</InputLabel>
-                    <Select
-                      labelId="product-media-select-label"
-                      label="Select Product Asset"
-                      value={selectedProductMediaId}
-                      onChange={(e) => setSelectedProductMediaId(e.target.value)}
-                    >
-                      {usableProducts.map((prod) => (
-                        <MenuItem key={prod.id} value={prod.id}>
-                          {prod.originalName} ({prod.width}x{prod.height}) · {prod.nobgArtifactId ? "Background Removed" : "Original"}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                {(productionMode === "product_ad" ? productCapableAssets : selectableMediaAssets).length > 0 && (
+                  <Grid container spacing={1.5}>
+                    {(productionMode === "product_ad" ? productCapableAssets : selectableMediaAssets).map((asset) => {
+                      const selected = selectedMediaIds.includes(asset.id) || selectedProductMediaId === asset.id;
+                      return (
+                        <Grid item xs={12} sm={6} md={4} key={asset.id}>
+                          <Card
+                            variant="outlined"
+                            onClick={() => {
+                              selectMediaAsset(asset);
+                            }}
+                            sx={{
+                              p: 1.25,
+                              cursor: "pointer",
+                              borderColor: selected ? "primary.main" : "divider",
+                              bgcolor: selected ? "action.selected" : "background.paper",
+                            }}
+                          >
+                            <Stack direction="row" spacing={1.25} alignItems="center">
+                              {asset.mediaType === "image" ? (
+                                <Box
+                                  component="img"
+                                  src={mediaPreviewUrl(asset)}
+                                  alt={asset.displayName || asset.originalName || asset.filename}
+                                  sx={{ width: 56, height: 56, objectFit: "cover", borderRadius: 1, bgcolor: "action.hover" }}
+                                />
+                              ) : (
+                                <Box sx={{ width: 56, height: 56, borderRadius: 1, bgcolor: "action.hover", display: "grid", placeItems: "center", fontWeight: 800 }}>
+                                  {mediaTypeLabel(ui, asset.mediaType).slice(0, 1)}
+                                </Box>
+                              )}
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography variant="body2" fontWeight={700} noWrap>
+                                  {asset.displayName || asset.originalName || asset.filename}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {mediaTypeLabel(ui, asset.mediaType)}
+                                  {asset.width && asset.height ? ` · ${asset.width}x${asset.height}` : ""}
+                                  {asset.tags?.length ? ` · ${asset.tags.slice(0, 2).join(", ")}` : ""}
+                                  {` · ${ui.usable}`}
+                                </Typography>
+                              </Box>
+                            </Stack>
+                          </Card>
+                        </Grid>
+                      );
+                    })}
+                  </Grid>
                 )}
-                {unusableProducts.length > 0 && (
+                {unusableMediaAssets.length > 0 && (
                   <Typography variant="caption" color="text.secondary">
-                    {unusableProducts.length} stored item{unusableProducts.length === 1 ? "" : "s"} cannot be used
-                    in a video and {unusableProducts.length === 1 ? "is" : "are"} not offered here. They are kept in
-                    your Media library, where the reason is shown.
+                    {unusableMediaAssets.length} {ui.unusableKept}
                   </Typography>
                 )}
 
-                <Grid container spacing={2}>
+                {productionMode === "product_ad" && <Grid container spacing={2}>
                   <Grid item xs={12} sm={6}>
                     <TextField
                       label="Headline Banner"
@@ -1289,7 +1865,7 @@ const VideoCreator: React.FC = () => {
                       </Select>
                     </FormControl>
                   </Grid>
-                </Grid>
+                </Grid>}
               </Stack>
             </SectionCard>
           )}
@@ -1374,8 +1950,8 @@ const VideoCreator: React.FC = () => {
 
           {/* Cost Estimate & Live Spec Preview */}
           <SectionCard
-            title="Production Spec & Cost Breakdown"
-            description="Review the planned scenes and external API cost estimate before launching generation."
+            title="Production Summary"
+            description="Plain-language summary of what will be produced. Technical details stay under Advanced."
             actions={
               <Button
                 variant="outlined"
@@ -1420,7 +1996,7 @@ const VideoCreator: React.FC = () => {
 
                 {/* One canonical summary of what the engine resolved: voice,
                     captions, visuals, quality and cost, in plain language. */}
-                <ProductionSummary spec={previewSpec} costEstimate={costEstimate as any} />
+                <ProductionSummary spec={previewSpec} costEstimate={costEstimate as any} readiness={previewReadiness} />
 
                 <Grid container spacing={1.5}>
                   {previewSpec.scenes?.map((scene: any, idx: number) => (
@@ -1459,13 +2035,27 @@ const VideoCreator: React.FC = () => {
             )}
           </SectionCard>
 
+          {readinessMessage() && (
+            <Alert severity="warning" action={modeReadiness?.capabilities?.find((cap: any) => cap.required && !cap.ready)?.action ? (
+              <Button
+                size="small"
+                color="inherit"
+                onClick={() => navigate(modeReadiness.capabilities.find((cap: any) => cap.required && !cap.ready).action.href)}
+              >
+                {modeReadiness.capabilities.find((cap: any) => cap.required && !cap.ready).action.label}
+              </Button>
+            ) : undefined}>
+              {readinessMessage()}
+            </Alert>
+          )}
+
           {/* Submit Action */}
           <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
             <Button
               variant="contained"
               size="large"
               startIcon={<SendIcon />}
-              disabled={submitting || !prompt.trim() || arabicBlocked || Boolean(modeReadiness && !modeReadiness.ready)}
+              disabled={submitting || Boolean(readinessMessage())}
               onClick={submitPromptJob}
             >
               {submitting ? "Creating..." : "Create Video"}
@@ -1512,6 +2102,34 @@ const VideoCreator: React.FC = () => {
         </DialogActions>
       </Dialog>
 
+      <Dialog open={saveTemplateDialog} onClose={() => setSaveTemplateDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Save Reusable Template</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              autoFocus
+              required
+              label="Template name"
+              value={saveTemplateName}
+              onChange={(event) => setSaveTemplateName(event.target.value)}
+            />
+            <TextField
+              label="Description"
+              multiline
+              minRows={2}
+              value={saveTemplateDescription}
+              onChange={(event) => setSaveTemplateDescription(event.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSaveTemplateDialog(false)}>Cancel</Button>
+          <Button variant="contained" startIcon={<SaveIcon />} onClick={saveCurrentAsTemplate}>
+            Save Template
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* ========================================================================= */}
       {/* TEMPLATE MODE (PRESERVED BUSINESS TEMPLATES)                              */}
       {/* ========================================================================= */}
@@ -1554,7 +2172,7 @@ const VideoCreator: React.FC = () => {
                         <Typography variant="caption" color="text.secondary">{template.targetUseCase}</Typography>
                         <Button
                           variant={selectedTemplateId === template.id ? "contained" : "outlined"}
-                          onClick={() => setSelectedTemplateId(template.id)}
+                          onClick={() => applyTemplateDefaults(template)}
                         >
                           Use Template
                         </Button>

@@ -42,6 +42,7 @@ import { ReviewPublishModal } from "../components/publishing/ReviewPublishModal"
 import type { V2Job, VideoItem, VideoPublishingStatus, VideoRevisionItem } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
 import { isFreeCost, videoCostLabel } from "../../types/costDisplay";
+import { useT } from "../i18n";
 
 function formatFileSize(bytes?: number): string {
   if (!bytes) return "Unknown";
@@ -181,6 +182,7 @@ function formatDuration(seconds?: number): string {
 }
 
 const VideoDetailsContent: React.FC = () => {
+  const tt = useT();
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
   const [video, setVideo] = useState<VideoItem | null>(null);
@@ -369,7 +371,7 @@ const VideoDetailsContent: React.FC = () => {
       {video && (
         <Grid container spacing={2}>
           <Grid item xs={12} lg={8}>
-            <SectionCard title="Video Preview">
+            <SectionCard title={tt("videos.section.overview")}>
               <video
                 controls
                 src={authedPreviewUrl}
@@ -540,7 +542,7 @@ const VideoDetailsContent: React.FC = () => {
               </SectionCard>
             )}
 
-            <SectionCard title="Revision Studio">
+            <SectionCard title={tt("videos.section.revisions")}>
               <Stack spacing={2}>
                 <Alert severity="info">
                   Voice-only revisions reuse planning/media. Media-only revisions reuse planning, voice, and captions. Caption-style revisions reuse speech timings.
@@ -631,8 +633,49 @@ const VideoDetailsContent: React.FC = () => {
           <Grid item xs={12} lg={4}>
             <Stack spacing={2}>
               {/* Metadata */}
-              <SectionCard title="Video Metadata" actions={<StatusBadge status={video.status} />}>
+              <SectionCard title={tt("videos.section.production")}>
                 <Stack spacing={1.25}>
+                  {job && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography color="text.secondary">{tt("videos.sourceProduction")}</Typography>
+                      <Button size="small" onClick={() => navigate(`/jobs/${job.id}`)}>
+                        {tt("videos.viewProduction")}
+                      </Button>
+                    </Stack>
+                  )}
+                  {job?.snapshots?.brand && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">{tt("productions.snapshotBrand")}</Typography>
+                      <Typography fontWeight={700}>
+                        {job.snapshots.brand.name || "—"}
+                        {job.snapshots.brand.revision
+                          ? ` · ${tt("productions.revision", { n: job.snapshots.brand.revision })}`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {job?.snapshots?.template && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">{tt("productions.snapshotTemplate")}</Typography>
+                      <Typography fontWeight={700}>
+                        {job.snapshots.template.name || job.snapshots.template.id || "—"}
+                        {job.snapshots.template.revision
+                          ? ` · ${tt("productions.revision", { n: job.snapshots.template.revision })}`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {job?.snapshots?.character && (
+                    <Stack direction="row" justifyContent="space-between">
+                      <Typography color="text.secondary">{tt("productions.snapshotCharacter")}</Typography>
+                      <Typography fontWeight={700}>
+                        {job.snapshots.character.name || job.snapshots.character.id || "—"}
+                        {job.snapshots.character.revision
+                          ? ` · ${tt("productions.revision", { n: job.snapshots.character.revision })}`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
                   <Stack direction="row" justifyContent="space-between">
                     <Typography color="text.secondary">Mode</Typography>
                     <Typography fontWeight={700}>
@@ -653,18 +696,24 @@ const VideoDetailsContent: React.FC = () => {
                     </Typography>
                   </Stack>
                   <Stack direction="row" justifyContent="space-between">
-                    <Typography color="text.secondary">Technical Score</Typography>
-                    <Chip
-                      size="small"
-                      color={
-                        (video.technicalScore ?? video.qualityScore ?? 100) >= 90
-                          ? "success"
-                          : (video.technicalScore ?? video.qualityScore ?? 100) >= 70
-                            ? "warning"
-                            : "error"
+                    <Typography color="text.secondary">{tt("videos.technicalQuality")}</Typography>
+                    {(() => {
+                      const score = video.technicalScore ?? video.qualityScore;
+                      if (score === undefined) {
+                        return (
+                          <Typography variant="caption" color="text.secondary">
+                            {tt("videos.notAvailableHistorical")}
+                          </Typography>
+                        );
                       }
-                      label={`${video.technicalScore ?? video.qualityScore ?? 100} / 100`}
-                    />
+                      return (
+                        <Chip
+                          size="small"
+                          color={score >= 90 ? "success" : score >= 70 ? "warning" : "error"}
+                          label={`${score} / 100`}
+                        />
+                      );
+                    })()}
                   </Stack>
                   {video.mediaPlanScore !== undefined && (
                     <Stack direction="row" justifyContent="space-between">
@@ -843,7 +892,7 @@ const VideoDetailsContent: React.FC = () => {
               {/* Creative summary. Readable evidence of what the engine chose
                   and why; the raw plan stays in the collapsed technical block. */}
               {video.creativePlan && (
-                <SectionCard title="Creative">
+                <SectionCard title={tt("videos.section.creative")}>
                   <Stack spacing={1.25}>
                     <Stack direction="row" justifyContent="space-between">
                       <Typography color="text.secondary">Creative Style</Typography>
@@ -891,6 +940,48 @@ const VideoDetailsContent: React.FC = () => {
                 </SectionCard>
               )}
 
+              {/* Creative Quality — distinct from Technical Quality; never merged. */}
+              <SectionCard title={tt("videos.creativeQuality")}>
+                <Stack spacing={1.25}>
+                  {video.creativeScore === undefined && video.creativeGrade === undefined ? (
+                    <Typography variant="body2" color="text.secondary">
+                      {tt("videos.notAvailableHistorical")}
+                    </Typography>
+                  ) : (
+                    <>
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography color="text.secondary">{tt("videos.creativeQuality")}</Typography>
+                        <Chip
+                          size="small"
+                          color={(video.creativeScore ?? 0) >= 90 ? "success" : "info"}
+                          label={
+                            video.creativeGrade
+                              ? `${video.creativeGrade} · ${video.creativeScore ?? "—"} / 100`
+                              : `${video.creativeScore} / 100`
+                          }
+                        />
+                      </Stack>
+                      {video.creativeDiagnostics &&
+                        Object.entries(video.creativeDiagnostics)
+                          .filter(([, value]) => typeof value === "number")
+                          .map(([key, value]) => (
+                            <Stack key={key} direction="row" justifyContent="space-between">
+                              <Typography color="text.secondary" sx={{ textTransform: "capitalize" }}>
+                                {key.replace(/([A-Z])/g, " $1").replace(/Score$/i, "").trim()}
+                              </Typography>
+                              <Typography fontWeight={700}>{value}</Typography>
+                            </Stack>
+                          ))}
+                      {video.creativeWarnings && video.creativeWarnings.length > 0 && (
+                        <Alert severity="warning" sx={{ fontSize: "0.8rem" }}>
+                          {video.creativeWarnings.join(" · ")}
+                        </Alert>
+                      )}
+                    </>
+                  )}
+                </Stack>
+              </SectionCard>
+
               {/* Brand Kit */}
               <SectionCard title="Brand Profile">
                 <Stack spacing={1}>
@@ -914,15 +1005,15 @@ const VideoDetailsContent: React.FC = () => {
                 </Typography>
               </SectionCard>
 
-              {/* Collapsible Production Spec */}
-              {video.productionSpec && (
+              {/* Collapsible advanced plan — sanitized (no paths/tokens). */}
+              {((video as any).advancedProductionSpec || video.productionSpec) && (
                 <Accordion>
                   <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography fontWeight={800}>Advanced production plan</Typography>
+                    <Typography fontWeight={800}>{tt("productions.advanced")}</Typography>
                   </AccordionSummary>
                   <AccordionDetails>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, background: "#0f172a", color: "#38bdf8", padding: 10, borderRadius: 6 }}>
-                      {JSON.stringify(video.productionSpec, null, 2)}
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, background: "#0f172a", color: "#38bdf8", padding: 10, borderRadius: 6, maxHeight: 320, overflowY: "auto" }}>
+                      {JSON.stringify((video as any).advancedProductionSpec || video.productionSpec, null, 2)}
                     </pre>
                   </AccordionDetails>
                 </Accordion>

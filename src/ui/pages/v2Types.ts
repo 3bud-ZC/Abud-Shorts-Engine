@@ -31,6 +31,53 @@ export type V2Job = {
   startedAt?: string;
   completedAt?: string;
   updatedAt: string;
+
+  // Customer-view fields (V2.3-06). Emitted by the backend serializer.
+  customerStatus?:
+    | "queued"
+    | "preparing"
+    | "generating"
+    | "rendering"
+    | "ready"
+    | "needs_attention"
+    | "cancelling"
+    | "cancelled";
+  promptSummary?: string;
+  elapsedMs?: number;
+  durationSeconds?: number;
+  requestedDurationSeconds?: number;
+  actualDurationSeconds?: number;
+  productionMode?: string;
+  visualSource?: string;
+  characterProfileId?: string;
+  videoId?: string;
+  thumbnailUrl?: string;
+  isFree?: boolean;
+  retryOf?: string;
+  retryLineage?: string[];
+  snapshots?: ProductionSnapshots;
+  timeline?: CustomerTimelineStep[];
+  failure?: CustomerFailure;
+  advanced?: Record<string, unknown>;
+};
+
+export type ProductionSnapshots = {
+  brand?: { name?: string; revision?: number };
+  template?: { id?: string; name?: string; revision?: number };
+  character?: { id?: string; name?: string; revision?: number; consistencyMode?: string };
+};
+
+export type CustomerTimelineStep = {
+  key: string;
+  state: "done" | "active" | "pending" | "failed";
+  at?: string;
+};
+
+export type CustomerFailure = {
+  message: string;
+  supportCode: string;
+  recoverable: boolean;
+  action?: { label: string; href: string };
 };
 
 export type V2JobEvent = {
@@ -97,17 +144,38 @@ export type V2HealthComponent = {
 export type BusinessTemplateField = {
   key: string;
   label: string;
-  type: "text" | "textarea" | "number" | "select";
+  type: "text" | "textarea" | "number" | "select" | "date" | "url" | "media_asset";
   required: boolean;
   placeholder?: string;
   helperText?: string;
   options?: string[];
 };
 
+export type TemplateVariable = {
+  key: string;
+  label: string;
+  type: "text" | "number" | "date" | "url" | "media_asset";
+  required?: boolean;
+  defaultValue?: string;
+  example?: string;
+  helpText?: string;
+};
+
 export type BusinessTemplateOption = {
   id: string;
+  name?: string;
   displayName: string;
   description: string;
+  category?: string;
+  source?: "built_in" | "custom";
+  builtIn?: boolean;
+  custom?: boolean;
+  favorite?: boolean;
+  archived?: boolean;
+  revision?: number;
+  baseTemplateId?: string;
+  config?: Record<string, any>;
+  variables?: TemplateVariable[];
   targetUseCase: string;
   defaultTone?: string;
   suggestedDurationSeconds?: number;
@@ -125,17 +193,50 @@ export type BusinessTemplateOption = {
 export type V2Brand = {
   id: string;
   name: string;
+  description?: string;
+  industry?: string;
+  tagline?: string;
   watermarkText?: string;
   primaryColor?: string;
   secondaryColor?: string;
   accentColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  logoAssetId?: string;
+  iconAssetId?: string;
   logoUrl?: string;
   websiteUrl?: string;
   socialHandle?: string;
-  captionStyle?: "none" | "clean" | "bold" | "minimal";
+  socialHandles?: Record<string, string>;
+  headingFont?: string;
+  bodyFont?: string;
+  captionFont?: string;
+  captionStyle?: string;
   includeOutro?: boolean;
   outroText?: string;
   contactText?: string;
+  toneOfVoice?: string;
+  keywords?: string[];
+  preferredPhrases?: string[];
+  avoidPhrases?: string[];
+  defaultCtaText?: string;
+  defaultLanguage?: "auto" | "ar" | "en";
+  defaultDurationSeconds?: number;
+  defaultAspectRatio?: string;
+  defaultQuality?: string;
+  defaultVisualSource?: string;
+  defaultMusicMood?: string;
+  defaultCharacterProfileId?: string;
+  watermark?: {
+    enabled?: boolean;
+    assetId?: string;
+    position?: string;
+    size?: string;
+    opacity?: number;
+    respectSafeZone?: boolean;
+  };
+  intro?: { type?: string; durationSeconds?: number };
+  outro?: { type?: string; durationSeconds?: number };
   voiceProfile?: {
     provider?: "auto" | "kokoro" | "piper" | "google_cloud_tts" | "elevenlabs";
     voiceId?: string;
@@ -144,6 +245,10 @@ export type V2Brand = {
     pace?: string;
     pronunciationDictionary?: Record<string, string>;
   };
+  revision?: number;
+  revisions?: Array<{ revision: number; createdAt: string; summary?: string }>;
+  archived?: boolean;
+  archivedAt?: string;
   isDefault?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -188,6 +293,12 @@ export type VideoItem = {
   technicalScore?: number;
   mediaPlanScore?: number;
   overallProductionScore?: number;
+  creativeScore?: number;
+  creativeGrade?: string;
+  creativeDiagnostics?: Record<string, number>;
+  creativeWarnings?: string[];
+  hasCreativeQuality?: boolean;
+  hasTechnicalQuality?: boolean;
   requestedDurationSeconds?: number;
   durationVarianceSeconds?: number;
   durationVariancePercent?: number;

@@ -15,6 +15,7 @@ import { validateCreateShortInput } from "../validator";
 import { readMetadata } from "../videoMetadata";
 import { V2Database } from "./db";
 import { getV2Health, validatePexelsProvider } from "./health";
+import { getFastHealth, type ProviderConfigurationSnapshot } from "./system/fastHealth";
 import { JobService } from "./jobs";
 import { N8nOrchestrator } from "./orchestrator";
 import {
@@ -30,6 +31,7 @@ import {
   productionJobSchema,
   productionSpecPreviewSchema,
   promptEnhanceRequestSchema,
+  reusableTemplateSchema,
   stageRetrySchema,
   voiceRevisionSchema,
 } from "./types";
@@ -37,6 +39,7 @@ import { ContentAIRegistry } from "./content-ai/registry";
 import { estimateProductionCost } from "./cost-estimator";
 import {
   productionSpecSchema,
+  type ProductionSpec,
   validateContentQuality,
   validateProductionSpec,
 } from "../../types/productionSpec";
@@ -99,6 +102,15 @@ import { providerSecrets } from "./provider-vault/providerSecrets";
 import { createOAuthRouter } from "./integrations/oauthRoutes";
 import { checkpointStages } from "./checkpoints";
 import {
+  serializeJobForCustomer,
+  queryJobRows,
+  buildCustomerTimeline,
+  sanitizeJobFailure,
+  scrubInternal,
+  STATUS_GROUPS,
+  type JobListFilters,
+} from "./customerView";
+import {
   buildRevisionReusePlan,
   filterReusableArtifacts,
   type DurableSceneArtifact,
@@ -106,26 +118,64 @@ import {
 import { capabilityManager } from "./capabilities/capabilityManager";
 import type { CapabilityId } from "./capabilities/types";
 import { qualityEngine } from "./quality/qualityEngine";
-import { mediaUploadService } from "./media/mediaUploadService";
+import {
+  mediaUploadService,
+  type MediaAsset,
+  type UploadedProductMedia,
+} from "./media/mediaUploadService";
 import { motionEngine } from "./motion/motionEngine";
 
 type BrandRow = {
   id: string;
   name: string;
+  description?: string | null;
+  industry?: string | null;
+  tagline?: string | null;
   watermark_text: string;
   primary_color: string;
   secondary_color?: string | null;
   accent_color: string;
+  background_color?: string | null;
+  text_color?: string | null;
+  logo_asset_id?: string | null;
+  icon_asset_id?: string | null;
   logo_url?: string | null;
   website_url?: string | null;
   social_handle?: string | null;
-  caption_style: "none" | "clean" | "bold" | "minimal";
+  caption_style: string;
   include_outro: boolean;
   outro_text: string;
   contact_text: string;
   voice_profile?: Record<string, unknown> | null;
+  kit?: Record<string, unknown> | null;
+  revision?: number | null;
+  revisions?: Array<Record<string, unknown>> | null;
+  archived_at?: Date | null;
   is_default: boolean;
   created_at: Date;
+  updated_at: Date;
+};
+
+type TemplateRow = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  source: "custom";
+  base_template_id?: string | null;
+  favorite: boolean;
+  archived_at?: Date | null;
+  revision: number;
+  config: Record<string, unknown>;
+  variables: Array<Record<string, unknown>>;
+  revisions: Array<Record<string, unknown>>;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type TemplatePreferenceRow = {
+  template_id: string;
+  favorite: boolean;
   updated_at: Date;
 };
 
@@ -136,25 +186,318 @@ type SettingRow = {
 };
 
 function mapBrand(row: BrandRow) {
+  const kit = (row.kit || {}) as Record<string, any>;
+  const revision = row.revision || 1;
   return {
     id: row.id,
     name: row.name,
+    description: row.description || kit.description || "",
+    industry: row.industry || kit.industry || "",
+    tagline: row.tagline || kit.tagline || "",
     watermarkText: row.watermark_text,
     primaryColor: row.primary_color,
     secondaryColor: row.secondary_color || undefined,
     accentColor: row.accent_color,
+    backgroundColor: row.background_color || kit.backgroundColor || undefined,
+    textColor: row.text_color || kit.textColor || undefined,
+    logoAssetId: row.logo_asset_id || kit.logoAssetId || undefined,
+    iconAssetId: row.icon_asset_id || kit.iconAssetId || undefined,
     logoUrl: row.logo_url || undefined,
     websiteUrl: row.website_url || undefined,
     socialHandle: row.social_handle || undefined,
+    socialHandles: kit.socialHandles || {},
+    headingFont: kit.headingFont || "ibm_plex_sans_arabic",
+    bodyFont: kit.bodyFont || "ibm_plex_sans_arabic",
+    captionFont: kit.captionFont || "ibm_plex_sans_arabic",
     captionStyle: row.caption_style,
     includeOutro: row.include_outro,
     outroText: row.outro_text,
     contactText: row.contact_text,
     voiceProfile: row.voice_profile || undefined,
+    toneOfVoice: kit.toneOfVoice || "",
+    keywords: Array.isArray(kit.keywords) ? kit.keywords : [],
+    preferredPhrases: Array.isArray(kit.preferredPhrases) ? kit.preferredPhrases : [],
+    avoidPhrases: Array.isArray(kit.avoidPhrases) ? kit.avoidPhrases : [],
+    defaultCtaText: kit.defaultCtaText || "",
+    defaultLanguage: kit.defaultLanguage || "auto",
+    defaultDurationSeconds: kit.defaultDurationSeconds,
+    defaultAspectRatio: kit.defaultAspectRatio || "9:16",
+    defaultQuality: kit.defaultQuality || "standard",
+    defaultVisualSource: kit.defaultVisualSource || "auto_best",
+    defaultMusicMood: kit.defaultMusicMood,
+    defaultCharacterProfileId: kit.defaultCharacterProfileId,
+    watermark: kit.watermark || { enabled: false },
+    intro: kit.intro || { type: "none", durationSeconds: 0 },
+    outro: kit.outro || { type: row.include_outro ? "cta_card" : "none", durationSeconds: row.include_outro ? 2 : 0 },
+    palette: kit.palette,
+    revision,
+    revisions: Array.isArray(row.revisions) ? row.revisions.map((item) => ({
+      revision: item.revision,
+      createdAt: item.createdAt,
+      summary: item.summary,
+    })) : [],
+    archived: Boolean(row.archived_at),
+    archivedAt: row.archived_at?.toISOString(),
     isDefault: row.is_default,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+const TEMPLATE_CATEGORIES = ["social", "product", "business", "educational", "explainer", "event", "promotional"] as const;
+
+const BUILT_IN_TEMPLATE_CATEGORY: Record<string, (typeof TEMPLATE_CATEGORIES)[number]> = {
+  product_ad: "product",
+  restaurant_offer: "promotional",
+  real_estate_listing: "business",
+  educational_tip: "educational",
+  viral_curiosity: "social",
+  event_promo: "event",
+};
+
+function compactStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 30)
+    : [];
+}
+
+function brandKitFromInput(input: any) {
+  return {
+    brandName: input.name,
+    description: input.description || undefined,
+    industry: input.industry || undefined,
+    tagline: input.tagline || undefined,
+    watermarkText: input.watermarkText || "",
+    primaryColor: input.primaryColor,
+    secondaryColor: input.secondaryColor || undefined,
+    accentColor: input.accentColor,
+    backgroundColor: input.backgroundColor || undefined,
+    textColor: input.textColor || undefined,
+    logoAssetId: input.logoAssetId || undefined,
+    iconAssetId: input.iconAssetId || undefined,
+    logoUrl: input.logoUrl || undefined,
+    websiteUrl: input.websiteUrl || undefined,
+    socialHandle: input.socialHandle || undefined,
+    socialHandles: input.socialHandles || {},
+    headingFont: input.headingFont,
+    bodyFont: input.bodyFont,
+    captionFont: input.captionFont,
+    captionStyle: input.captionStyle,
+    includeOutro: input.includeOutro,
+    outroText: input.outroText || "",
+    contactText: input.contactText || "",
+    toneOfVoice: input.toneOfVoice || undefined,
+    keywords: compactStringArray(input.keywords),
+    preferredPhrases: compactStringArray(input.preferredPhrases),
+    avoidPhrases: compactStringArray(input.avoidPhrases),
+    defaultCtaText: input.defaultCtaText || undefined,
+    defaultLanguage: input.defaultLanguage,
+    defaultDurationSeconds: input.defaultDurationSeconds,
+    defaultAspectRatio: input.defaultAspectRatio,
+    defaultQuality: input.defaultQuality,
+    defaultVisualSource: input.defaultVisualSource,
+    defaultMusicMood: input.defaultMusicMood || undefined,
+    defaultCharacterProfileId: input.defaultCharacterProfileId || undefined,
+    watermark: input.watermark || { enabled: false },
+    intro: input.intro || { type: "none", durationSeconds: 0 },
+    outro: input.outro || { type: input.includeOutro ? "cta_card" : "none", durationSeconds: input.includeOutro ? 2 : 0 },
+  };
+}
+
+function brandRevisionEntry(revision: number, brand: ReturnType<typeof mapBrand>, summary: string) {
+  return {
+    revision,
+    createdAt: new Date().toISOString(),
+    summary,
+    snapshot: createBrandSnapshot(brand),
+  };
+}
+
+function createBrandSnapshot(brand: ReturnType<typeof mapBrand>) {
+  return {
+    brandId: brand.id,
+    brandName: brand.name,
+    revision: brand.revision || 1,
+    logoAssetId: brand.logoAssetId,
+    iconAssetId: brand.iconAssetId,
+    palette: {
+      customer: {
+        primaryColor: brand.primaryColor,
+        secondaryColor: brand.secondaryColor,
+        accentColor: brand.accentColor,
+        backgroundColor: brand.backgroundColor,
+        textColor: brand.textColor,
+      },
+      provenance: {
+        primaryColor: brand.primaryColor ? "customer" : "default",
+        secondaryColor: brand.secondaryColor ? "customer" : "derived",
+        accentColor: brand.accentColor ? "customer" : "default",
+        backgroundColor: brand.backgroundColor ? "customer" : "default",
+        textColor: brand.textColor ? "customer" : "derived",
+      },
+    },
+    typography: {
+      headingFont: brand.headingFont,
+      bodyFont: brand.bodyFont,
+      captionFont: brand.captionFont,
+    },
+    captionPreference: brand.captionStyle,
+    voicePreference: brand.voiceProfile,
+    cta: brand.defaultCtaText || brand.outroText,
+    watermark: brand.watermark,
+    intro: brand.intro,
+    outro: brand.outro,
+    websiteUrl: brand.websiteUrl,
+    socialHandle: brand.socialHandle,
+    socialHandles: brand.socialHandles,
+    toneOfVoice: brand.toneOfVoice,
+    keywords: brand.keywords,
+    preferredPhrases: brand.preferredPhrases,
+    avoidPhrases: brand.avoidPhrases,
+  };
+}
+
+async function getBrandById(db: V2Database, id?: string): Promise<ReturnType<typeof mapBrand> | null> {
+  if (!id) return null;
+  const rows = await db.query<BrandRow>("SELECT * FROM brands WHERE id = $1", [id]);
+  return rows[0] ? mapBrand(rows[0]) : null;
+}
+
+async function validateBrandMediaReferences(input: any) {
+  const ids = [input.logoAssetId, input.iconAssetId, input.watermark?.assetId].filter(Boolean) as string[];
+  for (const id of ids) {
+    const asset = await mediaUploadService.getAsset(id);
+    if (!asset || asset.status === "archived") throw new Error("Selected logo or watermark asset was not found.");
+    if (!asset.usability?.usableForLogo) throw new Error("Selected logo or watermark asset is not usable as a logo.");
+  }
+}
+
+function mapBuiltInTemplate(template: ReturnType<typeof listBusinessTemplates>[number], preferences: Map<string, boolean> = new Map()) {
+  return {
+    id: template.id,
+    name: template.displayName,
+    displayName: template.displayName,
+    description: template.description,
+    category: BUILT_IN_TEMPLATE_CATEGORY[template.id] || "business",
+    source: "built_in" as const,
+    builtIn: true,
+    custom: false,
+    favorite: preferences.get(template.id) === true,
+    archived: false,
+    revision: 1,
+    baseTemplateId: template.id,
+    targetUseCase: template.targetUseCase,
+    defaultTone: template.defaultTone,
+    suggestedDurationSeconds: template.suggestedDurationSeconds,
+    recommendedSceneCount: template.recommendedSceneCount,
+    targetDurationSeconds: template.targetDurationSeconds,
+    hookStyle: template.hookStyle,
+    ctaStyle: template.ctaStyle,
+    examplePrompt: template.examplePrompt,
+    pexelsSearchHints: template.pexelsSearchHints,
+    fallbackPexelsSearchHints: template.fallbackPexelsSearchHints,
+    qualityChecklist: template.qualityChecklist,
+    fields: template.fields,
+    variables: template.fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type === "number" ? "number" : "text",
+      required: field.required,
+      defaultValue: "",
+      example: field.placeholder,
+      helpText: field.helperText,
+    })),
+    config: {
+      durationSeconds: template.targetDurationSeconds || template.suggestedDurationSeconds,
+      visualSource: "auto_best",
+      captionStyle: "bold",
+      quality: "standard",
+      aspectRatio: "9:16",
+    },
+  };
+}
+
+function mapCustomTemplate(row: TemplateRow) {
+  const variables = Array.isArray(row.variables) ? row.variables : [];
+  return {
+    id: row.id,
+    name: row.name,
+    displayName: row.name,
+    description: row.description,
+    category: row.category,
+    source: "custom" as const,
+    builtIn: false,
+    custom: true,
+    favorite: row.favorite,
+    archived: Boolean(row.archived_at),
+    archivedAt: row.archived_at?.toISOString(),
+    revision: row.revision,
+    baseTemplateId: row.base_template_id || undefined,
+    targetUseCase: row.description,
+    hookStyle: String(row.config?.creativeStyle || "Customer-defined opening"),
+    ctaStyle: String(row.config?.ctaBehavior || "Customer-defined CTA"),
+    examplePrompt: String(row.config?.promptGuidance || ""),
+    pexelsSearchHints: [],
+    qualityChecklist: [],
+    fields: variables.map((variable: any) => ({
+      key: variable.key,
+      label: variable.label,
+      type: variable.type === "number" ? "number" : variable.type === "text" ? "text" : "textarea",
+      required: Boolean(variable.required),
+      placeholder: variable.example,
+      helperText: variable.helpText,
+    })),
+    variables,
+    config: row.config || {},
+    revisions: Array.isArray(row.revisions) ? row.revisions.map((item) => ({
+      revision: item.revision,
+      createdAt: item.createdAt,
+      summary: item.summary,
+    })) : [],
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function templateSnapshot(template: any, resolvedVariables: Record<string, string> = {}) {
+  return {
+    templateId: template.id,
+    templateRevision: template.revision || 1,
+    templateName: template.displayName || template.name,
+    source: template.source,
+    baseTemplateId: template.baseTemplateId,
+    resolvedConfiguration: template.config || {},
+    resolvedVariables,
+  };
+}
+
+function validateTemplateVariables(template: any, values: Record<string, string> = {}) {
+  const missing: string[] = [];
+  const resolved: Record<string, string> = {};
+  for (const variable of template.variables || []) {
+    const value = String(values[variable.key] ?? variable.defaultValue ?? "").trim();
+    if (variable.required && !value) missing.push(variable.label || variable.key);
+    if (value) resolved[variable.key] = value;
+  }
+  const unresolved = Object.values(resolved).filter((value) => /\{\{[^}]+\}\}/.test(value));
+  return { ok: missing.length === 0 && unresolved.length === 0, missing, unresolved, resolved };
+}
+
+function applyVariablesToText(text: string | undefined, values: Record<string, string>) {
+  if (!text) return text;
+  return text.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g, (_match, key) => values[key] || "");
+}
+
+async function getTemplateForSnapshot(db: V2Database, id?: string): Promise<any | null> {
+  if (!id) return null;
+  const builtIn = listBusinessTemplates().map((template) => mapBuiltInTemplate(template)).find((template) => template.id === id);
+  if (builtIn) return builtIn;
+  try {
+    const rows = await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [id]);
+    return rows[0] ? mapCustomTemplate(rows[0]) : null;
+  } catch {
+    return null;
+  }
 }
 
 function redactConfiguredKey(key?: string) {
@@ -163,6 +506,8 @@ function redactConfiguredKey(key?: string) {
 }
 
 function readStorageDetails(config: Config) {
+  // Size only - the absolute container path is an internal detail and must not
+  // reach a customer (privacy standard).
   fs.ensureDirSync(config.videosDirPath);
   const files = fs.readdirSync(config.videosDirPath);
   const bytes = files.reduce((total, file) => {
@@ -170,7 +515,7 @@ function readStorageDetails(config: Config) {
     const stats = fs.statSync(filePath);
     return stats.isFile() ? total + stats.size : total;
   }, 0);
-  return { videosDir: config.videosDirPath, bytes };
+  return { videoCount: files.filter((file) => file.endsWith(".mp4")).length, bytes };
 }
 
 async function readAppSettings(db: V2Database) {
@@ -215,6 +560,40 @@ function withoutTechnicalFields(
   if (!transaction) return null;
   const { imageDigest: _digest, packageSha256: _checksum, ...rest } = transaction;
   return rest;
+}
+
+export type ClientMediaAsset = Omit<
+  MediaAsset,
+  "checksum" | "storagePath" | "relativePath" | "nobgArtifactId" | "nobgRelativePath"
+>;
+
+export type ClientProductMedia = Omit<
+  UploadedProductMedia,
+  "checksum" | "storagePath" | "relativePath" | "nobgArtifactId" | "nobgRelativePath"
+>;
+
+export function serializeMediaAssetForApi(asset: MediaAsset): ClientMediaAsset {
+  const {
+    checksum: _checksum,
+    storagePath: _storagePath,
+    relativePath: _relativePath,
+    nobgArtifactId: _nobgArtifactId,
+    nobgRelativePath: _nobgRelativePath,
+    ...safeAsset
+  } = asset;
+  return safeAsset;
+}
+
+export function serializeProductMediaForApi(media: UploadedProductMedia): ClientProductMedia {
+  const {
+    checksum: _checksum,
+    storagePath: _storagePath,
+    relativePath: _relativePath,
+    nobgArtifactId: _nobgArtifactId,
+    nobgRelativePath: _nobgRelativePath,
+    ...safeMedia
+  } = media;
+  return safeMedia;
 }
 
 async function writeAppSettings(db: V2Database, value: Record<string, unknown>) {
@@ -301,6 +680,59 @@ export type ProductionSpecDefaults = {
   arabicVoice?: PersistedArabicVoiceDefault | null;
 };
 
+type CreateVisualSource = "auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
+type StockProviderChoice = "auto_stock" | "pexels" | "pixabay";
+type MediaPolicyChoice = "auto_use_selected" | "only_selected";
+
+function characterProfileIdFromControls(controls: any): string {
+  const value =
+    controls.characterProfileId ||
+    controls.metadata?.characterProfileId ||
+    controls.productionSpec?.metadata?.characterProfileId ||
+    controls.productionSpec?.metadata?.characterSnapshot?.profileId;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function referenceCapableVisualProviders(providerIds: Set<string>): string[] {
+  const configured: string[] = [];
+  // Existing real adapters in this branch do not expose a truthful reference
+  // image contract yet. A hidden deterministic test provider exercises payload
+  // propagation without claiming Veo/fal/Pexels can preserve identity.
+  if (process.env.ENABLE_TEST_PROVIDERS === "true" || process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER === "true") {
+    configured.push("test_reference_visual");
+  }
+  return configured.filter((id) => id === "test_reference_visual" || providerIds.has(id));
+}
+
+function visualModeForSource(source?: string): string | undefined {
+  switch (source) {
+    case "stock":
+      return "stock";
+    case "uploaded_media":
+      return "uploaded_media";
+    case "ai_generated":
+      return "ai";
+    case "mixed":
+      return "hybrid";
+    case "auto_best":
+    default:
+      return undefined;
+  }
+}
+
+function selectedMediaIdsFromControls(controls: any): string[] {
+  const explicit = Array.isArray(controls.selectedMediaIds) ? controls.selectedMediaIds : [];
+  const metadataIds = Array.isArray(controls.metadata?.selectedMediaIds) ? controls.metadata.selectedMediaIds : [];
+  const singleProduct = controls.metadata?.productImageId || controls.productImageId;
+  return Array.from(
+    new Set(
+      [...explicit, ...metadataIds, singleProduct]
+        .filter((value) => typeof value === "string" && value.trim().length > 0)
+        .map((value) => String(value).trim()),
+    ),
+  );
+}
+
 function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
   const parsed = voicePresetEnum.safeParse(value);
   return parsed.success ? parsed.data : undefined;
@@ -344,6 +776,16 @@ export function canonicalizeProductionSpecContract(
     : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
   const voicePreset = arabicVoice ? arabicVoice.preset : coerceRequestedPreset(controls.voicePreset);
   const voiceModelId = arabicVoice ? arabicVoice.modelId : undefined;
+  const captionEnabled = controls.captionEnabled !== false && controls.captions !== false;
+  const visualSource = (controls.visualSource || "auto_best") as CreateVisualSource;
+  const selectedMediaIds = selectedMediaIdsFromControls(controls);
+  const sourceVisualMode = visualModeForSource(visualSource);
+  const resolvedVisualMode = sourceVisualMode || controls.visualMode || spec.visualMode;
+  const stockProvider = (controls.stockProvider || controls.metadata?.stockProvider || "auto_stock") as StockProviderChoice;
+  const mediaPolicy = (controls.mediaPolicy || controls.metadata?.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
+  const aiVisualProvider = controls.aiVisualProvider || controls.metadata?.aiVisualProvider || "auto";
+  const productImageId = controls.metadata?.productImageId || controls.productImageId;
+  const characterProfileId = characterProfileIdFromControls(controls);
   return validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -360,14 +802,17 @@ export function canonicalizeProductionSpecContract(
         ? controls.creativeStyle
         : spec.creativeStyle,
     animationIntensity: controls.animationIntensity || spec.animationIntensity,
-    visualMode: controls.visualMode || spec.visualMode,
+    visualMode: resolvedVisualMode,
     voiceProvider: resolvedVoiceProvider,
     voiceId,
     voicePreset,
     voiceModelId,
-    captionStyle: controls.captionStyle || spec.captionStyle,
+    captionStyle: captionEnabled ? controls.captionStyle || spec.captionStyle : "none",
     metadata: {
       ...(spec.metadata || {}),
+      ...(productImageId ? { productImageId } : {}),
+      ...(selectedMediaIds.length > 0 ? { selectedMediaIds } : {}),
+      ...(characterProfileId ? { characterProfileId } : {}),
       uiContract: {
         durationSeconds: controls.durationSeconds ?? controls.requestedDurationSeconds ?? controls.duration ?? spec.durationSeconds,
         language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -375,7 +820,25 @@ export function canonicalizeProductionSpecContract(
         aspectRatio: controls.aspectRatio || spec.aspectRatio,
         resolution: controls.resolution || spec.resolution,
         quality: controls.quality || spec.quality,
-        visualMode: controls.visualMode || spec.visualMode,
+        visualMode: resolvedVisualMode,
+        visualSource,
+        sourceStrategy:
+          visualSource === "auto_best"
+            ? "Auto Best"
+            : visualSource === "stock"
+              ? "Stock"
+              : visualSource === "uploaded_media"
+                ? "Uploaded Media"
+                : visualSource === "ai_generated"
+                  ? "AI Generated"
+                  : "Mixed",
+        stockProvider,
+        mediaPolicy,
+        selectedMediaIds,
+        aiVisualProvider,
+        characterProfileId,
+        characterConsistencyMode: characterProfileId ? "Provider capability required" : "None",
+        captionEnabled,
         requestedVoiceProvider: controls.voiceProvider || spec.voiceProvider || "auto",
         resolvedVoiceProvider,
         voiceId,
@@ -403,7 +866,97 @@ async function canonicalizeProductionSpecForRequest(
   controls: any,
 ) {
   const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
-  return canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
+  const canonical = canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
+  const brandId = String(controls.brandId || canonical.brandId || "").trim();
+  const templateId = String(controls.templateId || controls.businessTemplateId || canonical.templateId || "").trim();
+  const brand = await getBrandById(db, brandId).catch(() => null);
+  const template = await getTemplateForSnapshot(db, templateId).catch(() => null);
+  const brandSnapshot = brand ? createBrandSnapshot(brand) : undefined;
+  const baseMetadata = {
+    ...(canonical.metadata || {}),
+    ...(brandSnapshot ? { brandSnapshot } : {}),
+    ...(template ? { templateSnapshot: templateSnapshot(template, controls.templateVariables || controls.businessTemplateData || {}) } : {}),
+    resolutionPrecedence: [
+      "Per-video explicit override",
+      "Selected Template value",
+      "Selected Brand default",
+      "System/user default",
+      "Engine fallback",
+    ],
+  };
+  const withSnapshots = validateProductionSpec({
+    ...canonical,
+    brandId: brandId || canonical.brandId,
+    templateId: templateId || canonical.templateId,
+    brandKit: brandSnapshot ? {
+      ...(canonical.brandKit || {}),
+      brandName: brand?.name,
+      description: brand?.description,
+      industry: brand?.industry,
+      tagline: brand?.tagline,
+      watermarkText: brand?.watermarkText,
+      primaryColor: brand?.primaryColor,
+      secondaryColor: brand?.secondaryColor,
+      accentColor: brand?.accentColor,
+      backgroundColor: brand?.backgroundColor,
+      textColor: brand?.textColor,
+      logoAssetId: brand?.logoAssetId,
+      iconAssetId: brand?.iconAssetId,
+      websiteUrl: brand?.websiteUrl,
+      socialHandle: brand?.socialHandle,
+      headingFont: brand?.headingFont,
+      bodyFont: brand?.bodyFont,
+      captionFont: brand?.captionFont,
+      captionStyle: canonical.captionStyle || brand?.captionStyle,
+      includeOutro: brand?.includeOutro,
+      outroText: brand?.outroText,
+      contactText: brand?.contactText,
+      voiceProfile: brand?.voiceProfile as any,
+      watermark: brand?.watermark as any,
+      intro: brand?.intro as any,
+      outro: brand?.outro as any,
+    } : canonical.brandKit,
+    metadata: {
+      ...baseMetadata,
+      uiContract: {
+        ...((baseMetadata as any).uiContract || {}),
+        brandId: brandId || undefined,
+        brandRevision: brandSnapshot?.revision,
+        templateId: templateId || undefined,
+        templateRevision: template?.revision,
+      },
+    },
+  });
+  const characterProfileId = characterProfileIdFromControls(controls);
+  if (!characterProfileId) return withSnapshots;
+
+  const providerIds = new Set<string>();
+  const aiVisualProvider = String(controls.aiVisualProvider || (withSnapshots.metadata as any)?.uiContract?.aiVisualProvider || "auto");
+  if (aiVisualProvider !== "auto") providerIds.add(aiVisualProvider);
+  const referenceProviders = referenceCapableVisualProviders(providerIds);
+  const snapshot = await mediaUploadService.snapshotCharacter(characterProfileId, {
+    id: referenceProviders[0],
+    supportsReferenceImages: referenceProviders.length > 0,
+  });
+  if (!snapshot) return withSnapshots;
+  return validateProductionSpec({
+    ...withSnapshots,
+    metadata: {
+      ...(withSnapshots.metadata || {}),
+      characterProfileId,
+      characterSnapshot: snapshot,
+      uiContract: {
+        ...((withSnapshots.metadata as any)?.uiContract || {}),
+        characterProfileId,
+        characterConsistencyMode:
+          snapshot.consistencyMode === "reference_guided"
+            ? "Reference Guided"
+            : snapshot.consistencyMode === "provider_native"
+              ? "Provider Native"
+              : "Unavailable",
+      },
+    },
+  });
 }
 
 /**
@@ -676,8 +1229,8 @@ function scopeForRequest(req: ExpressRequest): ApiTokenScope | null {
   if (routePath.startsWith("/production-spec") || routePath.startsWith("/prompt") || routePath.startsWith("/cost-estimate")) {
     return "production:create";
   }
-  if (routePath.startsWith("/media/upload")) return "production:create";
-  if (routePath.startsWith("/media/uploads") || routePath.startsWith("/media/products")) return "videos:read";
+  if (routePath.startsWith("/media/upload") || routePath.startsWith("/media/product-upload") || routePath.startsWith("/media/assets")) return "production:create";
+  if (routePath.startsWith("/media/uploads") || routePath.startsWith("/media/products") || routePath.startsWith("/media/folders") || routePath.startsWith("/media/characters")) return "videos:read";
   if (routePath.startsWith("/system/capabilities") || routePath.startsWith("/system/readiness")) return "production:read";
   return null;
 }
@@ -773,6 +1326,218 @@ export function createV2PublicRouter(
       providerVault.readPlaintext(providerId, credentialType),
     );
     void providerSecrets.refreshElevenLabsApiKey();
+  }
+
+  async function configuredProviderIds(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    if (config.pexelsApiKey && config.pexelsApiKey !== "dummy-key" && !config.pexelsApiKey.includes("your_")) ids.add("pexels");
+    if (process.env.PIXABAY_API_KEY) ids.add("pixabay");
+    if (process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("veo");
+    if (process.env.FAL_KEY) ids.add("fal");
+    if (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("gemini");
+    if (new ElevenLabsVoiceProvider().isConfigured()) ids.add("elevenlabs");
+    if (providerVault.isAvailable()) {
+      const vaultCredentials = await providerVault.list().catch(() => []);
+      vaultCredentials.forEach((credential) => {
+        if (credential.configured) ids.add(credential.providerId);
+      });
+    }
+    return ids;
+  }
+
+  async function selectedMediaStatus(ids: string[]) {
+    if (ids.length === 0) return { usable: [], missing: [], unusable: [] };
+    const all = await mediaUploadService.listAssets().catch(() => []);
+    const byId = new Map(all.map((item) => [item.id, item]));
+    return {
+      usable: ids.map((id) => byId.get(id)).filter((item) => item?.usability?.usableForVideo),
+      missing: ids.filter((id) => !byId.has(id)),
+      unusable: ids.map((id) => byId.get(id)).filter((item) => item && !item.usability?.usableForVideo),
+    };
+  }
+
+  async function checkCreateReadiness(controls: any, spec?: ProductionSpec) {
+    const providerIds = await configuredProviderIds();
+    const contract = (spec?.metadata as any)?.uiContract || {};
+    const visualSource = (controls.visualSource || contract.visualSource || "auto_best") as CreateVisualSource;
+    const stockProvider = (controls.stockProvider || contract.stockProvider || "auto_stock") as StockProviderChoice;
+    const mediaPolicy = (controls.mediaPolicy || contract.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
+    const aiVisualProvider = String(controls.aiVisualProvider || contract.aiVisualProvider || "auto");
+    const characterProfileId = characterProfileIdFromControls({
+      ...controls,
+      metadata: {
+        ...(controls.metadata || {}),
+        characterProfileId: controls.characterProfileId || contract.characterProfileId || (spec?.metadata as any)?.characterProfileId,
+      },
+    });
+    const selectedMediaIds = selectedMediaIdsFromControls({
+      ...controls,
+      metadata: {
+        ...(controls.metadata || {}),
+        selectedMediaIds: controls.selectedMediaIds || contract.selectedMediaIds,
+        productImageId: controls.metadata?.productImageId || (spec?.metadata as any)?.productImageId,
+      },
+    });
+    const missingRequirements: string[] = [];
+    const capabilities: { id: string; name: string; ready: boolean; required: boolean; action?: { label: string; href: string } }[] = [];
+    const add = (id: string, name: string, ready: boolean, required: boolean, message?: string, action?: { label: string; href: string }) => {
+      capabilities.push({ id, name, ready, required, action });
+      if (required && !ready) missingRequirements.push(message || `${name} is required.`);
+    };
+
+    const anyStock = providerIds.has("pexels") || providerIds.has("pixabay");
+    if (visualSource === "stock") {
+      if (stockProvider === "pexels") {
+        add("pexels", "Pexels", providerIds.has("pexels"), true, "Stock provider required: configure Pexels.", { label: "Configure Stock Provider", href: "/providers" });
+      } else if (stockProvider === "pixabay") {
+        add("pixabay", "Pixabay", providerIds.has("pixabay"), true, "Stock provider required: configure Pixabay.", { label: "Configure Stock Provider", href: "/providers" });
+      } else {
+        add("stock", "Stock provider", anyStock, true, "Stock provider required.", { label: "Configure Stock Provider", href: "/providers" });
+      }
+    } else {
+      add("stock", "Stock provider", anyStock, false);
+    }
+
+    if (visualSource === "ai_generated") {
+      const aiProviders = ["veo", "fal"].filter((id) => providerIds.has(id));
+      const ready = aiVisualProvider === "auto" ? aiProviders.length > 0 : providerIds.has(aiVisualProvider);
+      add(
+        "ai_video",
+        "AI video provider",
+        ready,
+        true,
+        "Connect an AI video provider to use AI Generated visuals.",
+        { label: "Configure an AI Video Provider", href: "/providers" },
+      );
+    }
+
+    if (characterProfileId) {
+      const profile = (await mediaUploadService.listCharacters().catch(() => [])).find((item) => item.id === characterProfileId && item.status !== "archived");
+      const referenceCapable = referenceCapableVisualProviders(providerIds);
+      const compatible =
+        referenceCapable.length > 0 &&
+        (aiVisualProvider === "auto" || referenceCapable.includes(aiVisualProvider));
+      add(
+        "character_profile",
+        "Character Profile",
+        Boolean(profile),
+        true,
+        "Select an active Character Profile.",
+        { label: "Open Characters", href: "/media" },
+      );
+      if (visualSource === "stock") {
+        add(
+          "character_stock_incompatible",
+          "Character with stock footage",
+          false,
+          true,
+          "Stock footage cannot guarantee a recurring character identity. Use Mixed or AI Generated with a compatible provider.",
+          { label: "Change visual source", href: "/create" },
+        );
+      } else if (visualSource === "ai_generated" || visualSource === "mixed") {
+        add(
+          "character_reference_provider",
+          "Reference-capable visual provider",
+          compatible,
+          true,
+          "Character consistency is not available with the currently configured visual providers.",
+          { label: "Configure compatible provider", href: "/providers" },
+        );
+      } else if (visualSource === "auto_best") {
+        add(
+          "character_reference_provider",
+          "Reference-capable visual provider",
+          compatible,
+          false,
+          "Character consistency is not available with the currently configured visual providers.",
+          { label: "Configure compatible provider", href: "/providers" },
+        );
+      }
+    }
+
+    const mediaRequired =
+      visualSource === "uploaded_media" ||
+      (visualSource === "mixed" && mediaPolicy === "only_selected") ||
+      controls.productionMode === "custom_media" ||
+      spec?.productionMode === "custom_media";
+    if (mediaRequired || selectedMediaIds.length > 0) {
+      const status = await selectedMediaStatus(selectedMediaIds);
+      const ready = selectedMediaIds.length > 0 && status.usable.length === selectedMediaIds.length;
+      add(
+        "uploaded_media",
+        "Selected uploaded media",
+        ready,
+        mediaRequired,
+        selectedMediaIds.length === 0
+          ? "Select usable media before creating with uploaded-media-only."
+          : "One or more selected media items are missing or unusable.",
+        { label: "Open Media Library", href: "/media" },
+      );
+    }
+
+    if (isArabicLanguage(spec?.language || controls.language, (spec?.dialect || controls.dialect) as any)) {
+      add(
+        "elevenlabs",
+        "ElevenLabs Arabic voice",
+        providerIds.has("elevenlabs"),
+        true,
+        ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+        { label: "Configure ElevenLabs", href: "/providers" },
+      );
+    } else {
+      add("kokoro", "Built-in English voice", true, false);
+    }
+
+    const captionEnabled = controls.captionEnabled !== false && contract.captionEnabled !== false && spec?.captionStyle !== "none";
+    add("captions", captionEnabled ? "Captions enabled" : "Captions disabled", true, false);
+
+    return {
+      mode: controls.productionMode || spec?.productionMode || "auto_hybrid",
+      visualSource,
+      stockProvider,
+      mediaPolicy,
+      selectedMediaIds,
+      characterProfileId,
+      characterConsistencyAvailable: characterProfileId ? referenceCapableVisualProviders(providerIds).length > 0 : false,
+      ready: missingRequirements.length === 0,
+      missingRequirements,
+      capabilities,
+      externalUsage: expectedExternalUsage({
+        providerIds,
+        visualSource,
+        stockProvider,
+        aiVisualProvider,
+        voiceProvider: spec?.voiceProvider || controls.voiceProvider,
+        contentAIProvider: String(controls.contentAIProvider || "auto"),
+      }),
+    };
+  }
+
+  function expectedExternalUsage(input: {
+    providerIds: Set<string>;
+    visualSource: CreateVisualSource;
+    stockProvider: StockProviderChoice;
+    aiVisualProvider: string;
+    voiceProvider?: string;
+    contentAIProvider: string;
+  }): string[] {
+    const usage: string[] = [];
+    if (input.voiceProvider === "elevenlabs") usage.push("ElevenLabs · Usage Based");
+    if (input.contentAIProvider === "gemini") usage.push("Gemini · Usage Based");
+    if (input.visualSource === "ai_generated") {
+      const ai = input.aiVisualProvider !== "auto"
+        ? input.aiVisualProvider
+        : input.providerIds.has("veo")
+          ? "Google Veo"
+          : input.providerIds.has("fal")
+            ? "fal.ai"
+            : "AI Video Provider";
+      usage.push(`${ai} · Usage Based`);
+    }
+    if (input.visualSource === "stock") {
+      usage.push(input.stockProvider === "pixabay" ? "Pixabay · Stock API" : input.stockProvider === "pexels" ? "Pexels · Stock API" : "Stock provider · API");
+    }
+    return usage.length ? usage : ["Local / No Paid API"];
   }
 
   if (config.serviceRole === "app") {
@@ -1084,12 +1849,14 @@ export function createV2PublicRouter(
       const mediaPlan = mediaIntelligenceService.generateMediaPlan(resolvedSpec, {
         captionPreset: (resolvedSpec.captionStyle as any) || "bold",
       });
+      const readiness = await checkCreateReadiness(parsed.data, resolvedSpec);
 
       res.status(200).json({
         spec: resolvedSpec,
         costEstimate,
         quality,
         mediaPlan,
+        readiness,
       });
     } catch (error) {
       res.status(500).json({
@@ -1194,9 +1961,11 @@ export function createV2PublicRouter(
       return;
     }
     try {
-      const qualityMap: Record<string, "draft" | "standard" | "premium" | "max_quality_local"> = {
+      const qualityMap: Record<string, "draft" | "standard" | "high" | "premium" | "max_quality_local"> = {
         fast: "draft",
         balanced: "standard",
+        high: "high",
+        maximum: "max_quality_local",
         premium: "premium",
         max_quality_local: "max_quality_local",
       };
@@ -1223,6 +1992,16 @@ export function createV2PublicRouter(
       const arabicBlock = await arabicProductionBlocker(canonicalSpec);
       if (arabicBlock) {
         res.status(409).json(arabicBlock);
+        return;
+      }
+      const readiness = await checkCreateReadiness(parsed.data, canonicalSpec);
+      if (!readiness.ready) {
+        res.status(409).json({
+          error: "production_not_runnable",
+          message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+          readiness,
+          action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+        });
         return;
       }
       const job = await jobs.createVideoJob({
@@ -1293,11 +2072,16 @@ export function createV2PublicRouter(
     });
   });
 
-  router.get("/media/uploads/:filename", (req, res) => {
+  router.get("/media/uploads/:filename", async (req, res) => {
     const filename = path.basename(req.params.filename);
-    const targetPath = path.join(mediaCache.getUploadsDir(), filename);
-    if (!fs.existsSync(targetPath)) {
-      res.status(404).json({ error: "File not found" });
+    const targetPath = await mediaUploadService.resolveUploadPath(filename);
+    if (!targetPath || !fs.existsSync(targetPath)) {
+      const fallback = path.join(mediaCache.getUploadsDir(), filename);
+      if (!fs.existsSync(fallback)) {
+        res.status(404).json({ error: "File not found" });
+        return;
+      }
+      res.sendFile(fallback);
       return;
     }
     res.sendFile(targetPath);
@@ -1333,6 +2117,21 @@ export function createV2PublicRouter(
         const provider = contentAIRegistry.getProvider();
         const generatedSpec = await provider.generateProductionSpec(rawPayload as any);
         const canonicalSpec = await canonicalizeProductionSpecForRequest(db, generatedSpec, rawPayload);
+        const arabicBlock = await arabicProductionBlocker(canonicalSpec);
+        if (arabicBlock) {
+          res.status(409).json(arabicBlock);
+          return;
+        }
+        const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
+        if (!readiness.ready) {
+          res.status(409).json({
+            error: "production_not_runnable",
+            message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+            readiness,
+            action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+          });
+          return;
+        }
         resolvedPayload = {
           type: "video",
           creationMode: "prompt",
@@ -1346,6 +2145,21 @@ export function createV2PublicRouter(
           (rawPayload as any).productionSpec,
           rawPayload,
         );
+        const arabicBlock = await arabicProductionBlocker(canonicalSpec);
+        if (arabicBlock) {
+          res.status(409).json(arabicBlock);
+          return;
+        }
+        const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
+        if (!readiness.ready) {
+          res.status(409).json({
+            error: "production_not_runnable",
+            message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+            readiness,
+            action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+          });
+          return;
+        }
         resolvedPayload = {
           ...resolvedPayload,
           title: (rawPayload as any).title || canonicalSpec.title,
@@ -1357,12 +2171,28 @@ export function createV2PublicRouter(
           templateData: (resolvedPayload as any).businessTemplateData,
           config: (resolvedPayload as any).config,
           title: (resolvedPayload as any).title,
+          brandId: (resolvedPayload as any).brandId,
         });
+        const canonicalSpec = await canonicalizeProductionSpecForRequest(db, generatedSpec, {
+          ...rawPayload,
+          templateId: (resolvedPayload as any).businessTemplateId,
+          brandId: (resolvedPayload as any).brandId || generatedSpec.brandId,
+        });
+        const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
+        if (!readiness.ready) {
+          res.status(409).json({
+            error: "production_not_runnable",
+            message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+            readiness,
+            action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+          });
+          return;
+        }
         resolvedPayload = {
           type: "video",
           creationMode: "template",
-          title: (resolvedPayload as any).title || generatedSpec.title,
-          productionSpec: generatedSpec,
+          title: (resolvedPayload as any).title || canonicalSpec.title,
+          productionSpec: canonicalSpec,
           idempotencyKey: resolvedPayload.idempotencyKey,
         } as any;
       }
@@ -1405,14 +2235,40 @@ export function createV2PublicRouter(
 
   router.get("/jobs", async (req, res) => {
     try {
-      const requestedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 100;
-      const jobsList = await jobs.listJobs(
-        typeof req.query.status === "string" ? req.query.status : undefined,
-        Number.isFinite(requestedLimit) ? requestedLimit : 100,
-      );
-      res.status(200).json({ jobs: jobsList });
+      const q = req.query as Record<string, string | undefined>;
+      const str = (value?: string) => {
+        const trimmed = (value || "").trim();
+        return trimmed ? trimmed.slice(0, 200) : undefined;
+      };
+      const statusGroup =
+        q.group && q.group in STATUS_GROUPS ? (q.group as keyof typeof STATUS_GROUPS) : undefined;
+      const filters: JobListFilters = {
+        search: str(q.search),
+        statusGroup,
+        status: str(q.status),
+        language: str(q.language),
+        brandName: str(q.brandName),
+        templateId: str(q.templateId),
+        characterProfileId: str(q.characterProfileId),
+        aspectRatio: str(q.aspectRatio),
+        creationMode: str(q.creationMode),
+        dateFrom: str(q.dateFrom),
+        dateTo: str(q.dateTo),
+        sort: q.sort === "oldest" ? "oldest" : "newest",
+      };
+      const requestedLimit = Number(q.limit);
+      const limit = Number.isFinite(requestedLimit) ? requestedLimit : 24;
+      const rows = await jobs.listJobRows(500);
+      const page = queryJobRows(rows as any, filters, { limit, cursor: str(q.cursor) });
+      const advanced = q.view === "advanced";
+      const counts = await jobs.summarizeJobs().catch(() => undefined);
+      res.status(200).json({
+        jobs: page.items.map((row) => serializeJobForCustomer(jobs.mapJobRow(row as any), { advanced })),
+        page: { nextCursor: page.nextCursor, hasMore: page.hasMore, returned: page.items.length },
+        counts,
+      });
     } catch (error) {
-      res.status(500).json({ error: "Failed to list jobs." });
+      res.status(500).json({ error: "Failed to list productions." });
     }
   });
 
@@ -1422,7 +2278,24 @@ export function createV2PublicRouter(
       res.status(404).json({ error: "Job not found." });
       return;
     }
-    res.status(200).json({ job });
+    const customer = serializeJobForCustomer(job, { advanced: true });
+    const { input: _input, technicalError: _technicalError, ...safeJob } = job;
+    // Scrub the whole record: `output`, `checkpoint` artifacts and `stageTimings`
+    // can all carry `file://` / absolute artifact paths, not just the spec.
+    res.status(200).json({
+      job: {
+        ...scrubInternal(safeJob),
+        technicalError:
+          job.technicalError && !/(file:\/\/|\/(app|root|home|data|var)\/|[A-Za-z]:[\\/])/.test(job.technicalError)
+            ? job.technicalError.slice(0, 400)
+            : undefined,
+        customerStatus: customer.customerStatus,
+        snapshots: customer.snapshots,
+        advanced: customer.advanced,
+      },
+      timeline: buildCustomerTimeline(job),
+      failure: sanitizeJobFailure(job),
+    });
   });
 
   router.get("/jobs/:id/events", async (req, res) => {
@@ -1518,8 +2391,298 @@ export function createV2PublicRouter(
 
   router.get("/system/health", sendHealth);
 
+  /**
+   * FAST HEALTH - what System Health renders from on first paint.
+   *
+   * Every check inside is individually bounded and none of them contacts a
+   * paid provider API or walks storage, so this answers in well under a second
+   * even when an external service is down. The expensive work moved to
+   * `/system/diagnostics`, which the page now runs only on request.
+   *
+   * Provider *configuration* is read locally and passed in; provider
+   * *reachability* is deliberately not asked here.
+   */
+  router.get("/system/health/fast", async (req, res) => {
+    try {
+      let publishingAccountCount = 0;
+      try {
+        publishingAccountCount = (await publishingService.listAccounts()).length;
+      } catch {
+        // A publishing table that is not reachable must not fail the page; the
+        // database item in the report already carries that signal.
+        publishingAccountCount = 0;
+      }
+
+      const aiProvider = contentAIRegistry.getProvider();
+      const snapshot: ProviderConfigurationSnapshot = {
+        elevenLabsConfigured: new ElevenLabsVoiceProvider().isConfigured(),
+        pexelsConfigured: Boolean(
+          config.pexelsApiKey &&
+            config.pexelsApiKey !== "dummy-key" &&
+            !config.pexelsApiKey.includes("your_pexels"),
+        ),
+        aiConfigured: aiProvider.id !== "local_ai",
+        publishingAccountCount,
+      };
+
+      const report = await getFastHealth(config, db, snapshot, {
+        bypassCache: req.query.refresh === "true",
+      });
+      res.status(200).json(report);
+    } catch (error) {
+      res.status(500).json({
+        error: "Failed to read system status.",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   router.get("/templates", async (req, res) => {
-    res.status(200).json({ templates: listBusinessTemplates() });
+    const includeArchived = req.query.includeArchived === "true";
+    let preferences = new Map<string, boolean>();
+    try {
+      const preferenceRows = await db.query<TemplatePreferenceRow>("SELECT * FROM video_template_preferences");
+      preferences = new Map(preferenceRows.map((row) => [row.template_id, row.favorite]));
+    } catch {
+      preferences = new Map();
+    }
+    const builtIns = listBusinessTemplates().map((template) => mapBuiltInTemplate(template, preferences));
+    let custom: ReturnType<typeof mapCustomTemplate>[] = [];
+    try {
+      const rows = await db.query<TemplateRow>(
+        `SELECT * FROM video_templates
+         WHERE ($1::boolean = true OR archived_at IS NULL)
+         ORDER BY favorite DESC, updated_at DESC, name ASC`,
+        [includeArchived],
+      );
+      custom = rows.map(mapCustomTemplate);
+    } catch {
+      custom = [];
+    }
+    res.status(200).json({
+      templates: [...builtIns, ...custom],
+      categories: TEMPLATE_CATEGORIES,
+    });
+  });
+
+  router.post("/templates", async (req, res) => {
+    const parsed = reusableTemplateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid template payload", issues: parsed.error.flatten() });
+      return;
+    }
+    const id = cuid();
+    const revision = {
+      revision: 1,
+      createdAt: new Date().toISOString(),
+      summary: "Created reusable template",
+      snapshot: {
+        templateId: id,
+        templateName: parsed.data.name,
+        resolvedConfiguration: parsed.data.config,
+        variables: parsed.data.variables,
+      },
+    };
+    const rows = await db.query<TemplateRow>(
+      `INSERT INTO video_templates (
+        id, name, description, category, source, base_template_id, favorite,
+        archived_at, revision, config, variables, revisions, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,'custom',$5,$6,$7,1,$8::jsonb,$9::jsonb,$10::jsonb,now(),now())
+      RETURNING *`,
+      [
+        id,
+        parsed.data.name,
+        parsed.data.description,
+        parsed.data.category,
+        parsed.data.baseTemplateId || null,
+        parsed.data.favorite,
+        parsed.data.archived ? new Date() : null,
+        JSON.stringify(parsed.data.config),
+        JSON.stringify(parsed.data.variables),
+        JSON.stringify([revision]),
+      ],
+    );
+    res.status(201).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.put("/templates/:id", async (req, res) => {
+    if (listBusinessTemplates().some((template) => template.id === req.params.id)) {
+      res.status(409).json({ error: "Built-in templates cannot be edited. Duplicate it first." });
+      return;
+    }
+    const parsed = reusableTemplateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid template payload", issues: parsed.error.flatten() });
+      return;
+    }
+    const existingRows = await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [req.params.id]);
+    if (!existingRows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    const nextRevision = existingRows[0].revision + 1;
+    const revisions = [
+      ...(Array.isArray(existingRows[0].revisions) ? existingRows[0].revisions : []),
+      {
+        revision: nextRevision,
+        createdAt: new Date().toISOString(),
+        summary: "Updated reusable template",
+        snapshot: {
+          templateId: req.params.id,
+          templateName: parsed.data.name,
+          resolvedConfiguration: parsed.data.config,
+          variables: parsed.data.variables,
+        },
+      },
+    ];
+    const rows = await db.query<TemplateRow>(
+      `UPDATE video_templates
+       SET name = $2,
+           description = $3,
+           category = $4,
+           base_template_id = $5,
+           favorite = $6,
+           archived_at = CASE WHEN $7::boolean THEN COALESCE(archived_at, now()) ELSE NULL END,
+           revision = $8,
+           config = $9::jsonb,
+           variables = $10::jsonb,
+           revisions = $11::jsonb,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        req.params.id,
+        parsed.data.name,
+        parsed.data.description,
+        parsed.data.category,
+        parsed.data.baseTemplateId || null,
+        parsed.data.favorite,
+        parsed.data.archived,
+        nextRevision,
+        JSON.stringify(parsed.data.config),
+        JSON.stringify(parsed.data.variables),
+        JSON.stringify(revisions),
+      ],
+    );
+    res.status(200).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/duplicate", async (req, res) => {
+    const builtIn = listBusinessTemplates().map((template) => mapBuiltInTemplate(template)).find((template) => template.id === req.params.id);
+    const customRows = builtIn ? [] : await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [req.params.id]);
+    const source = builtIn || (customRows[0] ? mapCustomTemplate(customRows[0]) : null);
+    if (!source) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    const id = cuid();
+    const rows = await db.query<TemplateRow>(
+      `INSERT INTO video_templates (
+        id, name, description, category, source, base_template_id, favorite,
+        revision, config, variables, revisions, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,'custom',$5,false,1,$6::jsonb,$7::jsonb,$8::jsonb,now(),now())
+      RETURNING *`,
+      [
+        id,
+        `${source.displayName || source.name} Copy`,
+        source.description || "",
+        source.category || "social",
+        source.baseTemplateId || source.id,
+        JSON.stringify(source.config || {}),
+        JSON.stringify(source.variables || []),
+        JSON.stringify([{ revision: 1, createdAt: new Date().toISOString(), summary: "Duplicated template" }]),
+      ],
+    );
+    res.status(201).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/favorite", async (req, res) => {
+    const favorite = req.body?.favorite !== false;
+    const builtIn = listBusinessTemplates().some((template) => template.id === req.params.id);
+    if (builtIn) {
+      const rows = await db.query<TemplatePreferenceRow>(
+        `INSERT INTO video_template_preferences (template_id, favorite, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (template_id) DO UPDATE SET favorite = EXCLUDED.favorite, updated_at = now()
+         RETURNING *`,
+        [req.params.id, favorite],
+      );
+      const template = mapBuiltInTemplate(
+        listBusinessTemplates().find((item) => item.id === req.params.id)!,
+        new Map([[req.params.id, rows[0]?.favorite ?? favorite]]),
+      );
+      res.status(200).json({ template });
+      return;
+    }
+    const rows = await db.query<TemplateRow>(
+      "UPDATE video_templates SET favorite = $2, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id, favorite],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    res.status(200).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.delete("/templates/:id", async (req, res) => {
+    if (listBusinessTemplates().some((template) => template.id === req.params.id)) {
+      res.status(409).json({ error: "Built-in templates cannot be archived. Duplicate it first." });
+      return;
+    }
+    const rows = await db.query<TemplateRow>(
+      "UPDATE video_templates SET archived_at = now(), updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    res.status(200).json({ success: true, archived: true, template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/restore", async (req, res) => {
+    const rows = await db.query<TemplateRow>(
+      "UPDATE video_templates SET archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    res.status(200).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/resolve", async (req, res) => {
+    const builtIn = listBusinessTemplates().map((template) => mapBuiltInTemplate(template)).find((template) => template.id === req.params.id);
+    const customRows = builtIn ? [] : await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [req.params.id]);
+    const template = builtIn || (customRows[0] ? mapCustomTemplate(customRows[0]) : null);
+    if (!template) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    const validation = validateTemplateVariables(template, req.body?.variables || {});
+    if (!validation.ok) {
+      res.status(400).json({
+        error: "Template variables need attention.",
+        missing: validation.missing,
+        unresolved: validation.unresolved.length,
+      });
+      return;
+    }
+    const templateConfig = (template.config || {}) as Record<string, unknown>;
+    const resolvedConfig = {
+      ...templateConfig,
+      promptGuidance: applyVariablesToText(templateConfig.promptGuidance as string | undefined, validation.resolved),
+    };
+    res.status(200).json({
+      template,
+      resolvedConfig,
+      resolvedVariables: validation.resolved,
+      snapshot: templateSnapshot({ ...template, config: resolvedConfig }, validation.resolved),
+    });
   });
 
   router.get("/voices", async (req, res) => {
@@ -1766,6 +2929,18 @@ export function createV2PublicRouter(
         isDefault: true,
         message: pexelsComp?.message || "Pexels stock footage integration.",
         checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
+        details: {
+          visualCapabilities: {
+            textToImage: false,
+            imageToImage: false,
+            textToVideo: false,
+            imageToVideo: false,
+            referenceImage: false,
+            multipleReferenceImages: false,
+            seed: false,
+            nativeCharacterIdentity: false,
+          },
+        },
       },
       {
         // Optional second free stock source. Absence never blocks readiness, so
@@ -1793,6 +2968,9 @@ export function createV2PublicRouter(
           ? "Google Veo AI video generation configured."
           : "VEO_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new VeoVisualProvider().getCapabilities(),
+        },
       },
       {
         id: "fal",
@@ -1806,6 +2984,9 @@ export function createV2PublicRouter(
           ? "fal.ai multi-model video generation configured."
           : "FAL_KEY is not configured.",
         checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new FalVisualProvider().getCapabilities(),
+        },
       },
       // Voice
       {
@@ -2358,7 +3539,6 @@ export function createV2PublicRouter(
       app: {
         v2Enabled: process.env.V2_ENABLED === "true",
         webPort: process.env.PORT || "3123",
-        videosDir: config.videosDirPath,
         docker: process.env.DOCKER === "true",
       },
       storage: readStorageDetails(config),
@@ -2383,8 +3563,12 @@ export function createV2PublicRouter(
   });
 
   router.get("/brands", async (req, res) => {
+    const includeArchived = req.query.includeArchived === "true";
     const rows = await db.query<BrandRow>(
-      "SELECT * FROM brands ORDER BY is_default DESC, updated_at DESC, name ASC",
+      `SELECT * FROM brands
+       WHERE ($1::boolean = true OR archived_at IS NULL)
+       ORDER BY is_default DESC, updated_at DESC, name ASC`,
+      [includeArchived],
     );
     res.status(200).json({ brands: rows.map(mapBrand) });
   });
@@ -2398,7 +3582,14 @@ export function createV2PublicRouter(
       });
       return;
     }
+    try {
+      await validateBrandMediaReferences(parsed.data);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid brand media reference." });
+      return;
+    }
     const id = cuid();
+    const kit = brandKitFromInput(parsed.data);
     if (parsed.data.isDefault) {
       await db.query("UPDATE brands SET is_default = false");
     }
@@ -2406,9 +3597,13 @@ export function createV2PublicRouter(
       `INSERT INTO brands (
         id, name, watermark_text, primary_color, accent_color, caption_style,
         include_outro, outro_text, contact_text, voice_profile, is_default,
-        secondary_color, logo_url, website_url, social_handle, created_at, updated_at
+        secondary_color, logo_url, website_url, social_handle,
+        description, industry, tagline, logo_asset_id, icon_asset_id,
+        background_color, text_color, heading_font, body_font, caption_font,
+        kit, revision, revisions, created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+              $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,1,'[]',now(),now())
       RETURNING *`,
       [
         id,
@@ -2426,9 +3621,25 @@ export function createV2PublicRouter(
         parsed.data.logoUrl || null,
         parsed.data.websiteUrl || null,
         parsed.data.socialHandle || null,
+        parsed.data.description || null,
+        parsed.data.industry || null,
+        parsed.data.tagline || null,
+        parsed.data.logoAssetId || null,
+        parsed.data.iconAssetId || null,
+        parsed.data.backgroundColor || null,
+        parsed.data.textColor || null,
+        parsed.data.headingFont || null,
+        parsed.data.bodyFont || null,
+        parsed.data.captionFont || null,
+        JSON.stringify(kit),
       ],
     );
-    res.status(201).json({ brand: mapBrand(rows[0]) });
+    const brand = mapBrand(rows[0]);
+    await db.query("UPDATE brands SET revisions = $2::jsonb WHERE id = $1", [
+      id,
+      JSON.stringify([brandRevisionEntry(1, brand, "Created Brand Kit")]),
+    ]);
+    res.status(201).json({ brand: { ...brand, revisions: [{ revision: 1, createdAt: new Date().toISOString(), summary: "Created Brand Kit" }] } });
   });
 
   router.put("/brands/:id", async (req, res) => {
@@ -2440,11 +3651,26 @@ export function createV2PublicRouter(
       });
       return;
     }
+    try {
+      await validateBrandMediaReferences(parsed.data);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid brand media reference." });
+      return;
+    }
+    const existing = await getBrandById(db, req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
     if (parsed.data.isDefault) {
       await db.query("UPDATE brands SET is_default = false WHERE id <> $1", [
         req.params.id,
       ]);
     }
+    const kit = brandKitFromInput(parsed.data);
+    const nextRevision = (existing.revision || 1) + 1;
+    const previousRows = await db.query<BrandRow>("SELECT revisions FROM brands WHERE id = $1", [req.params.id]);
+    const previousRevisions = Array.isArray(previousRows[0]?.revisions) ? previousRows[0].revisions : [];
     const rows = await db.query<BrandRow>(
       `UPDATE brands
        SET name = $2,
@@ -2461,6 +3687,20 @@ export function createV2PublicRouter(
            logo_url = $13,
            website_url = $14,
            social_handle = $15,
+           description = $16,
+           industry = $17,
+           tagline = $18,
+           logo_asset_id = $19,
+           icon_asset_id = $20,
+           background_color = $21,
+           text_color = $22,
+           heading_font = $23,
+           body_font = $24,
+           caption_font = $25,
+           kit = $26::jsonb,
+           revision = $27,
+           revisions = $28::jsonb,
+           archived_at = CASE WHEN $29::boolean THEN archived_at ELSE NULL END,
            updated_at = now()
        WHERE id = $1
        RETURNING *`,
@@ -2480,6 +3720,32 @@ export function createV2PublicRouter(
         parsed.data.logoUrl || null,
         parsed.data.websiteUrl || null,
         parsed.data.socialHandle || null,
+        parsed.data.description || null,
+        parsed.data.industry || null,
+        parsed.data.tagline || null,
+        parsed.data.logoAssetId || null,
+        parsed.data.iconAssetId || null,
+        parsed.data.backgroundColor || null,
+        parsed.data.textColor || null,
+        parsed.data.headingFont || null,
+        parsed.data.bodyFont || null,
+        parsed.data.captionFont || null,
+        JSON.stringify(kit),
+        nextRevision,
+        JSON.stringify([
+          ...previousRevisions,
+          {
+            revision: nextRevision,
+            createdAt: new Date().toISOString(),
+            summary: "Updated Brand Kit",
+            snapshot: {
+              brandId: req.params.id,
+              brandName: parsed.data.name,
+              revision: nextRevision,
+            },
+          },
+        ]),
+        parsed.data.archived === true,
       ],
     );
     if (!rows[0]) {
@@ -2492,7 +3758,7 @@ export function createV2PublicRouter(
   router.post("/brands/:id/default", async (req, res) => {
     await db.query("UPDATE brands SET is_default = false");
     const rows = await db.query<BrandRow>(
-      "UPDATE brands SET is_default = true, updated_at = now() WHERE id = $1 RETURNING *",
+      "UPDATE brands SET is_default = true, archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *",
       [req.params.id],
     );
     if (!rows[0]) {
@@ -2502,16 +3768,87 @@ export function createV2PublicRouter(
     res.status(200).json({ brand: mapBrand(rows[0]) });
   });
 
-  router.delete("/brands/:id", async (req, res) => {
+  router.post("/brands/:id/duplicate", async (req, res) => {
+    const source = await getBrandById(db, req.params.id);
+    if (!source) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    const duplicate = brandProfileSchema.parse({
+      ...source,
+      name: `${source.name} Copy`,
+      isDefault: false,
+    });
+    const kit = brandKitFromInput(duplicate);
     const rows = await db.query<BrandRow>(
-      "DELETE FROM brands WHERE id = $1 RETURNING *",
+      `INSERT INTO brands (
+        id, name, watermark_text, primary_color, accent_color, caption_style,
+        include_outro, outro_text, contact_text, voice_profile, is_default,
+        secondary_color, logo_url, website_url, social_handle,
+        description, industry, tagline, logo_asset_id, icon_asset_id,
+        background_color, text_color, heading_font, body_font, caption_font,
+        kit, revision, revisions, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,$11,$12,$13,$14,
+              $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,1,'[]',now(),now())
+      RETURNING *`,
+      [
+        cuid(),
+        duplicate.name,
+        duplicate.watermarkText,
+        duplicate.primaryColor,
+        duplicate.accentColor,
+        duplicate.captionStyle,
+        duplicate.includeOutro,
+        duplicate.outroText,
+        duplicate.contactText,
+        duplicate.voiceProfile ? JSON.stringify(duplicate.voiceProfile) : null,
+        duplicate.secondaryColor || null,
+        duplicate.logoUrl || null,
+        duplicate.websiteUrl || null,
+        duplicate.socialHandle || null,
+        duplicate.description || null,
+        duplicate.industry || null,
+        duplicate.tagline || null,
+        duplicate.logoAssetId || null,
+        duplicate.iconAssetId || null,
+        duplicate.backgroundColor || null,
+        duplicate.textColor || null,
+        duplicate.headingFont || null,
+        duplicate.bodyFont || null,
+        duplicate.captionFont || null,
+        JSON.stringify(kit),
+      ],
+    );
+    res.status(201).json({ brand: mapBrand(rows[0]) });
+  });
+
+  router.delete("/brands/:id", async (req, res) => {
+    const usage = await db.query<{ count: string }>("SELECT count(*) as count FROM jobs WHERE brand_name = (SELECT name FROM brands WHERE id = $1)", [req.params.id]);
+    const hasUsage = Number(usage[0]?.count || 0) > 0;
+    const rows = await db.query<BrandRow>(
+      hasUsage
+        ? "UPDATE brands SET archived_at = now(), is_default = false, updated_at = now() WHERE id = $1 RETURNING *"
+        : "UPDATE brands SET archived_at = now(), is_default = false, updated_at = now() WHERE id = $1 RETURNING *",
       [req.params.id],
     );
     if (!rows[0]) {
       res.status(404).json({ error: "Brand not found." });
       return;
     }
-    res.status(200).json({ success: true });
+    res.status(200).json({ success: true, archived: true, dependencyAware: hasUsage, brand: mapBrand(rows[0]) });
+  });
+
+  router.post("/brands/:id/restore", async (req, res) => {
+    const rows = await db.query<BrandRow>(
+      "UPDATE brands SET archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    res.status(200).json({ brand: mapBrand(rows[0]) });
   });
 
   // 1. System Info & Diagnostics
@@ -2579,8 +3916,13 @@ export function createV2PublicRouter(
     });
   });
 
+  // Measuring storage walks the whole data directory synchronously, so the
+  // result is served from a short-lived cache unless the caller explicitly asks
+  // for a fresh measurement.
   router.get("/system/storage", (req, res) => {
-    res.status(200).json(diagnosticsService.getStorageUsage());
+    res.status(200).json(
+      diagnosticsService.getStorageUsage({ bypassCache: req.query.refresh === "true" }),
+    );
   });
 
   router.get("/system/observability", async (req, res) => {
@@ -2604,7 +3946,6 @@ export function createV2PublicRouter(
         recentStageBottleneck: worker.recentStageBottleneck,
         jobCounts: Object.fromEntries(statusRows.map((row) => [row.status, Number(row.count)])),
         cache: {
-          tempDir: config.tempDirPath,
           maxStorageBytes: config.videoCacheSizeInBytes,
           usedProjectStorageBytes: (storage as any).usedProjectStorageBytes,
           cacheStorageBytes: (storage as any).cacheStorageBytes,
@@ -2893,13 +4234,223 @@ export function createV2PublicRouter(
   });
 
   router.get("/system/readiness", (req, res) => {
-    const mode = String(req.query.mode || "auto_hybrid");
-    const visualMode = typeof req.query.visualMode === "string" ? req.query.visualMode : undefined;
-    const readiness = capabilityManager.checkModeReadiness(mode, visualMode);
-    res.status(200).json(readiness);
+    const controls = {
+      productionMode: String(req.query.mode || req.query.productionMode || "auto_hybrid"),
+      visualMode: typeof req.query.visualMode === "string" ? req.query.visualMode : undefined,
+      visualSource: typeof req.query.visualSource === "string" ? req.query.visualSource : "auto_best",
+      stockProvider: typeof req.query.stockProvider === "string" ? req.query.stockProvider : "auto_stock",
+      mediaPolicy: typeof req.query.mediaPolicy === "string" ? req.query.mediaPolicy : "auto_use_selected",
+      aiVisualProvider: typeof req.query.aiVisualProvider === "string" ? req.query.aiVisualProvider : "auto",
+      characterProfileId: typeof req.query.characterProfileId === "string" ? req.query.characterProfileId : "",
+      selectedMediaIds:
+        typeof req.query.selectedMediaIds === "string"
+          ? req.query.selectedMediaIds.split(",").map((item) => item.trim()).filter(Boolean)
+          : [],
+      language: typeof req.query.language === "string" ? req.query.language : "auto",
+      dialect: typeof req.query.dialect === "string" ? req.query.dialect : "none",
+      captionEnabled: req.query.captionEnabled !== "false",
+    };
+    checkCreateReadiness(controls)
+      .then((readiness) => res.status(200).json(readiness))
+      .catch((error) => res.status(500).json({ error: "Failed to check readiness.", message: String(error) }));
   });
 
-  // 7. Product Media Management
+  // 7. Unified Media Library
+  router.post("/media/assets", async (req, res) => {
+    try {
+      const rawBase64 = String(req.body?.fileBase64 || req.body?.imageBase64 || "").replace(/^data:[^;]+;base64,/, "");
+      const filename = typeof req.body?.filename === "string" ? req.body.filename : "asset";
+      if (!rawBase64) {
+        res.status(400).json({ error: "Missing file payload. Provide fileBase64." });
+        return;
+      }
+      const asset = await mediaUploadService.saveAsset(Buffer.from(rawBase64, "base64"), filename, {
+        purpose: req.body?.purpose,
+        displayName: req.body?.displayName,
+        folderId: req.body?.folderId,
+        tags: Array.isArray(req.body?.tags) ? req.body.tags : typeof req.body?.tags === "string" ? req.body.tags.split(",") : [],
+        removeBackground: req.body?.removeBackground !== false,
+      });
+      res.status(201).json({ asset: serializeMediaAssetForApi(asset) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Asset upload failed." });
+    }
+  });
+
+  router.get("/media/assets", async (req, res) => {
+    const assets = await mediaUploadService.listAssets({
+      search: typeof req.query.search === "string" ? req.query.search : undefined,
+      type: typeof req.query.type === "string" ? req.query.type : undefined,
+      purpose: typeof req.query.purpose === "string" ? req.query.purpose : undefined,
+      folderId: typeof req.query.folderId === "string" ? req.query.folderId : undefined,
+      tag: typeof req.query.tag === "string" ? req.query.tag : undefined,
+      includeArchived: req.query.includeArchived === "true",
+    });
+    res.status(200).json({ assets: assets.map(serializeMediaAssetForApi) });
+  });
+
+  router.get("/media/assets/:id", async (req, res) => {
+    const asset = await mediaUploadService.getAsset(req.params.id);
+    if (!asset) {
+      res.status(404).json({ error: "Asset not found." });
+      return;
+    }
+    res.status(200).json({ asset: serializeMediaAssetForApi(asset) });
+  });
+
+  router.patch("/media/assets/:id", async (req, res) => {
+    try {
+      const asset = await mediaUploadService.updateAsset(req.params.id, {
+        displayName: typeof req.body?.displayName === "string" ? req.body.displayName : undefined,
+        purpose: req.body?.purpose,
+        folderId: req.body?.folderId === null || typeof req.body?.folderId === "string" ? req.body.folderId : undefined,
+        tags: Array.isArray(req.body?.tags) ? req.body.tags : undefined,
+        archived: typeof req.body?.archived === "boolean" ? req.body.archived : undefined,
+      });
+      if (!asset) {
+        res.status(404).json({ error: "Asset not found." });
+        return;
+      }
+      res.status(200).json({ asset: serializeMediaAssetForApi(asset) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Asset update failed." });
+    }
+  });
+
+  router.post("/media/assets/:id/replace", async (req, res) => {
+    try {
+      const rawBase64 = String(req.body?.fileBase64 || req.body?.imageBase64 || "").replace(/^data:[^;]+;base64,/, "");
+      if (!rawBase64) {
+        res.status(400).json({ error: "Missing replacement payload." });
+        return;
+      }
+      const asset = await mediaUploadService.replaceAsset(req.params.id, Buffer.from(rawBase64, "base64"), String(req.body?.filename || "replacement"));
+      if (!asset) {
+        res.status(404).json({ error: "Asset not found." });
+        return;
+      }
+      res.status(200).json({ asset: serializeMediaAssetForApi(asset) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Asset replacement failed." });
+    }
+  });
+
+  router.delete("/media/assets/:id", async (req, res) => {
+    try {
+      const deleted = await mediaUploadService.deleteAsset(req.params.id, "user_request", typeof req.body?.note === "string" ? req.body.note : undefined);
+      if (!deleted) {
+        res.status(404).json({ error: "Asset not found." });
+        return;
+      }
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "Asset deletion failed." });
+    }
+  });
+
+  router.get("/media/folders", async (_req, res) => {
+    res.status(200).json({ folders: await mediaUploadService.listFolders() });
+  });
+
+  router.post("/media/folders", async (req, res) => {
+    try {
+      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+      if (!name) {
+        res.status(400).json({ error: "Folder name is required." });
+        return;
+      }
+      res.status(201).json({ folder: await mediaUploadService.createFolder(name) });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Folder creation failed." });
+    }
+  });
+
+  router.patch("/media/folders/:id", async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const folder = name ? await mediaUploadService.renameFolder(req.params.id, name) : null;
+    if (!folder) {
+      res.status(404).json({ error: "Folder not found." });
+      return;
+    }
+    res.status(200).json({ folder });
+  });
+
+  router.delete("/media/folders/:id", async (req, res) => {
+    try {
+      const archived = await mediaUploadService.archiveFolder(req.params.id);
+      if (!archived) {
+        res.status(404).json({ error: "Folder not found." });
+        return;
+      }
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(409).json({ error: error instanceof Error ? error.message : "Folder archive failed." });
+    }
+  });
+
+  router.get("/media/characters", async (_req, res) => {
+    const providerIds = await configuredProviderIds();
+    const referenceProviders = referenceCapableVisualProviders(providerIds);
+    const characters = (await mediaUploadService.listCharacters()).map((profile) => ({
+      ...profile,
+      readinessLabel:
+        profile.status === "archived"
+          ? "Archived"
+          : referenceProviders.length > 0
+            ? `Ready with ${referenceProviders[0]}`
+            : "Saved - compatible AI provider not configured",
+    }));
+    res.status(200).json({ characters, referenceCapableProviders: referenceProviders });
+  });
+
+  router.post("/media/characters", async (req, res) => {
+    try {
+      const profile = await mediaUploadService.createCharacter({
+        name: String(req.body?.name || ""),
+        referenceAssetIds: Array.isArray(req.body?.referenceAssetIds) ? req.body.referenceAssetIds : [],
+        primaryReferenceAssetId: typeof req.body?.primaryReferenceAssetId === "string" ? req.body.primaryReferenceAssetId : undefined,
+        description: typeof req.body?.description === "string" ? req.body.description : undefined,
+        visualTraits: typeof req.body?.visualTraits === "string" ? req.body.visualTraits : undefined,
+        promptAnchor: String(req.body?.promptAnchor || ""),
+        negativeNotes: typeof req.body?.negativeNotes === "string" ? req.body.negativeNotes : undefined,
+      });
+      res.status(201).json({ character: profile });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Character creation failed." });
+    }
+  });
+
+  router.put("/media/characters/:id", async (req, res) => {
+    try {
+      const profile = await mediaUploadService.updateCharacter(req.params.id, {
+        name: typeof req.body?.name === "string" ? req.body.name : undefined,
+        referenceAssetIds: Array.isArray(req.body?.referenceAssetIds) ? req.body.referenceAssetIds : undefined,
+        primaryReferenceAssetId: typeof req.body?.primaryReferenceAssetId === "string" ? req.body.primaryReferenceAssetId : undefined,
+        description: typeof req.body?.description === "string" ? req.body.description : undefined,
+        visualTraits: typeof req.body?.visualTraits === "string" ? req.body.visualTraits : undefined,
+        promptAnchor: typeof req.body?.promptAnchor === "string" ? req.body.promptAnchor : undefined,
+        negativeNotes: typeof req.body?.negativeNotes === "string" ? req.body.negativeNotes : undefined,
+      });
+      if (!profile) {
+        res.status(404).json({ error: "Character not found." });
+        return;
+      }
+      res.status(200).json({ character: profile });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Character update failed." });
+    }
+  });
+
+  router.delete("/media/characters/:id", async (req, res) => {
+    const archived = await mediaUploadService.archiveCharacter(req.params.id);
+    if (!archived) {
+      res.status(404).json({ error: "Character not found." });
+      return;
+    }
+    res.status(200).json({ success: true });
+  });
+
+  // Product Media Management compatibility paths
   router.post("/media/product-upload", async (req, res) => {
     try {
       let buffer: Buffer;
@@ -2918,7 +4469,7 @@ export function createV2PublicRouter(
       }
 
       const record = await mediaUploadService.saveProductImage(buffer, originalName, { removeBackground: removeBg });
-      res.status(201).json({ success: true, media: record });
+      res.status(201).json({ success: true, media: serializeProductMediaForApi(record) });
     } catch (err: any) {
       res.status(400).json({ error: err.message || "Product media upload failed" });
     }
@@ -2926,7 +4477,7 @@ export function createV2PublicRouter(
 
   router.get("/media/products", async (req, res) => {
     const products = await mediaUploadService.listProductImages();
-    res.status(200).json({ products });
+    res.status(200).json({ products: products.map(serializeProductMediaForApi) });
   });
 
   router.delete("/media/products/:id", async (req, res) => {
@@ -2962,7 +4513,7 @@ export function createV2PublicRouter(
         res.status(404).json({ error: "Media item not found." });
         return;
       }
-      res.status(200).json({ media: record });
+      res.status(200).json({ media: serializeProductMediaForApi(record) });
     } catch (error) {
       res.status(500).json({
         error: "Could not rename this media item.",
@@ -2977,7 +4528,7 @@ export function createV2PublicRouter(
       res.status(404).json({ error: "Product media not found." });
       return;
     }
-    res.status(200).json(product);
+    res.status(200).json(serializeProductMediaForApi(product));
   });
 
   return router;

@@ -71,13 +71,60 @@ export interface DiagnosticReport {
   };
 }
 
+/**
+ * Deep checks are bounded individually.
+ *
+ * A single unreachable publishing platform used to be able to hold the whole
+ * diagnostics report open for its client timeout, and the System Health page
+ * waited on that report before it rendered anything at all. The page no longer
+ * does - it renders from `/system/health/fast` - but a bounded deep check is
+ * still the difference between "full diagnostics took a while" and "full
+ * diagnostics never came back".
+ */
+export const DEEP_CHECK_TIMEOUT_MS = 8000;
+
+async function withDeadline<T>(work: Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(onTimeout()), timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** How long a measured storage figure stays fresh enough to reuse. */
+export const STORAGE_USAGE_CACHE_MS = 30_000;
+
 export class DiagnosticsService {
+  /**
+   * Storage measurement walks every file under the data directory with
+   * synchronous `readdir`/`stat`, which blocks the event loop for the whole
+   * traversal. On an installation with a few hundred rendered videos that is
+   * seconds, during which the application serves nothing at all. Caching the
+   * result means a page that polls, or a customer pressing Refresh, pays for it
+   * once rather than on every request.
+   */
+  private storageCache?: { value: StorageUsage; expiresAt: number };
+
   constructor(
     private db: V2Database,
     private config: Config,
   ) {}
 
-  public getStorageUsage(): StorageUsage {
+  public getStorageUsage(options: { bypassCache?: boolean } = {}): StorageUsage {
+    if (!options.bypassCache && this.storageCache && this.storageCache.expiresAt > Date.now()) {
+      return this.storageCache.value;
+    }
+    const value = this.measureStorageUsage();
+    this.storageCache = { value, expiresAt: Date.now() + STORAGE_USAGE_CACHE_MS };
+    return value;
+  }
+
+  private measureStorageUsage(): StorageUsage {
     const dataDir = this.config?.dataDirPath || "./data";
     const videosDir = this.config?.videosDirPath || path.join(dataDir, "videos");
     const tempDir = this.config?.tempDirPath || path.join(dataDir, "cache");
@@ -107,10 +154,22 @@ export class DiagnosticsService {
     const storage = this.getStorageUsage();
 
     // 1. Check Postgres
-    const pgHealth = await this.db.health();
+    const pgHealth = await withDeadline(this.db.health(), DEEP_CHECK_TIMEOUT_MS, () => ({
+      ok: false,
+      message: "The database did not respond within the diagnostics deadline.",
+    }));
 
-    // 2. Providers
-    const providerResults = await publishingRegistry.validateAll();
+    // 2. Providers. Bounded as a group: one platform that never answers must
+    //    not hold the report open, and the report is honest about the fact
+    //    that it could not reach them rather than reporting them as healthy.
+    const providerResults = await withDeadline(
+      publishingRegistry.validateAll(),
+      DEEP_CHECK_TIMEOUT_MS,
+      () => {
+        logger.warn("Publishing provider validation exceeded the diagnostics deadline");
+        return [];
+      },
+    );
     const providers = providerResults.map((p) => ({
       id: p.provider,
       displayName: p.provider,

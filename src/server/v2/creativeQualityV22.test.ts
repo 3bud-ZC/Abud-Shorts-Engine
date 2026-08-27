@@ -186,7 +186,8 @@ describe("Caption styles and font pack", () => {
   it("maps the rejected viral_bold treatment onto the redesigned Social Ad style", () => {
     expect(resolveCaptionStyle("viral_bold").id).toBe("social_ad");
     expect(resolveCaptionStyle("bold").id).toBe("social_ad");
-    expect(resolveCaptionStyle("cinematic").id).toBe("clean_professional");
+    // In V2.3-03, 'cinematic' was promoted to a first-class style preset rather than collapsing to clean_professional.
+    expect(resolveCaptionStyle("cinematic").id).toBe("cinematic");
     expect(resolveCaptionStyle(undefined).id).toBe("social_ad");
     expect(resolveCaptionStyle("not_a_style").id).toBe("social_ad");
   });

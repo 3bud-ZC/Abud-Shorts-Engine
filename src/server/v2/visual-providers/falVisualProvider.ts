@@ -22,6 +22,19 @@ export class FalVisualProvider implements VisualProvider {
     return Boolean(key && key.trim().length > 10 && !key.includes("your_"));
   }
 
+  public getCapabilities() {
+    return {
+      textToImage: false,
+      imageToImage: false,
+      textToVideo: true,
+      imageToVideo: false,
+      referenceImage: false,
+      multipleReferenceImages: false,
+      seed: false,
+      nativeCharacterIdentity: false,
+    };
+  }
+
   public async fetchOrGenerateScene(
     scene: ProductionSceneSpec,
     options: VisualRenderOptions,

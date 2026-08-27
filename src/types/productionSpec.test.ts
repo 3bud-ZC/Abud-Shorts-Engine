@@ -7,6 +7,7 @@ import {
   resolveProductionTimeline,
   calculateNarrationBudget,
   compactNarrationToBudget,
+  planSceneVisualDurationSeconds,
   type ProductionSpec,
 } from "./productionSpec";
 
@@ -259,14 +260,88 @@ describe("ProductionSpec Schema & Validation", () => {
   });
 
   it("budgets and compacts narration based on speech rate heuristics", () => {
-    const budget20Ar = calculateNarrationBudget(5, true);
-    expect(budget20Ar.maxWords).toBe(11);
-    expect(budget20Ar.maxChars).toBe(55);
+    const budget5Ar = calculateNarrationBudget(5, true);
+    // Rates calibrated to the shipped voices: 5s * 2.7 w/s Arabic.
+    expect(budget5Ar.maxWords).toBe(13);
+    expect(budget5Ar.maxChars).toBe(65);
+
+    const budget5En = calculateNarrationBudget(5, false);
+    expect(budget5En.maxWords).toBe(14);
 
     const longArabicText =
       "هذا نص طويل جداً يحتوي على الكثير من الكلمات والجمل الإضافية التي لا تناسب مدة مشهد قصير مدته خمس ثوان فقط في الفيديو";
     const compacted = compactNarrationToBudget(longArabicText, 5, true);
     const wordCount = compacted.split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(11);
+    expect(wordCount).toBeLessThanOrEqual(13);
+  });
+
+  it("compaction does not over-trim narration that already fits its scene budget", () => {
+    // 10 words for a 5s scene at the calibrated English rate (14 word budget).
+    const line = "Our team builds fast responsive websites that win you clients";
+    expect(compactNarrationToBudget(line, 5, false)).toBe(line);
+  });
+});
+
+describe("Scene visual duration — duration-adherence invariant (V2.3-07)", () => {
+  it("holds the video on the requested duration when narration is slightly short", () => {
+    // 12s request, 3 scenes, ~4s each; local voice came in a little under budget.
+    const budgetPerScene = 4;
+    const speechPerScene = 3.0;
+    let total = 0;
+    for (let i = 0; i < 3; i += 1) {
+      total += planSceneVisualDurationSeconds({
+        speechSeconds: speechPerScene,
+        resolvedSceneBudgetSeconds: budgetPerScene,
+        isLastScene: i === 2,
+      });
+    }
+    expect(Math.abs(total - 12)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("never collapses the video the way the pre-fix pipeline did (12s -> 4.89s)", () => {
+    // Even a pathologically terse narration cannot drop the video to ~5s: each
+    // scene still holds ~1.1s of visual beyond the speech floor.
+    const budgetPerScene = 4;
+    const speechPerScene = 1.4;
+    let total = 0;
+    for (let i = 0; i < 3; i += 1) {
+      total += planSceneVisualDurationSeconds({
+        speechSeconds: speechPerScene,
+        resolvedSceneBudgetSeconds: budgetPerScene,
+        isLastScene: i === 2,
+      });
+    }
+    expect(total).toBeGreaterThan(4.89 + 2);
+  });
+
+  it("lands on the requested duration when narration fills the scene", () => {
+    const total =
+      planSceneVisualDurationSeconds({ speechSeconds: 3.8, resolvedSceneBudgetSeconds: 4, isLastScene: false }) +
+      planSceneVisualDurationSeconds({ speechSeconds: 3.9, resolvedSceneBudgetSeconds: 4, isLastScene: false }) +
+      planSceneVisualDurationSeconds({ speechSeconds: 3.7, resolvedSceneBudgetSeconds: 4, isLastScene: true });
+    expect(Math.abs(total - 12)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("never sizes a scene below its spoken audio (no clipped speech, no dead air from over-trim)", () => {
+    // Long narration: behaviour is identical to V2.3-03 (wrap to speech + breath).
+    const d = planSceneVisualDurationSeconds({
+      speechSeconds: 7,
+      resolvedSceneBudgetSeconds: 4,
+      isLastScene: false,
+    });
+    expect(d).toBeGreaterThanOrEqual(7 + 0.16);
+    expect(d).toBeLessThanOrEqual(7 + 0.16 + 0.01);
+  });
+
+  it("holds a short-narration scene toward its budget but never past it", () => {
+    const d = planSceneVisualDurationSeconds({
+      speechSeconds: 0.6,
+      resolvedSceneBudgetSeconds: 6,
+      isLastScene: false,
+    });
+    // holds meaningfully toward budget rather than wrap-to-speech...
+    expect(d).toBeGreaterThan(0.6 + 0.16 + 2.5);
+    // ...but a single scene never exceeds its share of the timeline
+    expect(d).toBeLessThanOrEqual(6);
   });
 });

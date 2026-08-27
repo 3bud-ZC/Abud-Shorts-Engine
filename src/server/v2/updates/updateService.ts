@@ -42,6 +42,16 @@ export interface UpdateCheckResult {
   requiresRestart: boolean;
   /** Client-safe explanation. Never leaks a URL, a token or a stack trace. */
   message: string;
+  /**
+   * Translation key for the same explanation, under the `updates` namespace,
+   * plus any values it interpolates.
+   *
+   * The interface renders this so an Arabic operator reads Arabic; `message`
+   * stays as the English wording a support bundle and an API consumer expect,
+   * and as the fallback for a key this build does not carry.
+   */
+  messageKey?: string;
+  messageVars?: Record<string, string>;
   checkedAt: string;
   installationType: InstallationType;
   updateCommand: string;
@@ -153,13 +163,21 @@ export class UpdateService {
         status: "CHECK_FAILED",
         message:
           "Could not reach the update service. Check this machine's internet connection and try again.",
+        messageKey: "updates.msg.unreachable",
       };
     }
 
     const validation = validateManifest(document);
     if (!validation.ok) {
       logger.warn({ issues: validation.issues }, "Update manifest failed validation");
-      return { ...base, status: "CHECK_FAILED", message: validation.reason };
+      // The validation reason is diagnostic detail rather than one of a fixed
+      // set of outcomes, so it carries a generic translated headline.
+      return {
+        ...base,
+        status: "CHECK_FAILED",
+        message: validation.reason,
+        messageKey: "updates.msg.manifestInvalid",
+      };
     }
 
     const release = selectRelease(validation.manifest, this.channel);
@@ -168,6 +186,7 @@ export class UpdateService {
         ...base,
         status: "CHECK_FAILED",
         message: `No ${this.channel} release is published for this product yet.`,
+        messageKey: "updates.msg.noRelease",
       };
     }
 
@@ -178,6 +197,7 @@ export class UpdateService {
         ...base,
         status: "CHECK_FAILED",
         message: "The published release does not match this installation's update channel.",
+        messageKey: "updates.msg.channelMismatch",
       };
     }
 
@@ -213,6 +233,7 @@ export class UpdateService {
         ...common,
         status: "CHECK_FAILED",
         message: "The published release does not carry a usable version number.",
+        messageKey: "updates.msg.unusableVersion",
       };
     }
 
@@ -221,6 +242,7 @@ export class UpdateService {
         ...common,
         status: "UP_TO_DATE",
         message: "You are running the latest version.",
+        messageKey: "updates.msg.upToDate",
       };
     }
 
@@ -232,6 +254,8 @@ export class UpdateService {
         message:
           `Version ${release.version} cannot be installed directly from version ${PRODUCT_VERSION}. ` +
           "Contact support for the upgrade path for this installation.",
+        messageKey: "updates.msg.unsupportedPath",
+        messageVars: { version: release.version, current: PRODUCT_VERSION },
       };
     }
 
@@ -240,6 +264,8 @@ export class UpdateService {
       status: "UPDATE_AVAILABLE",
       advanced,
       message: `Version ${release.version} is available.`,
+      messageKey: "updates.msg.available",
+      messageVars: { version: release.version },
     };
   }
 
@@ -317,6 +343,7 @@ export class UpdateService {
       ...this.baseResult(),
       status: "CHECK_FAILED",
       message: "This installation has not checked for updates yet.",
+      messageKey: "updates.msg.neverChecked",
     };
   }
 

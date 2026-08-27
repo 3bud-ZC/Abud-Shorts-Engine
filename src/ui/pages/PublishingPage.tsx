@@ -9,12 +9,10 @@ import {
   Box,
   Button,
   Card,
-  CardContent,
   Chip,
   CircularProgress,
   Divider,
   Grid,
-  IconButton,
   MenuItem,
   Select,
   Stack,
@@ -43,12 +41,12 @@ import FacebookIcon from "@mui/icons-material/Facebook";
 import TelegramIcon from "@mui/icons-material/Telegram";
 import TwitterIcon from "@mui/icons-material/Twitter";
 import { EmptyState, LoadingState, PageHeader, SectionCard, StatusBadge } from "../components/v2";
+import { useI18n } from "../i18n";
 import { AccountConnectModal } from "../components/publishing/AccountConnectModal";
 import { withMediaAccessToken } from "../utils/auth";
 import type {
   Publication,
   PublishingPlatform,
-  PublishingStatus,
   PublishingSummary,
   SocialAccount,
 } from "./v2Types";
@@ -66,14 +64,24 @@ function getPlatformIcon(platform: PublishingPlatform) {
     case "twitter":
       return <TwitterIcon sx={{ color: "#1da1f2" }} />;
     case "tiktok":
-      return <span style={{ fontWeight: 900, color: "#000" }}>TT</span>;
+      return <span style={{ fontWeight: 900 }}>TT</span>;
     default:
       return <SendIcon />;
   }
 }
 
+const PLATFORM_LABEL: Record<string, string> = {
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  instagram: "Instagram",
+  facebook: "Facebook",
+  telegram: "Telegram",
+  twitter: "X / Twitter",
+};
+
 export const PublishingPage: React.FC = () => {
   const navigate = useNavigate();
+  const { t: tr, format } = useI18n();
   const [tab, setTab] = useState<"overview" | "scheduled" | "published" | "failed" | "accounts">("overview");
   const [summary, setSummary] = useState<PublishingSummary | null>(null);
   const [publications, setPublications] = useState<Publication[]>([]);
@@ -87,6 +95,8 @@ export const PublishingPage: React.FC = () => {
   const [filterPlatform, setFilterPlatform] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  const platformName = (platform: string) => PLATFORM_LABEL[platform] || platform;
+
   const fetchData = async (isManual = false) => {
     if (isManual) setRefreshing(true);
     try {
@@ -98,8 +108,8 @@ export const PublishingPage: React.FC = () => {
       setSummary(sumRes.data);
       setPublications(pubRes.data.publications || []);
       setAccounts(accRes.data.accounts || []);
-    } catch (err: any) {
-      setFeedback({ type: "error", message: "Failed to load publishing data." });
+    } catch {
+      setFeedback({ type: "error", message: tr("publishing.loadFailed") });
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -135,48 +145,48 @@ export const PublishingPage: React.FC = () => {
       });
       fetchData();
     } catch {
-      setFeedback({ type: "error", message: "Failed to test account connection." });
+      setFeedback({ type: "error", message: tr("publishing.msg.testFailed") });
     }
   };
 
   const handleDeleteAccount = async (id: string) => {
-    if (!confirm("Are you sure you want to disconnect this social account?")) return;
+    if (!confirm(tr("publishing.accounts.disconnectConfirm"))) return;
     try {
       await axios.delete(`/api/v2/publishing/accounts/${id}`);
-      setFeedback({ type: "success", message: "Account disconnected." });
+      setFeedback({ type: "success", message: tr("publishing.msg.accountDisconnected") });
       fetchData();
     } catch {
-      setFeedback({ type: "error", message: "Failed to disconnect account." });
+      setFeedback({ type: "error", message: tr("publishing.msg.disconnectFailed") });
     }
   };
 
   const handleRetry = async (pubId: string) => {
     try {
       await axios.post(`/api/v2/publishing/publications/${pubId}/retry`);
-      setFeedback({ type: "success", message: "Retry initiated." });
+      setFeedback({ type: "success", message: tr("publishing.msg.retryStarted") });
       fetchData();
     } catch {
-      setFeedback({ type: "error", message: "Retry request failed." });
+      setFeedback({ type: "error", message: tr("publishing.msg.retryFailed") });
     }
   };
 
   const handleCancel = async (pubId: string) => {
     try {
       await axios.post(`/api/v2/publishing/publications/${pubId}/cancel`);
-      setFeedback({ type: "info", message: "Publication canceled." });
+      setFeedback({ type: "info", message: tr("publishing.msg.cancelled") });
       fetchData();
     } catch {
-      setFeedback({ type: "error", message: "Failed to cancel publication." });
+      setFeedback({ type: "error", message: tr("publishing.msg.cancelFailed") });
     }
   };
 
   const handlePublishNow = async (pubId: string) => {
     try {
       await axios.post(`/api/v2/publishing/publications/${pubId}/publish`);
-      setFeedback({ type: "success", message: "Immediate publish dispatched." });
+      setFeedback({ type: "success", message: tr("publishing.msg.publishDispatched") });
       fetchData();
     } catch {
-      setFeedback({ type: "error", message: "Publish request failed." });
+      setFeedback({ type: "error", message: tr("publishing.msg.publishFailed") });
     }
   };
 
@@ -196,14 +206,14 @@ export const PublishingPage: React.FC = () => {
   const publishedList = filteredPublications.filter((p) => p.status === "published");
   const failedList = filteredPublications.filter((p) => p.status === "failed");
 
-  if (loading) return <LoadingState label="Loading distribution engine..." />;
+  if (loading) return <LoadingState label={tr("publishing.loading")} />;
 
   return (
     <>
       <PageHeader
-        title="Publishing"
-        eyebrow="Distribute"
-        description="Unified multi-platform distribution, scheduling engine, automated retries, and social accounts."
+        title={tr("publishing.title")}
+        eyebrow={tr("publishing.eyebrow")}
+        description={tr("publishing.description")}
         actions={
           <Stack direction="row" spacing={1}>
             <Button
@@ -211,14 +221,14 @@ export const PublishingPage: React.FC = () => {
               onClick={() => fetchData(true)}
               disabled={refreshing}
             >
-              {refreshing ? "Refreshing..." : "Refresh"}
+              {refreshing ? tr("common.refreshing") : tr("common.refresh")}
             </Button>
             <Button
               variant="contained"
               startIcon={<AddIcon />}
               onClick={() => setConnectModalOpen(true)}
             >
-              Connect Account
+              {tr("publishing.connectAccount")}
             </Button>
           </Stack>
         }
@@ -249,7 +259,7 @@ export const PublishingPage: React.FC = () => {
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  Scheduled Posts
+                  {tr("publishing.stat.scheduled")}
                 </Typography>
                 <Typography variant="h4" fontWeight={850} color="primary.main">
                   {summary?.scheduledCount || 0}
@@ -265,7 +275,7 @@ export const PublishingPage: React.FC = () => {
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  Publishing Now
+                  {tr("publishing.stat.publishingNow")}
                 </Typography>
                 <Typography variant="h4" fontWeight={850} color="info.main">
                   {summary?.publishingCount || 0}
@@ -289,7 +299,7 @@ export const PublishingPage: React.FC = () => {
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  Published Today
+                  {tr("publishing.stat.publishedToday")}
                 </Typography>
                 <Typography variant="h4" fontWeight={850} color="success.main">
                   {summary?.publishedTodayCount || 0}
@@ -313,7 +323,7 @@ export const PublishingPage: React.FC = () => {
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Box>
                 <Typography variant="caption" color="text.secondary">
-                  Failed Publications
+                  {tr("publishing.stat.failed")}
                 </Typography>
                 <Typography
                   variant="h4"
@@ -329,11 +339,7 @@ export const PublishingPage: React.FC = () => {
         </Grid>
       </Grid>
 
-      {/* Tabs */}
-      {/* Five tab labels need about 560px. Left as the default fixed variant
-          they pushed the whole page to 450px wide inside a 390px phone frame,
-          which is the one horizontal overflow in the client. Every other Tabs
-          in the app is already scrollable. */}
+      {/* Tabs — scrollable so five labels never force horizontal page overflow. */}
       <Tabs
         value={tab}
         onChange={(_, val) => setTab(val)}
@@ -342,16 +348,14 @@ export const PublishingPage: React.FC = () => {
         allowScrollButtonsMobile
         sx={{ mb: 2, borderBottom: 1, borderColor: "divider" }}
       >
-        <Tab value="overview" label="Overview" />
-        <Tab value="scheduled" label={`Scheduled (${summary?.scheduledCount || 0})`} />
-        <Tab value="published" label="Published" />
-        <Tab value="failed" label={`Failed (${summary?.failedCount || 0})`} />
-        <Tab value="accounts" label={`Social Accounts (${accounts.length})`} />
+        <Tab value="overview" label={tr("publishing.tab.overview")} />
+        <Tab value="scheduled" label={tr("publishing.tab.scheduled", { count: summary?.scheduledCount || 0 })} />
+        <Tab value="published" label={tr("publishing.tab.published")} />
+        <Tab value="failed" label={tr("publishing.tab.failed", { count: summary?.failedCount || 0 })} />
+        <Tab value="accounts" label={tr("publishing.tab.accounts", { count: accounts.length })} />
       </Tabs>
 
-      {/* Filter Bar. A 280px search box beside a platform select cannot sit on
-          one row in a 390px phone frame; as a nowrap row it pushed the page 60px
-          wide. It stacks on small screens and sits side by side from `sm` up. */}
+      {/* Filter bar — stacks on a phone, sits side by side from `sm` up. */}
       {tab !== "accounts" && (
         <Stack
           direction={{ xs: "column", sm: "row" }}
@@ -360,7 +364,7 @@ export const PublishingPage: React.FC = () => {
         >
           <TextField
             size="small"
-            placeholder="Search by title, prompt, or video ID..."
+            placeholder={tr("publishing.filter.search")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             sx={{ minWidth: { xs: 0, sm: 280 }, width: { xs: "100%", sm: "auto" } }}
@@ -372,7 +376,7 @@ export const PublishingPage: React.FC = () => {
             onChange={(e) => setFilterPlatform(e.target.value)}
             sx={{ width: { xs: "100%", sm: "auto" } }}
           >
-            <MenuItem value="">All Platforms</MenuItem>
+            <MenuItem value="">{tr("publishing.filter.allPlatforms")}</MenuItem>
             <MenuItem value="youtube">YouTube</MenuItem>
             <MenuItem value="tiktok">TikTok</MenuItem>
             <MenuItem value="instagram">Instagram</MenuItem>
@@ -383,22 +387,20 @@ export const PublishingPage: React.FC = () => {
         </Stack>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 1: OVERVIEW                                                           */}
-      {/* ========================================================================= */}
+      {/* ================================ OVERVIEW ================================ */}
       {tab === "overview" && (
         <Stack spacing={3}>
           <SectionCard
-            title="Recent Publications & Dispatches"
-            description="Live distribution activity across connected channels."
+            title={tr("publishing.overview.title")}
+            description={tr("publishing.overview.description")}
           >
             {publications.length === 0 ? (
               <EmptyState
-                title="Nothing published yet"
-                description="Open a finished video and choose Publish to send it to your connected accounts."
+                title={tr("publishing.overview.empty")}
+                description={tr("publishing.overview.emptyBody")}
                 action={
                   <Button variant="contained" onClick={() => navigate("/videos")}>
-                    Go to Video Library
+                    {tr("publishing.goToLibrary")}
                   </Button>
                 }
               />
@@ -407,12 +409,12 @@ export const PublishingPage: React.FC = () => {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Platform</TableCell>
-                      <TableCell>Title / Video</TableCell>
-                      <TableCell>Account</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell>Time / Schedule</TableCell>
-                      <TableCell align="right">Actions</TableCell>
+                      <TableCell>{tr("publishing.table.platform")}</TableCell>
+                      <TableCell>{tr("publishing.table.titleVideo")}</TableCell>
+                      <TableCell>{tr("publishing.table.account")}</TableCell>
+                      <TableCell>{tr("publishing.table.status")}</TableCell>
+                      <TableCell>{tr("publishing.table.timeSchedule")}</TableCell>
+                      <TableCell align="right">{tr("publishing.table.actions")}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -421,8 +423,8 @@ export const PublishingPage: React.FC = () => {
                         <TableCell>
                           <Stack direction="row" spacing={1} alignItems="center">
                             {getPlatformIcon(pub.platform)}
-                            <Typography variant="body2" fontWeight={700} sx={{ textTransform: "capitalize" }}>
-                              {pub.platform}
+                            <Typography variant="body2" fontWeight={700}>
+                              {platformName(pub.platform)}
                             </Typography>
                           </Stack>
                         </TableCell>
@@ -430,12 +432,12 @@ export const PublishingPage: React.FC = () => {
                           <Typography variant="body2" fontWeight={600} noWrap sx={{ maxWidth: 260 }}>
                             {pub.title || pub.caption || pub.videoId}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            ID: {pub.videoId.slice(0, 12)}...
+                          <Typography variant="caption" color="text.secondary" dir="ltr" sx={{ textAlign: "start", display: "block" }}>
+                            {tr("publishing.idPrefix", { id: pub.videoId.slice(0, 12) })}
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2">{pub.accountName || "Default"}</Typography>
+                          <Typography variant="body2">{pub.accountName || tr("publishing.defaultAccount")}</Typography>
                         </TableCell>
                         <TableCell>
                           <StatusBadge status={pub.status} />
@@ -443,10 +445,13 @@ export const PublishingPage: React.FC = () => {
                         <TableCell>
                           <Typography variant="caption">
                             {pub.publishedAt
-                              ? `Published: ${new Date(pub.publishedAt).toLocaleTimeString()}`
+                              ? tr("publishing.publishedAtTime", { time: format.time(pub.publishedAt) })
                               : pub.scheduledAt
-                                ? `Due: ${new Date(pub.scheduledAt).toLocaleString()} (${pub.sourceTimezone})`
-                                : new Date(pub.createdAt).toLocaleDateString()}
+                                ? tr("publishing.dueAt", {
+                                    time: format.dateTime(pub.scheduledAt),
+                                    timezone: pub.sourceTimezone,
+                                  })
+                                : format.date(pub.createdAt)}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
@@ -460,17 +465,17 @@ export const PublishingPage: React.FC = () => {
                                 rel="noreferrer"
                                 startIcon={<OpenInNewIcon />}
                               >
-                                View Post
+                                {tr("publishing.viewPost")}
                               </Button>
                             )}
                             {pub.status === "failed" && (
                               <Button size="small" variant="outlined" onClick={() => handleRetry(pub.id)}>
-                                Retry
+                                {tr("publishing.retry")}
                               </Button>
                             )}
                             {pub.status === "scheduled" && (
                               <Button size="small" onClick={() => handlePublishNow(pub.id)}>
-                                Publish Now
+                                {tr("publishing.publishNow")}
                               </Button>
                             )}
                           </Stack>
@@ -485,21 +490,19 @@ export const PublishingPage: React.FC = () => {
         </Stack>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 2: SCHEDULED                                                          */}
-      {/* ========================================================================= */}
+      {/* ================================ SCHEDULED ================================ */}
       {tab === "scheduled" && (
         <SectionCard
-          title="Scheduled Publications"
-          description="Scheduled posts are saved safely and continue after application restarts."
+          title={tr("publishing.scheduledTab.title")}
+          description={tr("publishing.scheduledTab.description")}
         >
           {scheduledList.length === 0 ? (
             <EmptyState
-              title="Nothing scheduled"
-              description="Schedule a post from any finished video and it will appear here until it goes out."
+              title={tr("publishing.scheduledTab.empty")}
+              description={tr("publishing.scheduledTab.emptyBody")}
               action={
                 <Button variant="contained" onClick={() => navigate("/videos")}>
-                  Go to Video Library
+                  {tr("publishing.goToLibrary")}
                 </Button>
               }
             />
@@ -515,7 +518,11 @@ export const PublishingPage: React.FC = () => {
                           {pub.title || pub.videoId}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
-                          Target: {pub.platform.toUpperCase()} · Account: {pub.accountName || "Default"} · Timezone: {pub.sourceTimezone}
+                          {tr("publishing.scheduledTab.target", {
+                            platform: platformName(pub.platform),
+                            account: pub.accountName || tr("publishing.defaultAccount"),
+                            timezone: pub.sourceTimezone,
+                          })}
                         </Typography>
                       </Box>
                     </Stack>
@@ -523,15 +530,17 @@ export const PublishingPage: React.FC = () => {
                     <Stack direction="row" spacing={2} alignItems="center">
                       <Chip
                         icon={<ScheduleIcon />}
-                        label={`Scheduled: ${new Date(pub.scheduledAt || pub.createdAt).toLocaleString()}`}
+                        label={tr("publishing.scheduledTab.scheduledFor", {
+                          time: format.dateTime(pub.scheduledAt || pub.createdAt),
+                        })}
                         color="primary"
                         variant="outlined"
                       />
                       <Button size="small" variant="contained" onClick={() => handlePublishNow(pub.id)}>
-                        Publish Now
+                        {tr("publishing.publishNow")}
                       </Button>
                       <Button size="small" color="error" onClick={() => handleCancel(pub.id)}>
-                        Cancel
+                        {tr("common.cancel")}
                       </Button>
                     </Stack>
                   </Stack>
@@ -542,17 +551,15 @@ export const PublishingPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 3: PUBLISHED                                                          */}
-      {/* ========================================================================= */}
+      {/* ================================ PUBLISHED ================================ */}
       {tab === "published" && (
         <SectionCard
-          title="Published Posts Feed"
-          description="Videos successfully distributed to social platforms."
+          title={tr("publishing.publishedTab.title")}
+          description={tr("publishing.publishedTab.description")}
         >
           {publishedList.length === 0 ? (
             <Typography color="text.secondary" sx={{ py: 3, textAlign: "center" }}>
-              No published posts recorded yet.
+              {tr("publishing.publishedTab.empty")}
             </Typography>
           ) : (
             <Grid container spacing={2}>
@@ -563,19 +570,21 @@ export const PublishingPage: React.FC = () => {
                       <Stack direction="row" justifyContent="space-between" alignItems="center">
                         <Stack direction="row" spacing={1} alignItems="center">
                           {getPlatformIcon(pub.platform)}
-                          <Typography variant="subtitle2" fontWeight={800} sx={{ textTransform: "capitalize" }}>
-                            {pub.platform}
+                          <Typography variant="subtitle2" fontWeight={800}>
+                            {platformName(pub.platform)}
                           </Typography>
                         </Stack>
-                        <StatusBadge status="ready" label="Published" />
+                        <StatusBadge status="published" />
                       </Stack>
 
                       <Typography variant="body2" fontWeight={700}>
-                        {pub.title || pub.caption || "Social Short"}
+                        {pub.title || pub.caption || tr("publishing.publishedTab.untitled")}
                       </Typography>
 
                       <Typography variant="caption" color="text.secondary">
-                        Published at: {new Date(pub.publishedAt || pub.updatedAt).toLocaleString()}
+                        {tr("publishing.publishedTab.publishedAt", {
+                          time: format.dateTime(pub.publishedAt || pub.updatedAt),
+                        })}
                       </Typography>
 
                       {pub.providerUrl && (
@@ -588,7 +597,7 @@ export const PublishingPage: React.FC = () => {
                           size="small"
                           startIcon={<OpenInNewIcon />}
                         >
-                          Open Published Post
+                          {tr("publishing.publishedTab.openPost")}
                         </Button>
                       )}
                     </Stack>
@@ -600,17 +609,15 @@ export const PublishingPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 4: FAILED                                                             */}
-      {/* ========================================================================= */}
+      {/* ================================ FAILED ================================ */}
       {tab === "failed" && (
         <SectionCard
-          title="Failed Publications"
-          description="Publications that encountered errors. Isolated per platform."
+          title={tr("publishing.failedTab.title")}
+          description={tr("publishing.failedTab.description")}
         >
           {failedList.length === 0 ? (
             <Typography color="text.secondary" sx={{ py: 3, textAlign: "center" }}>
-              Zero failed publications. Everything is healthy!
+              {tr("publishing.failedTab.empty")}
             </Typography>
           ) : (
             <Stack spacing={2}>
@@ -621,7 +628,7 @@ export const PublishingPage: React.FC = () => {
                       <Stack direction="row" spacing={1} alignItems="center">
                         {getPlatformIcon(pub.platform)}
                         <Typography variant="subtitle2" fontWeight={800}>
-                          {pub.platform.toUpperCase()} Publication Failed
+                          {tr("publishing.failedTab.heading", { platform: platformName(pub.platform) })}
                         </Typography>
                       </Stack>
                       <Button
@@ -629,23 +636,24 @@ export const PublishingPage: React.FC = () => {
                         variant="contained"
                         onClick={() => handleRetry(pub.id)}
                       >
-                        Retry Now
+                        {tr("publishing.failedTab.retryNow")}
                       </Button>
                     </Stack>
 
                     <Alert severity="error">
-                      <strong>Reason:</strong> {pub.lastError || "Unknown publish error."}
+                      <strong>{tr("publishing.failedTab.reason")}</strong>{" "}
+                      {pub.lastError || tr("publishing.failedTab.unknownError")}
                     </Alert>
 
                     {pub.technicalError && (
                       <Accordion variant="outlined">
                         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                           <Typography variant="caption" fontWeight={700}>
-                            Technical Error Diagnostics
+                            {tr("publishing.failedTab.technicalDetails")}
                           </Typography>
                         </AccordionSummary>
                         <AccordionDetails>
-                          <pre style={{ margin: 0, fontSize: 11, whiteSpace: "pre-wrap" }}>
+                          <pre style={{ margin: 0, fontSize: 11, whiteSpace: "pre-wrap", direction: "ltr", textAlign: "start" }}>
                             {pub.technicalError}
                           </pre>
                         </AccordionDetails>
@@ -659,28 +667,26 @@ export const PublishingPage: React.FC = () => {
         </SectionCard>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAB 5: SOCIAL ACCOUNTS                                                    */}
-      {/* ========================================================================= */}
+      {/* ================================ ACCOUNTS ================================ */}
       {tab === "accounts" && (
         <Stack spacing={2}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
             <Typography variant="subtitle1" fontWeight={800}>
-              Connected Publishing Accounts ({accounts.length})
+              {tr("publishing.accounts.title", { count: accounts.length })}
             </Typography>
             <Button
               variant="contained"
               startIcon={<AddIcon />}
               onClick={() => setConnectModalOpen(true)}
             >
-              Connect New Account
+              {tr("publishing.connectNewAccount")}
             </Button>
           </Stack>
 
           {accounts.length === 0 ? (
             <Card variant="outlined" sx={{ p: 4, textAlign: "center" }}>
               <Typography variant="body1" color="text.secondary" gutterBottom>
-                No social accounts connected yet.
+                {tr("publishing.accounts.empty")}
               </Typography>
               <Button
                 variant="outlined"
@@ -688,7 +694,7 @@ export const PublishingPage: React.FC = () => {
                 onClick={() => setConnectModalOpen(true)}
                 sx={{ mt: 1 }}
               >
-                Connect Your First Social Channel
+                {tr("publishing.connectFirstAccount")}
               </Button>
             </Card>
           ) : (
@@ -700,38 +706,34 @@ export const PublishingPage: React.FC = () => {
                       <Stack direction="row" justifyContent="space-between" alignItems="center">
                         <Stack direction="row" spacing={1} alignItems="center">
                           {getPlatformIcon(acc.platform)}
-                          <Typography variant="subtitle2" fontWeight={800} sx={{ textTransform: "capitalize" }}>
-                            {acc.platform}
+                          <Typography variant="subtitle2" fontWeight={800}>
+                            {platformName(acc.platform)}
                           </Typography>
                         </Stack>
-                        <Chip
-                          size="small"
-                          color={acc.connectionStatus === "connected" ? "success" : "error"}
-                          label={acc.connectionStatus}
-                        />
+                        <StatusBadge status={acc.connectionStatus} />
                       </Stack>
 
                       <Box>
                         <Typography variant="body2" fontWeight={700}>
                           {acc.accountName}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          ID: {acc.accountId} · Provider: {acc.provider}
+                        <Typography variant="caption" color="text.secondary" dir="ltr" sx={{ textAlign: "start", display: "block" }}>
+                          {tr("publishing.accounts.idProvider", { id: acc.accountId, provider: acc.provider })}
                         </Typography>
                       </Box>
 
                       <Typography variant="caption" color="text.secondary">
-                        Last Checked: {new Date(acc.lastCheckedAt).toLocaleString()}
+                        {tr("publishing.accounts.lastChecked", { time: format.dateTime(acc.lastCheckedAt) })}
                       </Typography>
 
                       <Divider />
 
                       <Stack direction="row" spacing={1} justifyContent="space-between">
                         <Button size="small" variant="outlined" onClick={() => handleTestAccount(acc.id)}>
-                          Test Connection
+                          {tr("common.testConnection")}
                         </Button>
                         <Button size="small" color="error" onClick={() => handleDeleteAccount(acc.id)}>
-                          Disconnect
+                          {tr("common.disconnect")}
                         </Button>
                       </Stack>
                     </Stack>
@@ -747,7 +749,7 @@ export const PublishingPage: React.FC = () => {
         open={connectModalOpen}
         onClose={() => setConnectModalOpen(false)}
         onSuccess={() => {
-          setFeedback({ type: "success", message: "Account connected successfully!" });
+          setFeedback({ type: "success", message: tr("publishing.msg.accountConnected") });
           fetchData();
         }}
       />

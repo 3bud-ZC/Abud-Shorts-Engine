@@ -574,6 +574,59 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: "2.13.0",
+    name: "v2_3_professional_brands_templates",
+    up: async (pool: Pool) => {
+      // Additive only. Legacy brand columns remain the compatibility surface;
+      // professional kit fields and revision snapshots live in JSONB so older
+      // rows keep validating and older builds can ignore the new columns.
+      await pool.query(`
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS description TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS industry TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS tagline TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS logo_asset_id TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS icon_asset_id TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS background_color TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS text_color TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS heading_font TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS body_font TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS caption_font TEXT;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS kit JSONB NOT NULL DEFAULT '{}';
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS revisions JSONB NOT NULL DEFAULT '[]';
+        ALTER TABLE brands ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
+        CREATE TABLE IF NOT EXISTS video_templates (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          category TEXT NOT NULL DEFAULT 'social',
+          source TEXT NOT NULL DEFAULT 'custom',
+          base_template_id TEXT,
+          favorite BOOLEAN NOT NULL DEFAULT false,
+          archived_at TIMESTAMPTZ,
+          revision INTEGER NOT NULL DEFAULT 1,
+          config JSONB NOT NULL DEFAULT '{}',
+          variables JSONB NOT NULL DEFAULT '[]',
+          revisions JSONB NOT NULL DEFAULT '[]',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE TABLE IF NOT EXISTS video_template_preferences (
+          template_id TEXT PRIMARY KEY,
+          favorite BOOLEAN NOT NULL DEFAULT false,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_video_templates_source
+          ON video_templates(source, category, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_video_templates_archived
+          ON video_templates(archived_at);
+      `);
+    },
+  },
 ];
 
 /**

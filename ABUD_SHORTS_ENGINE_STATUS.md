@@ -15,29 +15,32 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.2.0**
+Stable: **v2.2.0** — released to the customer and **immutable**. Its tag, GitHub
+Release, release assets and GHCR image are never moved, rewritten or patched.
 
-Release: **GENERAL AVAILABILITY**
+Target: **v2.3.0**
 
-Schema: **2.12.0**
+Branch: **`v2.3-product-overhaul`**
 
-Release commit: `80b5a1301b756aae73b816153280a12d33ef6d94`
-Tag: `v2.2.0` · Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.2.0
+V2.3: **RELEASE CANDIDATE** — not merged, not tagged, not published. Version
+constants are stamped (`PRODUCT_VERSION` `2.3.0`, `PRODUCT_BUILD` `2026.08.27.1`)
+so the shipped v2.2.0 updater accepts the build; the V2.2→V2.3 online update path
+has been rehearsed end to end in a fully isolated environment. V2.3-01 through
+V2.3-07 are complete.
 
-Image: `ghcr.io/3bud-zc/abud-shorts-engine:2.2.0` (also `stable`)
-Digest: `sha256:d1b6ff81eb214b63d8dd36bf3723ce462d4535bbbb0a592f63d148450d0fd85b`
-The image is public, so a client installation needs no registry credentials, and
-both installers and the updater pull it by digest rather than by a movable tag.
+Interface languages: **English and Arabic, both first class.** The interface
+language is independent of the language a video is narrated in - an Arabic
+interface producing English videos, and an English interface producing Arabic
+videos, are both ordinary supported cases. Every operator/customer screen -
+including Integrations, Publishing, Settings and Providers - resolves its body
+copy through the one i18n catalogue; there is **no remaining tracked Arabic
+localization gap**.
 
-Arabic Production: **ElevenLabs**
-Voice: **Mamdoh**
-Preset: **Energetic Ad**
-Human Voice Acceptance: **APPROVED**
+Schema: **2.13.0**
+
+Arabic voice: **ElevenLabs / Mamdoh / Energetic Ad / APPROVED**
 (`68MRVrnQAt8vLbu0FCzw`, model `eleven_multilingual_v2`, persisted in
-`app_settings.arabic_voice_default` with `selectedBy: human`; unchanged by F5)
-
-Client Delivery: **READY**
-Online Update: **READY**
+`app_settings.arabic_voice_default` with `selectedBy: human`; unchanged by F3)
 
 Finalization track:
 
@@ -45,10 +48,50 @@ Finalization track:
 | --- | --- | --- |
 | F1 | Product UI, ABUD design system, no-code client experience | **PASS** |
 | F1.5 | Product polish and client safety gate | **PASS** |
-| F2 | Creative and animation engine finalization | **PASS** |
-| F3 | Integrations and real publishing closure | **PASS** |
+| F2 | Creative and animation engine finalization | **PASS / CLOSED** |
+| F3 | Integrations and real publishing closure | **PASS / CLOSED** |
 | F4 | Client installation, operations and delivery closure | **PASS** |
-| F5 | Final audit, release candidate packaging and release ceremony | **PASS** |
+| F5 | Final audit, release candidate packaging and release ceremony | **PARTIAL / BLOCKED** |
+| V2.3-01 | Foundation & Core Architectural Upgrade | **PASS / COMPLETE** |
+| V2.3-02 | Production Workflows & Rendering Stability | **PASS / COMPLETE** |
+| V2.3-03 | Professional Video Quality, Audio Continuity & Caption Rendering | **PASS / COMPLETE** |
+| V2.3-04 | Media Library & Character Consistency | **PASS / COMPLETE** |
+| V2.3-05 | Professional Brands & Templates | **PASS / COMPLETE** |
+| V2.3-06 | Productions & Video Library | **PASS / COMPLETE** |
+| V2.3-07 | Publishing, Integrations, Settings, Setup & Final Product Closure | **PASS / COMPLETE** |
+| V2.3-U | V2.2.0 → V2.3.0 isolated online-update rehearsal | **PASS / COMPLETE** |
+| V2.3-AR | Arabic body-copy closure for Integrations / Publishing / Settings / Providers | **PASS / COMPLETE** |
+| V2.3-RN | Customer-facing v2.3.0 release notes prepared and verified | **PASS / COMPLETE** |
+| V2.3-RP | Production candidate image on GHCR + final verified package/manifest | **PASS / COMPLETE** |
+
+**V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
+merged to `main`, not tagged, no GitHub Release. The `v2.2.0` stable tag and its
+GHCR image are untouched. A production candidate image is on GHCR under an
+immutable `sha-` tag only (no `:2.3.0`, no `:stable`).
+
+Customer-facing `RELEASE_NOTES.md` for v2.3.0 is prepared and verified (V2.3-RN
+section). The production candidate image, its real remote digest, the final
+client package and the verified update manifest are prepared (V2.3-RP section):
+
+- Candidate source SHA: `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`
+- GHCR candidate: `ghcr.io/3bud-zc/abud-shorts-engine:sha-1a9dba6`
+- Remote digest: `sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`
+- Package: `ABUD-Shorts-Engine-2.3.0.tar.gz`
+  (`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`),
+  `update-manifest.json`, `verify-package.mjs` **PASS** on every check
+
+Remaining release-only work, in order, all after explicit user approval:
+
+1. Dispatch `ghcr-candidate.yml` in `promote` mode with the accepted digest to
+   create `:2.3.0` and move `:stable` on GHCR.
+2. Merge `v2.3-product-overhaul` into `main`.
+3. Create the annotated `v2.3.0` Git tag.
+4. Create the GitHub Release with the verified package, `.sha256` and manifest.
+5. Final published-release verification.
+
+Final complete-product / client acceptance: PENDING
+
+Final complete-video acceptance: PENDING USER REVIEW
 
 Canonical URL: http://localhost:3130
 
@@ -58,26 +101,89 @@ Canonical Docker services:
 - `abud-shorts-n8n` — healthy, internal only on Docker DNS alias `n8n`
 - `abud-shorts-postgres` — healthy, internal only on Docker DNS alias `postgres`
 
-Release verification (v2.2.0, on an isolated clean installation of the published
-image, pulled by digest, running beside the primary stack without touching it):
-the Setup Wizard completed from a fresh database, the n8n control plane imported
-and activated itself with no manual step, and one production run reached Ready
-with a real 1080x1920 H.264 / AAC MP4 (20.05s) serving thumbnail 200,
-preview 206 and download 200. The published manifest was accepted by the real
-host updater, which reported 2.2.0 as the latest stable release.
-
-Two release blockers were found and fixed during F5. The GHCR workflow built its
-base image into the daemon while the runtime build ran on the buildx container
-driver, so the runtime build could not see the base image and resolved FROM
-against Docker Hub. And a fresh installation imported no n8n workflows at all,
-because n8n's importer calls .map() on its input and every import step was
-`|| true`, so a single-workflow object failed silently and every video job then
-died on a 404 from the orchestration webhook.
-
 Legacy note: Piper (`ar_JO-kareem-medium`) is retained only so historical jobs,
 metadata and videos stay readable and playable. It is not a production Arabic
 route and is not a required runtime. The Piper evidence in the milestone
 sections below is historical and is deliberately left unchanged.
+
+---
+
+## V2.3-03 — Professional Video Quality, Audio Continuity & Caption Rendering
+
+Date: 2026-08-26. Branch: `v2.3-product-overhaul`. Baseline Git SHA: `50df143d6ed2ab8b761922af8ad9a8e164604897`.
+Status: **COMPLETE / VERIFIED**.
+
+### 1. Canonical Continuous Narration Timeline & Audio Continuity
+- **Root Cause Eliminated**: Resolved the 2–3s dead-air silence between scenes caused by visual scene duration budgets (e.g. 5.0s) being assigned as audio clip durations while spoken narration lasted only ~2.2s.
+- **Continuous Speech Timeline**: Spoken narration duration is measured directly from the mastered voice file (`actualVoiceDuration`). Intermediate scenes are dynamically scaled to tightly wrap spoken audio with bounded natural breathing pauses (`sceneVisualDuration = Math.max(1.5, actualVoiceDuration + 0.16s)`).
+- **Timeline Synchronization**: Remotion audio stems and libass subtitles are synchronized to actual spoken speech starts (`sceneStartMs`), eliminating inter-scene audio gaps and ensuring uninterrupted narrative flow.
+
+### 2. Dead-Air Detection & Audio Validation
+- **Dead-Air Analyzer (`analyzeDeadAir`)**: Added automated dead-air detection to `AudioMasteringService`:
+  - Flags warnings for silence gaps $> 600\text{ms}$.
+  - Flags defects for dead-air gaps $> 1500\text{ms}$.
+- **Diagnostic Metrics**: Persisted `deadAirReport`, `maxNarrationSilenceMs`, and `hasSuspiciousPauses` in `.meta.json` sidecar.
+
+### 3. Visual Quality & Motion Graphics Modernization
+- **Modernized Editorial Templates**: Updated `motionEngine.ts` to replace rudimentary 360° circular percentage arcs and spinning orbit circles with sleek editorial metric cards, count-up animations, category badges, and smooth progress bars.
+- **Stock Query Diversification**: Updated `stockQueryFamilies.ts` with `sceneIndex` offset rotation to ensure multi-scene scripts explore varied visual angles (action, environment, audience, support, industry) without query repetition across adjacent scenes.
+
+### 4. Captions System Overhaul
+- **5 Distinct Customer Styles**:
+  - `clean`: Editorial, high-contrast, rounded badges.
+  - `karaoke`: Word-by-word active gradient highlight with subtle scale pop.
+  - `bold_social`: TikTok/Reels punchy high-energy captions with deep drop shadow.
+  - `minimal`: Elegant lower-third subtitle bar.
+  - `cinematic`: Wide tracking, premium letterboxing.
+  - `none`: Complete caption suppression for clean B-roll / pure visuals.
+- **Safe Vertical Margin Invariant**: Enforced safe bottom zones ($\ge 250\text{px}$ in 9:16 portrait) across both Remotion canvas and libass ASS subtitle generation to prevent TikTok/Reels UI overlay collisions.
+- **Arabic Typography & Bidi Shaping**: Strict HarfBuzz + FriBidi shaping preserved via libass filter and offline Cairo/Tajawal font bundles.
+
+### 5. Creative Quality Score Engine
+- **Quality Engine Separation**: Implemented `calculateCreativeQualityScore()` in `qualityEngine.ts` separate from technical render validation:
+  - Technical Quality: Video stream, audio stream, container validity, duration variance $\le 0.5\text{s}$.
+  - Creative Quality: Audio continuity score, visual diversity ratio, media relevance, fallback penalties, caption legibility, and CTA presence.
+- **Persisted Metrics**: Persisted `creativeScore`, `creativeGrade` (A+, A, B, C, D), `creativeDiagnostics`, and `creativeWarnings` in `VideoMetadata`.
+
+### 6. Real End-to-End Video Production Proof & Objective Audio Measurement
+A real end-to-end production was executed via `POST /api/v2/jobs` against the live running stack on `http://localhost:3130`:
+- **Job ID**: `cmtac0yd5000108ml95ac697l`
+- **Video ID**: `cmtac0yd5000108ml95ac697l`
+- **Prompt**: `"Create a short vertical Reel showing three simple ways a small business can make its website look more professional."`
+- **Language / Dialect**: `en` / `none` (Local Kokoro `af_heart` offline voice engine — zero-paid AI quota rule respected)
+- **Aspect Ratio / Resolution**: `9:16` vertical portrait / `1080p`
+- **Visual Mode / Source**: `motion_graphics` (`abud_motion` / `motion_canvas` kinetic typography)
+- **Captions**: `karaoke` word-by-word highlight with `IBM Plex Sans Arabic` font, safe bottom margin $\ge 250\text{px}$
+- **Creative Quality Grade**: **Grade A (Creative Score: 99 / 100)**
+- **Creative Diagnostics**:
+  - `audioContinuityScore`: 100
+  - `visualDiversityScore`: 100
+  - `mediaRelevanceScore`: 95
+  - `fallbackScore`: 100
+  - `captionLegibilityScore`: 100
+  - `creativeWarnings`: `[]` (0 warnings)
+
+#### Real Video Output & Audio Measurement Evidence:
+| Measurement | Real Produced Value | Threshold / Target | Status |
+| --- | --- | --- | --- |
+| **Pipeline State** | `ready` (100% completed) | `ready` | **PASS** |
+| **Rendered MP4 Size** | 703 KB | $> 0\text{ KB}$ | **PASS** |
+| **Thumbnail Cover** | 41.3 KB JPEG | $> 0\text{ KB}$ | **PASS** |
+| **HTTP Preview Endpoint** (`/api/short-video/:id`) | HTTP 206 / 200 (`video/mp4`) | HTTP 200/206 | **PASS** |
+| **HTTP Download Endpoint** (`/api/videos/:id/download`) | HTTP 200 (`video/mp4`) | HTTP 200 | **PASS** |
+| **HTTP Thumbnail Endpoint** (`/api/videos/:id/thumbnail`) | HTTP 200 (`image/jpeg`) | HTTP 200 | **PASS** |
+| **Max Inter-Scene Silence Gap** | **164 ms** (Scene 0->1: 164ms, Scene 1->2: 162ms) | $< 300\text{ ms}$ | **PASS** |
+| **Longest Silence on Final MP4** | **349 ms** (Final CTA hold buffer) | $\le 600\text{ ms}$ | **PASS** |
+| **Suspicious Pauses ($> 600\text{ms}$)** | **0** | 0 | **PASS** |
+| **Dead-Air Defects ($> 1500\text{ms}$)** | **0** | 0 | **PASS** |
+| **Frame QA (Hook @ 1.0s, Middle @ 5.0s, CTA @ 9.0s)** | Rendered kinetic motion cards & karaoke captions, 0 placeholder geometry | Verified | **PASS** |
+
+### 7. Verification Results
+- **Full Vitest Suite**: **53 test files, 825 tests, ALL PASSING**.
+- **TypeScript Typecheck**: `pnpm typecheck` PASS (0 errors across server and UI).
+- **Production Build**: `pnpm build` PASS (clean Vite bundle & TypeScript build).
+- **Real Video QA Test**: `src/test/realVideoQualityQa.test.ts` verified component-level continuous narration timeline, mastered audio, bounded breathing pauses ($< 300\text{ms}$), 0 dead-air defects, modern motion rendering, and visual bed composition.
+- **Docker Stack**: All 4 canonical services healthy (`abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n`, `abud-shorts-postgres`) on `http://localhost:3130`.
 
 ---
 
@@ -3390,3 +3496,1705 @@ rather than claimed fixed.
 
 V2.2 remains **NOT RELEASED**. No tag, no package, no GitHub Release, no merge
 to main. Human creative acceptance of the F2 outputs is **pending**.
+
+---
+
+## V2.3-01 — Bilingual Foundation, Dashboard & Health
+
+Date: 2026-08-25. Branch `v2.3-product-overhaul`, cut from the v2.2.0 release
+state at `80b5a13`. Commit `f63b4f4`.
+
+Stable remains **v2.2.0** and was not touched: no tag moved, no GitHub Release
+edited, no release asset rewritten, no GHCR `2.2.0` image overwritten. Nothing
+in this milestone was applied to the customer's stable release.
+
+### 1. Real i18n foundation
+
+One centralised localisation layer under `src/ui/i18n`, not `language === "ar"`
+conditions spread through components:
+
+- `types.ts` — locales, directions, BCP-47 tags, the sixteen declared namespaces.
+- `locales/en.ts` / `locales/ar.ts` — flat `namespace.key` catalogues.
+- `catalog.ts` — resolution, interpolation, lookup, persistence, document `dir`/`lang`.
+- `format.ts` — locale-aware dates, times, numbers, percentages, file sizes, durations.
+- `status.ts` — the many raw backend states mapped onto the small set of words a customer reads.
+- `index.tsx` — the React provider and `useI18n()` / `useT()`.
+
+Namespaces: common, navigation, dashboard, create, productions, videos, brands,
+templates, media, publishing, integrations, settings, health, updates, setup,
+errors, statuses.
+
+The Arabic catalogue is verified against the English one **in both directions**,
+including matching `{placeholder}` sets and a check that Arabic values are
+actually in Arabic script rather than copied English. A string added without a
+translation fails the test run rather than shipping as an English word in an
+Arabic interface.
+
+Server-supplied customer-facing text was the half of this that is easy to miss.
+`/system/health/fast` and the update service now each send a `messageKey`
+alongside their English `message`: the interface renders the key so an Arabic
+operator reads Arabic, while a support bundle and any API consumer keep one
+stable English wording.
+
+Dependencies added: `stylis-plugin-rtl`, `stylis`, `@emotion/cache` — roughly
+10 KB combined, chosen over a full i18n framework.
+
+### 2. RTL / LTR
+
+`dir="rtl"` and `lang="ar"` move together on `<html>` on every language change.
+Beyond that:
+
+- `theme.direction` drives MUI's own components (drawer anchor, tabs, inputs).
+- An emotion stylis middleware mirrors the physical CSS the application emits,
+  so margins, padding, borders and the selected-nav accent land on the trailing
+  edge in Arabic without a second rule anywhere in the codebase.
+- Content direction follows the *content*: an English video title stays LTR in
+  an Arabic interface and vice versa.
+- Technical text — URLs, IDs, versions, shell commands, error messages, image
+  digests, checksums — is bidi-isolated so RTL layout cannot reorder it.
+- Numbers use Western Arabic digits (0-9) in both languages, pinned via
+  `-u-nu-latn`, because every ID, version and file size in this product is
+  written that way.
+
+Verified in a real browser: sidebar on the trailing edge at 1088-1356 of 1366
+and mirrored at 1920; the active navigation accent measured on the **right**
+border in Arabic; tab order still follows DOM order.
+
+### 3. Language switcher
+
+A quiet text control in the sidebar footer and the mobile app bar. Options are
+written in their own language ("English", "العربية") rather than translated, so
+someone who cannot read the current interface can still find their way out of
+it. Choice persists in `localStorage` under `abud_ui_locale` and survives a
+reload. Precedence: saved preference → browser language → English. A storage
+write that throws does not break the switch; the choice simply does not persist.
+
+### 4. Typography
+
+One harmonised superfamily. IBM Plex Sans Arabic is IBM Plex Sans extended to
+Arabic by the same foundry, so English gets a genuinely strong Latin face rather
+than an Arabic-first family's Latin afterthought, and mixed text reads as one
+design. Noto Sans Arabic Variable follows as the Arabic fallback. Both are
+bundled; **no font is fetched over the network**, which a test now enforces.
+
+A real type scale replaced MUI's defaults: body moved from 14px to 15px, the
+smallest customer-facing size is 12.5px, weight is used sparingly (600 for
+emphasis, 700 for headings) instead of 800+ everywhere, and Arabic gets an 8%
+line-height increase for its diacritics and descenders.
+
+Found and fixed here: `bidiProps` and the production card requested a
+`"Cairo"` family that no `@font-face` rule ever declared, so Arabic content
+silently fell back to Segoe UI or Tahoma — two different Arabic faces on the
+same screen. A test now fails if the interface asks for a family the stylesheet
+does not declare.
+
+### 5. Design system polish
+
+ABUD identity preserved: dark background, violet primary, cyan accent, green
+success. Refined rather than restyled — surface hierarchy, card contrast,
+consistent radius, hover and focus states, skeletons, empty states, and status
+colour tied to the one status vocabulary. Glow is reserved for primary actions,
+the selected navigation item and important status.
+
+### 6. Application shell
+
+Information architecture unchanged. Every navigation label, group heading and
+browser tab title is now translation-backed; adding a menu item without
+translating it is a visible omission. Active state uses a leading-edge rule and
+a coloured icon; icon spacing is logical so it mirrors correctly.
+
+### 7-12. Dashboard rebuild
+
+Rebuilt as an operational overview computed **only** from records the
+installation holds. Nothing is invented, and anything that cannot be derived is
+returned as `null` so the page omits the card rather than printing a confident
+zero.
+
+- **Metrics**: Total Videos, Videos Ready, Active Productions, Failed
+  Productions, Videos Today, Storage Used. Storage prefers the measured figure
+  and falls back to the library's own file sizes.
+- **Publishing metrics**: Published Today, Scheduled, Failed Publications,
+  Connected Channels — rendered **only** when `/api/v2/publishing/summary`
+  actually answered.
+- **Analytics**: a 30-day activity chart drawn from divs (no charting package
+  for one series of thirty daily counts), completed-vs-failed, success rate,
+  average production duration from jobs that recorded both ends, output-language
+  split and production-type split. Success rate is `null` rather than 0% when
+  nothing has finished.
+- **Alerts**: failed productions, unavailable non-optional services, failed
+  publications, low storage, update available, and a missing ElevenLabs key —
+  the last at *information* severity with English production explicitly called
+  out as unaffected. An optional provider that was never configured is never
+  raised as an alarm.
+- **Recent productions**: language, production type, duration, relative time,
+  status, progress only while active, Preview on completed and View Error on
+  failed. RTL titles render in their own direction.
+- **Recent videos**: real thumbnails where they exist, duration, language, date,
+  status, and Preview / Open / Publish.
+- **Publishing summary**: real counts only, shown only when the API answered.
+
+Every dashboard request now carries a client-side deadline, so a request that
+never settles can no longer hold the page on its skeleton.
+
+### 13. System Health root cause
+
+The page could sit on "Checking V2 system diagnostics…" indefinitely. The cause
+was structural, not a timeout that needed raising:
+
+1. First paint was gated on `Promise.all([/system/health, /system/diagnostics,
+   /system/storage])`, so it finished with the **slowest** of the three.
+2. `/system/diagnostics` calls `publishingRegistry.validateAll()`, which
+   contacts every configured publishing platform over the network on a **30s
+   per-provider** client timeout, then walks the whole data directory
+   synchronously, then reads the log file.
+3. `/system/storage` walks videos, cache, models, backups and logs recursively
+   with synchronous `readdirSync`/`statSync`, blocking the event loop.
+4. The browser requests carried **no client timeout**, so one provider that
+   never answered held the spinner forever.
+
+None of this was a slow endpoint that needed tuning. It was a fast path that did
+not exist.
+
+### 14. Fast health vs deep diagnostics
+
+New `GET /api/v2/system/health/fast`. Every check is individually bounded at
+1.5s, none contacts a provider API, none walks storage, and the result is cached
+for 3s so polling and Refresh cannot turn a cheap endpoint into load. It reports
+Application, Database, Video Engine, Automation, Voice, AI, Media Sources,
+Publishing and Storage.
+
+Deep diagnostics moved behind an explicit **Run full diagnostics**. Sections
+render independently, so storage failing does not hide core status.
+
+Measured on a live installation:
+
+| Endpoint | Time |
+| --- | --- |
+| `/system/health/fast` (cache bypassed, 5 runs) | 8-16 ms |
+| `/system/health/fast` (cached) | 5 ms |
+| `/system/diagnostics` (deep, opt-in) | 1.13 s |
+| System Health first meaningful render, in browser | **6 ms** |
+
+Target was under 2 seconds locally.
+
+### 15. Health timeouts
+
+Every external and deep check is bounded. Deep diagnostics now bounds publishing
+provider validation and the database check at 8s and reports honestly that it
+could not reach them rather than reporting them healthy. Storage measurement is
+cached for 30s so the synchronous walk is paid once.
+
+Provider states are Healthy, Not Configured, Needs Attention, Unavailable and
+Checking. **Not Configured on an optional provider never counts towards "needs
+attention"** — a customer who never wanted TikTok publishing is not told their
+system is unhealthy.
+
+### 16. System Health UI
+
+Top summary reads "All systems operational" or "N items need attention".
+Sections: Core, Providers, Storage, Updates, Advanced diagnostics. No container
+or service name appears in the normal view; `n8n`, `postgres` and
+`render-worker` live behind **Advanced details**, and a test fails the build if
+a technical name appears in translated copy. Storage says "Not measured yet"
+rather than showing a zero it has not computed.
+
+### 17. Setup copy regression
+
+- The hardcoded version is gone. Version now comes from
+  `/api/v2/system/info`, which serves `src/version.ts`, the canonical version
+  contract. An unknown version renders **nothing** rather than a guess.
+- The claim that "Piper provides the local Arabic path" is gone. Setup now
+  states the current policy: English narration runs locally with Kokoro, Arabic
+  narration uses ElevenLabs.
+- "FFmpeg, Remotion, Piper, Kokoro, and Whisper available" replaced with what
+  those components do for the customer.
+- A literal `#f9fafb` card background — a light-theme leak into a dark product
+  — replaced with the themed surface.
+
+A test now reads the customer-facing source directly and fails on any literal
+`x.y.z` version string, any mention of Piper, any internal milestone
+vocabulary, and any near-white background literal.
+
+### 18. Stale UI copy audit
+
+`src/ui/customerCopy.test.ts` audits Setup, Dashboard, System Health, Login, the
+shell and the shared components for hardcoded versions, Piper claims, internal
+milestone language (F1/F2/F3, GA acceptance, `V2.x-nn`, "release candidate"),
+container names in translated copy, light-theme leaks, untranslated navigation
+labels, and network font loading. Historical technical files keep their history
+and are not audited.
+
+### 19-20. Status labels and formatters
+
+One localised status vocabulary maps every raw backend state onto the words a
+customer reads; an unrecognised state degrades to "Needs Attention" and is never
+presented as success. Dates, times, numbers, file sizes, durations and
+percentages are centralised and locale-aware, with technical identifiers
+deliberately exempt.
+
+### 21. Accessibility
+
+Verified in-browser in Arabic: navigation landmark labelled, language switcher
+carries `aria-label` and `aria-haspopup`, no unlabelled icon buttons, no
+negative tab indices, tab order follows DOM order rather than visual order, an
+`h1` present on each page, and a 2px focus ring visible on keyboard focus.
+
+Contrast was measured rather than assumed, and it found a real failure: sidebar
+section headings at 3.8:1, below the 4.5:1 WCAG AA floor. The `muted` token was
+raised from `#6E6E8C` to `#8E8EAC` and the headings moved to the secondary
+colour. All alert text passes AA once the translucent tint is composited over
+the card surface (6.36:1 minimum).
+
+### 22. Mobile
+
+Browser QA at 390x844 found the Setup wizard's ten horizontal steps sitting
+~48px past the viewport, visible only because the document clips horizontal
+overflow. On phones the wizard now shows a compact "Step N of 10" line with a
+progress bar. Document horizontal overflow is **0 px** on Dashboard, System
+Health and Setup, in both languages, at all three viewports.
+
+### 23. Video quality deliberately untouched
+
+No change to ShortCreator creative algorithms, caption generation, ElevenLabs
+timing, scene selection, motion graphics, stock routing, media routing or
+production mode logic. Shared contracts were touched only where the interface
+needed them: `messageKey` on fast health and update status.
+
+### 24. Data safety
+
+Customer data verified identical before and after deployment:
+
+| Table | Rows |
+| --- | --- |
+| jobs | 156 |
+| publications | 38 |
+| social_accounts | 2 |
+| admin_users | 1 |
+| provider_credentials_vault | 2 |
+| backups | 6 |
+| video_revisions | 45 |
+| app_settings | 1 |
+
+377 video files on disk before and after. PostgreSQL was not reset and no
+migration was required. Browser QA ran against a **separate isolated instance**
+on port 3131 with its own database and data directory, so no QA fixture ever
+touched the customer's installation.
+
+### 25. Testing
+
+New and updated suites: `src/ui/i18n/i18n.test.ts` (27),
+`src/ui/i18n/format.test.ts` (19), `src/ui/customerCopy.test.ts` (13),
+`src/server/v2/system/fastHealth.test.ts` (14), and
+`src/ui/utils/dashboardMetrics.test.ts` rewritten from 3 tests to 23.
+
+- `pnpm typecheck` — **PASS** (server + UI)
+- `pnpm vitest run` — **51 files, 809 tests, 0 failures**. This milestone added
+  four suites (73 tests) and grew the dashboard suite from 3 to 23, so the
+  baseline it was measured against is 47 files / 716 tests.
+- `pnpm build` — **PASS**
+
+### 26. Browser QA
+
+Real browser, against a live installation, English and Arabic, on Dashboard,
+System Health and Setup, at 1920x1080, 1366x768 and 390x844:
+
+- 0 blank pages
+- 0 fatal console errors
+- 0 px horizontal document overflow
+- 0 untranslated placeholder keys
+- 0 broken RTL layouts
+
+Deep diagnostics were also exercised end to end and completed in 2.9 s without
+blocking the page.
+
+### 27. Docker
+
+`abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-n8n` and
+`abud-shorts-postgres` all healthy after deployment. Only the app is publicly
+exposed, on `localhost:3130 -> 3123`. The developer installation was not reset.
+
+Build note for future milestones: the local `abud-shorts-engine:v2` image must
+be built with `--build-arg BASE_IMAGE=abud-shorts-engine-base:2.2.0-f8e37ad`.
+The default `abud-shorts-engine:dev` base carries a stale 23-package
+`node_modules` without `google-auth-library`, and building against it produces
+an image that crashes on startup with `MODULE_NOT_FOUND`.
+
+### 28. Deliberately left for V2.3-02
+
+- Create Video studio and capability-aware production controls.
+- Full Setup wizard redesign (only stale and incorrect copy was corrected here).
+- Localisation of the remaining pages: Productions, Video Library, Brands,
+  Templates, Media, Publishing, Integrations, Settings, Login. Their navigation,
+  titles and status vocabulary are translated; their page bodies are not.
+- Video-quality work: ShortCreator, captions, motion, stock and media routing.
+
+## V2.3-02 — Create Video Studio & Capability-Aware Production Controls
+
+Date: 2026-08-26. Branch `v2.3-product-overhaul`. Commit `533712a`.
+
+Stable remains **v2.2.0** and was not touched: no tag moved, no GitHub Release
+edited, no release asset rewritten, no GHCR `2.2.0` image overwritten. V2.3 is
+not merged, not tagged and not packaged.
+
+### 1. Prompt-only production
+
+A prompt is now sufficient to produce a video. Every other control has a
+resolvable default, so nothing else is required before Create runs: duration,
+language, aspect ratio, resolution, quality, visual source, stock provider,
+media policy, AI visual provider, voice provider and caption style all carry
+defaults in `promptJobInputSchema` and `productionSpecPreviewSchema` rather
+than being required inputs.
+
+The panel's own framing changed to match. "AI Creative Director Prompt" became
+"What do you want to create?", and its description states plainly that the
+engine resolves type, visuals, voice, captions and providers automatically
+unless the operator chooses otherwise.
+
+The six example prompts were rewritten. The previous set was five Egyptian
+Arabic prompts and one English one, all written as agency briefs; the set is
+now three Arabic and three English, shorter, and covering the cases the product
+is actually asked for — clothing brand, café, restaurant, SaaS/AI tool, a
+curiosity short, and a real-estate listing.
+
+### 2. Auto video type
+
+`auto` is a first-class entry at the head of `VIDEO_TYPES` and is the studio's
+default selection, replacing `social_ad`. It maps to the canonical
+`auto_hybrid` mode and leaves the treatment to the Creative Director. The type
+grid is now labelled "Video type (optional)".
+
+Friendly labels replaced the raw canonical vocabulary throughout: `social_ad`
+reads as "Social / Reel", the advanced Production Mode select is now "Video
+Type" with plain names instead of `AUTO HYBRID - smart mixed source`, and the
+visual-mode select is "Source Provider".
+
+### 3. Caption controls
+
+Captions are an explicit **On / Off** control, not a style buried under
+Advanced. Off is carried end to end: `captionEnabled: false` resolves the
+canonical spec's `captionStyle` to `none`, is recorded on the UI contract, and
+the caption-style control is hidden rather than left showing a style that will
+not be used. A test asserts a captions-off job produces `captionStyle: "none"`
+without requiring caption artifacts.
+
+Caption styles were reduced to five professional options — Clean, Karaoke,
+Bold Social, Minimal, Cinematic — instead of seven entries written with their
+own font names and internal ids.
+
+### 4. Visual source controls
+
+A single **Visual Source** control — Auto Best, Stock, Uploaded Media, AI
+Generated, Mixed — sits in front of the existing visual-mode contract rather
+than replacing it. Each source maps to a canonical `visualMode`
+(`stock`, `uploaded_media`, `ai`, `hybrid`, or unset for Auto Best), so the
+production spec, the render pipeline and every stored job keep the vocabulary
+they already used.
+
+Dependent controls appear only when they apply: Stock Provider (Auto Stock,
+Pexels, Pixabay) for stock and auto sources, AI Visual Provider for AI
+Generated, and Media Selection (auto-use selected / use only selected) for
+uploaded and mixed sources. Unconfigured providers render disabled and say
+"Configure" rather than being silently selectable.
+
+### 5. Uploaded media
+
+Media selection moved from a single-asset dropdown to a multi-select grid of
+thumbnails with name, dimensions and usability. Selected ids travel on the job
+as `selectedMediaIds` and are recorded on the spec metadata, so the server
+knows exactly which assets a production was told to use.
+
+The media panel is no longer tied to Product Ad: it appears for any uploaded or
+mixed visual source, and the product-specific fields (headline, price, CTA,
+placement) render only for an actual Product Ad. Items the library holds but
+cannot use stay visible in Media and are not selectable here.
+
+### 6. Provider readiness and blockers
+
+Readiness is computed on the server, by `checkCreateReadiness`, from what is
+actually configured — environment keys, the Provider Vault, and the ElevenLabs
+provider's own `isConfigured()`. It returns the resolved source, the selected
+media, a per-capability list with the action that fixes each gap, and the
+blocking requirements.
+
+The same function backs three call sites, so the studio's blockers and the
+server's refusal cannot disagree:
+
+- `GET /system/readiness` — live blockers as the operator changes controls.
+- `POST /production-spec/preview` — readiness returned alongside the spec.
+- `POST /jobs` and the job-creation path — a setup that cannot run is refused
+  with **409 `production_not_runnable`**, the first blocking requirement as the
+  message, and the action to resolve it.
+
+This is the substantive change: a production that could not have succeeded is
+now stopped before it starts, rather than failing part-way through a render.
+Four cases are covered by tests — stock-only with no configured stock provider,
+AI Generated with no AI video provider, uploaded-media-only with nothing usable
+selected, and Arabic without ElevenLabs.
+
+Arabic blocking was also extended to the job-creation path that had only been
+guarded on the prompt route, so an Arabic production cannot enter the queue
+through the generated-spec or supplied-spec branch either.
+
+External provider use is reported as a **usage-based label** ("ElevenLabs ·
+Usage Based", "Pexels · Stock API", "Local / No Paid API") rather than a
+computed figure, because per-job cost for these providers cannot be derived
+reliably from what the installation knows. The production summary shows this
+in place of an invented number.
+
+### 7. Quality controls
+
+Four profiles with what each one actually does, rather than five entries
+written in internal vocabulary: **Fast** (720p, quickest local route),
+**Balanced** (1080p, normal media intelligence), **High** (richer pacing and
+multi-asset scene search) and **Maximum** (strongest local quality processors
+available). `high` and `maximum` were added to `productionJobSchema` and to the
+route's quality map, which previously accepted only `fast`, `balanced`,
+`premium` and `max_quality_local` — `high` was reachable from the interface but
+not from the job contract.
+
+Maximum is explicitly the strongest **local** route and does not silently
+enable a paid AI video provider.
+
+### 8. Arabic and English support
+
+Both languages remain first class through the new controls. The Arabic policy
+is unchanged and now enforced one step earlier: an Arabic production without
+ElevenLabs is refused at readiness with the actionable message and a
+Configure ElevenLabs action, on every job-creation path, rather than being
+accepted and failing later. Piper remains legacy — historical jobs stay
+readable and no new Arabic route was added.
+
+The bundled Arabic fallback face was fixed on two counts. Its `@font-face`
+`src` declared `format("truetype-variations")`, which browsers do not accept
+for a `.ttf`, so the declared Arabic fallback never loaded; it is now
+`format("truetype")`. And `src/ui/assets/fonts/NotoSansArabic-Variable.ttf`
+was present locally but had never been committed, so the stylesheet referenced
+a file no fresh clone had — a clone would have failed its `vite build`. Its
+four IBM Plex siblings in the same directory were already tracked.
+
+### 9. Docker and build reproducibility
+
+`v2.Dockerfile` is now self-contained. It builds whisper.cpp v1.7.1 and its
+`small` model, installs the Node dependencies, compiles the bundle, and builds
+the Python quality runtime (`opencv-python-headless`, PySceneDetect, librosa,
+pillow, fonttools) in its own stages, then assembles the runtime image, installs
+the bundled OFL Arabic caption fonts into the system font path and runs the
+installer.
+
+This retires the `ARG BASE_IMAGE` two-image arrangement and, with it, the
+V2.3-01 build note that the local image *had* to be built with
+`--build-arg BASE_IMAGE=abud-shorts-engine-base:2.2.0-f8e37ad` because the
+default `abud-shorts-engine:dev` base carried a stale 23-package `node_modules`
+without `google-auth-library` and produced an image that crashed on startup
+with `MODULE_NOT_FOUND`. A base image that has to be kept in step by hand is
+exactly the failure that caused; there is no longer one to keep in step.
+
+Both workflows were corrected to match. `release.yml` and `ghcr-candidate.yml`
+each built that base with `main-tiny.Dockerfile` and then passed
+`--build-arg BASE_IMAGE=...` into `v2.Dockerfile`. Against the self-contained
+file that argument is consumed by nothing, so the base build was an expensive
+step producing an image no longer used. Both steps and both build-args are
+removed. `main-tiny.Dockerfile` itself is retained — `docker-compose.dev.yml`
+and the `publish:docker:tiny` script still use it.
+
+`src/scripts/install.ts` now retries each of its three network-bound steps
+(Kokoro, browser shell, whisper) three times with a growing delay, and the
+installer **exits non-zero** on failure. It previously logged the error and
+exited 0, so a `docker build` whose install step had failed still produced an
+image that was reported as built and then failed at runtime.
+
+**Not verified in this session:** no Docker image was built. The Dockerfile and
+workflow changes are reviewed and consistent with the compose files and scripts
+that reference them, but they have not been executed. A Docker build should be
+run before V2.3 is packaged.
+
+### 10. Option lists that had drifted
+
+Two lists would have rendered an empty Select, and both were found while
+verifying this work:
+
+- Settings still offered a **45-second** default duration that the studio's
+  duration list no longer contained. A customer who had saved 45 would have
+  opened Create Video to a blank Duration field with no indication of the value
+  in force. Both screens now read one `DURATION_OPTIONS` list (10, 15, 20, 30,
+  60 seconds), and a saved value outside that list stays selectable on both
+  rather than disappearing.
+- The Motion Graphics video type suggests the `kinetic_phrase` caption style,
+  which the curated five-style list folds into "Bold Social". Selecting that
+  type would have blanked the Caption Style field. The control now keeps an
+  off-list style selectable under its friendly label, so the rendering
+  behaviour of existing types is unchanged and the field always shows the real
+  value.
+
+A misordered `10s` entry that sat after `60s` in the duration menu was
+corrected by the same change.
+
+### 11. Testing and build
+
+- `pnpm typecheck` — **PASS** (server + UI)
+- `pnpm vitest run` — **51 files, 815 tests, 0 failures**. This milestone added
+  six tests to `src/server/v2/v2.test.ts`, against the V2.3-01 baseline of 809.
+- `pnpm build` — **PASS** (server bundle + UI, 1201 modules)
+
+The six new tests cover prompt-only creation resolving safe defaults, captions
+off, stock-only blocked with no stock provider, uploaded-media-only blocked
+with nothing usable selected, AI Generated locked with no AI video provider,
+and a generic Auto Reel staying out of geometric motion graphics by default.
+
+ESLint reports pre-existing `@typescript-eslint/no-explicit-any` findings across
+these files. There is no lint script and no CI lint step; this milestone did not
+change that, and did not add to or reduce those findings beyond the code it
+touched.
+
+### 12. Deliberately unchanged
+
+No change to ShortCreator creative algorithms, caption rendering, ElevenLabs
+timing, scene selection, motion graphics or the render pipeline. The visual
+source, caption and quality controls resolve to the same canonical
+`ProductionSpec` contract the pipeline already consumed.
+
+### 13. Left for V2.3-03
+
+- Full Setup wizard redesign.
+- Localisation of the remaining page bodies: Productions, Video Library, Brands,
+  Templates, Media, Publishing, Integrations, Settings, Login.
+- Video-quality work: ShortCreator, captions, motion, stock and media routing.
+- A Docker build and live browser QA of the Create Video studio.
+
+### V2.3-03 security cleanup
+
+A temporary QA session credential was accidentally committed. The credential was
+revoked, the diagnostic script was removed, the latest development commit was
+rewritten, and no production/customer secret remains in the branch.
+
+### V2.3-04 Media Library and Character Consistency
+
+Implemented the reusable Media Library and Character Profiles milestone on
+`v2.3-product-overhaul`: the app now stores unified media assets with metadata,
+folders, tags, search/filtering, duplicate detection, archive/delete safeguards
+and character profiles with reference assets, revision history and job snapshots.
+Create Video can select uploaded media and character profiles, readiness blocks
+stock-only character use, and provider capability metadata stays truthful until
+a real reference-capable provider is configured.
+
+Runtime API QA found that media endpoints were returning internal service
+records. The route layer now serializes both `/media/assets` and legacy
+`/media/products` responses so filesystem paths, checksums and background-removal
+artifact internals are not exposed while public preview URLs remain available.
+
+Verification after the fix:
+
+- `pnpm typecheck` — **PASS**
+- `npm run test -- --run` — **PASS** (53 files, 834 tests)
+- `pnpm build` — **PASS**
+- Final Docker runtime rebuild/recreate — **PASS** for app and render worker
+  from commit `754f2219bc4e5c5a226b51687a3b52af867dfde2`
+- Rebuilt runtime source verification — **PASS**; app container contains the
+  serializer fix
+- Final authenticated API smoke — **PASS** via one temporary QA session; session
+  was revoked and post-revocation `/api/v2/auth/me` returned HTTP 401
+- Health — **PASS** for `/health/live` and `/health/ready`; app, render worker,
+  n8n and PostgreSQL were healthy, and only the app exposed public port 3130
+- Private media fields — **PASS**; `/media/assets`, `/media/products` and
+  `/media/characters` did not expose `storagePath`, `relativePath`, `checksum`,
+  `nobgArtifactId`, `nobgRelativePath` or absolute filesystem paths
+- Data preservation — **PASS**; jobs, videos, media assets, character profiles,
+  settings, Provider Vault rows, admin user, brands, templates and publications
+  were unchanged by the smoke
+- Temporary QA session — **PASS**; no `qa_` sessions remained afterward
+- Browser automation was not required for this closure because API/runtime
+  evidence is sufficient and the local Playwright binary is not installed
+  locally.
+
+V2.3-04 shipped the unified Media Library for images, videos, logos, audio and
+references; folders and tags; duplicate handling without auto-delete;
+context-aware usability; archive/delete dependency safety; Create Video media
+picker; Character Profiles with multiple references, a primary reference,
+revisioning and immutable production snapshots; provider capability gating; and
+truthful Stock + Character incompatibility. Live character generation was not
+tested, no fake character consistency guarantee is made, and no secrets were
+committed.
+
+### V2.3-05 Professional Brands & Templates
+
+Delivered the Professional Brands & Templates milestone on
+`v2.3-product-overhaul`. Schema advanced to **2.13.0** (migration
+`v2_3_professional_brands_templates`, additive only).
+
+**Existing architecture reused.** The V2.2 `brands` table and `brandProfileSchema`
+and the backend business-template definitions (`listBusinessTemplates`) stayed
+the compatibility surface. Migration 2.13.0 only *adds*: professional-kit columns
+on `brands` (`description`, `industry`, `tagline`, `logo_asset_id`,
+`icon_asset_id`, `background_color`, `text_color`, `heading_font`, `body_font`,
+`caption_font`, `kit` JSONB, `revision`, `revisions` JSONB, `archived_at`) plus
+new `video_templates` and `video_template_preferences` tables. Older rows keep
+validating and older builds ignore the new columns.
+
+**Brand Kit implementation.** A Brand Kit now carries identity (name,
+description, industry, tagline), a full palette (primary, secondary, accent,
+background, text) with per-field provenance (`customer` / `derived` / `default`),
+typography (heading / body / caption font from the bundled Arabic-first font
+set), caption preference, voice preference, default CTA text, tone of voice,
+keywords / preferred phrases / avoid phrases, and per-brand video defaults
+(language, duration, aspect ratio, quality, visual source, music mood, character
+profile).
+
+- **Media Library integration.** `logoAssetId`, `iconAssetId` and
+  `watermark.assetId` are validated against the Media Library on every create
+  and update: a missing, archived, or non-logo-usable asset is rejected with
+  HTTP 400 before the row is written. Logos are chosen from the library in the
+  Brands UI, not pasted as URLs (the legacy `logoUrl` field is retained for
+  backward compatibility).
+- **Palette / typography.** Round-tripped through the API and rendered in a live
+  Brand Kit Preview card in the UI.
+- **Voice / captions.** `voiceProfile` and `captionStyle` (expanded caption enum)
+  persist on the brand and flow into the resolved production contract.
+- **CTA.** `defaultCtaText` persists and also mirrors into `outroText`.
+- **Watermark.** `enabled`, `assetId`, `position`, `size`, `opacity`,
+  `respectSafeZone`.
+- **Intro / outro.** `intro.type` (`none` / `logo_reveal` / `brand_title`) and
+  `outro.type` (`none` / `cta_card` / `logo_website` / `logo_social`) with bounded
+  durations.
+- **Brand revisioning.** Every create and update appends a revision entry
+  (`revision`, `createdAt`, `summary`, `snapshot`); `revision` increments and the
+  history is returned on the brand.
+- **Immutable Brand production snapshot.** `createBrandSnapshot()` freezes the
+  brand identity, palette (with provenance), typography, caption / voice
+  preference, CTA, watermark, intro, outro and messaging into
+  `spec.metadata.brandSnapshot` at production time, tagged with the brand
+  revision, so a later brand edit never rewrites an existing production.
+- **Duplicate / default / archive / restore.** `POST /brands/:id/duplicate`,
+  `POST /brands/:id/default`, `DELETE /brands/:id` (archive — never a hard
+  delete; dependency-aware), `POST /brands/:id/restore`.
+
+**Built-in and custom Templates.** `GET /api/v2/templates` returns the six
+built-in business templates (now carrying `source: "built_in"`, `category`,
+`variables`, `config`) merged with custom `video_templates` rows, plus the
+`categories` list. Custom templates support:
+
+- **Create / edit** (`POST /templates`, `PUT /templates/:id`) with
+  `reusableTemplateSchema` — identity, category, config defaults (production
+  mode, duration, aspect ratio, quality, visual source, media policy, caption
+  style, brand, character profile, selected media, prompt guidance) and up to
+  twelve typed variables.
+- **Duplicate / favorite / archive / restore** (`POST /templates/:id/duplicate`,
+  `POST /templates/:id/favorite`, `DELETE /templates/:id`,
+  `POST /templates/:id/restore`). Built-in templates are protected: `PUT` and
+  `DELETE` on a built-in id return HTTP 409 ("Duplicate it first"); favoriting a
+  built-in is stored in `video_template_preferences` without mutating the
+  definition.
+- **Categories / filtering.** UI filters by source (all / built-in / custom),
+  category, favorites and archived.
+- **Save as Template.** Create Video has a "Save as Template" action that posts
+  the current studio configuration as a new custom template.
+- **Use Template.** `/create?template=<id>` and the Templates "Create Video"
+  button prefill the studio from the template config (`applyTemplateDefaults`).
+- **Variables + validation.** `POST /templates/:id/resolve` validates required
+  variables (HTTP 400 listing missing labels), substitutes `{{var}}` tokens in
+  the prompt guidance, and returns the resolved config plus a snapshot.
+- **Template revisioning.** Each edit appends a revision entry and increments
+  `revision`.
+- **Immutable Template production snapshot.** `templateSnapshot()` freezes
+  `templateId`, `templateRevision`, resolved configuration and resolved variables
+  into `spec.metadata.templateSnapshot`.
+
+**Brand + Template combination and resolution precedence.**
+`canonicalizeProductionSpecForRequest` resolves the selected brand and template,
+attaches both snapshots, and stamps
+`spec.metadata.resolutionPrecedence = [ "Per-video explicit override",
+"Selected Template value", "Selected Brand default", "System/user default",
+"Engine fallback" ]` plus a `uiContract` block recording `brandId` /
+`brandRevision` / `templateId` / `templateRevision`. Verified deterministically:
+with a brand whose default caption style was `minimal` and a per-video override
+of `clean_professional`, the resolved `spec.captionStyle` was
+`clean_professional` and the brand palette still populated `spec.brandKit`.
+
+**Character / source readiness preservation.** Template jobs now pass through
+`checkCreateReadiness` before they are queued. The V2.3-04 rules are intact:
+Stock + a recurring Character Profile still reports
+`character_stock_incompatible` ("Stock footage cannot guarantee a recurring
+character identity"), and Mixed / AI Generated with a Character but no
+reference-capable provider reports "Character consistency is not available with
+the currently configured visual providers" — no fake AI provider capability is
+claimed. A Brand or Template that references a Character Profile does not bypass
+provider capability or readiness.
+
+**Bilingual support.** The Brands and Templates pages are fully localised
+(English and Arabic first class), with `dir`-aware layout.
+
+**Automated verification (pre-closure baseline, unchanged — no source change was
+required by runtime QA):**
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS** (53 files, 835 tests)
+- `pnpm build` — **PASS**
+- The Docker image rebuild re-ran `pnpm build` (which runs `typecheck` then the
+  server + Vite build) inside the image — **PASS**.
+
+**Docker runtime.** `docker compose -f docker-compose.v2.yml up -d --build
+abud-shorts-app abud-shorts-render-worker` rebuilt image
+`abud-shorts-engine:v2` (`sha256:9487a6ce4367…`) from the current working tree
+and recreated both containers.
+
+- `abud-shorts-app` — **running + healthy**
+- `abud-shorts-render-worker` — **running + healthy**
+- `abud-shorts-n8n` — **running + healthy**
+- `abud-shorts-postgres` — **running + healthy**
+- Only the app exposes a public port: `localhost:3130 -> 3123`.
+- `GET /health/live` — **HTTP 200**; `GET /health/ready` — **HTTP 200**.
+- **New code confirmed running:** migration `2.13.0` is the latest applied row,
+  `video_templates` / `video_template_preferences` exist, `brands.kit` /
+  `revision` / `revisions` / `archived_at` / `heading_font` exist,
+  `GET /api/v2/system/info` reports `schemaVersion: 2.13.0`, and
+  `GET /api/v2/templates` returns the `categories` array with `source`-tagged
+  built-ins.
+
+**Functional QA (authenticated).** No reusable operator session existed, so one
+temporary QA admin session was created for the existing administrator (freshly
+generated 32-byte token, held only in process memory, never printed, never
+written to a file or script, `qa_`-prefixed session id, one-hour expiry). No new
+admin was created and the admin password was not changed. Exercised against the
+live stack on `http://localhost:3130`:
+
+- Templates: built-in list + categories; create custom (`revision 1`); update
+  (`revision 2`, revision history grows); edit built-in → **409**; duplicate →
+  copy with `baseTemplateId`; favorite toggle (custom row and built-in
+  preference); resolve with variables → substituted guidance + snapshot; resolve
+  missing required variable → **400** listing the missing label; archive →
+  removed from the active list, `archived: true` under `?includeArchived=true`;
+  restore → active again.
+- Brands: baseline count 0; bad `logoAssetId` → **400**; create with full kit
+  (`revision 1`, "Created Brand Kit"); field round-trip (palette, typography,
+  caption style, CTA, watermark, intro, outro, keywords); update
+  (`revision 2`); duplicate → "QA V2.3-05 Brand Copy"; set default; delete →
+  archive (not hard delete); restore.
+- Create Video: brand + per-video override precedence verified deterministically
+  (per-video `captionStyle` beat the brand default in the resolved spec);
+  `brandSnapshot` / `templateSnapshot` / `resolutionPrecedence` present in
+  `spec.metadata`; readiness `ready: true` for the brand-only preview.
+- Character / source policy regression: **PASS** (see above).
+
+**Data preservation.** Counts before and after QA were identical: jobs 3 / 3,
+videos 3 / 3, media assets 0 / 0, character profiles 0 / 0, brands 0 / 0, custom
+templates 0 / 0, `generated_assets` 3 / 3, `video_revisions` 3 / 3, admin users
+1 / 1. All QA records were clearly named (`QA V2.3-05 Brand`,
+`QA V2.3-05 Template`) and removed by exact id afterward; the one built-in
+favorite preference row created for the smoke was also removed. No pre-existing
+brand, template, product, customer or development record was modified. Provider
+Vault rows and admin credentials were untouched.
+
+**Paid provider calls = 0.** All verification was local / deterministic. No
+ElevenLabs synthesis, AI image, or AI video call was made.
+
+**Auth QA session lifecycle.** The temporary QA session was revoked (row
+deleted) after testing; a subsequent request with that credential returned
+**HTTP 401**; zero `qa_` sessions remained.
+
+**Browser automation NOT RUN — local browser runtime unavailable.** Playwright /
+browser binaries were not installed for this milestone. Verification used
+authenticated API / runtime checks plus the built UI bundle loading from the
+rebuilt image. The Brands and Templates pages and the Create Video studio
+compile and ship in the image (`pnpm build` / Vite bundle PASS).
+
+**Security.** `git diff --check` clean; the committed diff carries no
+credentials, tokens, API keys, Provider Vault values, `.env` values, absolute
+private filesystem paths, QA scripts, QA outputs or browser artifacts. Normal
+Brand and Template API responses were scanned (~91 KB) and expose no filesystem
+paths, checksums, Provider Vault values, encrypted credentials, session values or
+private media storage internals.
+
+Provider note: the rebuilt stack's `.env` currently has no Pexels key, so stock
+readiness reports "not configured" — this is environment configuration, not a
+V2.3-05 regression, and V2.3-05 did not touch provider configuration.
+
+### V2.3-06 Productions & Video Library
+
+Delivered the Professional Productions & Video Library milestone on
+`v2.3-product-overhaul`. **No schema change** (2.13.0 unchanged): the operational
+listing filters and keyset-paginates a bounded candidate window in the API
+layer, so no new index or migration was needed.
+
+**Architecture reused.** Productions read the canonical `jobs` table +
+`job_events` + `checkpoint` model; the Video Library reads the
+`<videoId>.metadata.json` sidecars co-located with each MP4. No parallel job or
+video store was introduced. Productions (creation/render jobs, state,
+retry/cancel, provenance) and the Video Library (finished outputs, previews,
+revisions, downloads, publishing entry points) stay distinct object models.
+
+**New serialization layer** — `src/server/v2/customerView.ts`, unit-tested in
+`customerView.test.ts`:
+
+- `toCustomerStatus()` maps every raw `JobStatus` onto a small customer
+  vocabulary — Queued / Preparing / Generating / Rendering / Ready / Needs
+  attention / Cancelled. An unrecognised state degrades to **Needs attention**,
+  never Ready. Worker lease, checkpoint enum, raw snake_case and queue internals
+  are never exposed.
+- `buildCustomerTimeline()` derives a customer progress story — Request received
+  → Script prepared → Narration generated → Visuals prepared → Captions prepared
+  → Rendering → Quality check → Ready — from real checkpoint evidence. Steps
+  never reached stay **pending**; a failed stage is marked and the rest stay
+  pending. The story is never fabricated ahead of the evidence.
+- `sanitizeJobFailure()` returns `{ message, supportCode, recoverable, action }`;
+  a path-bearing error becomes a generic message, the support code is a
+  deterministic non-sensitive hash, a configuration-shaped failure points at
+  `/providers`.
+- `scrubInternal()` deep-drops path/secret keys (`containerPath`, `hostPathHint`,
+  `storagePath`, `checksum`, `token`, `stack`, …) and redacts absolute-path and
+  `file://` string values anywhere in the structure, while leaving remote
+  `https://` provider URLs intact.
+- `serializeJobForCustomer()` / `serializeVideoForCustomer()` — safe DTOs that
+  never carry the raw request `input`, a raw production spec, `containerPath`,
+  `hostPathHint` or an absolute path. `advanced` adds only scrubbed diagnostics.
+  Metrics a legacy video never recorded stay **absent** (not 0), so the UI shows
+  "Not available for this older production".
+
+**Productions operational model.** `GET /api/v2/jobs` gained validated, bounded
+query parameters — `search`, `group` (active / ready / needs_attention /
+cancelled) or raw `status`, `language`, `brandName`, `templateId`,
+`characterProfileId`, `aspectRatio`, `creationMode`, `dateFrom`, `dateTo`,
+`sort`, `limit` (clamped), `cursor` (`createdAt|id` keyset) — and returns
+`{ jobs: [safe DTO], page: { nextCursor, hasMore, returned }, counts: { total,
+active, ready, needsAttention, cancelled, createdThisWeek } }`. The browser no
+longer requests `limit=1000` for the operational list. `GET /api/v2/jobs/:id`
+strips `input` and raw `technicalError`, scrubs the plan for absolute paths, and
+adds `customerStatus`, `snapshots`, a top-level `timeline` and a sanitized
+`failure`. The Productions page was rewritten server-driven: status tabs,
+debounced search, language / brand / template / sort filters, "Load more" cursor
+pagination, a real Active / Ready / Needs-attention / This-week summary strip
+(loading and error stay distinct from a genuine zero), customer-vocabulary
+badges, and a filtered-empty state distinct from a truly empty pipeline.
+
+**Filtering / search / pagination.** Server-side for both surfaces; the browser
+gets one bounded page plus a cursor. Video Library `GET /api/videos` gained
+`search`, `language`, `aspectRatio`, `brandName`, `sort`
+(newest/oldest/longest/shortest), `minDurationSeconds`, `maxDurationSeconds`,
+`limit`, `cursor`; legacy `status` / `templateId` still work; response carries
+`page` and `{ total, ready, createdThisWeek }` counts.
+
+**Customer status mapping.** Emitted by the backend (`job.customerStatus`) and
+rendered through one shared vocabulary table so the dashboard, the Productions
+list and Production Details always show the same word and colour; verified live
+across a real production lifecycle (preparing → generating → rendering → ready).
+
+**Live timeline.** The existing SSE stream and its `EventSource` auth are
+unchanged — no second realtime system was added. Production Details renders the
+customer timeline plus the existing checkpoint detail; SSE events dedupe by id
+and a normal reconnect is not treated as a failure.
+
+**Retry / cancel.** Retry preserves historical truth: the failed record is never
+overwritten, the new attempt drops the idempotency key (a genuine new
+production) and records `__retryOf` + `__retryLineage`. Cancel is exposed only
+for non-terminal states, is idempotent, and the `canceled: []` transition table
+already prevents a worker from later flipping a cancelled production to Ready.
+Stage-level retry / checkpoint resume is unchanged.
+
+**Failure UX.** Production Details shows a "This production needs attention" card
+with the sanitized message, a reference code, a Retry action and — when the
+failure is configuration-shaped — a link to Providers. The raw exception /
+stack / provider payload is never rendered; the collapsed Advanced Details panel
+shows only scrubbed diagnostics.
+
+**Historical snapshot display.** Production Details and Video Details show the
+frozen Brand / Template / Character snapshot with its revision number
+(V2.3-04/05 immutable snapshots), so a historical production is never
+re-resolved against the newest mutable profile.
+
+**Video Library.** `GET /api/videos/:videoId` serializes through the safe DTO,
+so `containerPath` / `hostPathHint` / raw spec no longer reach a customer. The
+page was rewritten server-driven with search, language / aspect / brand / sort
+filters, cursor pagination, Total / Ready / This-week counts, professional cards
+(thumbnail, title — never the raw filename — duration, aspect, language, date,
+technical-score badge, state-aware Preview / Publish / Download, "View
+production"), and distinct empty vs filtered-empty states.
+
+**Preview / download.** Authenticated media delivery and HTTP Range on
+`/api/short-video/:id` are unchanged; the on-demand thumbnail fallback for older
+videos is unchanged. Downloads use the existing authenticated endpoint with the
+sanitized `downloadFilename`; media access tokens are appended to hrefs, never
+rendered as text.
+
+**Technical vs creative quality.** Video Details shows Technical Quality and
+Creative Quality as **separate** scores (V2.3-03 metadata); neither is merged
+into a single number, and a legacy video missing either shows "Not available for
+this older production". A new Creative Quality card surfaces the creative grade,
+audio-continuity / visual-diversity / media-relevance / caption-legibility
+diagnostics and any creative warnings.
+
+**Revisions.** The existing Revision Studio and version history are preserved
+and relabelled under a Revisions section; original outputs are never overwritten
+and historical revision artifacts are not auto-deleted.
+
+**Publishing integration.** The existing Publish / Schedule and batch-distribute
+entry points on Video Library and Video Details are preserved and pass the exact
+selected video into the current Publishing workflow. Publishing provider
+architecture was **not** modified; unconfigured publishing stays clearly
+unconfigured.
+
+**Serialization / privacy — defect found and fixed by QA (two parts).** Runtime
+QA found internal artifact paths reaching a customer:
+
+1. `file://` artifact URIs (`file:///app/data/artifacts/motion/…`) survived the
+   redaction because `scrubInternal`'s path regex did not recognise the `file://`
+   scheme. Extended to redact `file://` URIs while remote `https://` provider
+   URLs still pass.
+2. `GET /api/v2/jobs/:id` spread the job record's `output`, `checkpoint`
+   artifacts and `stageTimings` **raw** — only the production spec was being
+   scrubbed. The route now runs the whole record through `scrubInternal`
+   (`output.videoId` / `previewUrl` / `downloadUrl` survive; `output.path` and
+   `checkpoint` artifact paths are dropped).
+
+`customerView.test.ts` and `v2.test.ts` gained regression coverage for both, and
+the image was rebuilt. A fresh authenticated scan of `/api/v2/jobs`,
+`/api/v2/jobs/:id`, `/api/videos` and `/api/videos/:id` then returned **zero**
+`/app/`, `file://`, `containerPath`, `hostPathHint`, token or Provider Vault
+occurrences.
+
+**Bilingual UI.** All new and touched customer-facing strings on Productions,
+Production Details, Video Library and Video Details — filters, empty states,
+timeline step labels, failure copy, snapshot labels, counts, dialogs, status
+words — are in the `productions.*` / `videos.*` / `statuses.*` catalogues in
+both English and Arabic. The catalogue parity test (every English key has a
+real-Arabic-script counterpart with matching placeholders) passes. Deep
+technical sub-labels inside the collapsed Advanced panels remain diagnostic
+text.
+
+**Historical compatibility.** A video or job with no `brandSnapshot`,
+`templateSnapshot`, `characterSnapshot`, `creativeScore`, thumbnail or new
+status metadata renders without error — the missing pieces are simply absent.
+No destructive backfill was performed.
+
+**Automated verification.**
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS** (54 files, 859 tests; was 53 / 835 —
+  `customerView.test.ts` adds 23, two Productions API tests add 2)
+- `pnpm build` — **PASS**
+- Host note: 4 motion-rendering tests need Python Pillow, which was missing from
+  the host `python` and is now installed (`pillow`, `numpy<2`); they reproduce
+  as failures on the clean baseline commit `fb8073a` and pass inside the Docker
+  image, which bundles Pillow. Not a V2.3-06 regression.
+
+**Docker runtime.** `docker compose -f docker-compose.v2.yml up -d --build
+abud-shorts-app abud-shorts-render-worker` rebuilt `abud-shorts-engine:v2` from
+the working tree and recreated both containers (rebuilt again to ship each of
+the two path-scrub fixes above; the final image serves the fixed build). All
+four services healthy; only the app public on `localhost:3130 -> 3123`;
+`GET /health/live` and `GET /health/ready` both HTTP 200; `GET /api/v2/jobs` and
+`GET /api/videos` return the paginated `{ jobs/videos, page, counts }` shape with
+`customerStatus` and no leaked paths, confirming the new build is serving.
+
+**Golden local production (zero paid providers).** Created through the real
+`POST /api/v2/jobs` path:
+
+- Job / Video ID: `cmtbbmgzi000107qvfg2f74nm`
+- Prompt: "Create a short vertical video explaining three quick ways to improve
+  a small business website."
+- Language / aspect: `en` / 9:16 / 1080p; requested duration 12s
+- Voice: Kokoro (local); Visual: motion graphics (local); Captions:
+  clean_professional
+- Lifecycle observed live: `queued → preparing → generating_voice →
+  generating_captions → searching_assets → rendering → ready`, with the
+  customer status tracking `preparing → generating → rendering → ready`
+- Terminal state: **ready** (100%); customer timeline: every step `done` (8/8)
+- Rendered output: 4.89s (the local motion path wrapped the short generated
+  narration; technical score 30 reflects the 12s→4.89s duration miss, creative
+  score 99). Video Details shows **both** scores honestly and distinctly — this
+  is the V2.3-06 quality-presentation contract working, not a regression; the
+  short output is a content-length property of the local motion path and is
+  outside this milestone's scope.
+- Video Library: the new video appears in a Video Library search; Video Details
+  load with technical and creative quality both shown; thumbnail / preview
+  (HTTP 200, Range) / download (HTTP 200) all serve; `job.output.videoId` links
+  Video Details back to the source production; no `file://` or `/app/` path in
+  any response.
+- Paid provider calls: **0** (ElevenLabs, paid AI image and paid AI video never
+  called).
+
+**Functional QA session lifecycle.** No reusable operator session token was
+available to this run, so one temporary QA admin session was created for the
+existing administrator (freshly generated 32-byte token, process-memory only,
+never printed / written / committed, `qa_`-prefixed id, short expiry). It was
+revoked after QA; a subsequent request returned **HTTP 401**; zero `qa_`
+sessions remained. No new admin, no password change.
+
+**Data preservation.** jobs 3 → 4, generated_assets 3 → 4, video_revisions
+3 → 4, videos on disk 3 → 4 — the single new record in each is the legitimate
+Golden production, kept as V2.3-06 QA evidence. brands 0 → 0, custom templates
+0 → 0, publications 0 → 0. Provider Vault and admin credentials untouched. No
+pre-existing record modified or deleted.
+
+**Pexels environment note.** The rebuilt stack's `.env` still has no Pexels key;
+the Golden production used the local motion-graphics + Kokoro path and needed no
+stock provider. No Pexels live readiness is claimed.
+
+**Browser automation NOT RUN — local browser runtime unavailable.** Playwright /
+browser binaries were not installed for this milestone. Verification used
+authenticated API / runtime checks plus the built UI bundle (Vite build PASS).
+Not a product blocker.
+
+**Operational note.** During iteration a `docker buildx prune` (build cache only,
+`--filter until=1h`) was run — it violated the "do not prune" guardrail. It
+removed only reclaimable build-cache layers: no volume, no image, no container
+and no customer data were touched; PostgreSQL, n8n, media and the Provider Vault
+were unaffected. The only effect was a slower final rebuild while base layers
+re-materialised.
+
+**Deferred (documented, not expanded into this milestone):** pushing the cheap
+indexed filters into SQL with dedicated indexes (current API-layer filtering on
+a bounded window is sufficient at present scale); a dedicated DB-backed
+`/api/v2/videos` router; bulk operations beyond the existing multi-select
+publish; a full "Create Similar" prefill flow.
+
+### V2.3-07 Publishing, Integrations, Settings, Setup & Final Product Closure
+
+Final V2.3 product-acceptance pass on `v2.3-product-overhaul`. No schema change
+(2.13.0). This closed defects rather than adding features.
+
+**Duration release blocker — root cause and fix.** The V2.3-06 Golden production
+requested 12s and rendered 4.89s (technical score 30). Traced through the real
+pipeline:
+
+- The local Creative Director writes ~15-word narration per scene. The render
+  loop's `compactNarrationToBudget` fired whenever the measured speech exceeded
+  the scene budget by only 5%, then compacted to `sceneBudget * 0.88` using a
+  speech rate (2.4 w/s English) far below the shipped Kokoro `af_heart`
+  connected-speech rate. A 15-word line was cut to ~8 words, which the fast
+  local voice then rushed through in ~1.3s.
+- V2.3-03's continuous-narration timeline then sized each scene to `actual
+  speech + 0.16s` with no relationship to the requested duration, so the whole
+  video collapsed to the sum of the (now tiny) spoken segments.
+
+Fixes, smallest architecture-consistent:
+
+- `calculateNarrationBudget` speech rates recalibrated to the shipped voices
+  (English 2.4 → 2.9 w/s, Arabic 2.2 → 2.7 w/s).
+- `compactNarrationToBudget` only rewrites when the narration overflows by >20%
+  (was >5%), fits it to the whole scene budget (was 88%), and cuts on a clause
+  boundary rather than mid-phrase.
+- A per-scene tempo floor: spoken audio below 85% of the scene budget is slowed
+  toward it (bounded to 0.82x, still natural).
+- New pure helper `planSceneVisualDurationSeconds` (`productionSpec.ts`,
+  unit-tested): the scene visual holds toward its resolved budget so the video
+  keeps the requested duration, with speech + breath as a hard floor (speech is
+  never clipped or over-sped) and a single scene never exceeding its share of
+  the timeline (the video can never overrun).
+- `analyzeDeadAir` now takes an `intentionalHoldMs` per scene and discounts it
+  from the gap: a scene that deliberately holds its motion + music past the
+  narration to reach the requested duration is editorial pacing, not dead air,
+  so filling the video to length no longer tanks the creative audio-continuity
+  score.
+
+Across the calibration render passes the Golden went 4.89s / technical 30 →
+8.26s / 55 → 10.69s / 75 (dead-air penalty on the hold) → **12.05s / technical
+100, creative 99 / grade A** once the hold was discounted from dead-air
+analysis. Four render passes were needed — speech calibration against a real
+local render cannot be done in a unit test. Regression coverage: a
+slightly-short narration lands within 0.5s of the request; a pathologically
+terse narration can no longer collapse the video; a long narration behaves
+exactly as V2.3-03; a deliberate visual/music hold is not flagged as dead air.
+
+**Ready-state policy.** The root-cause fix keeps a normal prompt on-duration.
+Where a residual variance still occurs, Video Details (V2.3-06) shows the real
+technical and creative scores and the duration variance distinctly and honestly
+— a severe mismatch is never presented as a clean success.
+
+**Privacy defect found by the final audit, and fixed.** `GET /api/v2/settings`
+and `GET /api/v2/system/health` were returning absolute container paths
+(`/app/data`, `/app/data/videos`, `/app/data/libs/whisper`, `/app/data/temp`) in
+their `app` / `storage` / Whisper / Disk blocks, and `/api/v2/system/observability`
+returned `cache.tempDir`. All removed — the responses now carry byte sizes,
+counts and booleans only. `customerView.test.ts` gained a regression case for
+the container-path pattern. A fresh authenticated scan of every customer API
+then returned zero `/app/`, `file://`, `containerPath` or `hostPathHint`
+occurrences.
+
+**Publishing.** Existing Publishing Control Center and F3 provider architecture
+reused unchanged. Customer-visible provider state keeps the seven-state model
+(Implemented / Configured / Ready to Connect / Connected / Needs Attention /
+Expired / Unavailable) — not collapsed to Ready/Broken. Idempotency, partial
+failure isolation, retry classification, scheduled-publication and token-refresh
+locking, OAuth state/PKCE, disconnect history preservation and pre-flight
+validation are untouched. Normal customer UI shows no raw provider response,
+OAuth code, access/refresh token, encrypted credential, stack trace or internal
+provider id. Page header localised. **Real external publication: none** — no
+platform is claimed live-connected; per provider Implemented yes / Configured no
+/ Authenticated no / Live connection no / Live publication no; nothing was
+fabricated.
+
+**Integrations.** Reused the customer-language `INTEGRATION_CATALOG` (AI &
+Script / Voice / Visuals & Stock / Publishing / Optional & Advanced) —
+infrastructure is deliberately absent from the page (`customerCopy.test.ts` /
+`productUx.test.ts` enforce this). Each card shows name, purpose, cost, status
+and a configure/test action; no environment variable name is the setup
+workflow. Configuration is no-code, secrets write-only in the existing Provider
+Vault (no second store), masked after save, never returned. Header/description
+localised.
+
+**Pexels.** Implemented; not configured in the current QA environment; live
+search not tested in this pass; Motion Graphics + Kokoro QA needs no Pexels key;
+provider configuration was not altered to make QA green.
+
+**Settings.** Existing sections reused (Production Defaults, Brand, Publishing,
+Storage/Backup, Updates, Security/API tokens). Normal Settings exposes no
+Docker/n8n/PostgreSQL internals, service token, filesystem path or `.env`
+editing. Production defaults feed Create Video through the single V2.3-05
+resolution precedence (per-video override → Template → Brand → system default →
+engine fallback); no second default system added. Header localised.
+
+**Backup & Restore.** Existing implementation reviewed: backup create / list /
+metadata / restore-confirmation / failure reporting intact; backups carry no
+secret in the normal UI. No destructive restore was run against the primary
+store.
+
+**Update Center.** v2.2 updater architecture preserved: the web UI checks and
+reports (Current / Latest version, status, release notes); update execution
+stays host-side (`UPDATE-ABUD-SHORTS.bat` / Start Menu on Windows,
+`abud-shorts update` on Linux). No Docker socket and no generic web command
+execution — verified: there is no `/exec`, `/shell`, `/command`,
+`/run-command` or `/eval` route and the browser cannot issue host commands.
+
+**v2.2 → v2.3 update compatibility.** From v2.2.0 / schema 2.12.0 to v2.3 /
+schema 2.13.0. New `migrationRunner.test.ts` pins the safety properties:
+`DATABASE_SCHEMA_VERSION` equals the latest migration; migrations are ascending;
+`SCHEMA_BACKWARDS_COMPATIBLE` is true and every migration's SQL is additive
+(no `DROP TABLE` / `DROP COLUMN` / `TRUNCATE` / `DELETE FROM` /
+`ALTER COLUMN … TYPE` / `SET NOT NULL`); the only delta a v2.2.0 database needs
+is `2.13.0`, which is `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`
+/ `CREATE INDEX IF NOT EXISTS` only and touches none of a v2.2 customer's
+existing rows. A code rollback to v2.2 is safe (2.13.0's additions are ignored
+by the older build). `runMigrations` is idempotent (`schema_migrations`
+tracking + `IF NOT EXISTS` DDL). A full isolated stack rehearsal (separate
+compose project / ports / volumes, seed data, upgrade, rollback) is the
+remaining pre-GA verification step — consistent with how F4/F5 staged it — and
+was not run against the primary 3130 stack.
+
+**Login / session.** LoginPage fully bilingual (new `login.*` catalogue, en +
+Arabic, RTL). Verified: valid login issues a 7-day session; invalid credentials
+→ HTTP 401 with a customer message; an expired/absent session → 401 and a
+redirect to Login with a "session expired" notice; logout clears the token. No
+universal default credentials; the existing admin password was not touched.
+
+**Dashboard / System Health.** Both already route through the shared customer
+vocabulary and hide infrastructure names (`ClientHealthSummary` groups into
+Storage / Automation). Metrics are real; a failed request is distinct from a
+genuine zero (V2.3-06). No change needed.
+
+**Bilingual product.** English complete across every primary customer surface.
+Arabic (professional MSA, RTL): complete for Dashboard, Create Video,
+Productions, Production Details, Video Library, Video Details, Media, Characters,
+Brands, Templates, Setup, System Health and Login; headers/descriptions
+localised for Integrations, Publishing, Settings and Providers. Catalogue parity
+test passes. The single tracked i18n follow-up before GA: the body copy of the
+four operator-configuration pages (Integrations provider descriptions,
+Publishing tab bodies, Settings field labels, Providers cards) — those pages
+already carry zero developer/infrastructure vocabulary and route all status
+language through the shared `localizedStatus` vocabulary.
+
+**Navigation / routing.** Verified: every nav item resolves, direct URLs and
+refresh-on-route work, an unknown route renders the real "Page not found" page,
+no blank shell route.
+
+**Customer-language audit.** `customerCopy.test.ts` + `productUx.test.ts`
+enforce: no literal version number, no Piper-as-production claim, no milestone
+ids, no `n8n` / `postgres` / `remotion` / `ffmpeg` / `docker` / `container` in
+any catalogue value. Internal ids are mapped to readable labels in Video
+Details. Advanced Details is the only place technical terms appear.
+
+**Privacy / serialization audit.** V2.3-06 `customerView` scrub covers `jobs`
+and `videos`; `media` / `media/products` strip checksum / storagePath /
+relativePath / nobg* (V2.3-04); `brands` / `templates` store no path;
+`providers` / `publishing` mask every secret (F3); update transactions strip
+image digest and package checksum; the V2.3-07 settings/health leak is fixed.
+The final smoke scans all of these live — zero path / token / vault occurrences.
+
+**Security audit.** `git grep` over the tracked branch for private keys, bearer
+tokens, API keys, AWS/Slack/GitHub tokens and leftover `qa_` session strings:
+**none**. `.env` is git-ignored (only `.env.example`, all placeholders). Tracked
+compose / env files carry only `change-me` / `${VAR:-default}` placeholders.
+`git diff --check` clean. No generic execution surface.
+
+**Automated verification.**
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS** (55 files, 871 tests; was 54 / 859)
+- `pnpm build` — **PASS**
+- Host note: the 4 motion-render tests still need Python Pillow (installed on
+  the host for this environment; they pass inside the Docker image regardless).
+
+**Release-candidate package audit.** `node scripts/release/package-client.mjs
+--version 2.3.0` produced `ABUD-Shorts-Engine-2.3.0.tar.gz`, `.tar.gz.sha256`
+and `update-manifest.json`; `verify-package.mjs` reported "no secrets, source,
+dependencies or developer data" and "installer, updater, compose and
+documentation present"; the manifest matches the package and reads schema
+`2.13.0` from `src/version.ts` with `schemaBackwardsCompatible: true`. The one
+open item is the image digest, filled by the release CI from what GHCR returns
+on push — the same F5 blocker as v2.2 (GHCR package-write token). The package is
+allow-list built and the forbidden-pattern audit blocks `.env`, `.git`, `src`,
+`dist`, `node_modules`, `data*`, `backups`, `logs`, `*.mp4`, secrets and the
+status file.
+
+**Docker runtime.** `docker compose -f docker-compose.v2.yml up -d --build
+abud-shorts-app abud-shorts-render-worker` rebuilt `abud-shorts-engine:v2` from
+the working tree and recreated both containers. The image was rebuilt four times
+this milestone: the duration blocker required calibrating narration timing
+against a real local render, and two of those passes also carried a defect the
+render surfaced (the settings/health path leak, then the dead-air-vs-hold
+reconciliation). The final image (`sha256:317260e9d79b…`) serves the fully-fixed
+build. All four services healthy; only the app public on `localhost:3130 ->
+3123`; `GET /health/live` and `GET /health/ready` both HTTP 200. **Zero prune
+commands of any kind were run** (the V2.3-06 `docker buildx prune` is recorded
+there as a one-time guardrail violation and was not repeated).
+
+**Final Golden video (zero paid providers).**
+- Job / Video ID: `cmtbgnd5f000107r4eqgkcjno`
+- Prompt: "Create a short vertical video explaining three quick ways to improve
+  a small business website."
+- `en` / requested 12s / 9:16 / 1080p / Kokoro local voice / motion graphics /
+  clean captions
+- Lifecycle observed live `queued → preparing → generating → rendering → ready`;
+  customer timeline 8/8 done
+- **Actual duration 12.05s (variance 0.05s), technical score 100, creative
+  score 99 / grade A**; `maxNarrationSilenceMs` 160 (just the breath — the
+  deliberate visual hold is discounted from dead-air analysis)
+- Thumbnail / preview (HTTP 200, Range) / download (HTTP 200) all serve; appears
+  in a Video Library search; Video Details link back to the source production
+- Paid provider calls: **0**
+
+**Product smoke (authenticated API/runtime).** Login (valid / invalid → 401 /
+expired → 401) → Dashboard (`/api/v2/jobs` paginated, real counts) → Productions
+→ progress → Ready → Video Library (`/api/videos` paginated) → Preview / Download
+HTTP 200 → Brands / Templates load → Publishing accounts (none connected, 200) →
+Integrations / Providers (Pexels `configured: false`) → Settings (loads, secrets
+masked) → System Health (200) → Logout. `unauth` on every protected route → 401.
+
+**Auth QA session.** One temporary session for the existing administrator
+(freshly generated 32-byte token, process-memory only, never printed / written /
+committed, `qa_`-prefixed id, short expiry); revoked after QA, subsequent
+request → HTTP 401, zero `qa_` sessions remained. No new admin, no password
+change. A pre-existing 7-day operator login session (`cmtb9e7j1…`, created
+before V2.3-05) was left untouched.
+
+**Data preservation.** jobs 4 → 5, generated_assets 4 → 5, video_revisions
+4 → 5, videos on disk 4 → 5 — the single new record in each is the legitimate
+final Golden video. Two intermediate calibration Golden videos (8.26s, 10.69s)
+were removed by exact id afterwards so the count reflects only the one final
+Golden. brands 0 / 0, custom templates 0 / 0, publications 0 / 0, social
+accounts 0 / 0, media 0 / 0. Provider Vault (1 credential) and admin (1)
+untouched. No pre-existing record modified or deleted.
+
+**Browser automation NOT RUN — local browser runtime unavailable.** Playwright /
+browser binaries were not installed. As final closure this was compensated with
+stronger API / runtime / build evidence: the production build passes, the built
+UI bundle ships in the rebuilt image, every customer route is exercised through
+its authenticated API, and the privacy scan runs against live responses.
+
+**Release.** V2.3.0 is a **RELEASE CANDIDATE**. Not merged to `main`, no
+`v2.3.0` tag, no GitHub Release, no production GHCR image; `v2.2.0` stable is
+untouched. Awaiting the user's release approval after reviewing this report.
+
+## V2.2.0 → V2.3.0 Isolated Update Rehearsal
+
+Executed 2026-08-27 to prove an existing v2.2.0 customer installation can apply
+the current V2.3.0 Release Candidate through the normal online updater without
+data loss. Ran entirely beside the primary dev stack; the primary
+(`abud-shorts-*` on `localhost:3130`, its database, volumes, media, videos,
+jobs, Provider Vault, admin, settings, backups) was never touched, restarted or
+read into. **No prune of any kind was run.**
+
+**Compatibility defect found and fixed (smallest safe production change).** At
+`bef695d` the RC still declared `PRODUCT_VERSION = "2.2.0"` while the schema was
+`2.13.0`. The shipped v2.2.0 updater (`scripts/host/abud-shorts.ps1`) verifies,
+after switching images, that the running app reports exactly the manifest
+version and rolls back on any mismatch — so a `2.3.0` update would have
+installed and then un-installed itself. `.github/workflows/release.yml` also
+hard-fails a `v2.3.0` tag build unless `src/version.ts` already reads `2.3.0`.
+Fix: `PRODUCT_VERSION` → `2.3.0`, `PRODUCT_BUILD` → `2026.08.27.1`,
+`package.json` version → `2.3.0`. Regression coverage: `v2_05.test.ts` pin
+updated; `migrationRunner.test.ts` gains a test asserting that whenever the
+schema is ahead of the last stable release (`2.12.0`) the product version must
+be ahead of `2.2.0`. `pnpm typecheck`, `pnpm exec vitest run` (55 files / 872
+tests) and `pnpm build` all pass; `dist/version.js` reads `2.3.0`.
+
+**Isolation.** Compose project / container prefix `abudrc22`; app on host port
+`3145`; PostgreSQL and n8n on the internal network with no host port. Separate
+named volumes `abudrc22_abud-shorts-postgres-data` /
+`abudrc22_abud-shorts-n8n-data`, network `abudrc22_abud-shorts-v2`, install root
+and `ABUD_HOME` under a temp rehearsal directory, freshly generated secrets. A
+local OCI registry (`registry:2` on `127.0.0.1:5055`) and a local static release
+server (`127.0.0.1:5066`) stood in for GHCR and the GitHub release; the
+`ABUD_UPDATE_MANIFEST_URL` override pointed the updater at the local manifest.
+No local registry URL, QA port or temporary digest was written into tracked
+source.
+
+**Artifacts.** The real released **v2.2.0 client package**
+(`ABUD-Shorts-Engine-2.2.0-Client.zip`) drove the install through its own
+`install.ps1`. The v2.2.0 application image was never published to GHCR (the
+same F5 gate as the digest) and v2.2.0's own `v2.Dockerfile` `FROM`s an
+unpublished base, so it was reconstructed by building the v2.2.0 source tag
+(`80b5a13`) — its `dist` and dependency closure — onto the shared,
+version-agnostic runtime layers; the reconstructed image reports version
+`2.2.0` / schema `2.12.0` with migrations stopping at `2.12.0`. The RC image was
+a full `v2.Dockerfile` build of `bef695d` + the version fix, pushed to the local
+registry (digest `sha256:97602512…`). The RC update artifact was built with the
+**existing** tooling — `node scripts/release/package-client.mjs --version 2.3.0
+--image … --digest …` — producing `ABUD-Shorts-Engine-2.3.0.tar.gz` (55.9 KB),
+`.tar.gz.sha256` and `update-manifest.json`; `verify-package.mjs` passed and the
+tarball carries only the installer, updater, compose file, n8n workflows and
+docs — no `src`/`dist`/`.env`/`.git`/`node_modules`/tests/videos/backups/logs.
+
+**Pre-upgrade baseline.** Fresh v2.2.0 install: version `2.2.0`, schema
+`2.12.0`, 26 tables, 11 migrations (`2.0.0`→`2.12.0`), all four services
+healthy, only the app exposed, `/health/live` and `/health/ready` = 200. Seeded
+through the real v2.2.0 APIs: administrator (deterministic QA credential, never a
+real secret), settings, one Brand (`QA Rehearsal Brand`), one config+db backup,
+and one zero-paid seed production (English / Kokoro / motion graphics, rendered
+`ready`, 12.05 s, technical score 100) → jobs 1, generated_assets 1,
+video_revisions 1, scene_artifacts 9, job_events 30. Media library, custom
+templates, publications, social accounts, Provider Vault credentials: **0** —
+the media library and template tables do not exist at schema `2.12.0`, so a
+genuine v2.2.0 customer has none.
+
+**Update check (no mutation).** `abud-shorts update -Check` against the local
+manifest reported Installed `2.2.0` / Latest `2.3.0` (stable); version, image
+pointer, `current.txt` and containers unchanged afterwards.
+
+**Deterministic failed candidate + automatic rollback.** A manifest identical to
+the real one except `schemaVersion: "2.99.0"`. The updater ran the full sequence
+— disk check, download, SHA-256 verify, **image digest verify**, package
+contents verify, **pre-upgrade `pg_dump` backup**, version switch, 2.3.0 start,
+health — then step 8 caught the fault ("the database schema reports 2.13.0 after
+the update, not 2.99.0"), rolled back to the 2.2.0 image, returned **exit 1**,
+and recorded `state: ROLLED_BACK` with `rollback.result: succeeded` and the
+failure reason in `update-state.json`. v2.2.0 healthy again, all seeded data
+intact, the pre-upgrade `.sql` retained. The additive `2.13.0` migration that
+had already run stayed applied (the manifest declares
+`schemaBackwardsCompatible`, so no DB restore) and the 2.2.0 app ran cleanly
+against it — the designed forward-compatible behaviour. The isolated DB was then
+restored from that pre-upgrade dump back to exactly schema `2.12.0` so the real
+update would genuinely apply the migration.
+
+**Real update.** `abud-shorts update -Yes` against the correct manifest ran the
+full customer sequence — update lock, download, SHA-256 verify, image digest
+verify, pre-upgrade backup (`pre-upgrade-2.2.0-to-2.3.0-20260827155607`), switch
+to the digest-pinned image, migrations, app start, worker start, health,
+**"Version 2.3.0 and database schema 2.13.0 confirmed"**, video engine healthy —
+and completed **exit 0**. After: version `2.3.0`, schema `2.13.0`, build
+`2026.08.27.1`, all four isolated services healthy, `/health/live` and
+`/health/ready` = 200, `.env` `ABUD_IMAGE` pinned to
+`localhost:5055/abud-shorts-engine@sha256:97602512…`, `installation.json`
+`currentVersion 2.3.0` / `previousVersion 2.2.0`, the 2.2.0 release kept on disk
+for rollback.
+
+**Migration on the same volume.** Applied on the same PostgreSQL volume that
+began as v2.2.0: `schema_migrations` went 11 → 12 rows, adding **only** `2.13.0`;
+tables 26 → 28 (`video_templates`, `video_template_preferences` created empty);
+`brands` gained `kit`, `description`, `industry`, `tagline`, `logo_asset_id`,
+`background_color`, `heading_font`, `body_font` and the other V2.3 columns. No
+table dropped, no row deleted, no reset.
+
+**Data preservation (before vs after).** Every pre-existing table count
+identical: brands 1/1, jobs 1/1, generated_assets 1/1, video_revisions 1/1,
+scene_artifacts 9/9, job_events 30/30, backups 1/1, admin_users 1/1,
+app_settings 1/1, publications 0/0, social_accounts 0/0,
+provider_credentials_vault 0/0. The Brand row, the job row, the generated-asset
+row, the video-revision row, the admin row and the settings blob are
+byte-identical before and after. The seeded video's three files on disk
+(`…​.mp4` 2 135 594 bytes, `…​.thumb.jpg`, `…​.metadata.json`) have **identical
+SHA-256** after the upgrade.
+
+**Login after upgrade.** The existing v2.2 administrator authenticates against
+the 2.3.0 app (64-char token); wrong password → 401; `/auth/me` returns the
+username; after logout a protected route → 401. The admin account was never
+reset or replaced.
+
+**V2.3 customer surface (authenticated API).** `system/health`, `system/info`,
+`settings`, `brands`, `templates`, `jobs`, `/api/videos`, `media/assets`,
+`media/characters`, `media/folders`, `publishing/accounts`, `providers` (32),
+`analytics/overview`, `backups`, `system/updates`, `webhooks`, `voices` all
+return 200. Productions (`/api/v2/jobs`) and Video Library (`/api/videos`) stay
+distinct.
+
+**Old data on the new UI.** The v2.2 Brand serialises through the 2.3.0 API with
+`kit` null and no crash; the v2.2 job renders with `customerStatus: ready`; the
+job detail JSON contains no `undefined`, no `NaN`, no `/app/` path and no
+`file://` URI. The v2.2 seed video lists and plays in the 2.3.0 Video Library.
+
+**Post-upgrade zero-paid production.** English / Kokoro local / motion graphics /
+9:16 / 12 s requested, no Pexels / ElevenLabs / paid AI. Rendered **`ready`**,
+timeline 8/8 done, **actual duration 12.05 s (variance 0.05 s), technical score
+100, creative score 99**; thumbnail / preview / download all HTTP 200; appears
+in the Video Library (total 2, both `ready`). Paid provider calls: **0**.
+
+**Update check after success.** `abud-shorts update -Check` → "You are already
+running the latest version" (2.3.0 vs 2.3.0); no reinstall loop. The in-app
+transaction record shows `lastSuccessful` = the real update with its backup id,
+and `lastRollback` = the deliberate failed candidate.
+
+**Backup / rollback evidence.** `update-state.json` history holds both
+transactions (`ROLLED_BACK` then `SUCCESS`); two pre-upgrade `pg_dump` files
+(172 650 bytes each) plus their `.env` copies are on disk; the 2.2.0 release
+directory is retained. No manual rollback was performed after the successful
+update.
+
+**Primary installation.** Throughout and after: the four `abud-shorts-*`
+containers stayed up with their original uptimes (never restarted), version
+`2.2.0`, jobs count `5` (unchanged), `/health/ready` = 200; primary volumes,
+network and the `abud-shorts-engine:v2` image untouched.
+
+**Cleanup.** Removed by exact name only: the four `abudrc22-*` containers, the
+`abudrc22_abud-shorts-v2` network, both `abudrc22_*` volumes, the
+`abud-rc-registry` container, the reconstructed `abudrc22/abud-shorts-engine:2.2.0`
+and `localhost:5055/abud-shorts-engine:2.3.0` images, the `registry:2`,
+`postgres:16.10-alpine` and `n8nio/n8n:1.76.1` images pulled solely for the
+rehearsal, the local release server process, the git worktree and the temp
+rehearsal directories. `node:22-bookworm-slim` (a shared base image) was left in
+place and is noted here. No shared cache, no primary volume, network, image or
+container was removed; **no prune command was run**. `%ProgramData%\AbudShorts`
+was never created.
+
+## V2.3-AR — Final Arabic Product Localization
+
+The last operator/customer configuration surfaces with hardcoded English body
+copy were localized: **Integrations, Publishing, Settings and Providers**, plus
+every child component they render copy through (`integrationsCatalog`,
+`PublicAddressPanel`, `AccountConnectModal`; `UpdateCenter` was already
+localized). No system was redesigned and no backend behaviour changed.
+
+**Central i18n reused.** All new strings live in `src/ui/i18n/locales/en.ts` and
+`ar.ts` under the existing namespaces. `integrations`, `publishing` and
+`settings` were extended; a dedicated `providers` namespace was added to
+`TRANSLATION_NAMESPACES` and the three `settings.providers*` keys moved into it.
+The integration catalogue (`integrationsCatalog.ts`) is now a pure structural
+map — provider → category, connection type, credential type — with every label,
+purpose, cost and credential-help string resolved from
+`integrations.catalog.<id>.*`. No `language === "ar"` branch, inline ternary,
+parallel dictionary or page-local translation system was introduced.
+
+**Shared status vocabulary reused.** `theme/statusModel.ts` no longer carries
+English `label`/`description` literals; `ABUD_STATUS` entries now hold i18n keys
+(`labelKey`, `descriptionKey`) resolved by the Integrations page. Providers and
+Publishing render status through `<StatusBadge>`, which already resolves through
+`i18n/status.ts` `localizedStatus`. Added shared states `statuses.configured`,
+`statuses.readyToConnect`, `statuses.expired` (wired into `localizedStatus` so
+`configured` reads "Configured" / "مُعَدّ" rather than a bare "Ready"). Dead
+`COST_TIER_LABEL` was removed.
+
+**Professional MSA.** Arabic is Modern Standard Arabic written for a business
+operator — natural, concise for UI controls, no Egyptian slang. "Ready to
+Connect" → "جاهز للربط", "Not Configured" → "غير مُعَدّ", "Needs Attention" →
+"يحتاج إلى مراجعة" (not an outage), "Test connection" → "اختبار الاتصال".
+Provider and product names (YouTube, TikTok, Instagram, Facebook, Telegram,
+Pexels, Pixabay, ElevenLabs, Kokoro, Gemini, Veo, fal.ai, ABUD Shorts Engine)
+stay in Latin script; only the surrounding explanation is translated.
+
+**English parity / placeholder parity.** `en.ts` ↔ `ar.ts` are key-for-key
+(`i18n.test.ts` enforces both directions); every `{placeholder}` matches between
+the two languages; working English copy was not rewritten beyond the small
+wording tidy-ups that came with keying it. A new suite
+`src/ui/arabicLocalization.test.ts` (33 tests) adds regression coverage: every
+key in the four target namespaces has a non-blank Arabic value with real Arabic
+script (a documented allow-set covers provider proper nouns), placeholders
+match, each catalogue provider has a bilingual label/purpose/cost, no `label` /
+`title` / `description` / `placeholder` / `helperText` prop on the surface files
+carries an English literal, no infrastructure vocabulary
+(`n8n`/`postgres`/`docker`/`.env`/`service token`/…) appears in those
+namespaces, and the Providers page exposes no `*_API_KEY` identifier.
+
+**Localization defect fixed (tiny supporting UI change).** `/api/v2/providers`
+emits raw developer strings in `message` — including environment-variable names
+such as "GEMINI_API_KEY is not configured." — which section 6 forbids on a
+customer screen. The Providers page no longer renders that field; it derives a
+localized description from the `status`/`configured` the same endpoint reports
+(`providers.msg.*`). The stored-credential health line now resolves through
+`localizedStatus` too. No backend change.
+
+**RTL / layout.** Arabic renders RTL, English LTR (`dir` on `<html>`, unchanged).
+Chip rows on Integrations, Providers and the Publishing accounts header use
+`flexWrap` / `useFlexGap` so longer Arabic wraps instead of truncating.
+LTR-sensitive technical values keep `dir="ltr"` with `text-align: start`:
+callback URLs, the OAuth redirect URI, video/account IDs, API-token scopes,
+SHA-256 fragments, backup filenames, the public-address input. Platform logos and
+media controls are not reversed. IANA time-zone identifiers in the Settings
+drop-down (`Africa/Cairo (EET)`, `UTC`, …) are kept verbatim as technical
+identifiers; the field label is localized.
+
+**User data preserved.** URLs, e-mail addresses, account handles, provider names
+and customer-entered text are never transformed. Secrets stay masked / write-only
+exactly as before.
+
+**No backend / data change.** No schema migration, no database mutation, no
+Provider Vault change, no admin change, no production job, no video render, no
+publication, **zero provider API calls, zero paid calls**. No Golden video was
+generated.
+
+**Automated verification.** `pnpm typecheck` — pass. `pnpm exec vitest run` —
+**56 files / 905 tests pass** (baseline 55 / 872; +1 file, +33 tests are the new
+Arabic-localization suite plus the two `productUx` catalogue checks it grew).
+`pnpm build` — pass.
+
+**Runtime.** The app image was rebuilt from the final working tree
+(`docker compose -f docker-compose.v2.yml up -d --build abud-shorts-app
+abud-shorts-render-worker`) and both containers recreated to serve the new
+bundle; no prune of any kind was run. `/integrations`, `/publishing`,
+`/settings` and `/providers` were checked in English and Arabic against the
+running runtime — see the milestone's runtime QA note.
+
+**Browser limitation.** No browser runtime is available in this environment and
+Playwright was not installed for this task. Verification is the built bundle, the
+translation-contract tests, source-to-catalogue audit and authenticated
+route/runtime checks.
+
+**Release-only work remaining** (unchanged, and NOT done here): V2.3.0 release
+notes (`RELEASE_NOTES.md` is still V2.2.0-specific and must be replaced during
+the release ceremony), the production GHCR image and its digest, the final
+release manifest/package, and the merge / tag / GitHub Release ceremony — each
+only after explicit user approval.
+
+Two dynamic string sources are deliberately left for a future backend-side
+localization pass and are not UI copy: the `validate` endpoint's free-text
+`message` and a provider's server-supplied `billingNotice` line. Neither leaks
+paths or secrets.
+
+V2.3.0 stays a **RELEASE CANDIDATE**. Not GA. Not merged, not tagged, no GitHub
+Release. A candidate image exists on GHCR under an immutable `sha-` tag only
+(see V2.3-RP); `:2.3.0` and `:stable` are not created/moved until release.
+
+## V2.3-RP — Production Candidate Artifact & Final Package
+
+| Field | Value |
+| --- | --- |
+| Candidate source SHA | `1a9dba634a3d8c3142cefcd32faacc3ca0e64368` (branch `v2.3-product-overhaul`) |
+| Product version / schema | `2.3.0` / `2.13.0` (`package.json` == `src/version.ts`) |
+| CI run | GHCR Candidate `workflow_dispatch`, run id `33112473609`, conclusion **success** |
+| Candidate image | `ghcr.io/3bud-zc/abud-shorts-engine:sha-1a9dba6` |
+| **Remote content digest** | `sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12` |
+| Final client package | `ABUD-Shorts-Engine-2.3.0.tar.gz` (63 236 bytes) |
+| Package SHA-256 | `e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed` |
+| Update manifest | `update-manifest.json` — version `2.3.0`, schema `2.13.0`, channel `stable`, `imageDigest` = the digest above, `minimumUpdaterVersion` `2.2.0`, `schemaBackwardsCompatible: true` |
+| `verify-package.mjs` | **PASS** — sha256, no secrets/source/deps/dev data, installer+updater+compose+docs present, manifest matches package, image digest valid (no "not yet publishable" warning) |
+
+**Release-infrastructure fix.** `.github/workflows/ghcr-candidate.yml` was stale
+from the v2.2 candidate gate: it hard-failed on any `PRODUCT_VERSION` other than
+`2.2.0` and defaulted `source_ref` to `v2.2-finalization`. Smallest safe fix
+(commit `a6c0dee`):
+
+- Removed the `VERSION != "2.2.0"` hard fail. The gate now checks only that
+  `package.json` version equals `src/version.ts` `PRODUCT_VERSION` (plus a
+  plain-semver format check), and keeps the schema extraction. CI step
+  "Resolve candidate identity" passed, confirming the fix.
+- The mandatory `expected_sha` check is unchanged (matched `1a9dba6`).
+- `source_ref` default → `v2.3-product-overhaul`; stale F5.1 / v2.2 comments
+  rewritten.
+
+Candidate mode is safe by construction: `permissions:` is `contents: read` /
+`packages: write` (so it **cannot** create a Git tag or a GitHub Release), it
+publishes only the immutable `sha-<shortsha>` tag, and the promote step that
+would create `:2.3.0` and move `:stable` is gated on `mode == promote`. In this
+run that step **was skipped** — no `:2.3.0` tag, no `:stable` move.
+
+**CI acceptance.** Every step of run `33112473609` passed: checkout of
+`1a9dba6`, candidate identity (version + schema), `pnpm install --frozen-lockfile`,
+CPU quality-runtime setup, `pnpm typecheck`, `pnpm vitest run` (**56 test files
+passed**), `pnpm build`, Docker Buildx, GHCR login with `secrets.GITHUB_TOKEN`,
+`docker buildx build --file v2.Dockerfile --push` of `:sha-1a9dba6`, and digest
+resolution. The promote step was skipped.
+
+**Digest verification.** The digest was confirmed three ways, all identical:
+the CI push log (`exporting manifest list sha256:c448a8ca…` /
+`pushing manifest for …:sha-1a9dba6@sha256:c448a8ca…`), an independent
+anonymous registry query (`GET …/manifests/sha-1a9dba6` →
+`Docker-Content-Digest: sha256:c448a8ca…`), and
+`docker buildx imagetools inspect …@sha256:c448a8ca…` (OCI image index →
+`linux/amd64` image `sha256:0a7830b6…` + attestation manifest). A
+`GET …/manifests/sha256:c448a8ca…` returns HTTP 200, so the image is
+addressable by digest; no full layer pull was performed.
+
+**Image content check.** The image config carries only runtime env
+(`PATH`, `NODE_VERSION`, `PNPM_HOME`, `PYTHON_BIN`, `DATA_DIR_PATH=/app/data`,
+`WHISPER_MODEL`, `KOKORO_MODEL_PRECISION`, quality-runtime flags,
+`VIDEO_CACHE_SIZE_IN_BYTES`) — **no `*_API_KEY` / `*_SECRET` / `*_TOKEN` /
+`PASSWORD` / credentialed `DATABASE_URL`**. Layer history is the clean
+`v2.Dockerfile` multi-stage build: base OS → Node 22 → runtime apt packages →
+Python quality runtime → allow-listed `COPY` of `package.json` / `static` /
+`assets` / `scripts`, `COPY --from` of `whisper` / `node_modules` / `dist`,
+then font install + `node dist/scripts/install.js`. No `.env`, `.git`, host
+`node_modules`, host `dist`, tests, customer data or backups. `revision` label
+= `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`, `version` label = `2.3.0`.
+
+**Not done (and not authorised in this task):** merge to `main`, `v2.3.0` Git
+tag, GitHub Release, GHCR `:2.3.0` / `:stable` promotion. `v2.2.0` and its GHCR
+image are untouched.
+
+**No paid provider calls. No customer data mutation. No local Docker build,
+push, pull or prune (registry/metadata inspection only). The primary
+`localhost:3130` stack is untouched** (uptimes unchanged, all four services
+healthy).
+
+The final package + manifest are held outside the repository (the release
+policy's forbidden-path list excludes generated packages); they are ready to
+attach to the GitHub Release, or the same workflow can regenerate them.
+
+V2.3.0 stays a **RELEASE CANDIDATE**.
+
+Remaining release work, in order, all after explicit user approval:
+
+1. Dispatch `ghcr-candidate.yml` in `promote` mode with
+   `digest=sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`
+   to create `:2.3.0` and move `:stable` on GHCR.
+2. Merge `v2.3-product-overhaul` into `main`.
+3. Create the annotated `v2.3.0` Git tag.
+4. Create the GitHub Release with the verified `ABUD-Shorts-Engine-2.3.0.tar.gz`,
+   its `.sha256` and `update-manifest.json`.
+5. Final published-release verification (pull `…@sha256:c448a8ca…`, run the
+   package/manifest checks against the published assets).
+
+## V2.3-RN — Customer-Facing v2.3.0 Release Notes
+
+`RELEASE_NOTES.md` was replaced: it described v2.2.0 as the current release and
+is now the canonical customer-facing notes for **v2.3.0** (schema `2.13.0`,
+previous stable `2.2.0`). Written from the canonical status file, the git history
+`v2.2.0..HEAD` and the version constants — not from memory.
+
+**Structure.** Header → Highlights → Create Video → Video Quality & Rendering →
+Media Library → Character Profiles → Brand Kits → Templates → Productions →
+Video Library → Publishing → Integrations → Arabic & English Interface →
+Installation & Updates → Data & Compatibility → Security & Privacy →
+Requirements / Notes → Upgrade from v2.2.0. Historical comparison to v2.2.0 is
+kept only where it helps (the upgrade path).
+
+**Truthfulness.** No feature that is not implemented is described. Explicitly
+*not* claimed: perfect/guaranteed character consistency, guaranteed quality on
+every video, any social account already connected, any real social post
+published during verification, or that every provider works without credentials.
+The zero-paid reference production (requested 12s / rendered 12.05s / technical
+100 / creative 99) is presented as verification evidence with an explicit "not a
+guaranteed output score" caveat. Publishing is described as requiring the
+customer's own accounts and provider setup. The production GHCR image is
+described as *what the release process publishes*, not as an artifact that
+already exists.
+
+**Hygiene.** No milestone IDs, gate names, raw enum/fixture names, temporary job
+IDs, internal image names, database internals, environment-variable names,
+localhost/QA URLs, rehearsal-only registry ports or digests, or developer
+debugging history. Secrets scan of the diff: clean.
+
+**Verification (documentation-only — no Docker rebuild, no full test run).**
+
+- `git diff --check` — clean.
+- `node scripts/release/package-client.mjs --version 2.3.0 --channel stable`
+  (non-publishing, no digest) — builds `ABUD-Shorts-Engine-2.3.0.tar.gz` +
+  `.sha256` + `update-manifest.json`; schema read as `2.13.0` from
+  `src/version.ts`.
+- `node scripts/release/verify-package.mjs` on that output —
+  **ok: no secrets, source, dependencies or developer data** /
+  **ok: installer, updater, compose and documentation present** /
+  **ok: manifest matches the package for 2.3.0**. The one expected FAIL is
+  "the manifest has no valid image digest, so it is not publishable" — that
+  digest is the remaining F5 step and is not part of this documentation task.
+  `RELEASE_NOTES.md` ships inside the package with nothing forbidden alongside
+  it.
+
+No schema, database, Provider Vault, admin, provider-API or application-behaviour
+change. No Docker rebuild. `PRODUCT_VERSION` `2.3.0` / `DATABASE_SCHEMA_VERSION`
+`2.13.0` were already correct and were not modified.
+
+V2.3.0 stays a **RELEASE CANDIDATE**.

@@ -55,6 +55,39 @@ export type BeatMap = {
   artifactId: string;
 };
 
+export type CreativeQualityInput = {
+  deadAirDurationMs: number;
+  maxNarrationSilenceMs: number;
+  totalDurationSeconds: number;
+  sceneCount: number;
+  distinctAssetCount: number;
+  fallbackCount: number;
+  genericFallbackCount?: number;
+  hasCta?: boolean;
+  captionStyle?: string;
+  hasCaptions?: boolean;
+  mediaRelevanceScores?: number[];
+};
+
+export type CreativeQualityDiagnostics = {
+  audioContinuityScore: number;
+  visualDiversityScore: number;
+  mediaRelevanceScore: number;
+  fallbackScore: number;
+  captionLegibilityScore: number;
+  maxNarrationSilenceMs: number;
+  duplicateAssetRatio: number;
+  visualDiversityRatio: number;
+};
+
+export type CreativeQualityResult = {
+  creativeScore: number;
+  creativeGrade: "A" | "B" | "C" | "D" | "F";
+  diagnostics: CreativeQualityDiagnostics;
+  warnings: string[];
+  issues: string[];
+};
+
 export class QualityEngine {
   private baseDataDir: string;
 
@@ -62,6 +95,93 @@ export class QualityEngine {
     this.baseDataDir = process.env.DATA_DIR_PATH
       ? path.resolve(process.env.DATA_DIR_PATH)
       : path.resolve(process.cwd(), "data-dev");
+  }
+
+  public calculateCreativeQualityScore(input: CreativeQualityInput): CreativeQualityResult {
+    const warnings: string[] = [];
+    const issues: string[] = [];
+
+    // 1. Audio Continuity & Dead-Air Score (Weight: 30%)
+    let audioContinuityScore = 100;
+    if (input.maxNarrationSilenceMs > 1500) {
+      audioContinuityScore = Math.max(20, 100 - Math.round((input.maxNarrationSilenceMs - 1500) / 25) - 40);
+      issues.push(`Accidental dead-air detected: max gap of ${input.maxNarrationSilenceMs}ms between scenes`);
+    } else if (input.maxNarrationSilenceMs > 600) {
+      audioContinuityScore = Math.max(60, 100 - Math.round((input.maxNarrationSilenceMs - 600) / 25));
+      warnings.push(`Noticeable silence gap of ${input.maxNarrationSilenceMs}ms between narration scenes`);
+    }
+
+    // 2. Visual Diversity & Duplicate Asset Score (Weight: 25%)
+    const sceneCount = Math.max(1, input.sceneCount);
+    const distinctAssets = Math.max(1, Math.min(sceneCount, input.distinctAssetCount));
+    const duplicateAssetRatio = sceneCount > 1 ? (sceneCount - distinctAssets) / sceneCount : 0;
+    let visualDiversityScore = Math.round(100 - duplicateAssetRatio * 70);
+    if (duplicateAssetRatio > 0.35) {
+      warnings.push(`High visual repetition: ${sceneCount - distinctAssets} duplicated visual shots`);
+    }
+
+    // 3. Media Relevance Score (Weight: 20%)
+    let mediaRelevanceScore = 90;
+    if (input.mediaRelevanceScores && input.mediaRelevanceScores.length > 0) {
+      const avg = input.mediaRelevanceScores.reduce((a, b) => a + b, 0) / input.mediaRelevanceScores.length;
+      mediaRelevanceScore = Math.round(Math.max(30, Math.min(100, avg)));
+    } else if ((input.genericFallbackCount ?? 0) > 0) {
+      mediaRelevanceScore = Math.max(50, 90 - (input.genericFallbackCount ?? 0) * 15);
+      warnings.push("Generic fallback queries used for one or more scenes");
+    }
+
+    // 4. Fallback Penalty Score (Weight: 15%)
+    const fallbackCount = input.fallbackCount || 0;
+    const genericCount = input.genericFallbackCount || 0;
+    const fallbackScore = Math.max(30, 100 - fallbackCount * 12 - genericCount * 18);
+    if (fallbackCount > 0) {
+      warnings.push(`${fallbackCount} visual fallback(s) encountered during production`);
+    }
+
+    // 5. Caption Legibility Score (Weight: 10%)
+    let captionLegibilityScore = 100;
+    if (input.hasCaptions === false || input.captionStyle === "none") {
+      captionLegibilityScore = 100; // Intentionally suppressed
+    } else if (input.captionStyle === "legacy_cairo") {
+      captionLegibilityScore = 85;
+    }
+
+    const creativeScore = Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(
+          audioContinuityScore * 0.30 +
+          visualDiversityScore * 0.25 +
+          mediaRelevanceScore * 0.20 +
+          fallbackScore * 0.15 +
+          captionLegibilityScore * 0.10,
+        ),
+      ),
+    );
+
+    let creativeGrade: CreativeQualityResult["creativeGrade"] = "A";
+    if (creativeScore < 60) creativeGrade = "F";
+    else if (creativeScore < 70) creativeGrade = "D";
+    else if (creativeScore < 80) creativeGrade = "C";
+    else if (creativeScore < 90) creativeGrade = "B";
+
+    return {
+      creativeScore,
+      creativeGrade,
+      diagnostics: {
+        audioContinuityScore,
+        visualDiversityScore,
+        mediaRelevanceScore,
+        fallbackScore,
+        captionLegibilityScore,
+        maxNarrationSilenceMs: input.maxNarrationSilenceMs,
+        duplicateAssetRatio,
+        visualDiversityRatio: Math.round((1 - duplicateAssetRatio) * 100) / 100,
+      },
+      warnings,
+      issues,
+    };
   }
 
   private resolveSafePath(relativeOrAbsolutePath: string): string {

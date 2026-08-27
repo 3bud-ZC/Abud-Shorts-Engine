@@ -13,6 +13,8 @@ import {
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopyOutlined";
 
+import { useT } from "../i18n";
+
 /**
  * SETTINGS -> PUBLIC ADDRESS
  *
@@ -35,21 +37,24 @@ interface PublicUrlState {
 const PROVIDER_LABELS: Record<string, string> = {
   youtube: "YouTube",
   tiktok: "TikTok",
-  meta: "Instagram / Facebook",
 };
 
-const SOURCE_LABELS: Record<PublicUrlState["source"], string> = {
-  configured: "Set here in Settings",
-  environment: "Set by the installer",
-  default: "Default for a local installation",
+const SOURCE_KEYS: Record<PublicUrlState["source"], string> = {
+  configured: "settings.publicAddress.sourceConfigured",
+  environment: "settings.publicAddress.sourceEnvironment",
+  default: "settings.publicAddress.sourceDefault",
 };
 
 const PublicAddressPanel: React.FC = () => {
+  const tr = useT();
   const [state, setState] = useState<PublicUrlState | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const providerLabel = (provider: string) =>
+    provider === "meta" ? tr("settings.publicAddress.metaLabel") : PROVIDER_LABELS[provider] || provider;
 
   const load = async () => {
     try {
@@ -57,12 +62,13 @@ const PublicAddressPanel: React.FC = () => {
       setState(response.data);
       setDraft(response.data.url || "");
     } catch {
-      setError("The public address could not be read.");
+      setError(tr("settings.publicAddress.readFailed"));
     }
   };
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = async () => {
@@ -74,14 +80,9 @@ const PublicAddressPanel: React.FC = () => {
       // every other setting rather than through a second, looser path.
       await axios.put("/api/v2/settings", { canonicalPublicUrl: draft.trim() });
       await load();
-      setMessage(
-        "Address saved. Re-register the callback URLs below in each provider's console.",
-      );
+      setMessage(tr("settings.publicAddress.saved"));
     } catch (err: any) {
-      setError(
-        err?.response?.data?.error ||
-          "That address could not be saved. Enter a full address, for example https://shorts.example.com",
-      );
+      setError(err?.response?.data?.error || tr("settings.publicAddress.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -104,11 +105,12 @@ const PublicAddressPanel: React.FC = () => {
         <Grid item xs={12} md={8}>
           <TextField
             fullWidth
-            label="Public address"
+            label={tr("settings.publicAddress.field")}
             placeholder="https://shorts.example.com"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            helperText={`Currently: ${SOURCE_LABELS[state.source]}`}
+            helperText={tr("settings.publicAddress.currently", { source: tr(SOURCE_KEYS[state.source]) })}
+            inputProps={{ dir: "ltr" }}
           />
         </Grid>
         <Grid item xs={12} md={4}>
@@ -119,7 +121,7 @@ const PublicAddressPanel: React.FC = () => {
             onClick={save}
             sx={{ height: 56 }}
           >
-            {saving ? "Saving..." : "Save Address"}
+            {saving ? tr("common.saving") : tr("settings.publicAddress.save")}
           </Button>
         </Grid>
       </Grid>
@@ -132,11 +134,10 @@ const PublicAddressPanel: React.FC = () => {
 
       <Box>
         <Typography variant="subtitle2" fontWeight={800} gutterBottom>
-          Callback URLs for connected accounts
+          {tr("settings.publicAddress.callbacksTitle")}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Paste the matching URL into each provider&apos;s developer console. They follow the
-          address above, so changing it here changes them everywhere.
+          {tr("settings.publicAddress.callbacksBody")}
         </Typography>
         <Stack spacing={1}>
           {Object.entries(state.callbackUrls).map(([provider, url]) => (
@@ -155,18 +156,23 @@ const PublicAddressPanel: React.FC = () => {
             >
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="body2" fontWeight={700}>
-                  {PROVIDER_LABELS[provider] || provider}
+                  {providerLabel(provider)}
                 </Typography>
                 <Typography
                   variant="caption"
                   color="text.secondary"
-                  sx={{ display: "block", wordBreak: "break-all" }}
+                  dir="ltr"
+                  sx={{ display: "block", wordBreak: "break-all", textAlign: "start" }}
                 >
                   {url}
                 </Typography>
               </Box>
-              <Tooltip title="Copy">
-                <IconButton size="small" onClick={() => copy(url)} aria-label={`Copy the ${provider} callback URL`}>
+              <Tooltip title={tr("settings.publicAddress.copy")}>
+                <IconButton
+                  size="small"
+                  onClick={() => copy(url)}
+                  aria-label={tr("settings.publicAddress.copyAria", { provider: providerLabel(provider) })}
+                >
                   <ContentCopyIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
@@ -176,7 +182,7 @@ const PublicAddressPanel: React.FC = () => {
       </Box>
 
       <Typography variant="caption" color="text.secondary">
-        Reverse proxy: {state.trustedProxy.description}
+        {tr("settings.publicAddress.reverseProxy", { description: state.trustedProxy.description })}
       </Typography>
     </Stack>
   );

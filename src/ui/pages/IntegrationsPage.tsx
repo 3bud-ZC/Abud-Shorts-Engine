@@ -29,10 +29,13 @@ import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import BoltIcon from "@mui/icons-material/Bolt";
 
 import { ConfirmDialog, ErrorBoundary, LoadingState, PageHeader, SectionCard } from "../components/v2";
+import { useI18n } from "../i18n";
 import { statusDescriptor, type StatusTone } from "../theme/statusModel";
 import {
   CLIENT_CATEGORY_ORDER,
+  CLIENT_CATEGORY_KEY,
   INTEGRATION_CATALOG,
+  catalogKey,
   clientCategoryFor,
   type ClientCategory,
 } from "./integrationsCatalog";
@@ -66,13 +69,6 @@ function toneColor(tone: StatusTone): "success" | "warning" | "error" | "info" |
   if (tone === "danger") return "error";
   if (tone === "info") return "info";
   return "default";
-}
-
-function formatWhen(value?: string): string {
-  if (!value) return "Never tested";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Never tested";
-  return `Tested ${date.toLocaleString()}`;
 }
 
 /** What the Connected Accounts endpoint gives us, minus anything sensitive. */
@@ -110,6 +106,7 @@ const OAUTH_PLATFORMS: Record<string, string[]> = {
 const IntegrationsContent: React.FC = () => {
   const theme = useTheme();
   const t = theme.abud;
+  const { t: tr, format } = useI18n();
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [vaultAvailable, setVaultAvailable] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -129,6 +126,18 @@ const IntegrationsContent: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [disconnectTarget, setDisconnectTarget] = useState<ProviderRecord | null>(null);
 
+  /** "Tested {date}", or "Never tested" for a missing / unparseable value. */
+  const formatWhen = (value?: string): string => {
+    if (!value) return tr("integrations.neverTested");
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return tr("integrations.neverTested");
+    return tr("integrations.testedOn", { time: format.dateTime(date) });
+  };
+
+  /** Customer-facing label for a catalogue entry, from the active-language catalogue. */
+  const catalogText = (id: string, field: "label" | "purpose" | "cost" | "keyHelp" | "default") =>
+    tr(catalogKey(id, field));
+
   const load = async () => {
     try {
       const [providerResponse, accountResponse] = await Promise.all([
@@ -142,7 +151,7 @@ const IntegrationsContent: React.FC = () => {
       setAccounts(accountResponse.data.accounts || []);
       setError(null);
     } catch {
-      setError("Integrations could not be loaded.");
+      setError(tr("integrations.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -161,11 +170,12 @@ const IntegrationsContent: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     const outcome = params.get("connection");
     if (!outcome) return;
-    if (outcome === "connected") setFeedback("Account connected.");
-    else if (outcome === "cancelled") setError("The connection was cancelled before it finished.");
-    else setError(`The connection could not be completed (${params.get("reason") || "unknown"}).`);
+    if (outcome === "connected") setFeedback(tr("integrations.accountConnected"));
+    else if (outcome === "cancelled") setError(tr("integrations.connectionCancelled"));
+    else setError(tr("integrations.connectionFailed", { reason: params.get("reason") || tr("common.unknown") }));
     window.history.replaceState({}, "", window.location.pathname);
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** Only providers the catalog knows about are shown to a customer. */
@@ -192,7 +202,9 @@ const IntegrationsContent: React.FC = () => {
         ...prev,
         [provider.id as string]: {
           ok: Boolean(healthy),
-          message: data.message || (healthy ? "Connection succeeded." : "Connection did not succeed."),
+          message:
+            data.message ||
+            (healthy ? tr("integrations.testSucceeded") : tr("integrations.testDidNotSucceed")),
         },
       }));
       load();
@@ -201,7 +213,7 @@ const IntegrationsContent: React.FC = () => {
         ...prev,
         [provider.id as string]: {
           ok: false,
-          message: err?.response?.data?.message || "Connection test failed.",
+          message: err?.response?.data?.message || tr("integrations.testFailed"),
         },
       }));
     } finally {
@@ -224,12 +236,12 @@ const IntegrationsContent: React.FC = () => {
         credentialType,
         value: secretValue.trim(),
       });
-      setFeedback(`${configureTarget.name} saved securely.`);
+      setFeedback(tr("integrations.savedSecurely", { name: catalogText(configureTarget.id, "label") }));
       setConfigureTarget(null);
       setSecretValue("");
       load();
     } catch (err: any) {
-      setError(err?.response?.data?.message || "Could not save this integration.");
+      setError(err?.response?.data?.message || tr("integrations.saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -239,10 +251,10 @@ const IntegrationsContent: React.FC = () => {
     if (!disconnectTarget?.id) return;
     try {
       await axios.delete(`/api/v2/providers/${disconnectTarget.id}/credentials`);
-      setFeedback(`${disconnectTarget.name} disconnected.`);
+      setFeedback(tr("integrations.disconnectedName", { name: catalogText(disconnectTarget.id, "label") }));
       load();
     } catch {
-      setError("Could not disconnect this integration.");
+      setError(tr("integrations.disconnectFailed"));
     } finally {
       setDisconnectTarget(null);
     }
@@ -260,7 +272,7 @@ const IntegrationsContent: React.FC = () => {
       const response = await axios.get(`/api/v2/providers/${providerId}/oauth/config`);
       setOauthSetup({ ...response.data, values: {} });
     } catch {
-      setError("Could not load the setup details for this provider.");
+      setError(tr("integrations.setupLoadFailed"));
     }
   };
 
@@ -275,7 +287,7 @@ const IntegrationsContent: React.FC = () => {
       setOauthSetup(null);
       await load();
     } catch (err: any) {
-      setOauthSetup({ ...oauthSetup, error: err?.response?.data?.error || "Could not save these credentials." });
+      setOauthSetup({ ...oauthSetup, error: err?.response?.data?.error || tr("integrations.saveFailed") });
     } finally {
       setOauthSaving(false);
     }
@@ -299,7 +311,7 @@ const IntegrationsContent: React.FC = () => {
         await openOauthSetup(provider.id);
         return;
       }
-      setError(err?.response?.data?.message || "Could not start the connection.");
+      setError(err?.response?.data?.message || tr("integrations.startFailed"));
     }
   };
 
@@ -313,7 +325,7 @@ const IntegrationsContent: React.FC = () => {
     );
   };
 
-  if (loading) return <LoadingState label="Loading integrations..." />;
+  if (loading) return <LoadingState label={tr("integrations.loading")} />;
 
   const renderCard = (provider: ProviderRecord) => {
     const catalog = INTEGRATION_CATALOG[provider.id as string];
@@ -333,44 +345,50 @@ const IntegrationsContent: React.FC = () => {
           <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5}>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="subtitle1" fontWeight={650} noWrap>
-                {catalog.label}
+                {catalogText(catalog.id, "label")}
               </Typography>
               <Typography variant="body2" sx={{ color: t.textSecondary, mt: 0.25 }}>
-                {catalog.purpose}
+                {catalogText(catalog.id, "purpose")}
               </Typography>
             </Box>
             <Chip
               size="small"
               icon={toneIcon(descriptor.tone)}
-              label={descriptor.label}
+              label={tr(descriptor.labelKey)}
               color={toneColor(descriptor.tone)}
               variant={descriptor.tone === "neutral" ? "outlined" : "filled"}
             />
           </Stack>
 
           <Stack direction="row" spacing={0.75} sx={{ mt: 1.5, flexWrap: "wrap", gap: 0.75 }}>
-            <Chip size="small" variant="outlined" label={catalog.costLabel} />
+            <Chip size="small" variant="outlined" label={catalogText(catalog.id, "cost")} />
             {provider.isDefault && (
-              <Chip size="small" variant="outlined" label={catalog.defaultLabel || "Default"} />
+              <Chip
+                size="small"
+                variant="outlined"
+                label={catalog.hasDefault ? catalogText(catalog.id, "default") : tr("integrations.defaultLabel")}
+              />
             )}
-            {catalog.optional && <Chip size="small" variant="outlined" label="Optional" />}
+            {catalog.optional && <Chip size="small" variant="outlined" label={tr("integrations.optional")} />}
           </Stack>
 
           <Typography variant="caption" sx={{ color: t.muted, mt: 1.5, display: "block" }}>
-            {vaultEntry?.maskedHint ? `Key ${vaultEntry.maskedHint} · ` : ""}
+            {vaultEntry?.maskedHint
+              ? `${tr("integrations.keyHint", { hint: vaultEntry.maskedHint })} · `
+              : ""}
             {/* A built-in capability has no credential to test; system health
                 already verifies it, so "Never tested" would be misleading.
                 For everything else only a real credential test counts - the
                 health-check timestamp is not a connection test. */}
             {catalog.connectionType === "builtin"
-              ? "Self-check passed"
+              ? tr("integrations.selfCheckPassed")
               : !provider.configured
-                ? "Not set up"
+                ? tr("integrations.notSetUp")
                 : vaultEntry?.lastTestedAt
                   ? formatWhen(vaultEntry.lastTestedAt)
                   : healthyStatus
-                    ? "Working — verified by the last system check"
-                    : "Not tested yet"}
+                    ? tr("integrations.workingVerified")
+                    : tr("integrations.notTestedYet")}
           </Typography>
 
           {result && (
@@ -388,20 +406,24 @@ const IntegrationsContent: React.FC = () => {
                  account read as ready. */
               <>
                 <Button size="small" variant={provider.configured ? "outlined" : "contained"} onClick={() => openOauthSetup(provider.id)}>
-                  {provider.configured ? "Replace app credentials" : `Set up ${catalog.shortName}`}
+                  {provider.configured
+                    ? tr("integrations.replaceAppCredentials")
+                    : tr("integrations.setUpProvider", { name: catalog.shortName })}
                 </Button>
                 {provider.configured && (
                   <Button size="small" variant="contained" onClick={() => startOauth(provider)}>
-                    {connectedAccountFor(provider.id) ? "Reconnect account" : "Connect account"}
+                    {connectedAccountFor(provider.id)
+                      ? tr("integrations.reconnectAccount")
+                      : tr("integrations.connectAccount")}
                   </Button>
                 )}
               </>
             ) : catalog.connectionType === "key" ? (
               <Button size="small" variant="contained" onClick={() => openConfigure(provider)}>
-                {provider.configured ? "Replace key" : "Configure"}
+                {provider.configured ? tr("integrations.replaceKey") : tr("common.configure")}
               </Button>
             ) : (
-              <Chip size="small" variant="outlined" label="Built in — nothing to configure" />
+              <Chip size="small" variant="outlined" label={tr("integrations.builtInNothing")} />
             )}
 
             {catalog.connectionType !== "builtin" && (
@@ -412,13 +434,13 @@ const IntegrationsContent: React.FC = () => {
                 onClick={() => runTest(provider)}
                 startIcon={testing === provider.id ? <CircularProgress size={14} /> : undefined}
               >
-                Test connection
+                {tr("common.testConnection")}
               </Button>
             )}
 
             {catalog.connectionType !== "builtin" && provider.vaultConfigured && (
               <Button size="small" color="error" variant="text" onClick={() => setDisconnectTarget(provider)}>
-                Disconnect
+                {tr("common.disconnect")}
               </Button>
             )}
           </Stack>
@@ -430,15 +452,14 @@ const IntegrationsContent: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Integrations"
-        eyebrow="Configure"
-        description="Connect the services ABUD Shorts uses. Everything marked Optional can be skipped — the engine works without it."
+        title={tr("integrations.title")}
+        eyebrow={tr("integrations.eyebrow")}
+        description={tr("integrations.description")}
       />
 
       {!vaultAvailable && (
         <Alert severity="warning" sx={{ mb: 3 }}>
-          Secure storage is unavailable, so integrations cannot be saved right now. Contact your
-          installer.
+          {tr("integrations.storageUnavailable")}
         </Alert>
       )}
       {error && (
@@ -457,6 +478,7 @@ const IntegrationsContent: React.FC = () => {
           const items = grouped.get(category) || [];
           if (items.length === 0) return null;
           const isAdvanced = category === "Optional & Advanced";
+          const categoryLabel = tr(CLIENT_CATEGORY_KEY[category]);
 
           const body = (
             <Grid container spacing={2}>
@@ -470,16 +492,16 @@ const IntegrationsContent: React.FC = () => {
             <Accordion key={category} variant="outlined">
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Box>
-                  <Typography fontWeight={650}>{category}</Typography>
+                  <Typography fontWeight={650}>{categoryLabel}</Typography>
                   <Typography variant="body2" sx={{ color: t.textSecondary }}>
-                    Extra capabilities for advanced setups. Safe to ignore.
+                    {tr("integrations.advancedCategoryHint")}
                   </Typography>
                 </Box>
               </AccordionSummary>
               <AccordionDetails>{body}</AccordionDetails>
             </Accordion>
           ) : (
-            <SectionCard key={category} title={category}>
+            <SectionCard key={category} title={categoryLabel}>
               {body}
             </SectionCard>
           );
@@ -487,28 +509,36 @@ const IntegrationsContent: React.FC = () => {
       </Stack>
 
       <Dialog open={Boolean(configureTarget)} onClose={() => setConfigureTarget(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Configure {configureTarget ? INTEGRATION_CATALOG[configureTarget.id as string]?.label : ""}</DialogTitle>
+        <DialogTitle>
+          {configureTarget
+            ? tr("integrations.configureTitle", { name: catalogText(configureTarget.id as string, "label") })
+            : ""}
+        </DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ color: t.textSecondary, mb: 2 }}>
-            {configureTarget ? INTEGRATION_CATALOG[configureTarget.id as string]?.keyHelp : ""}
+            {configureTarget ? catalogText(configureTarget.id as string, "keyHelp") : ""}
           </Typography>
           <TextField
             fullWidth
             autoFocus
             type="password"
-            label={credentialType === "service_account_json" ? "Service account JSON" : "API key"}
+            label={
+              credentialType === "service_account_json"
+                ? tr("integrations.serviceAccountJson")
+                : tr("integrations.apiKey")
+            }
             value={secretValue}
             onChange={(event) => setSecretValue(event.target.value)}
             multiline={credentialType === "service_account_json"}
             minRows={credentialType === "service_account_json" ? 4 : undefined}
-            placeholder="Paste the value here"
-            helperText="Stored encrypted. It is never displayed again after saving."
+            placeholder={tr("integrations.pastePlaceholder")}
+            helperText={tr("integrations.storedEncrypted")}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfigureTarget(null)}>Cancel</Button>
+          <Button onClick={() => setConfigureTarget(null)}>{tr("common.cancel")}</Button>
           <Button variant="contained" onClick={saveCredential} disabled={saving || !secretValue.trim()}>
-            {saving ? "Saving..." : "Save securely"}
+            {saving ? tr("common.saving") : tr("integrations.saveSecurely")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -516,25 +546,26 @@ const IntegrationsContent: React.FC = () => {
       {/* No-code OAuth application setup. The callback URL is generated and
           shown here so the customer never has to construct it or edit a file. */}
       <Dialog open={Boolean(oauthSetup)} onClose={() => setOauthSetup(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Set up {oauthSetup?.displayName}</DialogTitle>
+        <DialogTitle>{tr("integrations.oauthSetupTitle", { name: oauthSetup?.displayName || "" })}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             {oauthSetup?.error && <Alert severity="error">{oauthSetup.error}</Alert>}
             <Alert severity="info">
               <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
-                Paste this exact address into the provider console as the redirect URI:
+                {tr("integrations.redirectUriInstruction")}
               </Typography>
               <Typography
                 variant="body2"
-                sx={{ wordBreak: "break-all", fontFamily: "monospace", fontSize: "0.78rem" }}
+                dir="ltr"
+                sx={{ wordBreak: "break-all", fontFamily: "monospace", fontSize: "0.78rem", textAlign: "start" }}
               >
                 {oauthSetup?.callbackUrl}
               </Typography>
             </Alert>
             {oauthSetup?.consoleUrl && (
               <Typography variant="caption" color="text.secondary">
-                Create the application at{" "}
-                <a href={oauthSetup.consoleUrl} target="_blank" rel="noreferrer">
+                {tr("integrations.createAppAt")}{" "}
+                <a href={oauthSetup.consoleUrl} target="_blank" rel="noreferrer" dir="ltr">
                   {oauthSetup.consoleUrl}
                 </a>
                 .
@@ -558,7 +589,7 @@ const IntegrationsContent: React.FC = () => {
             {(oauthSetup?.scopes || []).length > 0 && (
               <Box>
                 <Typography variant="caption" sx={{ fontWeight: 700 }}>
-                  What this connection is allowed to do:
+                  {tr("integrations.scopesTitle")}
                 </Typography>
                 <Stack component="ul" sx={{ pl: 2, m: 0 }}>
                   {oauthSetup?.scopes.map((entry) => (
@@ -572,22 +603,24 @@ const IntegrationsContent: React.FC = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOauthSetup(null)}>Cancel</Button>
+          <Button onClick={() => setOauthSetup(null)}>{tr("common.cancel")}</Button>
           <Button
             variant="contained"
             disabled={oauthSaving || !oauthSetup?.values.clientId || !oauthSetup?.values.clientSecret}
             onClick={saveOauthApp}
           >
-            {oauthSaving ? "Saving..." : "Save"}
+            {oauthSaving ? tr("common.saving") : tr("common.save")}
           </Button>
         </DialogActions>
       </Dialog>
 
       <ConfirmDialog
         open={Boolean(disconnectTarget)}
-        title={`Disconnect ${disconnectTarget?.name || ""}?`}
-        description="The stored key will be removed. You can reconnect at any time."
-        confirmLabel="Disconnect"
+        title={tr("integrations.disconnectConfirm", {
+          name: disconnectTarget?.id ? catalogText(disconnectTarget.id, "label") : disconnectTarget?.name || "",
+        })}
+        description={tr("integrations.disconnectConfirmBody")}
+        confirmLabel={tr("common.disconnect")}
         onClose={() => setDisconnectTarget(null)}
         onConfirm={disconnect}
       />

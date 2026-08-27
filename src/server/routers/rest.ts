@@ -18,6 +18,11 @@ import {
   filterVideoList,
 } from "../videoMetadata";
 import {
+  serializeVideoForCustomer,
+  queryVideoRows,
+  type VideoLibraryFilters,
+} from "../v2/customerView";
+import {
   getBusinessTemplateById,
   listBusinessTemplates,
 } from "../../short-creator/business-templates";
@@ -345,9 +350,21 @@ export class APIRouter {
           }
 
           const files = listVideoFiles(fs.readdirSync(videosDir));
-          const { status: queryStatus, templateId: queryTemplateId } = req.query;
+          const q = req.query as Record<string, string | undefined>;
+          const str = (value?: string) => {
+            const trimmed = (value || "").trim();
+            return trimmed ? trimmed.slice(0, 200) : undefined;
+          };
+          const num = (value?: string) => {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : undefined;
+          };
 
-          let videos = files
+          // The sidecar `<videoId>.metadata.json` is the canonical per-video
+          // record and is co-located with the file, so this is one directory
+          // read plus a stat per entry - not a database scan. Filtering and
+          // pagination happen here in the API layer, never in the browser.
+          const merged = files
             .map((file) => {
               const videoId = file.replace(".mp4", "");
               const filePath = path.join(videosDir, file);
@@ -368,23 +385,43 @@ export class APIRouter {
               };
 
               return mergeMetadata(fileMeta, sidecar);
-            })
-            .sort(
-              (a, b) =>
-                new Date(b.createdAt || 0).getTime() -
-                new Date(a.createdAt || 0).getTime(),
-            );
+            });
 
-          // Optional query filtering
-          videos = filterVideoList(videos, {
-            status: typeof queryStatus === "string" ? queryStatus : undefined,
-            templateId:
-              typeof queryTemplateId === "string"
-                ? queryTemplateId
-                : undefined,
+          // Legacy compatibility: `status` / `templateId` still filter directly.
+          const preFiltered = filterVideoList(merged, {
+            status: str(q.status),
+            templateId: str(q.templateId),
           });
 
-          res.status(200).json({ videos });
+          const filters: VideoLibraryFilters = {
+            search: str(q.search),
+            language: str(q.language),
+            aspectRatio: str(q.aspectRatio),
+            brandName: str(q.brandName),
+            sort:
+              q.sort === "oldest" || q.sort === "longest" || q.sort === "shortest"
+                ? (q.sort as VideoLibraryFilters["sort"])
+                : "newest",
+            minDurationSeconds: num(q.minDurationSeconds),
+            maxDurationSeconds: num(q.maxDurationSeconds),
+          };
+          const requestedLimit = num(q.limit);
+          const paged = queryVideoRows(preFiltered, filters, {
+            limit: requestedLimit ?? 24,
+            cursor: str(q.cursor),
+          });
+
+          const readyCount = merged.filter((video) => video.status === "ready").length;
+          const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+          const thisWeek = merged.filter(
+            (video) => new Date(video.createdAt || 0).getTime() >= weekAgo,
+          ).length;
+
+          res.status(200).json({
+            videos: paged.items.map((video) => serializeVideoForCustomer(video)),
+            page: { nextCursor: paged.nextCursor, hasMore: paged.hasMore, returned: paged.items.length },
+            counts: { total: merged.length, ready: readyCount, createdThisWeek: thisWeek },
+          });
         } catch (error: unknown) {
           logger.error(error, "Error listing videos");
           res.status(500).json({
@@ -442,7 +479,9 @@ export class APIRouter {
             downloadFilename,
           };
 
-          res.status(200).json(mergeMetadata(fileMeta, sidecar));
+          res.status(200).json(
+            serializeVideoForCustomer(mergeMetadata(fileMeta, sidecar), { advanced: true }),
+          );
         } catch (error: unknown) {
           logger.error(error, "Error getting video metadata");
           res.status(500).json({

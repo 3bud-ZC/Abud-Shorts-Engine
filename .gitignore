@@ -45,3 +45,12 @@ post-rc-02-results.json
 release-validation-evidence.json
 responsive-qa-results.json
 ga-validation-final-report.json
+
+# Local scratch and manual-QA artifacts. These are produced while checking a
+# change by hand and are never part of a build, so they must not reach a clone.
+.codex-*.tmp
+scratch_*
+test-product-*.png
+test-product-*.jpg
+test-edge-*.mp3
+*-Scenes.csv

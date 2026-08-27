@@ -17,6 +17,8 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 
+import { useI18n } from "../i18n";
+
 /**
  * SETTINGS -> UPDATES
  *
@@ -62,6 +64,9 @@ interface UpdateCenterState {
   releaseNotesUrl: string | null;
   requiresRestart: boolean;
   message: string;
+  /** Translation key for `message`; see the update service contract. */
+  messageKey?: string;
+  messageVars?: Record<string, string>;
   checkedAt: string;
   lastCheckedAt: string | null;
   installationType: string;
@@ -85,32 +90,47 @@ interface UpdateCenterState {
 
 const STATUS_PRESENTATION: Record<
   UpdateStatus,
-  { label: string; color: "success" | "info" | "warning" | "default"; severity: "success" | "info" | "warning" }
+  { labelKey: string; color: "success" | "info" | "warning" | "default"; severity: "success" | "info" | "warning" }
 > = {
-  UP_TO_DATE: { label: "Up to date", color: "success", severity: "success" },
-  UPDATE_AVAILABLE: { label: "Update available", color: "info", severity: "info" },
-  CHECK_FAILED: { label: "Could not check", color: "warning", severity: "warning" },
-  UNSUPPORTED_UPDATE: { label: "Needs support", color: "warning", severity: "warning" },
+  UP_TO_DATE: { labelKey: "updates.statusUpToDate", color: "success", severity: "success" },
+  UPDATE_AVAILABLE: { labelKey: "updates.statusAvailable", color: "info", severity: "info" },
+  CHECK_FAILED: { labelKey: "updates.statusCheckFailed", color: "warning", severity: "warning" },
+  UNSUPPORTED_UPDATE: { labelKey: "updates.statusNeedsSupport", color: "warning", severity: "warning" },
 };
 
-function formatMoment(value: string | null | undefined): string {
-  if (!value) return "Never";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
-}
-
-const Field: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+/**
+ * A labelled value.
+ *
+ * `technical` marks a value that must keep reading left-to-right whatever the
+ * interface direction is: a version, an image digest, a checksum or an
+ * installation identifier reorders visually inside an RTL paragraph otherwise.
+ */
+const Field: React.FC<{ label: string; value: React.ReactNode; technical?: boolean }> = ({
+  label,
+  value,
+  technical,
+}) => (
   <Box>
     <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
       {label}
     </Typography>
-    <Typography variant="body2" fontWeight={700} sx={{ wordBreak: "break-word" }}>
+    <Typography
+      variant="body2"
+      fontWeight={650}
+      dir={technical ? "ltr" : undefined}
+      sx={{ wordBreak: "break-word", textAlign: technical ? "start" : undefined }}
+    >
       {value}
     </Typography>
   </Box>
 );
 
 const UpdateCenter: React.FC = () => {
+  const { t, format } = useI18n();
+  // Timestamps here follow the interface language like every other date in the
+  // product, rather than the browser's own default locale.
+  const formatMoment = (value: string | null | undefined): string =>
+    value ? format.dateTime(value) : t("updates.never");
   const [state, setState] = useState<UpdateCenterState | null>(null);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -124,11 +144,11 @@ const UpdateCenter: React.FC = () => {
       setState(response.data);
       setError(null);
     } catch {
-      setError("Update status is unavailable right now.");
+      setError(t("updates.unavailable"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
@@ -141,7 +161,7 @@ const UpdateCenter: React.FC = () => {
       const response = await axios.post("/api/v2/system/updates/check");
       setState(response.data);
     } catch {
-      setError("Could not reach the update service. Try again in a moment.");
+      setError(t("updates.unreachable"));
     } finally {
       setChecking(false);
     }
@@ -165,14 +185,14 @@ const UpdateCenter: React.FC = () => {
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 2 }}>
         <CircularProgress size={18} />
         <Typography variant="body2" color="text.secondary">
-          Reading update status...
+          {t("updates.reading")}
         </Typography>
       </Stack>
     );
   }
 
   if (!state) {
-    return <Alert severity="warning">{error || "Update status is unavailable right now."}</Alert>;
+    return <Alert severity="warning">{error || t("updates.unavailable")}</Alert>;
   }
 
   const presentation = STATUS_PRESENTATION[state.status] || STATUS_PRESENTATION.CHECK_FAILED;
@@ -184,30 +204,30 @@ const UpdateCenter: React.FC = () => {
 
       {state.updateInProgress && (
         <Alert severity="warning">
-          An update is in progress, or a previous one was interrupted before it finished.
-          Run the updater again to complete it safely — it takes a fresh backup, verifies
-          the result, and returns to version {state.lastAttempt?.fromVersion || "the previous version"} if
-          anything is wrong.
+          {t("updates.inProgress", {
+            version: state.lastAttempt?.fromVersion || t("updates.previousVersion"),
+          })}
         </Alert>
       )}
 
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={3}>
-          <Field label="Current Version" value={state.currentVersion} />
+          <Field label={t("updates.currentVersion")} value={state.currentVersion} technical />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Field
-            label="Channel"
-            value={state.channel === "stable" ? "Stable" : "Development"}
+            label={t("updates.channel")}
+            value={t(state.channel === "stable" ? "updates.channelStable" : "updates.channelDevelopment")}
           />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Field label="Last Checked" value={formatMoment(state.lastCheckedAt)} />
+          <Field label={t("updates.lastChecked")} value={formatMoment(state.lastCheckedAt)} />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <Field
-            label="Latest Version"
-            value={state.latestVersion || "Not known yet"}
+            label={t("updates.latestVersion")}
+            value={state.latestVersion || t("updates.notKnownYet")}
+            technical={Boolean(state.latestVersion)}
           />
         </Grid>
       </Grid>
@@ -222,12 +242,14 @@ const UpdateCenter: React.FC = () => {
       >
         <Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
-            Update Status
+            {t("updates.status")}
           </Typography>
           <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap" useFlexGap>
-            <Chip size="small" color={presentation.color} label={presentation.label} />
+            <Chip size="small" color={presentation.color} label={t(presentation.labelKey)} />
+            {/* The service sends a key alongside its English wording, so the
+                status sentence follows the interface language. */}
             <Typography variant="body2" color="text.secondary">
-              {state.message}
+              {state.messageKey ? t(state.messageKey, state.messageVars) : state.message}
             </Typography>
           </Stack>
         </Box>
@@ -238,20 +260,24 @@ const UpdateCenter: React.FC = () => {
           disabled={checking}
           onClick={check}
         >
-          {checking ? "Checking..." : "Check for Updates"}
+          {checking ? t("updates.checking") : t("updates.check")}
         </Button>
       </Stack>
 
       {updateAvailable && (
         <Alert severity="info">
-          <Typography variant="body2" fontWeight={800} gutterBottom>
-            Version {state.latestVersion} is available
-            {state.publishedAt ? ` — published ${formatMoment(state.publishedAt)}` : ""}
+          <Typography variant="body2" fontWeight={650} gutterBottom>
+            {t("updates.availableHeading", { version: state.latestVersion || "" })}
+            {state.publishedAt
+              ? ` — ${t("updates.publishedOn", { date: formatMoment(state.publishedAt) })}`
+              : ""}
           </Typography>
           <Typography variant="body2" sx={{ mb: 1 }}>
-            {state.installationType === "docker_windows"
-              ? 'To install it, open the Start Menu and choose "ABUD Shorts → ABUD Shorts - Update".'
-              : "To install it, sign in to this server and run:"}
+            {t(
+              state.installationType === "docker_windows"
+                ? "updates.installWindows"
+                : "updates.installServer",
+            )}
           </Typography>
           {state.installationType !== "docker_windows" && (
             <Box
@@ -266,19 +292,21 @@ const UpdateCenter: React.FC = () => {
                 fontSize: 13,
                 overflowX: "auto",
               }}
+              // A shell command is technical text: it stays left-to-right so an
+              // Arabic interface cannot reorder its flags and paths.
+              dir="ltr"
             >
               {state.updateCommand}
             </Box>
           )}
           <Typography variant="body2" color="text.secondary">
-            A backup is created first. If anything is wrong after the update, the previous
-            version is restored automatically.
-            {state.requiresRestart ? " The system restarts during the update." : ""}
+            {t("updates.safetyNote")}
+            {state.requiresRestart ? ` ${t("updates.restartNote")}` : ""}
           </Typography>
           {state.releaseNotesUrl && (
             <Typography variant="body2" sx={{ mt: 1 }}>
               <Link href={state.releaseNotesUrl} target="_blank" rel="noopener noreferrer">
-                Release Notes
+                {t("updates.releaseNotes")}
               </Link>
             </Typography>
           )}
@@ -286,29 +314,36 @@ const UpdateCenter: React.FC = () => {
       )}
 
       {state.status === "UNSUPPORTED_UPDATE" && (
-        <Alert severity="warning">{state.message}</Alert>
+        <Alert severity="warning">
+          {state.messageKey ? t(state.messageKey, state.messageVars) : state.message}
+        </Alert>
       )}
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={4}>
           <Field
-            label="Automatic checking"
-            value={state.automaticCheckEnabled ? "On" : "Off"}
+            label={t("updates.automaticChecking")}
+            value={t(state.automaticCheckEnabled ? "updates.on" : "updates.off")}
           />
         </Grid>
         <Grid item xs={12} md={4}>
           <Field
-            label="Automatic installing"
-            value="Off — an administrator approves every update"
+            label={t("updates.automaticInstalling")}
+            value={t("updates.automaticInstallingValue")}
           />
         </Grid>
         <Grid item xs={12} md={4}>
           <Field
-            label="Last successful update"
+            label={t("updates.lastSuccessful")}
             value={
               state.lastSuccessful
-                ? `${state.lastSuccessful.toVersion} on ${formatMoment(state.lastSuccessful.finishedAt || state.lastSuccessful.updatedAt)}`
-                : "None yet"
+                ? t("updates.lastSuccessfulValue", {
+                    version: state.lastSuccessful.toVersion,
+                    date: formatMoment(
+                      state.lastSuccessful.finishedAt || state.lastSuccessful.updatedAt,
+                    ),
+                  })
+                : t("updates.noneYet")
             }
           />
         </Grid>
@@ -327,14 +362,21 @@ const UpdateCenter: React.FC = () => {
               : "warning"
           }
         >
-          <Typography variant="body2" fontWeight={700}>
-            {state.lastAttempt.kind === "rollback"
-              ? "This system was returned to an earlier version"
-              : "The last update attempt did not complete"}
+          <Typography variant="body2" fontWeight={650}>
+            {t(
+              state.lastAttempt.kind === "rollback"
+                ? "updates.rolledBackHeading"
+                : "updates.attemptFailedHeading",
+            )}
           </Typography>
           <Typography variant="body2">
-            {state.lastAttempt.fromVersion} → {state.lastAttempt.toVersion} on{" "}
-            {formatMoment(state.lastAttempt.updatedAt)}.
+            {/* Two version numbers and an arrow between them: a version pair is
+                technical, and reversing it in RTL would state the migration
+                backwards. */}
+            <Box component="span" dir="ltr" sx={{ display: "inline-block" }}>
+              {state.lastAttempt.fromVersion} → {state.lastAttempt.toVersion}
+            </Box>{" "}
+            · {formatMoment(state.lastAttempt.updatedAt)}
             {state.lastAttempt.kind !== "rollback" && state.lastAttempt.error
               ? ` ${state.lastAttempt.error}`
               : ""}
@@ -342,16 +384,20 @@ const UpdateCenter: React.FC = () => {
           {state.lastAttempt.kind !== "rollback" && state.lastAttempt.rollback?.attempted && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
               {state.lastAttempt.rollback.result === "succeeded"
-                ? `The system was returned to version ${state.lastAttempt.rollback.restoredVersion}.`
-                : "The automatic return to the previous version did not finish. Contact support."}
-              {state.lastAttempt.rollback.databaseRestored
-                ? " The database was restored from the pre-update backup."
-                : ""}
+                ? t("updates.restoredToVersion", {
+                    version: state.lastAttempt.rollback.restoredVersion || "",
+                  })
+                : t("updates.rollbackIncomplete")}
+              {state.lastAttempt.rollback.databaseRestored ? ` ${t("updates.databaseRestored")}` : ""}
             </Typography>
           )}
           {state.lastAttempt.backupId && (
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-              A backup from before that {state.lastAttempt.kind === "rollback" ? "change" : "attempt"} is kept.
+              {t(
+                state.lastAttempt.kind === "rollback"
+                  ? "updates.backupKeptChange"
+                  : "updates.backupKeptAttempt",
+              )}
             </Typography>
           )}
         </Alert>
@@ -364,41 +410,41 @@ const UpdateCenter: React.FC = () => {
           endIcon={showAdvanced ? <ExpandLessIcon /> : <ExpandMoreIcon />}
           onClick={toggleAdvanced}
         >
-          Advanced technical details
+          {t("updates.advancedDetails")}
         </Button>
         <Collapse in={showAdvanced} unmountOnExit>
           <Box sx={{ mt: 1.5, p: 1.5, border: "1px solid", borderColor: "divider", borderRadius: 2 }}>
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
-                <Field label="Database schema" value={state.currentSchemaVersion} />
+                <Field label={t("updates.databaseSchema")} value={state.currentSchemaVersion} technical />
               </Grid>
               <Grid item xs={12} md={6}>
-                <Field label="Installation type" value={state.installationType} />
+                <Field label={t("updates.installationType")} value={state.installationType} technical />
               </Grid>
               {advanced && (
                 <>
                   <Grid item xs={12}>
-                    <Field label="Candidate image" value={advanced.image} />
+                    <Field label={t("updates.candidateImage")} value={advanced.image} technical />
                   </Grid>
                   <Grid item xs={12}>
-                    <Field label="Image digest" value={advanced.imageDigest} />
+                    <Field label={t("updates.imageDigest")} value={advanced.imageDigest} technical />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <Field label="Package SHA-256" value={advanced.packageSha256} />
+                    <Field label={t("updates.packageChecksum")} value={advanced.packageSha256} technical />
                   </Grid>
                   <Grid item xs={12} md={6}>
-                    <Field label="Candidate schema" value={advanced.schemaVersion} />
+                    <Field label={t("updates.candidateSchema")} value={advanced.schemaVersion} technical />
                   </Grid>
                   <Grid item xs={12} md={6}>
                     <Field
-                      label="Rollback without database restore"
-                      value={advanced.schemaBackwardsCompatible ? "Possible" : "Not possible"}
+                      label={t("updates.rollbackWithoutRestore")}
+                      value={t(advanced.schemaBackwardsCompatible ? "updates.possible" : "updates.notPossible")}
                     />
                   </Grid>
                   <Grid item xs={12} md={6}>
                     <Field
-                      label="Release signature"
-                      value={advanced.signed ? "Signed" : "Not signed — SHA-256 and image digest only"}
+                      label={t("updates.releaseSignature")}
+                      value={t(advanced.signed ? "updates.signed" : "updates.notSigned")}
                     />
                   </Grid>
                 </>
@@ -406,7 +452,7 @@ const UpdateCenter: React.FC = () => {
               {!advanced && showAdvanced && (
                 <Grid item xs={12}>
                   <Typography variant="body2" color="text.secondary">
-                    No candidate release has been retrieved yet, so there is nothing further to show.
+                    {t("updates.noCandidate")}
                   </Typography>
                 </Grid>
               )}

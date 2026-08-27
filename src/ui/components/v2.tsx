@@ -32,6 +32,9 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 
+import { useI18n } from "../i18n";
+import { localizedStatus, TONE_TO_MUI_COLOR } from "../i18n/status";
+
 // ============================================================================
 // CONTENT-AWARE BIDIRECTIONAL (RTL/LTR) HELPERS
 // ============================================================================
@@ -42,70 +45,27 @@ export function isArabicText(text?: string): boolean {
   return arabicPattern.test(text);
 }
 
+/**
+ * Direction props for a piece of *content* (a video title, a narration line),
+ * as opposed to interface chrome.
+ *
+ * Content direction follows the content, not the interface: an English video
+ * title in an Arabic interface still reads left to right, and an Arabic title
+ * in an English interface still reads right to left. `textAlign: start` lets the
+ * element's own `dir` place it, so the two never disagree.
+ *
+ * This used to request a `"Cairo"` font family that no `@font-face` rule ever
+ * declared, so Arabic content silently fell through to Segoe UI or Tahoma while
+ * the rest of the interface used IBM Plex Sans Arabic - two different Arabic
+ * faces on the same screen. The family is now inherited from the theme, which
+ * is the one bundled family the product actually loads.
+ */
 export function bidiProps(text?: string) {
   const isAr = isArabicText(text);
   return {
     dir: isAr ? ("rtl" as const) : ("ltr" as const),
-    style: isAr
-      ? {
-          textAlign: "right" as const,
-          fontFamily: '"Cairo", "Segoe UI", Tahoma, Arial, sans-serif',
-          lineHeight: 1.4,
-        }
-      : {},
+    style: { textAlign: "start" as const },
   };
-}
-
-// ============================================================================
-// CENTRALIZED JOB STATUS & STAGE LABELS
-// ============================================================================
-
-export const JOB_STATUS_LABELS: Record<string, string> = {
-  queued: "Queued",
-  all: "All",
-  active: "Active",
-  planning: "Planning Creative",
-  preparing: "Preparing",
-  generating_content: "Planning Creative",
-  searching_assets: "Finding Visuals",
-  collecting_media: "Collecting Media",
-  generating_voice: "Synthesizing Voice",
-  generating_captions: "Generating Captions",
-  rendering: "Rendering Video",
-  finalizing: "Finalizing",
-  validating: "Validating Output",
-  ready: "Completed",
-  failed: "Failed",
-  canceled: "Canceled",
-  invalid_credentials: "Invalid Credentials",
-  missing_permissions: "Missing Permissions",
-  voice_discovery_restricted: "Voice Discovery Restricted",
-  provider_unavailable: "Provider Unavailable",
-  not_configured: "Not Configured",
-  live_verified: "Live Verified",
-};
-
-export const STAGE_LABELS: Record<string, string> = {
-  Queued: "Queued in Pipeline",
-  "Planning Creative": "Creative Script Planning",
-  "Collecting Media": "Fetching Visual Assets",
-  "Generating Voice": "Neural Voice Synthesis",
-  "Generating Captions": "Caption Timing",
-  "Rendering Video": "Remotion Composition",
-  Validating: "FFmpeg Quality Validation",
-  Ready: "Production Complete",
-  Failed: "Job Interrupted / Failed",
-  Canceled: "Job Canceled",
-};
-
-export function getJobStatusLabel(status: string): string {
-  if (!status) return "Unknown";
-  return JOB_STATUS_LABELS[status] || status.replaceAll("_", " ");
-}
-
-export function getStageLabel(stage: string): string {
-  if (!stage) return "Processing";
-  return STAGE_LABELS[stage] || stage;
 }
 
 // ============================================================================
@@ -146,41 +106,74 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render() {
     if (this.state.hasError) {
       return (
-        <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 800, mx: "auto", my: 4 }}>
-          <Card variant="outlined" sx={{ borderRadius: 3, border: "1px solid", borderColor: "error.light", bgcolor: "#fff5f5" }}>
-            <CardContent sx={{ p: 3 }}>
-              <Stack spacing={2} alignItems="flex-start">
-                <Stack direction="row" spacing={1.5} alignItems="center">
-                  <ErrorOutlineIcon color="error" sx={{ fontSize: 32 }} />
-                  <Typography variant="h5" fontWeight={800} color="error.main">
-                    {this.props.fallbackTitle || "Something went wrong rendering this page"}
-                  </Typography>
-                </Stack>
-                <Typography variant="body2" color="text.secondary">
-                  An unexpected UI error occurred while displaying content. Your video data and server operations are unaffected.
-                </Typography>
-                {this.state.error && (
-                  <Alert severity="error" sx={{ width: "100%", wordBreak: "break-word" }}>
-                    <AlertTitle fontWeight={700}>Error Detail</AlertTitle>
-                    {this.state.error.message || String(this.state.error)}
-                  </Alert>
-                )}
-                <Stack direction="row" spacing={1.5}>
-                  <Button variant="contained" color="primary" startIcon={<RefreshIcon />} onClick={this.handleReset}>
-                    Reload Page
-                  </Button>
-                  <Button variant="outlined" onClick={() => (window.location.href = "/")}>
-                    Go to Dashboard
-                  </Button>
-                </Stack>
-              </Stack>
-            </CardContent>
-          </Card>
-        </Box>
+        <ErrorBoundaryFallback
+          title={this.props.fallbackTitle}
+          error={this.state.error}
+          onReset={this.handleReset}
+        />
       );
     }
     return this.props.children;
   }
+}
+
+/**
+ * The boundary's fallback, split out as a function component so it can use the
+ * translation hook - a class component cannot.
+ *
+ * It also fixes a visual defect: the fallback used to paint a near-white card
+ * (`#fff5f5`) inside a near-black product, so the one screen a customer sees
+ * when something has already gone wrong was also the one screen that looked
+ * broken. It now uses the theme's own error surface.
+ */
+function ErrorBoundaryFallback({
+  title,
+  error,
+  onReset,
+}: {
+  title?: string;
+  error: Error | null;
+  onReset: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 800, mx: "auto", my: 4 }}>
+      <Card variant="outlined" sx={{ borderRadius: 3, borderColor: "error.main" }}>
+        <CardContent sx={{ p: 3 }}>
+          <Stack spacing={2} alignItems="flex-start">
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <ErrorOutlineIcon color="error" sx={{ fontSize: 30 }} />
+              <Typography variant="h5" color="error.main">
+                {title || t("common.somethingWentWrong")}
+              </Typography>
+            </Stack>
+            <Typography variant="body2" color="text.secondary">
+              {t("common.uiErrorBody")}
+            </Typography>
+            {error && (
+              <Alert severity="error" sx={{ width: "100%", wordBreak: "break-word" }}>
+                <AlertTitle>{t("common.errorDetail")}</AlertTitle>
+                {/* An exception message is technical text: kept left-to-right
+                    so a stack frame or a URL inside it stays readable in an
+                    Arabic interface. */}
+                <Box component="span" dir="ltr" sx={{ display: "block", textAlign: "start" }}>
+                  {error.message || String(error)}
+                </Box>
+              </Alert>
+            )}
+            <Stack direction="row" spacing={1.5}>
+              <Button variant="contained" startIcon={<RefreshIcon />} onClick={onReset}>
+                {t("common.reloadPage")}
+              </Button>
+              <Button variant="outlined" onClick={() => (window.location.href = "/")}>
+                {t("common.goToDashboard")}
+              </Button>
+            </Stack>
+          </Stack>
+        </CardContent>
+      </Card>
+    </Box>
+  );
 }
 
 // ============================================================================
@@ -208,15 +201,15 @@ export function PageHeader({
     >
       <Box minWidth={0}>
         {eyebrow && (
-          <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: "0.08em", fontWeight: 700 }}>
+          <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>
             {eyebrow}
           </Typography>
         )}
-        <Typography variant="h4" component="h1" sx={{ lineHeight: 1.15, fontWeight: 850 }}>
+        <Typography variant="h4" component="h1">
           {title}
         </Typography>
         {description && (
-          <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 760, fontSize: "0.95rem" }}>
+          <Typography variant="body1" color="text.secondary" sx={{ mt: 0.75, maxWidth: 760 }}>
             {description}
           </Typography>
         )}
@@ -256,10 +249,14 @@ export function SectionCard({
             spacing={1.5}
             sx={{ px: 2.5, py: 1.75 }}
           >
-            <Box>
-              {title && <Typography variant="h6" fontWeight={800}>{title}</Typography>}
+            <Box sx={{ minWidth: 0 }}>
+              {title && (
+                <Typography variant="h6" component="h2">
+                  {title}
+                </Typography>
+              )}
               {description && (
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
                   {description}
                 </Typography>
               )}
@@ -280,36 +277,76 @@ export function SectionCard({
 // STANDARDIZED STAT CARD
 // ============================================================================
 
+/**
+ * A single operational figure.
+ *
+ * The number is the loudest thing on the card and everything else is quiet
+ * around it: a small uppercase label above, one line of context below. Colour
+ * carries meaning rather than decoration - the number is neutral unless the
+ * figure is something the operator should act on, and only then does it turn
+ * amber or red.
+ */
 export function StatCard({
   label,
   value,
   hint,
+  tone = "default",
+  onClick,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
+  tone?: "default" | "warning" | "danger";
+  onClick?: () => void;
 }) {
+  const valueColor =
+    tone === "danger" ? "error.main" : tone === "warning" ? "warning.main" : "text.primary";
+
   return (
     <Card
       variant="outlined"
+      onClick={onClick}
+      {...(onClick
+        ? {
+            role: "button",
+            tabIndex: 0,
+            onKeyDown: (event: React.KeyboardEvent) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onClick();
+              }
+            },
+          }
+        : {})}
       sx={{
         height: "100%",
-        minHeight: 110,
-        borderRadius: 2,
+        minHeight: 116,
+        borderRadius: 2.5,
         display: "flex",
         flexDirection: "column",
         justifyContent: "space-between",
-        transition: "box-shadow 0.15s ease",
-        "&:hover": {
-          boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-        },
+        cursor: onClick ? "pointer" : "default",
+        transition: "border-color 0.15s ease, background-color 0.15s ease",
+        "&:hover": onClick
+          ? { borderColor: "primary.main", bgcolor: "action.hover" }
+          : { borderColor: "divider" },
       }}
     >
       <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-        <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        <Typography variant="overline" color="text.secondary" sx={{ display: "block" }}>
           {label}
         </Typography>
-        <Typography variant="h4" fontWeight={850} color="primary.main" sx={{ my: 0.5, wordBreak: "break-word" }}>
+        <Typography
+          sx={{
+            my: 0.5,
+            wordBreak: "break-word",
+            color: valueColor,
+            fontSize: "1.875rem",
+            lineHeight: 1.15,
+            fontWeight: 700,
+            letterSpacing: "-0.02em",
+          }}
+        >
           {value}
         </Typography>
         {hint ? (
@@ -317,7 +354,7 @@ export function StatCard({
             {hint}
           </Typography>
         ) : (
-          <Box sx={{ height: 16 }} />
+          <Box sx={{ height: 18 }} />
         )}
       </CardContent>
     </Card>
@@ -362,14 +399,25 @@ export function statusColor(status: string): "success" | "warning" | "error" | "
   return "info";
 }
 
+/**
+ * The one status pill in the product.
+ *
+ * The raw backend status is mapped to the small localised vocabulary in
+ * `i18n/status`, so `ready`, `live_verified` and `provider_unavailable` all
+ * come out as words the customer recognises, in whichever language the
+ * interface is in. Status is never colour alone - the label always ships with
+ * the colour.
+ */
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
-  const displayLabel = label || getJobStatusLabel(status);
+  const { t } = useI18n();
+  const descriptor = localizedStatus(status);
   return (
     <Chip
       size="small"
-      label={displayLabel}
-      color={statusColor(status)}
-      sx={{ fontWeight: 700, textTransform: "capitalize", px: 0.5 }}
+      label={label || t(descriptor.key)}
+      color={TONE_TO_MUI_COLOR[descriptor.tone]}
+      variant={descriptor.tone === "neutral" ? "outlined" : "filled"}
+      sx={{ fontWeight: 600, px: 0.5 }}
     />
   );
 }
@@ -422,15 +470,18 @@ export function ProgressDisplay({
   timestamp?: string;
   message?: string;
 }) {
-  const isArabicMsg = isArabicText(message);
+  const { t, format } = useI18n();
+  // The progress message is produced by the pipeline and may be in either
+  // language, so it carries its own direction rather than the interface's.
+  const messageDir = bidiProps(message);
   return (
     <Stack spacing={0.75}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
-        <Typography variant="body2" fontWeight={800}>
-          {getStageLabel(stage)}
+        <Typography variant="body2" fontWeight={650}>
+          {t(localizedStatus(stage).key)}
         </Typography>
-        <Typography variant="body2" fontWeight={800} color="primary.main">
-          {progress}%
+        <Typography variant="body2" fontWeight={650} color="primary.main">
+          {format.percent(Math.min(100, Math.max(0, progress)) / 100)}
         </Typography>
       </Stack>
       <LinearProgress
@@ -438,26 +489,36 @@ export function ProgressDisplay({
         value={Math.min(100, Math.max(0, progress))}
         sx={{ height: 6, borderRadius: 3 }}
       />
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        dir={isArabicMsg ? "rtl" : "ltr"}
-        sx={{ textAlign: isArabicMsg ? "right" : "left" }}
-      >
-        {message || "Waiting for orchestration event."}
-        {timestamp ? ` · ${new Date(timestamp).toLocaleTimeString()}` : ""}
+      <Typography variant="caption" color="text.secondary" dir={messageDir.dir} sx={messageDir.style}>
+        {message || t("common.loading")}
+        {timestamp ? ` · ${format.time(timestamp)}` : ""}
       </Typography>
     </Stack>
   );
 }
 
 // ============================================================================
-// REDESIGNED RECENT JOB CARD
+// RECENT PRODUCTION CARD
 // ============================================================================
 
+/**
+ * One production, as it appears on the dashboard and in lists.
+ *
+ * The previous card showed a title, a stage and a percentage, which made six
+ * consecutive productions look almost identical. This one carries the facts
+ * that actually distinguish them - output language, how it was created, how
+ * long the video runs, when it was requested - and offers the action that fits
+ * the state: preview a completed video, look at the error on a failed one.
+ *
+ * The title follows its own direction: an Arabic title stays right-to-left in
+ * an English interface, and the metadata line beside it stays in the
+ * interface's direction.
+ */
 export function RecentJobCard({
   job,
   onClick,
+  onPreview,
+  onViewError,
 }: {
   job: {
     id: string;
@@ -465,86 +526,132 @@ export function RecentJobCard({
     templateId?: string;
     brandName?: string;
     status: string;
+    customerStatus?: string;
     progress: number;
     currentStage: string;
     creationMode?: string;
+    language?: string;
+    durationSeconds?: number;
     createdAt: string;
     updatedAt: string;
     error?: string | null;
   };
   onClick?: () => void;
+  onPreview?: () => void;
+  onViewError?: () => void;
 }) {
-  const isArabicTitle = isArabicText(job.title);
-  const displayTitle = job.title || job.templateId || "Video Job";
+  const { t, format } = useI18n();
+  const titleDir = bidiProps(job.title);
+  const displayTitle = job.title || job.templateId || t("videos.untitled");
+  const isActive = !["ready", "failed", "canceled", "cancelled"].includes(job.status);
+
+  const facts = [
+    job.language ? job.language.toUpperCase() : null,
+    job.creationMode === "prompt" ? t("productions.typePrompt") : job.templateId ? t("productions.typeTemplate") : null,
+    typeof job.durationSeconds === "number" ? format.duration(job.durationSeconds) : null,
+    job.brandName || null,
+  ].filter(Boolean) as string[];
 
   return (
     <Card
       variant="outlined"
       onClick={onClick}
       sx={{
-        borderRadius: 2,
+        borderRadius: 2.5,
         cursor: onClick ? "pointer" : "default",
-        transition: "all 0.15s ease",
-        borderColor: "divider",
+        transition: "border-color 0.15s ease, background-color 0.15s ease",
         "&:hover": onClick
-          ? {
-              boxShadow: "0 3px 12px rgba(0,0,0,0.06)",
-              borderColor: "primary.main",
-              bgcolor: "action.hover",
-            }
+          ? { borderColor: "primary.main", bgcolor: "action.hover" }
           : {},
       }}
     >
       <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-        <Stack spacing={1.5}>
-          {/* Header Row: Title on Left/RTL, Status Badge on Right */}
+        <Stack spacing={1.25}>
           <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5}>
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography
                 variant="subtitle1"
-                fontWeight={800}
-                dir={isArabicTitle ? "rtl" : "ltr"}
-                sx={{
-                  textAlign: isArabicTitle ? "right" : "left",
-                  wordBreak: "break-word",
-                  lineHeight: 1.3,
-                  fontFamily: isArabicTitle ? '"Cairo", "Segoe UI", Tahoma, Arial, sans-serif' : 'inherit',
-                }}
+                dir={titleDir.dir}
+                sx={{ ...titleDir.style, wordBreak: "break-word", lineHeight: 1.35 }}
               >
                 {displayTitle}
               </Typography>
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.25 }}>
-                {job.creationMode === "prompt" ? "Prompt Studio" : (job.templateId || "Template")}
-                {job.brandName ? ` · ${job.brandName}` : ""}
-                {` · ${new Date(job.createdAt).toLocaleDateString()} ${new Date(job.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
-              </Typography>
+              <Stack
+                direction="row"
+                spacing={0.75}
+                alignItems="center"
+                flexWrap="wrap"
+                sx={{ mt: 0.5, rowGap: 0.5 }}
+              >
+                {facts.map((fact) => (
+                  <Chip key={fact} label={fact} size="small" variant="outlined" />
+                ))}
+                <Typography variant="caption" color="text.secondary">
+                  {format.relative(job.createdAt)}
+                </Typography>
+              </Stack>
             </Box>
-            <StatusBadge status={job.status} />
+            <StatusBadge status={job.customerStatus || job.status} />
           </Stack>
 
-          {/* Progress Section: Stage & Percentage */}
-          <Stack spacing={0.5}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography variant="caption" fontWeight={700} color="text.secondary">
-                {getStageLabel(job.currentStage)}
-              </Typography>
-              <Typography variant="caption" fontWeight={800} color="primary.main">
-                {job.progress}%
-              </Typography>
+          {/* Progress is only meaningful while the job is moving. A finished
+              production showing a full bar is noise on every card. */}
+          {isActive && (
+            <Stack spacing={0.5}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                  {t(localizedStatus(job.currentStage || job.status).key)}
+                </Typography>
+                <Typography variant="caption" fontWeight={650} color="primary.main">
+                  {format.percent(Math.min(100, Math.max(0, job.progress)) / 100)}
+                </Typography>
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={Math.min(100, Math.max(0, job.progress))}
+                sx={{ height: 5, borderRadius: 3 }}
+              />
             </Stack>
-            <LinearProgress
-              variant="determinate"
-              value={Math.min(100, Math.max(0, job.progress))}
-              color={job.status === "failed" ? "error" : "primary"}
-              sx={{ height: 5, borderRadius: 3 }}
-            />
-          </Stack>
+          )}
 
-          {/* Footer: Latest update/error */}
-          {job.error && (
-            <Typography variant="caption" color="error.main" sx={{ display: "block", wordBreak: "break-word" }}>
-              Issue: {job.error}
+          {job.status === "failed" && job.error && (
+            <Typography
+              variant="caption"
+              color="error.main"
+              sx={{ display: "block", wordBreak: "break-word" }}
+            >
+              {job.error}
             </Typography>
+          )}
+
+          {(onPreview || onViewError) && (
+            <Stack direction="row" spacing={1}>
+              {job.status === "ready" && onPreview && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPreview();
+                  }}
+                >
+                  {t("common.preview")}
+                </Button>
+              )}
+              {job.status === "failed" && onViewError && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="error"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onViewError();
+                  }}
+                >
+                  {t("dashboard.recentProductions.viewError")}
+                </Button>
+              )}
+            </Stack>
           )}
         </Stack>
       </CardContent>
@@ -552,15 +659,15 @@ export function RecentJobCard({
   );
 }
 
-// ============================================================================
 // SKELETONS & LOADING STATES
 // ============================================================================
 
-export function LoadingState({ label = "Loading..." }: { label?: string }) {
+export function LoadingState({ label }: { label?: string }) {
+  const { t } = useI18n();
   return (
     <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ minHeight: 260 }}>
       <CircularProgress size={28} />
-      <Typography color="text.secondary" fontWeight={500}>{label}</Typography>
+      <Typography color="text.secondary">{label || t("common.loading")}</Typography>
     </Stack>
   );
 }
@@ -692,7 +799,7 @@ export function ConfirmDialog({
   open,
   title,
   description,
-  confirmLabel = "Confirm",
+  confirmLabel,
   onClose,
   onConfirm,
 }: {
@@ -703,16 +810,17 @@ export function ConfirmDialog({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
-      <DialogTitle fontWeight={800}>{title}</DialogTitle>
+      <DialogTitle>{title}</DialogTitle>
       <DialogContent>
-        <Typography color="text.secondary">{description}</Typography>
+        <Typography variant="body2" color="text.secondary">{description}</Typography>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose}>{t("common.cancel")}</Button>
         <Button variant="contained" color="error" onClick={onConfirm}>
-          {confirmLabel}
+          {confirmLabel || t("common.confirm")}
         </Button>
       </DialogActions>
     </Dialog>
@@ -755,10 +863,15 @@ export function FilterTabs({
   options: string[];
   onChange: (value: string) => void;
 }) {
+  const { t } = useI18n();
   return (
     <Tabs value={value} onChange={(_, next) => onChange(next)} variant="scrollable" allowScrollButtonsMobile>
       {options.map((option) => (
-        <Tab key={option} value={option} label={getJobStatusLabel(option)} sx={{ textTransform: "capitalize", fontWeight: 700 }} />
+        <Tab
+          key={option}
+          value={option}
+          label={option === "all" ? t("common.all") : t(localizedStatus(option).key)}
+        />
       ))}
     </Tabs>
   );
@@ -769,10 +882,12 @@ export function ActionMenu({
 }: {
   items: Array<{ label: string; onClick: () => void; disabled?: boolean }>;
 }) {
+  const { t } = useI18n();
+  const moreActionsLabel = t("common.moreActions");
   const [anchor, setAnchor] = React.useState<null | HTMLElement>(null);
   return (
     <>
-      <IconButton aria-label="More actions" onClick={(event) => setAnchor(event.currentTarget)}>
+      <IconButton aria-label={moreActionsLabel} onClick={(event) => setAnchor(event.currentTarget)}>
         <MoreVertIcon />
       </IconButton>
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>

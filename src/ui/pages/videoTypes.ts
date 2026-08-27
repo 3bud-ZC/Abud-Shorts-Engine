@@ -8,6 +8,7 @@
  */
 
 export type VideoTypeId =
+  | "auto"
   | "social_ad"
   | "product_ad"
   | "animated_explainer"
@@ -30,8 +31,16 @@ export type VideoTypeEntry = {
 
 export const VIDEO_TYPES: VideoTypeEntry[] = [
   {
+    id: "auto",
+    label: "Auto",
+    mode: "auto_hybrid",
+    description: "Let the Creative Director choose the best treatment from the prompt and available providers.",
+    suggestedVisualMode: "auto",
+    suggestedCaptionStyle: "social_ad",
+  },
+  {
     id: "social_ad",
-    label: "Social Ad",
+    label: "Social / Reel",
     mode: "social_viral",
     description: "Fast hook, quick cuts, strong call to action. Best for Reels, Shorts and TikTok.",
     suggestedVisualMode: "auto",
@@ -105,13 +114,17 @@ export function videoTypeById(id: string): VideoTypeEntry | undefined {
 
 /** Friendly caption-style names, so raw style ids never reach normal UX. */
 export const CAPTION_STYLE_LABELS: Record<string, string> = {
-  social_ad: "Social Ad",
-  clean_professional: "Clean Professional",
+  social_ad: "Bold Social",
+  clean_professional: "Clean",
   minimal: "Minimal",
-  kinetic_phrase: "Kinetic Phrase",
+  kinetic_phrase: "Bold Social",
   karaoke: "Karaoke",
   legacy_cairo: "Legacy",
   none: "No captions",
+  cinematic: "Cinematic",
+  viral_bold: "Bold Social",
+  clean: "Clean",
+  bold: "Bold Social",
 };
 
 /** Friendly font names, matched to the caption style's own font. */
@@ -125,10 +138,10 @@ export const CAPTION_FONT_LABELS: Record<string, string> = {
 };
 
 export const VISUAL_MODE_LABELS: Record<string, string> = {
-  auto: "Auto Hybrid",
-  stock: "Stock footage",
-  ai: "AI generated",
-  hybrid: "Hybrid",
+  auto: "Auto Best",
+  stock: "Stock",
+  ai: "AI Generated",
+  hybrid: "Mixed",
   motion_graphics: "Motion graphics",
   animated_explainer: "Animated explainer",
   product_ad: "Product composition",
@@ -137,8 +150,17 @@ export const VISUAL_MODE_LABELS: Record<string, string> = {
 };
 
 export const QUALITY_LABELS: Record<string, string> = {
-  draft: "Draft — fastest",
-  standard: "Standard — recommended",
-  premium: "Premium — best quality",
-  max_quality_local: "Maximum — slowest",
+  draft: "Fast — 720p render, quickest local production",
+  standard: "Balanced — 1080p render, normal media intelligence",
+  high: "High — richer pacing and multi-asset scene search",
+  premium: "Premium — configured premium services",
+  max_quality_local: "Maximum — 1080p render plus strongest local quality processors available",
 };
+
+/**
+ * The durations the studio offers, shortest first. Settings and the Create page
+ * share this list so a saved default is always selectable on both screens - an
+ * option offered in one place but missing from the other renders an empty
+ * Select and hides the value the user actually chose.
+ */
+export const DURATION_OPTIONS = [10, 15, 20, 30, 60];

@@ -122,24 +122,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The application image is built in two stages, exactly as it is locally:
-      # a base with the whisper build and the runtime dependencies, then the
-      # ABUD layer on top. BASE_IMAGE keeps the second stage reproducible in CI.
-      - name: Build the base image
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --file main-tiny.Dockerfile \
-            --tag abud-shorts-engine-base:${{ steps.identity.outputs.version }} \
-            --load \
-            .
-
+      # v2.Dockerfile is self-contained: it builds whisper.cpp, the Node
+      # dependencies, the compiled bundle and the Python quality runtime in
+      # its own stages. CI therefore runs the same single build a developer
+      # runs locally, with no separately-tagged base image to keep in step.
       - name: Build the application image
         run: |
           docker buildx build \
             --platform linux/amd64 \
             --file v2.Dockerfile \
-            --build-arg BASE_IMAGE=abud-shorts-engine-base:${{ steps.identity.outputs.version }} \
             --tag ${{ steps.identity.outputs.image }}:${{ steps.identity.outputs.version }} \
             --label "org.opencontainers.image.title=ABUD Shorts Engine" \
             --label "org.opencontainers.image.description=Client-installed short-video production system" \

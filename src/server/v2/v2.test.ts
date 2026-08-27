@@ -10,7 +10,12 @@ import { ShortCreator } from "../../short-creator/ShortCreator";
 import { Server } from "../server";
 import { listVideoFiles, mergeMetadata, readMetadata, writeMetadata } from "../videoMetadata";
 import { validatePexelsProvider } from "./health";
-import { createV2InternalRouter, createV2PublicRouter } from "./routes";
+import {
+  createV2InternalRouter,
+  createV2PublicRouter,
+  serializeMediaAssetForApi,
+  serializeProductMediaForApi,
+} from "./routes";
 import { isValidJobTransition, JobService, sanitizeIdempotencyKey } from "./jobs";
 import {
   assertPathInside,
@@ -56,6 +61,8 @@ class FakeDb {
   public events: any[] = [];
   public assets: any[] = [];
   public brands = new Map<string, any>();
+  public templates = new Map<string, any>();
+  public templatePreferences = new Map<string, any>();
   public settings = new Map<string, any>();
 
   async query(text: string, values: any[] = []) {
@@ -67,8 +74,20 @@ class FakeDb {
       this.settings.set(values[0], values[1]);
       return [{ key: values[0], value: values[1], updated_at: new Date() }];
     }
+    if (text.includes("SELECT count(*) as count FROM jobs WHERE brand_name")) {
+      return [{ count: "0" }];
+    }
+    if (text.includes("SELECT revisions FROM brands WHERE id")) {
+      const row = this.brands.get(values[0]);
+      return row ? [{ revisions: row.revisions || [] }] : [];
+    }
+    if (text.includes("SELECT * FROM brands WHERE id")) {
+      const row = this.brands.get(values[0]);
+      return row ? [row] : [];
+    }
     if (text.includes("SELECT * FROM brands")) {
-      return Array.from(this.brands.values());
+      const includeArchived = values[0] === true;
+      return Array.from(this.brands.values()).filter((row) => includeArchived || !row.archived_at);
     }
     if (text.includes("UPDATE brands SET is_default = false WHERE id <>")) {
       for (const [id, row] of this.brands) {
@@ -82,6 +101,8 @@ class FakeDb {
     }
     if (text.includes("INSERT INTO brands")) {
       const now = new Date();
+      const defaultIndex = values.length === 26 ? 10 : -1;
+      const offset = values.length === 26 ? 0 : -1;
       const row = {
         id: values[0],
         name: values[1],
@@ -92,19 +113,48 @@ class FakeDb {
         include_outro: values[6],
         outro_text: values[7],
         contact_text: values[8],
-        voice_profile: values.length > 10 ? values[9] : null,
-        is_default: values.length > 10 ? values[10] : values[9],
+        voice_profile: values[9] ? JSON.parse(values[9]) : null,
+        is_default: defaultIndex >= 0 ? values[defaultIndex] : false,
+        secondary_color: values[11 + offset] || null,
+        logo_url: values[12 + offset] || null,
+        website_url: values[13 + offset] || null,
+        social_handle: values[14 + offset] || null,
+        description: values[15 + offset] || null,
+        industry: values[16 + offset] || null,
+        tagline: values[17 + offset] || null,
+        logo_asset_id: values[18 + offset] || null,
+        icon_asset_id: values[19 + offset] || null,
+        background_color: values[20 + offset] || null,
+        text_color: values[21 + offset] || null,
+        heading_font: values[22 + offset] || null,
+        body_font: values[23 + offset] || null,
+        caption_font: values[24 + offset] || null,
+        kit: values[25 + offset] ? JSON.parse(values[25 + offset]) : {},
+        revision: 1,
+        revisions: [],
+        archived_at: null,
         created_at: now,
         updated_at: now,
       };
       this.brands.set(row.id, row);
       return [row];
     }
+    if (text.includes("UPDATE brands SET revisions")) {
+      const row = this.brands.get(values[0]);
+      if (row) row.revisions = JSON.parse(values[1]);
+      return [];
+    }
     if (text.includes("UPDATE brands") && text.includes("RETURNING *")) {
       const row = this.brands.get(values[0]);
       if (!row) return [];
       if (text.includes("SET is_default = true")) {
         row.is_default = true;
+        row.archived_at = null;
+      } else if (text.includes("SET archived_at = now()")) {
+        row.archived_at = new Date();
+        row.is_default = false;
+      } else if (text.includes("SET archived_at = NULL")) {
+        row.archived_at = null;
       } else {
         row.name = values[1];
         row.watermark_text = values[2];
@@ -114,8 +164,26 @@ class FakeDb {
         row.include_outro = values[6];
         row.outro_text = values[7];
         row.contact_text = values[8];
-        row.voice_profile = values.length > 10 ? values[9] : null;
-        row.is_default = values.length > 10 ? values[10] : values[9];
+        row.voice_profile = values[9] ? JSON.parse(values[9]) : null;
+        row.is_default = values[10];
+        row.secondary_color = values[11] || null;
+        row.logo_url = values[12] || null;
+        row.website_url = values[13] || null;
+        row.social_handle = values[14] || null;
+        row.description = values[15] || null;
+        row.industry = values[16] || null;
+        row.tagline = values[17] || null;
+        row.logo_asset_id = values[18] || null;
+        row.icon_asset_id = values[19] || null;
+        row.background_color = values[20] || null;
+        row.text_color = values[21] || null;
+        row.heading_font = values[22] || null;
+        row.body_font = values[23] || null;
+        row.caption_font = values[24] || null;
+        row.kit = values[25] ? JSON.parse(values[25]) : {};
+        row.revision = values[26] || row.revision;
+        row.revisions = values[27] ? JSON.parse(values[27]) : row.revisions;
+        row.archived_at = values[28] === true ? row.archived_at : null;
       }
       row.updated_at = new Date();
       return [row];
@@ -124,6 +192,67 @@ class FakeDb {
       const row = this.brands.get(values[0]);
       if (!row) return [];
       this.brands.delete(values[0]);
+      return [row];
+    }
+    if (text.includes("SELECT * FROM video_template_preferences")) {
+      return Array.from(this.templatePreferences.values());
+    }
+    if (text.includes("INSERT INTO video_template_preferences")) {
+      const row = { template_id: values[0], favorite: values[1], updated_at: new Date() };
+      this.templatePreferences.set(row.template_id, row);
+      return [row];
+    }
+    if (text.includes("SELECT * FROM video_templates WHERE id")) {
+      const row = this.templates.get(values[0]);
+      return row ? [row] : [];
+    }
+    if (text.includes("SELECT * FROM video_templates")) {
+      const includeArchived = values[0] === true;
+      return Array.from(this.templates.values()).filter((row) => includeArchived || !row.archived_at);
+    }
+    if (text.includes("INSERT INTO video_templates")) {
+      const now = new Date();
+      const row = {
+        id: values[0],
+        name: values[1],
+        description: values[2],
+        category: values[3],
+        source: "custom",
+        base_template_id: values[4] || null,
+        favorite: values[5] === true,
+        archived_at: text.includes("archived_at") && values[6] ? new Date(values[6]) : null,
+        revision: 1,
+        config: JSON.parse(text.includes("archived_at") ? values[7] : values[5]),
+        variables: JSON.parse(text.includes("archived_at") ? values[8] : values[6]),
+        revisions: JSON.parse(text.includes("archived_at") ? values[9] : values[7]),
+        created_at: now,
+        updated_at: now,
+      };
+      this.templates.set(row.id, row);
+      return [row];
+    }
+    if (text.includes("UPDATE video_templates") && text.includes("RETURNING *")) {
+      const row = this.templates.get(values[0]);
+      if (!row) return [];
+      if (text.includes("SET favorite = $2")) {
+        row.favorite = values[1] === true;
+      } else if (text.includes("SET archived_at = now()")) {
+        row.archived_at = new Date();
+      } else if (text.includes("SET archived_at = NULL")) {
+        row.archived_at = null;
+      } else {
+        row.name = values[1];
+        row.description = values[2];
+        row.category = values[3];
+        row.base_template_id = values[4] || null;
+        row.favorite = values[5] === true;
+        row.archived_at = values[6] === true ? row.archived_at || new Date() : null;
+        row.revision = values[7];
+        row.config = JSON.parse(values[8]);
+        row.variables = JSON.parse(values[9]);
+        row.revisions = JSON.parse(values[10]);
+      }
+      row.updated_at = new Date();
       return [row];
     }
     if (text.includes("INSERT INTO jobs")) {
@@ -205,6 +334,16 @@ class FakeDb {
     }
     if (text.includes("SELECT * FROM jobs WHERE status")) {
       return Array.from(this.jobs.values()).filter((job) => job.status === values[0]);
+    }
+    if (text.includes("SELECT status, count(*)") && text.includes("FROM jobs")) {
+      const counts = new Map<string, number>();
+      for (const job of this.jobs.values()) {
+        counts.set(job.status, (counts.get(job.status) || 0) + 1);
+      }
+      return Array.from(counts.entries()).map(([status, count]) => ({ status, count }));
+    }
+    if (text.includes("count(*)::int AS count FROM jobs WHERE created_at")) {
+      return [{ count: this.jobs.size }];
     }
     if (text.includes("SELECT * FROM jobs ORDER BY")) {
       return Array.from(this.jobs.values());
@@ -390,6 +529,69 @@ describe("V2 routes", () => {
     await request(app).post("/internal/v1/render/jobs/test/start").send({}).expect(401);
   });
 
+  it("keeps media API responses free of internal storage details", () => {
+    const asset = serializeMediaAssetForApi({
+      id: "asset_1",
+      filename: "asset.png",
+      originalName: "asset.png",
+      displayName: "Reference image",
+      mediaType: "image",
+      purpose: "character_reference",
+      mimeType: "image/png",
+      sizeBytes: 1024,
+      width: 1024,
+      height: 1024,
+      checksum: "private-checksum",
+      storagePath: "C:\\private\\uploads\\asset.png",
+      relativePath: "uploads/asset.png",
+      previewUrl: "/media/uploads/asset.png",
+      folderId: "folder_1",
+      tags: ["hero"],
+      status: "ready",
+      usable: true,
+      usageCount: 0,
+      createdAt: "2026-08-27T00:00:00.000Z",
+      updatedAt: "2026-08-27T00:00:00.000Z",
+      uploadedAt: "2026-08-27T00:00:00.000Z",
+      nobgArtifactId: "artifact_private",
+      nobgRelativePath: "uploads/asset-nobg.png",
+      usability: {
+        usableForVideo: true,
+        usableForProduct: true,
+        usableForLogo: true,
+        usableForCharacterReference: true,
+        reasons: {},
+      },
+    });
+
+    const product = serializeProductMediaForApi({
+      id: "product_1",
+      filename: "product.png",
+      originalName: "Product",
+      mimeType: "image/png",
+      sizeBytes: 2048,
+      width: 1200,
+      height: 1200,
+      checksum: "private-product-checksum",
+      storagePath: "/app/data/uploads/product.png",
+      relativePath: "uploads/product.png",
+      uploadedAt: "2026-08-27T00:00:00.000Z",
+      nobgArtifactId: "product_artifact_private",
+      nobgRelativePath: "uploads/product-nobg.png",
+      usable: true,
+    });
+
+    const body = JSON.stringify({ asset, product });
+    expect(asset.previewUrl).toBe("/media/uploads/asset.png");
+    expect(body).not.toContain("storagePath");
+    expect(body).not.toContain("relativePath");
+    expect(body).not.toContain("checksum");
+    expect(body).not.toContain("nobgArtifactId");
+    expect(body).not.toContain("nobgRelativePath");
+    expect(body).not.toContain("C:\\");
+    expect(body).not.toContain("/app/data");
+  });
+
   it("validates public job payloads and redacts settings secrets", async () => {
     const config = makeConfig();
     const db = new FakeDb();
@@ -455,6 +657,206 @@ describe("V2 routes", () => {
     expect(res.body.job.productionSpec).toBeDefined();
   });
 
+  it("accepts prompt-only creation and resolves safe automatic defaults", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 10-second vertical Reel about three quick ways to make a small business website look more professional.",
+      })
+      .expect(201);
+
+    expect(res.body.job.creationMode).toBe("prompt");
+    expect(res.body.job.productionSpec.durationSeconds).toBeGreaterThanOrEqual(5);
+    expect(res.body.job.productionSpec.visualMode).toBe("auto");
+    expect(res.body.job.productionSpec.voiceProvider).toBe("kokoro");
+    expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_best");
+  });
+
+  it("supports captions off without requiring caption artifacts", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 10-second English Reel about a cleaner homepage.",
+        language: "en",
+        captionEnabled: false,
+      })
+      .expect(201);
+
+    expect(res.body.job.productionSpec.captionStyle).toBe("none");
+    expect(res.body.job.productionSpec.metadata.uiContract.captionEnabled).toBe(false);
+  });
+
+  it("blocks stock-only creation when no selected stock provider is configured", async () => {
+    const previousPexels = process.env.PEXELS_API_KEY;
+    delete process.env.PEXELS_API_KEY;
+    const config = makeConfig();
+    config.pexelsApiKey = "";
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create an English stock-only Reel about a restaurant offer.",
+        language: "en",
+        visualSource: "stock",
+        stockProvider: "pexels",
+      })
+      .expect(409);
+
+    expect(res.body.error).toBe("production_not_runnable");
+    expect(res.body.message).toMatch(/Stock provider required/i);
+
+    if (previousPexels === undefined) delete process.env.PEXELS_API_KEY;
+    else process.env.PEXELS_API_KEY = previousPexels;
+  });
+
+  it("blocks uploaded-media-only creation until usable media is selected", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create an English Reel using only my uploaded product media.",
+        language: "en",
+        visualSource: "uploaded_media",
+        mediaPolicy: "only_selected",
+      })
+      .expect(409);
+
+    expect(res.body.error).toBe("production_not_runnable");
+    expect(res.body.message).toMatch(/Select usable media/i);
+  });
+
+  it("locks AI Generated visuals when no AI video provider is configured", async () => {
+    const previousVeo = process.env.VEO_API_KEY;
+    const previousGoogle = process.env.GOOGLE_AI_API_KEY;
+    const previousFal = process.env.FAL_KEY;
+    delete process.env.VEO_API_KEY;
+    delete process.env.GOOGLE_AI_API_KEY;
+    delete process.env.FAL_KEY;
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create an English Reel with AI generated visuals.",
+        language: "en",
+        visualSource: "ai_generated",
+      })
+      .expect(409);
+
+    expect(res.body.message).toMatch(/AI video provider/i);
+
+    if (previousVeo === undefined) delete process.env.VEO_API_KEY;
+    else process.env.VEO_API_KEY = previousVeo;
+    if (previousGoogle === undefined) delete process.env.GOOGLE_AI_API_KEY;
+    else process.env.GOOGLE_AI_API_KEY = previousGoogle;
+    if (previousFal === undefined) delete process.env.FAL_KEY;
+    else process.env.FAL_KEY = previousFal;
+  });
+
+  it("blocks Stock Only when a Character Profile is selected", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .get("/api/v2/system/readiness")
+      .set(authHeader)
+      .query({
+        productionMode: "auto_hybrid",
+        visualSource: "stock",
+        stockProvider: "pexels",
+        characterProfileId: "char_missing",
+        language: "en",
+      })
+      .expect(200);
+
+    expect(res.body.ready).toBe(false);
+    expect(res.body.characterConsistencyAvailable).toBe(false);
+    expect(res.body.missingRequirements.join(" ")).toMatch(/Stock footage cannot guarantee/i);
+  });
+
+  it("reports reference capability only through the hidden compatible test provider", async () => {
+    const previous = process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER;
+    process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER = "true";
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .get("/api/v2/system/readiness")
+      .set(authHeader)
+      .query({
+        productionMode: "auto_hybrid",
+        visualSource: "mixed",
+        characterProfileId: "char_missing",
+        language: "en",
+      })
+      .expect(200);
+
+    expect(res.body.characterConsistencyAvailable).toBe(true);
+    expect(res.body.capabilities.find((cap: any) => cap.id === "character_reference_provider")?.ready).toBe(true);
+    expect(res.body.missingRequirements.join(" ")).toMatch(/active Character Profile/i);
+
+    if (previous === undefined) delete process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER;
+    else process.env.ABUD_TEST_REFERENCE_VISUAL_PROVIDER = previous;
+  });
+
+  it("keeps a generic Auto Reel out of geometric motion graphics by default", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const preview = await request(app)
+      .post("/api/v2/production-spec/preview")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 10-second vertical Reel about three quick ways to make a small business website look more professional.",
+        language: "en",
+      })
+      .expect(200);
+
+    expect(preview.body.spec.productionMode).not.toBe("motion_graphics");
+    expect(preview.body.spec.productionMode).not.toBe("animated_explainer");
+    expect(preview.body.spec.scenes.map((scene: any) => scene.visualSource)).not.toContain("motion_graphics");
+  });
+
   it("lists categorized providers and tests connection endpoints", async () => {
     nock("http://127.0.0.1:1").get("/healthz").reply(200, { ok: true });
     nock("http://127.0.0.1:1").get("/health").reply(200, { ok: true });
@@ -468,6 +870,12 @@ describe("V2 routes", () => {
     expect(res.body.providers.some((p: any) => p.category === "Content AI")).toBe(true);
     expect(res.body.providers.some((p: any) => p.category === "Visuals")).toBe(true);
     expect(res.body.providers.some((p: any) => p.category === "Voice")).toBe(true);
+    const pexels = res.body.providers.find((p: any) => p.id === "pexels");
+    const veo = res.body.providers.find((p: any) => p.id === "veo");
+    const fal = res.body.providers.find((p: any) => p.id === "fal");
+    expect(pexels.details.visualCapabilities.referenceImage).toBe(false);
+    expect(veo.details.visualCapabilities.referenceImage).toBe(false);
+    expect(fal.details.visualCapabilities.nativeCharacterIdentity).toBe(false);
 
     const valGemini = await request(app).post("/api/v2/providers/gemini/validate").set(authHeader).expect(200);
     expect(valGemini.body.provider).toBe("Google Gemini");
@@ -606,6 +1014,8 @@ describe("V2 routes", () => {
     await request(app).delete(`/api/v2/brands/${created.body.brand.id}`).set(authHeader).expect(200);
     const empty = await request(app).get("/api/v2/brands").set(authHeader).expect(200);
     expect(empty.body.brands).toHaveLength(0);
+    const archived = await request(app).get("/api/v2/brands?includeArchived=true").set(authHeader).expect(200);
+    expect(archived.body.brands[0].archived).toBe(true);
   });
 
   it("serves backend template definitions through V2", async () => {
@@ -616,6 +1026,168 @@ describe("V2 routes", () => {
 
     const response = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
     expect(response.body.templates.some((template: any) => template.id === "product_ad")).toBe(true);
+  });
+
+  it("creates, resolves, favorites, archives, and restores reusable video templates", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const favorite = await request(app)
+      .post("/api/v2/templates/product_ad/favorite")
+      .set(authHeader)
+      .send({ favorite: true })
+      .expect(200);
+    expect(favorite.body.template.favorite).toBe(true);
+
+    const created = await request(app)
+      .post("/api/v2/templates")
+      .set(authHeader)
+      .send({
+        name: "Launch Offer",
+        description: "Reusable launch offer template",
+        category: "promotional",
+        favorite: true,
+        config: {
+          durationSeconds: 15,
+          visualSource: "stock",
+          captionStyle: "social_ad",
+          promptGuidance: "Launch {{productName}} with {{offer}}.",
+        },
+        variables: [
+          { key: "productName", label: "Product", type: "text", required: true },
+          { key: "offer", label: "Offer", type: "text", required: true },
+        ],
+      })
+      .expect(201);
+    expect(created.body.template.custom).toBe(true);
+    expect(created.body.template.revision).toBe(1);
+
+    const resolved = await request(app)
+      .post(`/api/v2/templates/${created.body.template.id}/resolve`)
+      .set(authHeader)
+      .send({ variables: { productName: "ABUD Studio", offer: "20% off" } })
+      .expect(200);
+    expect(resolved.body.resolvedConfig.promptGuidance).toContain("ABUD Studio");
+    expect(resolved.body.snapshot.resolvedVariables.offer).toBe("20% off");
+
+    await request(app)
+      .delete(`/api/v2/templates/${created.body.template.id}`)
+      .set(authHeader)
+      .expect(200);
+    const active = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
+    expect(active.body.templates.some((template: any) => template.id === created.body.template.id)).toBe(false);
+
+    await request(app)
+      .post(`/api/v2/templates/${created.body.template.id}/restore`)
+      .set(authHeader)
+      .expect(200);
+    const listed = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
+    expect(listed.body.templates.some((template: any) => template.id === created.body.template.id)).toBe(true);
+  });
+
+  it("serves Productions as a paginated, filtered, customer-safe list", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const now = Date.now();
+    for (let index = 0; index < 8; index += 1) {
+      db.jobs.set(`job_${index}`, {
+        id: `job_${index}`,
+        type: "video",
+        status: index % 2 === 0 ? "failed" : "ready",
+        progress: 100,
+        current_stage: "Ready",
+        title: `Production ${index}`,
+        original_prompt: index === 3 ? "unique kingfisher prompt" : "generic prompt",
+        language: index % 2 === 0 ? "en" : "ar",
+        aspect_ratio: "9:16",
+        creation_mode: "prompt",
+        brand_name: index < 2 ? "ACME" : null,
+        production_spec: {
+          userPrompt: "generic",
+          metadata: { brandSnapshot: { brandName: "ACME", revision: 2 } },
+        },
+        input: { prompt: "x", idempotencyKey: `key_${index}`, secretThing: "do-not-leak" },
+        error: index % 2 === 0 ? "Stock provider is not configured." : null,
+        output: index % 2 === 1 ? { videoId: `job_${index}` } : null,
+        checkpoint: {},
+        stage_timings: {},
+        created_at: new Date(now - index * 60000),
+        updated_at: new Date(now - index * 60000),
+      });
+    }
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const page1 = await request(app).get("/api/v2/jobs?limit=3").set(authHeader).expect(200);
+    expect(page1.body.jobs).toHaveLength(3);
+    expect(page1.body.page.hasMore).toBe(true);
+    expect(page1.body.counts.total).toBe(8);
+    expect(page1.body.counts.needsAttention).toBe(4);
+    // customer-safe: no raw request input, no leaked secret
+    expect(JSON.stringify(page1.body)).not.toContain("do-not-leak");
+    expect(page1.body.jobs[0].input).toBeUndefined();
+    expect(page1.body.jobs[0].customerStatus).toBeTruthy();
+
+    const page2 = await request(app)
+      .get(`/api/v2/jobs?limit=3&cursor=${encodeURIComponent(page1.body.page.nextCursor)}`)
+      .set(authHeader)
+      .expect(200);
+    expect(page2.body.jobs[0].id).not.toBe(page1.body.jobs[0].id);
+
+    const failedOnly = await request(app).get("/api/v2/jobs?group=needs_attention").set(authHeader).expect(200);
+    expect(failedOnly.body.jobs.every((job: any) => job.customerStatus === "needs_attention")).toBe(true);
+    expect(failedOnly.body.jobs[0].failure).toBeTruthy();
+
+    const searched = await request(app).get("/api/v2/jobs?search=kingfisher").set(authHeader).expect(200);
+    expect(searched.body.jobs).toHaveLength(1);
+
+    const detail = await request(app).get("/api/v2/jobs/job_1").set(authHeader).expect(200);
+    expect(detail.body.timeline).toBeTruthy();
+    expect(detail.body.job.input).toBeUndefined();
+    expect(detail.body.job.snapshots.brand.revision).toBe(2);
+  });
+
+  it("scrubs file:// and absolute artifact paths out of a Production Details response", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    db.jobs.set("job_leak", {
+      id: "job_leak",
+      type: "video",
+      status: "ready",
+      progress: 100,
+      current_stage: "Ready",
+      title: "Leak check",
+      original_prompt: "x",
+      language: "en",
+      aspect_ratio: "9:16",
+      creation_mode: "prompt",
+      production_spec: {
+        userPrompt: "x",
+        scenes: [{ mediaSegments: [{ url: "file:///app/data/artifacts/motion/motion_a.png" }] }],
+      },
+      input: { prompt: "x" },
+      output: { videoId: "job_leak", path: "/app/data/videos/job_leak.mp4", previewUrl: "/api/short-video/job_leak" },
+      checkpoint: { render: { status: "completed", artifacts: { file: "file:///app/data/artifacts/render/out.mp4" } } },
+      stage_timings: {},
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const detail = await request(app).get("/api/v2/jobs/job_leak").set(authHeader).expect(200);
+    const serialized = JSON.stringify(detail.body);
+    expect(serialized).not.toContain("file://");
+    expect(serialized).not.toContain("/app/data");
+    // useful fields survive
+    expect(detail.body.job.output.videoId).toBe("job_leak");
+    expect(detail.body.job.output.previewUrl).toBe("/api/short-video/job_leak");
+    expect(detail.body.job.output.path).toBeUndefined();
   });
 });
 

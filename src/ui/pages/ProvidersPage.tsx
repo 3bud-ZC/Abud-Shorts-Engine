@@ -15,17 +15,17 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SettingsIcon from "@mui/icons-material/Settings";
 import {
   LoadingState,
   PageHeader,
-  ProviderStatus,
   SectionCard,
   StatusBadge,
 } from "../components/v2";
 import type { ProviderItem } from "./v2Types";
+import { useI18n } from "../i18n";
+import { localizedStatus } from "../i18n/status";
 
 type DiscoveredVoice = {
   id: string;
@@ -48,7 +48,22 @@ type VoiceLabConfig = {
   defaultArabicVoice?: { voiceId: string; voiceName?: string; preset?: string; selectedAt?: string } | null;
 };
 
+/** Backend provider category → i18n key stems (heading + description). */
+const CATEGORY_KEY: Record<string, { label: string; desc: string }> = {
+  "Content AI": { label: "providers.category.contentAi", desc: "providers.categoryDesc.contentAi" },
+  Visuals: { label: "providers.category.visuals", desc: "providers.categoryDesc.visuals" },
+  Voice: { label: "providers.category.voice", desc: "providers.categoryDesc.voice" },
+  Captions: { label: "providers.category.captions", desc: "providers.categoryDesc.captions" },
+  Renderer: { label: "providers.category.renderer", desc: "providers.categoryDesc.default" },
+  Motion: { label: "providers.category.motion", desc: "providers.categoryDesc.default" },
+  "Post Production": { label: "providers.category.postProduction", desc: "providers.categoryDesc.default" },
+  "AI GPU": { label: "providers.category.aiGpu", desc: "providers.categoryDesc.default" },
+  Publishing: { label: "providers.category.publishing", desc: "providers.categoryDesc.default" },
+  Infrastructure: { label: "providers.category.infrastructure", desc: "providers.categoryDesc.default" },
+};
+
 const ProvidersPage: React.FC = () => {
+  const { t: tr, format } = useI18n();
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +91,36 @@ const ProvidersPage: React.FC = () => {
   const [defaultArabicVoiceId, setDefaultArabicVoiceId] = useState("");
   const [browseOnly, setBrowseOnly] = useState(false);
 
+  const categoryLabel = (category: string) =>
+    CATEGORY_KEY[category] ? tr(CATEGORY_KEY[category].label) : category;
+  const categoryDescription = (category: string) =>
+    tr(CATEGORY_KEY[category]?.desc || "providers.categoryDesc.default");
+
+  /**
+   * The provider description line. The `/api/v2/providers` endpoint emits raw
+   * developer strings here (env-var names, "GEMINI_API_KEY is not configured"),
+   * which must never reach a customer screen. We derive a localised line from
+   * the status the same endpoint reports instead.
+   */
+  const providerDescription = (provider: ProviderItem): string => {
+    const builtIn = ["local_ai", "kokoro", "piper", "whisper_cpp", "remotion", "ffmpeg", "n8n", "postgres"].includes(
+      provider.id || "",
+    );
+    if (builtIn) return tr("providers.msg.builtIn");
+    if (provider.configured === false) return tr("providers.msg.notConfigured");
+    const status = String(provider.status || "").toLowerCase();
+    if (["connected", "live_verified", "verified", "linked"].includes(status)) return tr("providers.msg.connected");
+    if (["healthy", "ready", "ok", "operational", "pass", "available"].includes(status)) return tr("providers.msg.healthy");
+    if (["unhealthy", "unavailable", "provider_unavailable", "offline", "down", "timeout"].includes(status)) {
+      return tr("providers.msg.unavailable");
+    }
+    if (["not_configured", "unconfigured", "missing", "disabled", "none"].includes(status)) {
+      return tr("providers.msg.notConfigured");
+    }
+    if (["configured"].includes(status)) return tr("providers.msg.configured");
+    return tr("providers.msg.needsAttention");
+  };
+
   const load = async () => {
     try {
       const response = await axios.get("/api/v2/providers");
@@ -83,7 +128,7 @@ const ProvidersPage: React.FC = () => {
       setCategories(response.data.categories || []);
       setError(null);
     } catch {
-      setError("Failed to load providers.");
+      setError(tr("providers.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -91,6 +136,7 @@ const ProvidersPage: React.FC = () => {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const grouped = useMemo(() => {
@@ -113,14 +159,14 @@ const ProvidersPage: React.FC = () => {
       const response = await axios.post(`/api/v2/providers/${slug}/validate`);
       setValidationAlert({
         provider: providerName,
-        message: response.data.message || "Connection test succeeded.",
+        message: response.data.message || tr("providers.testSucceeded"),
         healthy: response.data.healthy ?? (response.data.status === "healthy"),
       });
       await load();
     } catch (err: any) {
       setValidationAlert({
         provider: providerName,
-        message: err?.response?.data?.message || "Validation call failed.",
+        message: err?.response?.data?.message || tr("providers.testCallFailed"),
         healthy: false,
       });
     } finally {
@@ -156,7 +202,7 @@ const ProvidersPage: React.FC = () => {
       if (warnings.length) setVoiceLabError(warnings.join(" "));
       if (!voiceLabVoiceId && voices.length) setVoiceLabVoiceId(voices[0].id);
     } catch (err: any) {
-      setVoiceLabError(err?.response?.data?.message || "Could not reach ElevenLabs voice discovery.");
+      setVoiceLabError(err?.response?.data?.message || tr("providers.voiceLab.loadFailed"));
     } finally {
       setVoiceLabLoading(false);
     }
@@ -178,7 +224,7 @@ const ProvidersPage: React.FC = () => {
       setVoiceLabError(null);
     } catch (err) {
       setVoiceLabError(
-        (err as any)?.response?.data?.message || "Could not save the default Arabic voice.",
+        (err as any)?.response?.data?.message || tr("providers.voiceLab.saveDefaultFailed"),
       );
     }
   };
@@ -197,7 +243,7 @@ const ProvidersPage: React.FC = () => {
       });
       setVoiceLabAudio(response.data.audioBase64 || null);
     } catch (err: any) {
-      setVoiceLabError(err?.response?.data?.message || "Voice preview failed.");
+      setVoiceLabError(err?.response?.data?.message || tr("providers.voiceLab.previewFailed"));
     } finally {
       setVoiceLabGenerating(false);
     }
@@ -221,7 +267,7 @@ const ProvidersPage: React.FC = () => {
       setCredentialValue("");
       await load();
     } catch (err: any) {
-      setError(err?.response?.data?.message || "Credential save failed.");
+      setError(err?.response?.data?.message || tr("providers.credentialSaveFailed"));
     } finally {
       setSavingCredential(false);
     }
@@ -233,21 +279,21 @@ const ProvidersPage: React.FC = () => {
       await axios.delete(`/api/v2/providers/${provider.id}/credentials`);
       await load();
     } catch (err: any) {
-      setError(err?.response?.data?.message || "Disconnect failed.");
+      setError(err?.response?.data?.message || tr("providers.disconnectFailed"));
     }
   };
 
-  if (loading) return <LoadingState label="Loading provider engine..." />;
+  if (loading) return <LoadingState label={tr("providers.loading")} />;
 
   return (
     <>
       <PageHeader
-        title="Providers"
-        eyebrow="Configuration"
-        description="Review which local, cloud, and premium services are available. Credentials stay server-side and are never shown in the browser."
+        title={tr("providers.title")}
+        eyebrow={tr("providers.eyebrow")}
+        description={tr("providers.description")}
         actions={
           <Button startIcon={<RefreshIcon />} onClick={load}>
-            Refresh Status
+            {tr("common.refresh")}
           </Button>
         }
       />
@@ -266,20 +312,7 @@ const ProvidersPage: React.FC = () => {
       <Grid container spacing={2}>
         {grouped.map(([category, items]) => (
           <Grid item xs={12} key={category}>
-            <SectionCard
-              title={category}
-              description={
-                category === "Content AI"
-                  ? "Script and production planning providers."
-                  : category === "Visuals"
-                    ? "Stock footage and optional AI video providers."
-                    : category === "Voice"
-                      ? "Piper for local Arabic, Kokoro for local English, optional Google Cloud TTS, and premium ElevenLabs."
-                      : category === "Captions"
-                        ? "Caption timing and transcript generation."
-                        : "Rendering, automation, and supporting services."
-              }
-            >
+            <SectionCard title={categoryLabel(category)} description={categoryDescription(category)}>
               <Grid container spacing={2}>
                 {items.map((provider) => (
                   <Grid item xs={12} md={6} xl={4} key={provider.name}>
@@ -287,42 +320,66 @@ const ProvidersPage: React.FC = () => {
                       <Stack spacing={1.5}>
                         <Stack direction="row" justifyContent="space-between" alignItems="center">
                           <Typography variant="h6" fontWeight={800}>{provider.name}</Typography>
-                          <StatusBadge status={provider.status} label={provider.status.replace(/_/g, " ")} />
+                          <StatusBadge status={provider.status} />
                         </Stack>
                         <Typography variant="body2" color="text.secondary">
-                          {provider.message}
+                          {providerDescription(provider)}
                         </Typography>
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                           {provider.isDefault && (
-                            <Chip size="small" color="primary" label="Default" />
+                            <Chip size="small" color="primary" label={tr("providers.badge.default")} />
                           )}
                           {provider.tier && (
                             <Chip
                               size="small"
                               variant="outlined"
-                              label={provider.tier === "cloud_free_tier" ? "CLOUD / FREE TIER AVAILABLE" : provider.tier.toUpperCase()}
+                              label={
+                                provider.tier === "cloud_free_tier"
+                                  ? tr("providers.badge.cloudFreeTier")
+                                  : provider.tier
+                              }
                             />
                           )}
                           {provider.details?.local !== undefined && (
-                            <Chip size="small" variant="outlined" label={provider.details.local ? "LOCAL" : "CLOUD"} />
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={provider.details.local ? tr("providers.badge.local") : tr("providers.badge.cloud")}
+                            />
                           )}
                           {provider.vaultConfigured && (
-                            <Chip size="small" color="success" variant="outlined" label="Vault Configured" />
+                            <Chip
+                              size="small"
+                              color="success"
+                              variant="outlined"
+                              label={tr("providers.badge.vaultConfigured")}
+                            />
                           )}
                           {provider.details?.liveVerified === true && (
-                            <Chip size="small" color="success" label="Live Verified" />
+                            <Chip size="small" color="success" label={tr("providers.badge.liveVerified")} />
                           )}
                           {provider.configured && provider.details?.liveVerified === false && (
-                            <Chip size="small" color="warning" variant="outlined" label="Not Live Verified" />
+                            <Chip
+                              size="small"
+                              color="warning"
+                              variant="outlined"
+                              label={tr("providers.badge.notLiveVerified")}
+                            />
                           )}
                           {typeof provider.details?.accountTier === "string" && (
-                            <Chip size="small" variant="outlined" label={`Tier: ${provider.details.accountTier}`} />
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={tr("providers.badge.tier", { tier: provider.details.accountTier })}
+                            />
                           )}
                           {typeof provider.details?.lastTestedAt === "string" && (
                             <Chip
                               size="small"
                               variant="outlined"
-                              label={`Last Tested: ${new Date(provider.details.lastTestedAt as string).toLocaleString()}`}
+                              label={tr("providers.badge.lastTested", {
+                                time: format.dateTime(provider.details.lastTestedAt as string),
+                              })}
                             />
                           )}
                         </Stack>
@@ -330,7 +387,8 @@ const ProvidersPage: React.FC = () => {
                           <Stack spacing={0.5}>
                             {provider.vault.map((credential) => (
                               <Typography key={credential.credentialType} variant="caption" color="text.secondary">
-                                {credential.credentialType}: {credential.maskedHint || "masked"} · {credential.health}
+                                <Box component="span" dir="ltr">{credential.credentialType}</Box>:{" "}
+                                {credential.maskedHint || "••••"} · {tr(localizedStatus(credential.health).key)}
                               </Typography>
                             ))}
                           </Stack>
@@ -338,24 +396,33 @@ const ProvidersPage: React.FC = () => {
                         {provider.category === "Voice" && provider.details && (
                           <Stack spacing={0.5}>
                             <Typography variant="caption" color="text.secondary">
-                              Languages: {Array.isArray(provider.details.languages) ? provider.details.languages.join(", ") : "unknown"}
+                              {tr("providers.detail.languages", {
+                                list: Array.isArray(provider.details.languages)
+                                  ? provider.details.languages.join("، ")
+                                  : tr("common.unknown"),
+                              })}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                              Arabic: {String(provider.details.arabicSupport || "unknown")} · Egyptian: {String(provider.details.egyptianSupport || "unknown")}
+                              {tr("providers.detail.arabicEgyptian", {
+                                arabic: String(provider.details.arabicSupport || tr("common.unknown")),
+                                egyptian: String(provider.details.egyptianSupport || tr("common.unknown")),
+                              })}
                             </Typography>
                             {provider.details.license && (
                               <Typography variant="caption" color="text.secondary">
-                                License: {String(provider.details.license)}
+                                {tr("providers.detail.license", { value: String(provider.details.license) })}
                               </Typography>
                             )}
                             {provider.details.authentication && (
                               <Typography variant="caption" color="text.secondary">
-                                Authentication: {String(provider.details.authentication)}
+                                {tr("providers.detail.authentication", {
+                                  value: String(provider.details.authentication),
+                                })}
                               </Typography>
                             )}
                             {provider.details.freeTierLabel && (
                               <Typography variant="caption" color="text.secondary">
-                                Tier: {String(provider.details.freeTierLabel)}
+                                {tr("providers.detail.tier", { value: String(provider.details.freeTierLabel) })}
                               </Typography>
                             )}
                             {provider.details.billingNotice && (
@@ -365,7 +432,7 @@ const ProvidersPage: React.FC = () => {
                             )}
                             {Array.isArray(provider.details.voiceFamilies) && provider.details.voiceFamilies.length > 0 && (
                               <Typography variant="caption" color="text.secondary">
-                                Families: {provider.details.voiceFamilies.join(", ")}
+                                {tr("providers.detail.families", { list: provider.details.voiceFamilies.join("، ") })}
                               </Typography>
                             )}
                             {provider.id === "elevenlabs" && (
@@ -373,31 +440,80 @@ const ProvidersPage: React.FC = () => {
                                 <Chip
                                   size="small"
                                   variant="outlined"
-                                  label={`Credential: ${provider.details.credentialStored ? "Stored" : "Not stored"}`}
+                                  label={tr("providers.detail.credential", {
+                                    state: provider.details.credentialStored
+                                      ? tr("providers.detail.credentialStored")
+                                      : tr("providers.detail.credentialNotStored"),
+                                  })}
                                   color={provider.details.credentialStored ? "success" : "default"}
                                 />
                                 <Chip
                                   size="small"
                                   variant="outlined"
-                                  label={`Connection: ${provider.details.authenticated === undefined ? "Not tested" : provider.details.authenticated ? "Authenticated" : "Failed"}`}
-                                  color={provider.details.authenticated ? "success" : provider.details.authenticated === false ? "error" : "default"}
+                                  label={tr("providers.detail.connection", {
+                                    state:
+                                      provider.details.authenticated === undefined
+                                        ? tr("providers.detail.connectionNotTested")
+                                        : provider.details.authenticated
+                                          ? tr("providers.detail.connectionAuthenticated")
+                                          : tr("providers.detail.connectionFailed"),
+                                  })}
+                                  color={
+                                    provider.details.authenticated
+                                      ? "success"
+                                      : provider.details.authenticated === false
+                                        ? "error"
+                                        : "default"
+                                  }
                                 />
                                 <Chip
                                   size="small"
                                   variant="outlined"
-                                  label={`Voices: ${provider.details.voiceDiscoveryAvailable === undefined ? "Not tested" : provider.details.voiceDiscoveryAvailable ? `${provider.details.voicesDiscovered ?? 0} found` : "Restricted"}`}
-                                  color={provider.details.voiceDiscoveryAvailable ? "success" : provider.details.voiceDiscoveryAvailable === false ? "error" : "default"}
+                                  label={tr("providers.detail.voices", {
+                                    state:
+                                      provider.details.voiceDiscoveryAvailable === undefined
+                                        ? tr("providers.detail.voicesNotTested")
+                                        : provider.details.voiceDiscoveryAvailable
+                                          ? tr("providers.detail.voicesFound", {
+                                              count: provider.details.voicesDiscovered ?? 0,
+                                            })
+                                          : tr("providers.detail.voicesRestricted"),
+                                  })}
+                                  color={
+                                    provider.details.voiceDiscoveryAvailable
+                                      ? "success"
+                                      : provider.details.voiceDiscoveryAvailable === false
+                                        ? "error"
+                                        : "default"
+                                  }
                                 />
                                 <Chip
                                   size="small"
                                   variant="outlined"
-                                  label={`TTS: ${provider.details.ttsReady === undefined ? "Not tested" : provider.details.ttsReady ? "Ready" : "Not ready"}`}
-                                  color={provider.details.ttsReady ? "success" : provider.details.ttsReady === false ? "warning" : "default"}
+                                  label={tr("providers.detail.tts", {
+                                    state:
+                                      provider.details.ttsReady === undefined
+                                        ? tr("providers.detail.ttsNotTested")
+                                        : provider.details.ttsReady
+                                          ? tr("providers.detail.ttsReady")
+                                          : tr("providers.detail.ttsNotReady"),
+                                  })}
+                                  color={
+                                    provider.details.ttsReady
+                                      ? "success"
+                                      : provider.details.ttsReady === false
+                                        ? "warning"
+                                        : "default"
+                                  }
                                 />
                                 <Chip
                                   size="small"
                                   variant={provider.details.liveVerified ? "filled" : "outlined"}
-                                  label={provider.details.liveVerified ? "Live Verified" : "Not live-verified"}
+                                  label={
+                                    provider.details.liveVerified
+                                      ? tr("providers.badge.liveVerified")
+                                      : tr("providers.badge.notLiveVerified")
+                                  }
                                   color={provider.details.liveVerified ? "success" : "default"}
                                 />
                               </Stack>
@@ -411,21 +527,25 @@ const ProvidersPage: React.FC = () => {
                               return (
                                 <Typography variant="caption" color="error.main">
                                   {String(errorDetail.upstreamMessage || errorDetail.category)}
-                                  {errorDetail.requestId ? ` (request ${errorDetail.requestId})` : ""}
+                                  {errorDetail.requestId
+                                    ? ` ${tr("providers.detail.requestId", { id: errorDetail.requestId })}`
+                                    : ""}
                                 </Typography>
                               );
                             })()}
                           </Stack>
                         )}
                         <Divider />
-                        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} flexWrap="wrap">
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap>
                           {provider.credentialTypes && provider.credentialTypes.length > 0 && !["local_ai", "kokoro", "piper", "whisper_cpp", "remotion", "ffmpeg", "n8n", "postgres"].includes(provider.id || "") && (
                             <Button
                               size="small"
                               startIcon={<SettingsIcon />}
                               onClick={() => openCredentialDialog(provider)}
                             >
-                              {provider.vaultConfigured ? "Replace Credentials" : "Configure"}
+                              {provider.vaultConfigured
+                                ? tr("providers.replaceCredentials")
+                                : tr("common.configure")}
                             </Button>
                           )}
                           <Button
@@ -434,21 +554,25 @@ const ProvidersPage: React.FC = () => {
                             disabled={validatingProvider === provider.name}
                             onClick={() => testProviderConnection(provider)}
                           >
-                            {provider.configured === false ? "Not configured" : validatingProvider === provider.name ? "Testing..." : "Test Connection"}
+                            {provider.configured === false
+                              ? tr("providers.notConfigured")
+                              : validatingProvider === provider.name
+                                ? tr("providers.testing")
+                                : tr("common.testConnection")}
                           </Button>
                           {provider.id === "elevenlabs" && (
                             <>
                               <Button size="small" onClick={() => openVoiceLab({ browseOnly: true })}>
-                                Browse Voices
+                                {tr("providers.voiceLab.browseVoices")}
                               </Button>
                               <Button size="small" variant="contained" onClick={() => openVoiceLab()}>
-                                Voice Lab
+                                {tr("providers.voiceLab.open")}
                               </Button>
                             </>
                           )}
                           {provider.vaultConfigured && (
                             <Button size="small" color="error" onClick={() => disconnectProvider(provider)}>
-                              Disconnect
+                              {tr("common.disconnect")}
                             </Button>
                           )}
                         </Stack>
@@ -463,40 +587,35 @@ const ProvidersPage: React.FC = () => {
       </Grid>
 
       <Dialog open={voiceLabOpen} onClose={() => setVoiceLabOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>{browseOnly ? "ElevenLabs Voices" : "ElevenLabs Voice Lab"}</DialogTitle>
+        <DialogTitle>{browseOnly ? tr("providers.voiceLab.browseTitle") : tr("providers.voiceLab.title")}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {voiceLabConfig && !voiceLabConfig.configured && (
-              <Alert severity="error">
-                ElevenLabs is required for Arabic narration. Configure an API key before auditioning voices.
-              </Alert>
+              <Alert severity="error">{tr("providers.voiceLab.needsKey")}</Alert>
             )}
             {voiceLabError && <Alert severity="warning">{voiceLabError}</Alert>}
-            <Alert severity="info">
-              Short auditions only - no video is rendered. Pick the voice you prefer by listening; the engine
-              does not rank voices or claim any of them is Egyptian.
-            </Alert>
+            <Alert severity="info">{tr("providers.voiceLab.auditionOnly")}</Alert>
 
             {voiceLabLoading ? (
-              <Typography variant="body2">Loading voices...</Typography>
+              <Typography variant="body2">{tr("providers.voiceLab.loadingVoices")}</Typography>
             ) : (
               <>
-                <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip size="small" variant="outlined" label={`Model: ${voiceLabConfig?.model || "-"}`} />
-                  <Chip size="small" variant="outlined" label={`Voices discovered: ${voiceLabVoices.length}`} />
-                  <Chip size="small" variant="outlined" label="Cloud / Usage Based" />
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Chip size="small" variant="outlined" label={tr("providers.voiceLab.model", { model: voiceLabConfig?.model || "—" })} />
+                  <Chip size="small" variant="outlined" label={tr("providers.voiceLab.voicesDiscovered", { count: voiceLabVoices.length })} />
+                  <Chip size="small" variant="outlined" label={tr("providers.voiceLab.usageBased")} />
                 </Stack>
 
                 <TextField
                   select
-                  label="Voice"
+                  label={tr("providers.voiceLab.voice")}
                   value={voiceLabVoiceId}
                   onChange={(e) => setVoiceLabVoiceId(e.target.value)}
                   fullWidth
                   SelectProps={{ native: true }}
                   InputLabelProps={{ shrink: true }}
                 >
-                  <option value="">Select a voice</option>
+                  <option value="">{tr("providers.voiceLab.selectVoice")}</option>
                   {voiceLabVoices.map((voice) => (
                     <option key={voice.id} value={voice.id}>
                       {[voice.name, voice.accent, voice.gender, voice.category].filter(Boolean).join(" · ")}
@@ -509,31 +628,31 @@ const ProvidersPage: React.FC = () => {
                     <Stack direction="row" spacing={2}>
                       <TextField
                         select
-                        label="Language"
+                        label={tr("providers.voiceLab.language")}
                         value={voiceLabLanguage}
                         onChange={(e) => setVoiceLabLanguage(e.target.value)}
                         fullWidth
                         SelectProps={{ native: true }}
                         InputLabelProps={{ shrink: true }}
                       >
-                        <option value="ar">Arabic</option>
-                        <option value="en">English</option>
+                        <option value="ar">{tr("settings.field.languageArabic")}</option>
+                        <option value="en">{tr("settings.field.languageEnglish")}</option>
                       </TextField>
                       <TextField
                         select
-                        label="Target dialect"
+                        label={tr("providers.voiceLab.targetDialect")}
                         value={voiceLabDialect}
                         onChange={(e) => setVoiceLabDialect(e.target.value)}
                         fullWidth
                         SelectProps={{ native: true }}
                         InputLabelProps={{ shrink: true }}
                       >
-                        <option value="egyptian">Egyptian</option>
-                        <option value="msa">MSA</option>
+                        <option value="egyptian">{tr("providers.voiceLab.dialectEgyptian")}</option>
+                        <option value="msa">{tr("providers.voiceLab.dialectMsa")}</option>
                       </TextField>
                       <TextField
                         select
-                        label="Preset"
+                        label={tr("providers.voiceLab.preset")}
                         value={voiceLabPreset}
                         onChange={(e) => setVoiceLabPreset(e.target.value)}
                         fullWidth
@@ -547,29 +666,33 @@ const ProvidersPage: React.FC = () => {
                     </Stack>
 
                     <TextField
-                      label="Audition text"
+                      label={tr("providers.voiceLab.auditionText")}
                       value={voiceLabText}
                       onChange={(e) => setVoiceLabText(e.target.value)}
                       fullWidth
                       multiline
                       minRows={4}
-                      helperText="Keep the same text across voices so the comparison stays fair."
+                      helperText={tr("providers.voiceLab.auditionHelp")}
                       inputProps={{ maxLength: voiceLabConfig?.maxCharacters || 600, dir: "auto" }}
                     />
 
-                    <Stack direction="row" spacing={1}>
+                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                       <Button
                         variant="contained"
                         disabled={voiceLabGenerating || !voiceLabVoiceId || !voiceLabText.trim()}
                         onClick={generateVoiceLabPreview}
                       >
-                        {voiceLabGenerating ? "Generating..." : voiceLabAudio ? "Regenerate" : "Generate Preview"}
+                        {voiceLabGenerating
+                          ? tr("providers.voiceLab.generating")
+                          : voiceLabAudio
+                            ? tr("providers.voiceLab.regenerate")
+                            : tr("providers.voiceLab.generatePreview")}
                       </Button>
                       <Button
                         disabled={!voiceLabVoiceId}
                         onClick={saveDefaultArabicVoice}
                       >
-                        Set as default Arabic voice
+                        {tr("providers.voiceLab.setDefaultArabic")}
                       </Button>
                     </Stack>
 
@@ -579,7 +702,9 @@ const ProvidersPage: React.FC = () => {
 
                     {defaultArabicVoiceId && (
                       <Alert severity="success">
-                        Default Arabic voice selected: {voiceLabVoices.find((v) => v.id === defaultArabicVoiceId)?.name || defaultArabicVoiceId}
+                        {tr("providers.voiceLab.defaultSelected", {
+                          name: voiceLabVoices.find((v) => v.id === defaultArabicVoiceId)?.name || defaultArabicVoiceId,
+                        })}
                       </Alert>
                     )}
                   </>
@@ -589,23 +714,25 @@ const ProvidersPage: React.FC = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setVoiceLabOpen(false)}>Close</Button>
+          <Button onClick={() => setVoiceLabOpen(false)}>{tr("common.close")}</Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={Boolean(credentialProvider)} onClose={() => setCredentialProvider(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>{credentialProvider?.vaultConfigured ? "Replace Credentials" : "Configure Provider"}</DialogTitle>
+        <DialogTitle>
+          {credentialProvider?.vaultConfigured
+            ? tr("providers.credential.dialogTitleReplace")
+            : tr("providers.credential.dialogTitle")}
+        </DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            <Alert severity="info">
-              Credentials are encrypted server-side and the plaintext value is never returned after save.
-            </Alert>
+            <Alert severity="info">{tr("providers.credential.encryptedNote")}</Alert>
             <Typography variant="subtitle2" fontWeight={800}>
               {credentialProvider?.name}
             </Typography>
             <TextField
               select
-              label="Credential Type"
+              label={tr("providers.credential.type")}
               value={credentialType}
               onChange={(e) => setCredentialType(e.target.value)}
               fullWidth
@@ -616,7 +743,11 @@ const ProvidersPage: React.FC = () => {
               ))}
             </TextField>
             <TextField
-              label={credentialType === "service_account_json" ? "Service Account JSON" : "Credential"}
+              label={
+                credentialType === "service_account_json"
+                  ? tr("providers.credential.serviceAccountJson")
+                  : tr("providers.credential.value")
+              }
               type={credentialType.includes("json") ? "text" : "password"}
               value={credentialValue}
               onChange={(e) => setCredentialValue(e.target.value)}
@@ -628,9 +759,9 @@ const ProvidersPage: React.FC = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCredentialProvider(null)}>Cancel</Button>
+          <Button onClick={() => setCredentialProvider(null)}>{tr("common.cancel")}</Button>
           <Button variant="contained" disabled={savingCredential || !credentialValue.trim()} onClick={saveCredential}>
-            {savingCredential ? "Saving..." : "Save Encrypted"}
+            {savingCredential ? tr("common.saving") : tr("providers.saveEncrypted")}
           </Button>
         </DialogActions>
       </Dialog>

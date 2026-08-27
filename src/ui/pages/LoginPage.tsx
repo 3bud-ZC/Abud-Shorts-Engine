@@ -17,9 +17,11 @@ import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { useI18n } from "../i18n";
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
+  const { t, direction } = useI18n();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,19 +32,19 @@ export const LoginPage: React.FC = () => {
   React.useEffect(() => {
     try {
       if (localStorage.getItem("abud_auth_notice") === "session_expired") {
-        setNotice("Your session expired. Sign in again to continue.");
+        setNotice(t("login.sessionExpired"));
         localStorage.removeItem("abud_auth_notice");
       }
     } catch {
       // Ignore storage availability issues.
     }
-  }, []);
+  }, [t]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!username || !password) {
-      setError("Please enter both username and password.");
+      setError(t("login.enterBoth"));
       return;
     }
 
@@ -58,10 +60,10 @@ export const LoginPage: React.FC = () => {
         localStorage.removeItem("abud_auth_return_to");
         navigate(returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/");
       } else {
-        setError("Invalid credentials.");
+        setError(t("login.invalidCredentials"));
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || "Login failed. Please check credentials.");
+      setError(err.response?.data?.error || t("login.failed"));
     } finally {
       setLoading(false);
     }
@@ -69,6 +71,7 @@ export const LoginPage: React.FC = () => {
 
   return (
     <Box
+      dir={direction}
       sx={{
         display: "flex",
         alignItems: "center",
@@ -94,10 +97,10 @@ export const LoginPage: React.FC = () => {
               <LockOutlinedIcon sx={{ color: "primary.main" }} />
             </Box>
             <Typography variant="h5" fontWeight={800} color="primary.main">
-              Sign in
+              {t("login.title")}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              ABUD Shorts
+              {t("common.appName")}
             </Typography>
           </Box>
 
@@ -116,7 +119,7 @@ export const LoginPage: React.FC = () => {
           <form onSubmit={handleLogin}>
             <Stack spacing={2.5}>
               <TextField
-                label="Username"
+                label={t("login.username")}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 fullWidth
@@ -125,7 +128,7 @@ export const LoginPage: React.FC = () => {
                 autoComplete="username"
               />
               <TextField
-                label="Password"
+                label={t("login.password")}
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -136,7 +139,7 @@ export const LoginPage: React.FC = () => {
                   endAdornment: (
                     <InputAdornment position="end">
                       <IconButton
-                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}
                         onClick={() => setShowPassword((value) => !value)}
                         edge="end"
                       >
@@ -154,7 +157,7 @@ export const LoginPage: React.FC = () => {
                 disabled={loading}
                 sx={{ py: 1.2, fontWeight: 700 }}
               >
-                {loading ? <CircularProgress size={24} color="inherit" /> : "Sign In"}
+                {loading ? <CircularProgress size={24} color="inherit" /> : t("login.submit")}
               </Button>
             </Stack>
           </form>

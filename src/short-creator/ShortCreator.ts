@@ -77,6 +77,7 @@ import {
   type ProductionSceneSpec,
   type ResolvedProductionTimeline,
   compactNarrationToBudget,
+  planSceneVisualDurationSeconds,
   resolveProductionTimeline,
   validateProductionSpec,
 } from "../types/productionSpec";
@@ -527,6 +528,15 @@ export class ShortCreator {
       timingMs: Date.now() - planningStartedAt,
     });
 
+    // Continuous-narration wrapping (V2.3-03) sizes each scene to its spoken
+    // audio so there is no dead air between scenes. That only holds the total
+    // duration when the narration actually fills the requested budget, so the
+    // per-scene narration is now fitted to (not shrunk below) the resolved
+    // scene budget, a scene whose spoken audio still lands short is gently
+    // slowed rather than left with a silent gap, and a bounded visual hold
+    // keeps the video from collapsing far below the request.
+    let renderedContentSeconds = 0;
+
     let index = 0;
     for (const sceneTimeline of timeline.scenes) {
       const originalSceneSpec = spec.scenes[sceneTimeline.sceneIndex] || {
@@ -562,8 +572,8 @@ export class ShortCreator {
       });
 
       const brandVoiceProfile = spec.brandKit?.voiceProfile as any;
-      const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || sceneTimeline.narration);
-      const targetSceneDuration = sceneTimeline.durationSeconds;
+      const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || originalSceneSpec.narration || sceneTimeline.narration);
+      let targetSceneDuration = sceneTimeline.durationSeconds;
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
       const requestedVoiceProvider = ((brandVoiceProfile?.provider || spec.voiceProvider || "auto") as VoiceProviderId | "auto");
       const requestedVoiceId = pinnedVoiceId || brandVoiceProfile?.voiceId || spec.voiceId || undefined;
@@ -652,10 +662,14 @@ export class ShortCreator {
         );
         let measuredVoiceDuration = normalized.duration || voiceAudio.audioLength || targetSceneDuration;
 
-        if (measuredVoiceDuration > targetSceneDuration * 1.05) {
+        if (measuredVoiceDuration > targetSceneDuration * 1.2) {
+          // Only rewrite when the narration clearly overflows, and fit it to the
+          // whole scene budget rather than a shrunken fraction of it - the old
+          // 0.88 target plus a tight trigger cut ~15-word lines to ~8 words,
+          // which the local voice then rushed through, collapsing the timeline.
           const compactedText = compactNarrationToBudget(
             voiceAudio.processedText || requestedSpokenNarration,
-            Math.max(1.5, targetSceneDuration * 0.88),
+            Math.max(2, targetSceneDuration),
             spec.language === "ar",
           );
           if (compactedText && compactedText !== (voiceAudio.processedText || requestedSpokenNarration)) {
@@ -695,6 +709,18 @@ export class ShortCreator {
             speedFactor,
           );
           measuredVoiceDuration = normalized.duration || measuredVoiceDuration;
+        } else if (measuredVoiceDuration > 0 && measuredVoiceDuration < targetSceneDuration * 0.85) {
+          // Narration landed short of the scene budget (a terse generated script,
+          // or the fast local voice). Slow it toward the budget - bounded to
+          // 0.82x so it still sounds natural - so speech fills the scene instead
+          // of leaving a silent gap the dead-air analyzer would flag.
+          speedFactor = Math.max(0.82, measuredVoiceDuration / (targetSceneDuration * 0.96));
+          normalized = await this.ffmpeg.saveNormalizedAudioWithSpeed(
+            voiceAudio.audio,
+            tempWavPath,
+            speedFactor,
+          );
+          measuredVoiceDuration = normalized.duration || measuredVoiceDuration;
         }
 
         voiceMastering = await this.audioMastering.masterVoice(tempWavPath, tempMasteredWavPath);
@@ -702,13 +728,25 @@ export class ShortCreator {
         actualVoiceDuration = await this.ffmpeg.getMediaDuration(tempMasteredWavPath);
         captionAudioPath = tempMasteredWavPath;
       }
-      sceneTimeline.actualSpeechDurationSeconds = actualVoiceDuration || targetSceneDuration;
+
+      // Canonical continuous narration timeline calculation:
+      // Chain spoken scenes with bounded natural breath pauses (160ms) and
+      // eliminate dead silence between scenes, while holding toward the resolved
+      // scene budget so the video keeps the requested duration.
+      const isLastScene = index === timeline.scenes.length - 1;
+      const sceneSpeechDuration = actualVoiceDuration || sceneTimeline.durationSeconds;
+      const calculatedVisualDuration = planSceneVisualDurationSeconds({
+        speechSeconds: sceneSpeechDuration,
+        resolvedSceneBudgetSeconds: sceneTimeline.durationSeconds || sceneSpeechDuration,
+        isLastScene,
+      });
+      renderedContentSeconds += calculatedVisualDuration;
+      targetSceneDuration = calculatedVisualDuration;
+      sceneTimeline.actualSpeechDurationSeconds = sceneSpeechDuration;
+      sceneTimeline.durationSeconds = calculatedVisualDuration;
       sceneTimeline.audioSpeedFactor = speedFactor;
       const speechWindowStartMs = 0;
-      const speechWindowEndMs = Math.min(
-        Math.round((actualVoiceDuration || targetSceneDuration) * 1000),
-        Math.round(targetSceneDuration * 1000),
-      );
+      const speechWindowEndMs = Math.round(sceneSpeechDuration * 1000);
 
       if (!voiceArtifact && voiceAudio && voiceMastering) {
         voiceProvidersUsed.add(voiceAudio.provider || voiceAudio.decision.providerId);
@@ -1736,7 +1774,20 @@ export class ShortCreator {
       index++;
     }
 
-    const totalDurationSeconds = timeline.finalExpectedDurationSeconds;
+    const totalDurationSeconds = Math.round(scenes.reduce((acc, curr) => acc + (curr.audio?.duration || 0), 0) * 100) / 100;
+
+    // Observability for the duration-adherence invariant: the sum of the planned
+    // scene visual durations should track the requested content budget.
+    const plannedContentSeconds = Math.round(renderedContentSeconds * 100) / 100;
+    const requestedContentSeconds = Math.round(
+      ((timeline.requestedDurationSeconds || 0) - (timeline.outroDurationSeconds || 0)) * 100,
+    ) / 100;
+    if (requestedContentSeconds > 0 && Math.abs(plannedContentSeconds - requestedContentSeconds) > 1.5) {
+      logger.warn(
+        { videoId, requestedContentSeconds, plannedContentSeconds, spokenSeconds: totalDurationSeconds },
+        "Planned scene duration diverges from the requested content budget",
+      );
+    }
 
 
     await this.emitProgress(onProgress, {
@@ -1802,8 +1853,11 @@ export class ShortCreator {
         checkpointStatus: "running",
       });
       // Scene captions are scene-relative; shift them onto the video timeline.
+      const sceneStartMs = scenes.map((_s, i) =>
+        scenes.slice(0, i).reduce((acc, curr) => acc + (curr.audio?.duration || 0) * 1000, 0),
+      );
       const timelineWords = sceneCaptionWords.flatMap((words, sceneIndex) => {
-        const offsetMs = Math.round((timeline.scenes[sceneIndex]?.startSeconds || 0) * 1000);
+        const offsetMs = Math.round(sceneStartMs[sceneIndex] || 0);
         return (words || [])
           .map((word) => ({
             text: word.text.trim(),
@@ -1932,6 +1986,41 @@ export class ShortCreator {
         0,
       );
 
+      const sceneStartMsForQa = scenes.map((_s, i) =>
+        scenes.slice(0, i).reduce((acc, curr) => acc + (curr.audio?.duration || 0) * 1000, 0),
+      );
+      const speechWindowsForDeadAir = scenes.map((s, i) => {
+        const sceneVisualSeconds = timeline.scenes[i]?.durationSeconds || (s.audio?.duration || 0);
+        const sceneSpeechSeconds =
+          timeline.scenes[i]?.actualSpeechDurationSeconds ??
+          ((s.speechWindowsMs?.[0]?.endMs || (s.audio?.duration || 0) * 1000) / 1000);
+        // Time this scene deliberately holds its motion/music past the narration.
+        const intentionalHoldMs = Math.max(
+          0,
+          Math.round((sceneVisualSeconds - sceneSpeechSeconds - 0.16) * 1000),
+        );
+        return {
+          sceneIndex: i,
+          startMs: Math.round(sceneStartMsForQa[i] || 0),
+          endMs: Math.round((sceneStartMsForQa[i] || 0) + sceneSpeechSeconds * 1000),
+          intentionalHoldMs,
+        };
+      });
+      const deadAirReport = this.audioMastering.analyzeDeadAir(speechWindowsForDeadAir);
+
+      const creativeQualityResult = qualityEngine.calculateCreativeQualityScore({
+        deadAirDurationMs: deadAirReport.totalNarrationSilenceMs,
+        maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
+        totalDurationSeconds: validationResult.durationSeconds,
+        sceneCount: scenes.length,
+        distinctAssetCount: new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size,
+        fallbackCount: selectedVisuals.filter((item) => item.metadata?.fallback || item.metadata?.fallbackReason).length,
+        hasCta: spec.scenes.some((s) => s.purpose === "cta" || (spec.cta && spec.cta.text)),
+        captionStyle: spec.captionStyle,
+        hasCaptions: spec.captionStyle !== "none",
+        mediaRelevanceScores: sceneQa.map((item) => Number(item.visualRelevanceScore) || 90),
+      });
+
       const metadata: VideoMetadata = {
         videoId,
         filename: `${videoId}.mp4`,
@@ -2033,6 +2122,12 @@ export class ShortCreator {
         },
         qualityScore: validationResult.technicalScore,
         technicalScore: validationResult.technicalScore,
+        creativeScore: creativeQualityResult.creativeScore,
+        creativeGrade: creativeQualityResult.creativeGrade,
+        creativeDiagnostics: creativeQualityResult.diagnostics,
+        creativeWarnings: creativeQualityResult.warnings,
+        maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
+        deadAirReport,
         mediaPlanScore: mediaPlan.qualityReview?.overallScore || 90,
         qualityScoreV2: {
           technical: validationResult.technicalScore,

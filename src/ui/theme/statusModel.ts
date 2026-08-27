@@ -20,42 +20,43 @@ export type StatusTone = "success" | "info" | "neutral" | "warning" | "danger";
 
 export type StatusDescriptor = {
   id: AbudStatus;
-  label: string;
+  /** i18n key under the shared `statuses` namespace. */
+  labelKey: string;
   tone: StatusTone;
-  /** Plain-language explanation for a non-technical operator. */
-  description: string;
+  /** i18n key for the plain-language explanation shown to a non-technical operator. */
+  descriptionKey: string;
 };
 
 export const ABUD_STATUS: Record<AbudStatus, StatusDescriptor> = {
   connected: {
     id: "connected",
-    label: "Connected",
+    labelKey: "statuses.connected",
     tone: "success",
-    description: "Set up and verified against the live service.",
+    descriptionKey: "integrations.statusDesc.connected",
   },
   ready: {
     id: "ready",
-    label: "Ready",
+    labelKey: "statuses.ready",
     tone: "info",
-    description: "Available and ready to use.",
+    descriptionKey: "integrations.statusDesc.ready",
   },
   not_configured: {
     id: "not_configured",
-    label: "Not Configured",
+    labelKey: "statuses.notConfigured",
     tone: "neutral",
-    description: "Optional. Add it when you want this capability.",
+    descriptionKey: "integrations.statusDesc.notConfigured",
   },
   needs_attention: {
     id: "needs_attention",
-    label: "Needs Attention",
+    labelKey: "statuses.needsAttention",
     tone: "warning",
-    description: "Set up, but the last check did not succeed.",
+    descriptionKey: "integrations.statusDesc.needsAttention",
   },
   unavailable: {
     id: "unavailable",
-    label: "Unavailable",
+    labelKey: "statuses.unavailable",
     tone: "danger",
-    description: "Not reachable right now.",
+    descriptionKey: "integrations.statusDesc.unavailable",
   },
 };
 
@@ -120,13 +121,3 @@ export function toAbudStatus(raw?: string | boolean | null): AbudStatus {
 export function statusDescriptor(raw?: string | boolean | null): StatusDescriptor {
   return ABUD_STATUS[toAbudStatus(raw)];
 }
-
-/** Cost/tier vocabulary shown on integration cards. */
-export type CostTier = "free" | "local" | "cloud" | "usage_based";
-
-export const COST_TIER_LABEL: Record<CostTier, string> = {
-  free: "Free",
-  local: "Local",
-  cloud: "Cloud",
-  usage_based: "Usage Based",
-};

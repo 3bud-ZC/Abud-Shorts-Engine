@@ -2,8 +2,12 @@ import type { Caption, CaptionLine, CaptionPage } from "../types/shorts";
 
 export type ArabicCaptionStyle =
   | "cinematic"
+  | "karaoke"
+  | "bold_social"
+  | "social_ad"
   | "viral_bold"
   | "clean"
+  | "clean_professional"
   | "minimal"
   | "product_ad"
   | "educational"
@@ -52,7 +56,7 @@ export function isolateBidi(text: string): string {
   return `\u2068${trimmed}\u2069`;
 }
 
-export function captionLayoutForStyle(style: ArabicCaptionStyle = "viral_bold", isPortrait = true): ArabicCaptionLayout {
+export function captionLayoutForStyle(style: ArabicCaptionStyle = "bold_social", isPortrait = true): ArabicCaptionLayout {
   const base = {
     maxLines: 2,
     minDisplayMs: 850,
@@ -67,11 +71,14 @@ export function captionLayoutForStyle(style: ArabicCaptionStyle = "viral_bold", 
   };
   switch (style) {
     case "cinematic":
-      return { ...base, maxCharsPerLine: isPortrait ? 21 : 34, fontSizePx: isPortrait ? 64 : 48 };
+      return { ...base, maxCharsPerLine: isPortrait ? 22 : 36, fontSizePx: isPortrait ? 54 : 40, bottomSafeZonePx: isPortrait ? 250 : 120 };
     case "clean":
-      return { ...base, maxCharsPerLine: isPortrait ? 24 : 38, fontSizePx: isPortrait ? 56 : 42 };
+    case "clean_professional":
+      return { ...base, maxCharsPerLine: isPortrait ? 22 : 36, fontSizePx: isPortrait ? 58 : 44, bottomSafeZonePx: isPortrait ? 260 : 120 };
+    case "karaoke":
+      return { ...base, maxCharsPerLine: isPortrait ? 20 : 34, fontSizePx: isPortrait ? 62 : 46, bottomSafeZonePx: isPortrait ? 270 : 120 };
     case "minimal":
-      return { ...base, maxCharsPerLine: isPortrait ? 26 : 42, fontSizePx: isPortrait ? 48 : 36 };
+      return { ...base, maxCharsPerLine: isPortrait ? 26 : 40, fontSizePx: isPortrait ? 48 : 36, bottomSafeZonePx: isPortrait ? 250 : 110 };
     case "product_ad":
       return { ...base, maxCharsPerLine: isPortrait ? 20 : 32, fontSizePx: isPortrait ? 62 : 46 };
     case "educational":
@@ -80,8 +87,10 @@ export function captionLayoutForStyle(style: ArabicCaptionStyle = "viral_bold", 
     case "bold":
     case "brand":
     case "viral_bold":
+    case "bold_social":
+    case "social_ad":
     default:
-      return { ...base, maxCharsPerLine: isPortrait ? 18 : 30, fontSizePx: isPortrait ? 68 : 50 };
+      return { ...base, maxCharsPerLine: isPortrait ? 18 : 30, fontSizePx: isPortrait ? 66 : 48, bottomSafeZonePx: isPortrait ? 280 : 130 };
   }
 }
 
