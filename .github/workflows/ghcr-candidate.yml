@@ -1,9 +1,16 @@
 # ==============================================================================
 # ABUD Shorts Engine - GHCR candidate image workflow
 # ==============================================================================
-# Manual-only candidate gate for F5.1. It uses the repository GITHUB_TOKEN with
-# package write permission, publishes only sha-<commit> candidate tags, and can
-# later promote an already accepted digest without rebuilding application bytes.
+# Manual-only candidate gate. It uses the repository GITHUB_TOKEN with package
+# write permission, publishes only sha-<commit> candidate tags, and can later
+# promote an already accepted digest onto the version and stable tags without
+# rebuilding application bytes.
+#
+# The workflow is version-agnostic: it checks only that package.json and
+# src/version.ts agree on PRODUCT_VERSION, so the same gate serves every
+# release candidate. Candidate mode never creates a Git tag or a GitHub
+# Release and never moves the version or stable tag - that is promote mode,
+# run only after the release is approved.
 # ==============================================================================
 
 name: GHCR Candidate
@@ -18,7 +25,7 @@ on:
       source_ref:
         description: "Git ref to check out before building or promoting"
         required: true
-        default: v2.2-finalization
+        default: v2.3-product-overhaul
         type: string
       mode:
         description: "Build candidate image or promote an accepted digest"
@@ -68,8 +75,8 @@ jobs:
             echo "::error::package.json is $VERSION but src/version.ts is $SOURCE_VERSION."
             exit 1
           fi
-          if [ "$VERSION" != "2.2.0" ]; then
-            echo "::error::F5.1 can only publish 2.2.0 candidates, found $VERSION."
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::PRODUCT_VERSION $VERSION is not a plain semantic version."
             exit 1
           fi
 
