@@ -41,6 +41,7 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import SendIcon from "@mui/icons-material/Send";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import SaveIcon from "@mui/icons-material/Save";
 import {
   CaptionPositionEnum,
   MusicMoodEnum,
@@ -355,6 +356,9 @@ const VideoCreator: React.FC = () => {
     { text: "A concise video narration for a local business.", searchTerms: "business, retail, customer" },
   ]);
   const [config, setConfig] = useState<RenderConfig>(defaultConfig);
+  const [saveTemplateDialog, setSaveTemplateDialog] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState("");
+  const [saveTemplateDescription, setSaveTemplateDescription] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -405,14 +409,28 @@ const VideoCreator: React.FC = () => {
         if (appSettings.defaultVisualMode) setVisualMode(appSettings.defaultVisualMode);
 
         const queryTemplate = params.get("template");
+        let templateBrandId = "";
         if (queryTemplate) {
           setMode("template");
           setSelectedTemplateId(queryTemplate);
+          const template = nextTemplates.find((item: BusinessTemplateOption) => item.id === queryTemplate);
+          if (template) {
+            applyTemplateDefaults(template);
+            templateBrandId = template.config?.brandId || "";
+          }
         } else {
-          setSelectedTemplateId(appSettings.defaultTemplateId || nextTemplates[0]?.id || "");
+          const fallbackTemplate = nextTemplates.find((item: BusinessTemplateOption) => item.id === appSettings.defaultTemplateId) || nextTemplates[0];
+          setSelectedTemplateId(fallbackTemplate?.id || "");
+          if (fallbackTemplate) {
+            applyTemplateDefaults(fallbackTemplate);
+            templateBrandId = fallbackTemplate.config?.brandId || "";
+          }
         }
 
+        const queryBrand = params.get("brand");
         const defaultBrand =
+          nextBrands.find((b: V2Brand) => b.id === queryBrand) ||
+          nextBrands.find((b: V2Brand) => b.id === templateBrandId) ||
           nextBrands.find((b: V2Brand) => b.id === appSettings.defaultBrandId) ||
           nextBrands.find((b: V2Brand) => b.isDefault) ||
           nextBrands[0];
@@ -524,6 +542,10 @@ const VideoCreator: React.FC = () => {
 
   const generatedScenes = useMemo(() => {
     if (!selectedTemplate) return [];
+    if (!selectedTemplate.builtIn && selectedTemplate.config?.promptGuidance) {
+      const text = applyTemplateText(selectedTemplate.config.promptGuidance, templateData);
+      return [{ text, searchTerms: selectedTemplate.pexelsSearchHints || [] }];
+    }
     return generateScenesForTemplate(selectedTemplate.id as BusinessTemplateId, templateData);
   }, [selectedTemplate, templateData]);
 
@@ -542,6 +564,12 @@ const VideoCreator: React.FC = () => {
 
   function applyBrand(brand: V2Brand) {
     setSelectedBrandId(brand.id);
+    if (brand.defaultDurationSeconds) setDuration(brand.defaultDurationSeconds);
+    if (brand.defaultQuality) setQuality(brand.defaultQuality);
+    if (brand.defaultVisualSource) setVisualSource(brand.defaultVisualSource as any);
+    if (brand.captionStyle) setCaptionStyle(brand.captionStyle);
+    if (brand.defaultLanguage) setLanguage(brand.defaultLanguage);
+    if (brand.defaultCharacterProfileId) setSelectedCharacterProfileId(brand.defaultCharacterProfileId);
     setConfig((prev) => ({
       ...prev,
       brandKit: {
@@ -558,12 +586,44 @@ const VideoCreator: React.FC = () => {
         socialHandle: brand.socialHandle || undefined,
         // A brand set to "none" has no caption-style override to contribute;
         // the production spec's own captionStyle governs that case.
-        captionStyle: brand.captionStyle && brand.captionStyle !== "none" ? brand.captionStyle : "bold",
+        captionStyle: (brand.captionStyle && brand.captionStyle !== "none" ? brand.captionStyle : "bold") as any,
         includeOutro: brand.includeOutro ?? true,
         outroText: brand.outroText || "",
         contactText: brand.contactText || "",
       },
     }));
+  }
+
+  function applyTemplateDefaults(template: BusinessTemplateOption) {
+    setSelectedTemplateId(template.id);
+    const defaults = template.config || {};
+    const durationSeconds = Number(defaults.durationSeconds || template.targetDurationSeconds || template.suggestedDurationSeconds || 0);
+    if (durationSeconds > 0) setDuration(durationSeconds);
+    if (defaults.aspectRatio) setAspectRatio(String(defaults.aspectRatio));
+    if (defaults.quality) setQuality(String(defaults.quality));
+    if (defaults.visualSource) setVisualSource(String(defaults.visualSource) as any);
+    if (defaults.mediaPolicy) setMediaPolicy(String(defaults.mediaPolicy) as any);
+    if (defaults.captionStyle) setCaptionStyle(String(defaults.captionStyle));
+    if (defaults.productionMode) setProductionMode(String(defaults.productionMode));
+    if (defaults.contentStyle) setContentStyle(String(defaults.contentStyle));
+    if (defaults.creativeStyle) setCreativeStyle(String(defaults.creativeStyle));
+    if (Array.isArray(defaults.selectedMediaIds)) setSelectedMediaIds(defaults.selectedMediaIds.map(String));
+    if (defaults.characterProfileId) setSelectedCharacterProfileId(String(defaults.characterProfileId));
+    if (defaults.brandId) {
+      const brand = brands.find((item) => item.id === defaults.brandId);
+      if (brand) applyBrand(brand);
+      else setSelectedBrandId(String(defaults.brandId));
+    }
+    const seeded = Object.fromEntries(
+      (template.fields || [])
+        .map((field) => [field.key, templateData[field.key] || ""])
+        .filter(([key]) => Boolean(key)),
+    );
+    setTemplateData(seeded);
+  }
+
+  function applyTemplateText(text: string, values: Record<string, string>) {
+    return text.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g, (_match, key) => values[key] || "");
   }
 
   function updateBrandKit(field: keyof NonNullable<RenderConfig["brandKit"]>, value: string | boolean) {
@@ -863,10 +923,116 @@ const VideoCreator: React.FC = () => {
     }
   }
 
+  async function saveCurrentAsTemplate() {
+    const name = saveTemplateName.trim();
+    if (!name) {
+      setError("Template name is required.");
+      return;
+    }
+    try {
+      await axios.post("/api/v2/templates", {
+        name,
+        description: saveTemplateDescription.trim(),
+        category: videoTypeId === "product_ad" ? "product" : contentStyle === "educational" ? "educational" : "social",
+        favorite: true,
+        config: {
+          productionMode,
+          contentStyle,
+          creativeStyle,
+          durationSeconds: duration,
+          aspectRatio,
+          quality,
+          visualSource,
+          mediaPolicy,
+          captionStyle,
+          brandId: selectedBrandId || undefined,
+          characterProfileId: selectedCharacterProfileId || undefined,
+          selectedMediaIds,
+          promptGuidance: prompt || selectedTemplate?.examplePrompt || "",
+        },
+        variables: selectedTemplate?.variables || selectedTemplate?.fields?.map((field) => ({
+          key: field.key,
+          label: field.label,
+          type: field.type === "number" || field.type === "date" || field.type === "url" || field.type === "media_asset" ? field.type : "text",
+          required: field.required,
+          example: field.placeholder,
+          helpText: field.helperText,
+        })) || [],
+      });
+      setSaveTemplateDialog(false);
+      setSaveTemplateName("");
+      setSaveTemplateDescription("");
+      const response = await axios.get("/api/v2/templates");
+      setTemplates(response.data.templates || []);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Template could not be saved.");
+    }
+  }
+
   async function submitTemplateJob() {
+    if (!selectedTemplate) {
+      setError("Choose a template before creating a video.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
+      const businessTemplateData = Object.fromEntries(
+        Object.entries(templateData).filter(([, value]) => value.trim().length > 0),
+      );
+      if (selectedTemplate.custom) {
+        const resolved = await axios.post(`/api/v2/templates/${selectedTemplate.id}/resolve`, {
+          variables: businessTemplateData,
+        });
+        const resolvedConfig = resolved.data.resolvedConfig || {};
+        const response = await axios.post(
+          "/api/v2/jobs",
+          {
+            creationMode: "prompt",
+            title: `${config.brandKit?.brandName || "Video"} · ${selectedTemplate.displayName}`,
+            prompt: resolvedConfig.promptGuidance || selectedTemplate.examplePrompt || selectedTemplate.description,
+            language,
+            dialect: language === "ar" || language === "auto" ? dialect : "none",
+            durationSeconds: Number(resolvedConfig.durationSeconds || duration),
+            aspectRatio: resolvedConfig.aspectRatio || aspectRatio,
+            quality: resolvedConfig.quality || quality,
+            resolution,
+            contentStyle: resolvedConfig.contentStyle || contentStyle,
+            productionMode: resolvedConfig.productionMode || productionMode,
+            creativeStyle: resolvedConfig.creativeStyle || creativeStyle,
+            animationIntensity,
+            visualMode,
+            visualSource: resolvedConfig.visualSource || visualSource,
+            stockProvider,
+            mediaPolicy: resolvedConfig.mediaPolicy || mediaPolicy,
+            selectedMediaIds: Array.isArray(resolvedConfig.selectedMediaIds) ? resolvedConfig.selectedMediaIds : selectedMediaIds,
+            characterProfileId: resolvedConfig.characterProfileId || selectedCharacterProfileId || undefined,
+            aiVisualProvider,
+            voiceProvider,
+            voiceId,
+            captionEnabled,
+            captionStyle: resolvedConfig.captionStyle || captionStyle,
+            brandId: resolvedConfig.brandId || selectedBrandId || undefined,
+            templateId: selectedTemplate.id,
+            templateVariables: businessTemplateData,
+            metadata: {
+              templateVariables: businessTemplateData,
+              selectedMediaIds,
+              characterProfileId: resolvedConfig.characterProfileId || selectedCharacterProfileId || undefined,
+              mediaPolicy: resolvedConfig.mediaPolicy || mediaPolicy,
+              stockProvider,
+              aiVisualProvider,
+            },
+          },
+          {
+            headers: {
+              "Idempotency-Key": `template-${selectedTemplate.id}-${Date.now()}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`,
+            },
+          },
+        );
+        navigate(`/jobs/${response.data.job.id}`);
+        return;
+      }
       const apiScenes: SceneInput[] = scenes.map((scene) => ({
         text: scene.text,
         searchTerms: scene.searchTerms
@@ -874,9 +1040,6 @@ const VideoCreator: React.FC = () => {
           .map((term) => term.trim())
           .filter(Boolean),
       }));
-      const businessTemplateData = Object.fromEntries(
-        Object.entries(templateData).filter(([, value]) => value.trim().length > 0),
-      );
       const title = `${config.brandKit?.brandName || "Video"} · ${selectedTemplate?.displayName || "Manual"}`;
       const response = await axios.post("/api/v2/jobs", {
         type: "video",
@@ -886,6 +1049,8 @@ const VideoCreator: React.FC = () => {
         config,
         businessTemplateId: selectedTemplateId || undefined,
         businessTemplateData: selectedTemplateId ? businessTemplateData : undefined,
+        templateVariables: selectedTemplateId ? businessTemplateData : undefined,
+        brandId: selectedBrandId || undefined,
       });
       navigate(`/jobs/${response.data.job.id}`);
     } catch (err: any) {
@@ -908,22 +1073,31 @@ const VideoCreator: React.FC = () => {
         eyebrow="Production Studio"
         description="Start with a prompt, choose the essential video settings, preview the voice, then create a production job."
         actions={
-          <ButtonGroup variant="contained">
-            <Button
-              color={mode === "prompt" ? "primary" : "inherit"}
-              variant={mode === "prompt" ? "contained" : "outlined"}
-              onClick={() => setMode("prompt")}
-            >
-              Prompt Mode
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            <Button variant="outlined" startIcon={<SaveIcon />} onClick={() => {
+              setSaveTemplateName(prompt ? prompt.slice(0, 54) : selectedTemplate?.displayName ? `${selectedTemplate.displayName} Custom` : "");
+              setSaveTemplateDescription(selectedTemplate?.description || "");
+              setSaveTemplateDialog(true);
+            }}>
+              Save as Template
             </Button>
-            <Button
-              color={mode === "template" ? "primary" : "inherit"}
-              variant={mode === "template" ? "contained" : "outlined"}
-              onClick={() => setMode("template")}
-            >
-              Template Mode
-            </Button>
-          </ButtonGroup>
+            <ButtonGroup variant="contained">
+              <Button
+                color={mode === "prompt" ? "primary" : "inherit"}
+                variant={mode === "prompt" ? "contained" : "outlined"}
+                onClick={() => setMode("prompt")}
+              >
+                Prompt Mode
+              </Button>
+              <Button
+                color={mode === "template" ? "primary" : "inherit"}
+                variant={mode === "template" ? "contained" : "outlined"}
+                onClick={() => setMode("template")}
+              >
+                Template Mode
+              </Button>
+            </ButtonGroup>
+          </Stack>
         }
       />
 
@@ -1928,6 +2102,34 @@ const VideoCreator: React.FC = () => {
         </DialogActions>
       </Dialog>
 
+      <Dialog open={saveTemplateDialog} onClose={() => setSaveTemplateDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Save Reusable Template</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              autoFocus
+              required
+              label="Template name"
+              value={saveTemplateName}
+              onChange={(event) => setSaveTemplateName(event.target.value)}
+            />
+            <TextField
+              label="Description"
+              multiline
+              minRows={2}
+              value={saveTemplateDescription}
+              onChange={(event) => setSaveTemplateDescription(event.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSaveTemplateDialog(false)}>Cancel</Button>
+          <Button variant="contained" startIcon={<SaveIcon />} onClick={saveCurrentAsTemplate}>
+            Save Template
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* ========================================================================= */}
       {/* TEMPLATE MODE (PRESERVED BUSINESS TEMPLATES)                              */}
       {/* ========================================================================= */}
@@ -1970,7 +2172,7 @@ const VideoCreator: React.FC = () => {
                         <Typography variant="caption" color="text.secondary">{template.targetUseCase}</Typography>
                         <Button
                           variant={selectedTemplateId === template.id ? "contained" : "outlined"}
-                          onClick={() => setSelectedTemplateId(template.id)}
+                          onClick={() => applyTemplateDefaults(template)}
                         >
                           Use Template
                         </Button>

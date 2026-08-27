@@ -23,14 +23,14 @@ Target: **v2.3.0**
 Branch: **`v2.3-product-overhaul`**
 
 V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
-V2.3-01, V2.3-02, V2.3-03, and V2.3-04 are complete.
+V2.3-01, V2.3-02, V2.3-03, V2.3-04, and V2.3-05 are complete.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
 interface producing English videos, and an English interface producing Arabic
 videos, are both ordinary supported cases.
 
-Schema: **2.12.0**
+Schema: **2.13.0**
 
 Arabic voice: **ElevenLabs / Mamdoh / Energetic Ad / APPROVED**
 (`68MRVrnQAt8vLbu0FCzw`, model `eleven_multilingual_v2`, persisted in
@@ -50,6 +50,7 @@ Finalization track:
 | V2.3-02 | Production Workflows & Rendering Stability | **PASS / COMPLETE** |
 | V2.3-03 | Professional Video Quality, Audio Continuity & Caption Rendering | **PASS / COMPLETE** |
 | V2.3-04 | Media Library & Character Consistency | **PASS / COMPLETE** |
+| V2.3-05 | Professional Brands & Templates | **PASS / COMPLETE** |
 
 Final complete-product / client acceptance: PENDING
 
@@ -4076,3 +4077,195 @@ revisioning and immutable production snapshots; provider capability gating; and
 truthful Stock + Character incompatibility. Live character generation was not
 tested, no fake character consistency guarantee is made, and no secrets were
 committed.
+
+### V2.3-05 Professional Brands & Templates
+
+Delivered the Professional Brands & Templates milestone on
+`v2.3-product-overhaul`. Schema advanced to **2.13.0** (migration
+`v2_3_professional_brands_templates`, additive only).
+
+**Existing architecture reused.** The V2.2 `brands` table and `brandProfileSchema`
+and the backend business-template definitions (`listBusinessTemplates`) stayed
+the compatibility surface. Migration 2.13.0 only *adds*: professional-kit columns
+on `brands` (`description`, `industry`, `tagline`, `logo_asset_id`,
+`icon_asset_id`, `background_color`, `text_color`, `heading_font`, `body_font`,
+`caption_font`, `kit` JSONB, `revision`, `revisions` JSONB, `archived_at`) plus
+new `video_templates` and `video_template_preferences` tables. Older rows keep
+validating and older builds ignore the new columns.
+
+**Brand Kit implementation.** A Brand Kit now carries identity (name,
+description, industry, tagline), a full palette (primary, secondary, accent,
+background, text) with per-field provenance (`customer` / `derived` / `default`),
+typography (heading / body / caption font from the bundled Arabic-first font
+set), caption preference, voice preference, default CTA text, tone of voice,
+keywords / preferred phrases / avoid phrases, and per-brand video defaults
+(language, duration, aspect ratio, quality, visual source, music mood, character
+profile).
+
+- **Media Library integration.** `logoAssetId`, `iconAssetId` and
+  `watermark.assetId` are validated against the Media Library on every create
+  and update: a missing, archived, or non-logo-usable asset is rejected with
+  HTTP 400 before the row is written. Logos are chosen from the library in the
+  Brands UI, not pasted as URLs (the legacy `logoUrl` field is retained for
+  backward compatibility).
+- **Palette / typography.** Round-tripped through the API and rendered in a live
+  Brand Kit Preview card in the UI.
+- **Voice / captions.** `voiceProfile` and `captionStyle` (expanded caption enum)
+  persist on the brand and flow into the resolved production contract.
+- **CTA.** `defaultCtaText` persists and also mirrors into `outroText`.
+- **Watermark.** `enabled`, `assetId`, `position`, `size`, `opacity`,
+  `respectSafeZone`.
+- **Intro / outro.** `intro.type` (`none` / `logo_reveal` / `brand_title`) and
+  `outro.type` (`none` / `cta_card` / `logo_website` / `logo_social`) with bounded
+  durations.
+- **Brand revisioning.** Every create and update appends a revision entry
+  (`revision`, `createdAt`, `summary`, `snapshot`); `revision` increments and the
+  history is returned on the brand.
+- **Immutable Brand production snapshot.** `createBrandSnapshot()` freezes the
+  brand identity, palette (with provenance), typography, caption / voice
+  preference, CTA, watermark, intro, outro and messaging into
+  `spec.metadata.brandSnapshot` at production time, tagged with the brand
+  revision, so a later brand edit never rewrites an existing production.
+- **Duplicate / default / archive / restore.** `POST /brands/:id/duplicate`,
+  `POST /brands/:id/default`, `DELETE /brands/:id` (archive — never a hard
+  delete; dependency-aware), `POST /brands/:id/restore`.
+
+**Built-in and custom Templates.** `GET /api/v2/templates` returns the six
+built-in business templates (now carrying `source: "built_in"`, `category`,
+`variables`, `config`) merged with custom `video_templates` rows, plus the
+`categories` list. Custom templates support:
+
+- **Create / edit** (`POST /templates`, `PUT /templates/:id`) with
+  `reusableTemplateSchema` — identity, category, config defaults (production
+  mode, duration, aspect ratio, quality, visual source, media policy, caption
+  style, brand, character profile, selected media, prompt guidance) and up to
+  twelve typed variables.
+- **Duplicate / favorite / archive / restore** (`POST /templates/:id/duplicate`,
+  `POST /templates/:id/favorite`, `DELETE /templates/:id`,
+  `POST /templates/:id/restore`). Built-in templates are protected: `PUT` and
+  `DELETE` on a built-in id return HTTP 409 ("Duplicate it first"); favoriting a
+  built-in is stored in `video_template_preferences` without mutating the
+  definition.
+- **Categories / filtering.** UI filters by source (all / built-in / custom),
+  category, favorites and archived.
+- **Save as Template.** Create Video has a "Save as Template" action that posts
+  the current studio configuration as a new custom template.
+- **Use Template.** `/create?template=<id>` and the Templates "Create Video"
+  button prefill the studio from the template config (`applyTemplateDefaults`).
+- **Variables + validation.** `POST /templates/:id/resolve` validates required
+  variables (HTTP 400 listing missing labels), substitutes `{{var}}` tokens in
+  the prompt guidance, and returns the resolved config plus a snapshot.
+- **Template revisioning.** Each edit appends a revision entry and increments
+  `revision`.
+- **Immutable Template production snapshot.** `templateSnapshot()` freezes
+  `templateId`, `templateRevision`, resolved configuration and resolved variables
+  into `spec.metadata.templateSnapshot`.
+
+**Brand + Template combination and resolution precedence.**
+`canonicalizeProductionSpecForRequest` resolves the selected brand and template,
+attaches both snapshots, and stamps
+`spec.metadata.resolutionPrecedence = [ "Per-video explicit override",
+"Selected Template value", "Selected Brand default", "System/user default",
+"Engine fallback" ]` plus a `uiContract` block recording `brandId` /
+`brandRevision` / `templateId` / `templateRevision`. Verified deterministically:
+with a brand whose default caption style was `minimal` and a per-video override
+of `clean_professional`, the resolved `spec.captionStyle` was
+`clean_professional` and the brand palette still populated `spec.brandKit`.
+
+**Character / source readiness preservation.** Template jobs now pass through
+`checkCreateReadiness` before they are queued. The V2.3-04 rules are intact:
+Stock + a recurring Character Profile still reports
+`character_stock_incompatible` ("Stock footage cannot guarantee a recurring
+character identity"), and Mixed / AI Generated with a Character but no
+reference-capable provider reports "Character consistency is not available with
+the currently configured visual providers" — no fake AI provider capability is
+claimed. A Brand or Template that references a Character Profile does not bypass
+provider capability or readiness.
+
+**Bilingual support.** The Brands and Templates pages are fully localised
+(English and Arabic first class), with `dir`-aware layout.
+
+**Automated verification (pre-closure baseline, unchanged — no source change was
+required by runtime QA):**
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS** (53 files, 835 tests)
+- `pnpm build` — **PASS**
+- The Docker image rebuild re-ran `pnpm build` (which runs `typecheck` then the
+  server + Vite build) inside the image — **PASS**.
+
+**Docker runtime.** `docker compose -f docker-compose.v2.yml up -d --build
+abud-shorts-app abud-shorts-render-worker` rebuilt image
+`abud-shorts-engine:v2` (`sha256:9487a6ce4367…`) from the current working tree
+and recreated both containers.
+
+- `abud-shorts-app` — **running + healthy**
+- `abud-shorts-render-worker` — **running + healthy**
+- `abud-shorts-n8n` — **running + healthy**
+- `abud-shorts-postgres` — **running + healthy**
+- Only the app exposes a public port: `localhost:3130 -> 3123`.
+- `GET /health/live` — **HTTP 200**; `GET /health/ready` — **HTTP 200**.
+- **New code confirmed running:** migration `2.13.0` is the latest applied row,
+  `video_templates` / `video_template_preferences` exist, `brands.kit` /
+  `revision` / `revisions` / `archived_at` / `heading_font` exist,
+  `GET /api/v2/system/info` reports `schemaVersion: 2.13.0`, and
+  `GET /api/v2/templates` returns the `categories` array with `source`-tagged
+  built-ins.
+
+**Functional QA (authenticated).** No reusable operator session existed, so one
+temporary QA admin session was created for the existing administrator (freshly
+generated 32-byte token, held only in process memory, never printed, never
+written to a file or script, `qa_`-prefixed session id, one-hour expiry). No new
+admin was created and the admin password was not changed. Exercised against the
+live stack on `http://localhost:3130`:
+
+- Templates: built-in list + categories; create custom (`revision 1`); update
+  (`revision 2`, revision history grows); edit built-in → **409**; duplicate →
+  copy with `baseTemplateId`; favorite toggle (custom row and built-in
+  preference); resolve with variables → substituted guidance + snapshot; resolve
+  missing required variable → **400** listing the missing label; archive →
+  removed from the active list, `archived: true` under `?includeArchived=true`;
+  restore → active again.
+- Brands: baseline count 0; bad `logoAssetId` → **400**; create with full kit
+  (`revision 1`, "Created Brand Kit"); field round-trip (palette, typography,
+  caption style, CTA, watermark, intro, outro, keywords); update
+  (`revision 2`); duplicate → "QA V2.3-05 Brand Copy"; set default; delete →
+  archive (not hard delete); restore.
+- Create Video: brand + per-video override precedence verified deterministically
+  (per-video `captionStyle` beat the brand default in the resolved spec);
+  `brandSnapshot` / `templateSnapshot` / `resolutionPrecedence` present in
+  `spec.metadata`; readiness `ready: true` for the brand-only preview.
+- Character / source policy regression: **PASS** (see above).
+
+**Data preservation.** Counts before and after QA were identical: jobs 3 / 3,
+videos 3 / 3, media assets 0 / 0, character profiles 0 / 0, brands 0 / 0, custom
+templates 0 / 0, `generated_assets` 3 / 3, `video_revisions` 3 / 3, admin users
+1 / 1. All QA records were clearly named (`QA V2.3-05 Brand`,
+`QA V2.3-05 Template`) and removed by exact id afterward; the one built-in
+favorite preference row created for the smoke was also removed. No pre-existing
+brand, template, product, customer or development record was modified. Provider
+Vault rows and admin credentials were untouched.
+
+**Paid provider calls = 0.** All verification was local / deterministic. No
+ElevenLabs synthesis, AI image, or AI video call was made.
+
+**Auth QA session lifecycle.** The temporary QA session was revoked (row
+deleted) after testing; a subsequent request with that credential returned
+**HTTP 401**; zero `qa_` sessions remained.
+
+**Browser automation NOT RUN — local browser runtime unavailable.** Playwright /
+browser binaries were not installed for this milestone. Verification used
+authenticated API / runtime checks plus the built UI bundle loading from the
+rebuilt image. The Brands and Templates pages and the Create Video studio
+compile and ship in the image (`pnpm build` / Vite bundle PASS).
+
+**Security.** `git diff --check` clean; the committed diff carries no
+credentials, tokens, API keys, Provider Vault values, `.env` values, absolute
+private filesystem paths, QA scripts, QA outputs or browser artifacts. Normal
+Brand and Template API responses were scanned (~91 KB) and expose no filesystem
+paths, checksums, Provider Vault values, encrypted credentials, session values or
+private media storage internals.
+
+Provider note: the rebuilt stack's `.env` currently has no Pexels key, so stock
+readiness reports "not configured" — this is environment configuration, not a
+V2.3-05 regression, and V2.3-05 did not touch provider configuration.

@@ -31,6 +31,7 @@ import {
   productionJobSchema,
   productionSpecPreviewSchema,
   promptEnhanceRequestSchema,
+  reusableTemplateSchema,
   stageRetrySchema,
   voiceRevisionSchema,
 } from "./types";
@@ -118,20 +119,54 @@ import { motionEngine } from "./motion/motionEngine";
 type BrandRow = {
   id: string;
   name: string;
+  description?: string | null;
+  industry?: string | null;
+  tagline?: string | null;
   watermark_text: string;
   primary_color: string;
   secondary_color?: string | null;
   accent_color: string;
+  background_color?: string | null;
+  text_color?: string | null;
+  logo_asset_id?: string | null;
+  icon_asset_id?: string | null;
   logo_url?: string | null;
   website_url?: string | null;
   social_handle?: string | null;
-  caption_style: "none" | "clean" | "bold" | "minimal";
+  caption_style: string;
   include_outro: boolean;
   outro_text: string;
   contact_text: string;
   voice_profile?: Record<string, unknown> | null;
+  kit?: Record<string, unknown> | null;
+  revision?: number | null;
+  revisions?: Array<Record<string, unknown>> | null;
+  archived_at?: Date | null;
   is_default: boolean;
   created_at: Date;
+  updated_at: Date;
+};
+
+type TemplateRow = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  source: "custom";
+  base_template_id?: string | null;
+  favorite: boolean;
+  archived_at?: Date | null;
+  revision: number;
+  config: Record<string, unknown>;
+  variables: Array<Record<string, unknown>>;
+  revisions: Array<Record<string, unknown>>;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type TemplatePreferenceRow = {
+  template_id: string;
+  favorite: boolean;
   updated_at: Date;
 };
 
@@ -142,25 +177,318 @@ type SettingRow = {
 };
 
 function mapBrand(row: BrandRow) {
+  const kit = (row.kit || {}) as Record<string, any>;
+  const revision = row.revision || 1;
   return {
     id: row.id,
     name: row.name,
+    description: row.description || kit.description || "",
+    industry: row.industry || kit.industry || "",
+    tagline: row.tagline || kit.tagline || "",
     watermarkText: row.watermark_text,
     primaryColor: row.primary_color,
     secondaryColor: row.secondary_color || undefined,
     accentColor: row.accent_color,
+    backgroundColor: row.background_color || kit.backgroundColor || undefined,
+    textColor: row.text_color || kit.textColor || undefined,
+    logoAssetId: row.logo_asset_id || kit.logoAssetId || undefined,
+    iconAssetId: row.icon_asset_id || kit.iconAssetId || undefined,
     logoUrl: row.logo_url || undefined,
     websiteUrl: row.website_url || undefined,
     socialHandle: row.social_handle || undefined,
+    socialHandles: kit.socialHandles || {},
+    headingFont: kit.headingFont || "ibm_plex_sans_arabic",
+    bodyFont: kit.bodyFont || "ibm_plex_sans_arabic",
+    captionFont: kit.captionFont || "ibm_plex_sans_arabic",
     captionStyle: row.caption_style,
     includeOutro: row.include_outro,
     outroText: row.outro_text,
     contactText: row.contact_text,
     voiceProfile: row.voice_profile || undefined,
+    toneOfVoice: kit.toneOfVoice || "",
+    keywords: Array.isArray(kit.keywords) ? kit.keywords : [],
+    preferredPhrases: Array.isArray(kit.preferredPhrases) ? kit.preferredPhrases : [],
+    avoidPhrases: Array.isArray(kit.avoidPhrases) ? kit.avoidPhrases : [],
+    defaultCtaText: kit.defaultCtaText || "",
+    defaultLanguage: kit.defaultLanguage || "auto",
+    defaultDurationSeconds: kit.defaultDurationSeconds,
+    defaultAspectRatio: kit.defaultAspectRatio || "9:16",
+    defaultQuality: kit.defaultQuality || "standard",
+    defaultVisualSource: kit.defaultVisualSource || "auto_best",
+    defaultMusicMood: kit.defaultMusicMood,
+    defaultCharacterProfileId: kit.defaultCharacterProfileId,
+    watermark: kit.watermark || { enabled: false },
+    intro: kit.intro || { type: "none", durationSeconds: 0 },
+    outro: kit.outro || { type: row.include_outro ? "cta_card" : "none", durationSeconds: row.include_outro ? 2 : 0 },
+    palette: kit.palette,
+    revision,
+    revisions: Array.isArray(row.revisions) ? row.revisions.map((item) => ({
+      revision: item.revision,
+      createdAt: item.createdAt,
+      summary: item.summary,
+    })) : [],
+    archived: Boolean(row.archived_at),
+    archivedAt: row.archived_at?.toISOString(),
     isDefault: row.is_default,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+const TEMPLATE_CATEGORIES = ["social", "product", "business", "educational", "explainer", "event", "promotional"] as const;
+
+const BUILT_IN_TEMPLATE_CATEGORY: Record<string, (typeof TEMPLATE_CATEGORIES)[number]> = {
+  product_ad: "product",
+  restaurant_offer: "promotional",
+  real_estate_listing: "business",
+  educational_tip: "educational",
+  viral_curiosity: "social",
+  event_promo: "event",
+};
+
+function compactStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 30)
+    : [];
+}
+
+function brandKitFromInput(input: any) {
+  return {
+    brandName: input.name,
+    description: input.description || undefined,
+    industry: input.industry || undefined,
+    tagline: input.tagline || undefined,
+    watermarkText: input.watermarkText || "",
+    primaryColor: input.primaryColor,
+    secondaryColor: input.secondaryColor || undefined,
+    accentColor: input.accentColor,
+    backgroundColor: input.backgroundColor || undefined,
+    textColor: input.textColor || undefined,
+    logoAssetId: input.logoAssetId || undefined,
+    iconAssetId: input.iconAssetId || undefined,
+    logoUrl: input.logoUrl || undefined,
+    websiteUrl: input.websiteUrl || undefined,
+    socialHandle: input.socialHandle || undefined,
+    socialHandles: input.socialHandles || {},
+    headingFont: input.headingFont,
+    bodyFont: input.bodyFont,
+    captionFont: input.captionFont,
+    captionStyle: input.captionStyle,
+    includeOutro: input.includeOutro,
+    outroText: input.outroText || "",
+    contactText: input.contactText || "",
+    toneOfVoice: input.toneOfVoice || undefined,
+    keywords: compactStringArray(input.keywords),
+    preferredPhrases: compactStringArray(input.preferredPhrases),
+    avoidPhrases: compactStringArray(input.avoidPhrases),
+    defaultCtaText: input.defaultCtaText || undefined,
+    defaultLanguage: input.defaultLanguage,
+    defaultDurationSeconds: input.defaultDurationSeconds,
+    defaultAspectRatio: input.defaultAspectRatio,
+    defaultQuality: input.defaultQuality,
+    defaultVisualSource: input.defaultVisualSource,
+    defaultMusicMood: input.defaultMusicMood || undefined,
+    defaultCharacterProfileId: input.defaultCharacterProfileId || undefined,
+    watermark: input.watermark || { enabled: false },
+    intro: input.intro || { type: "none", durationSeconds: 0 },
+    outro: input.outro || { type: input.includeOutro ? "cta_card" : "none", durationSeconds: input.includeOutro ? 2 : 0 },
+  };
+}
+
+function brandRevisionEntry(revision: number, brand: ReturnType<typeof mapBrand>, summary: string) {
+  return {
+    revision,
+    createdAt: new Date().toISOString(),
+    summary,
+    snapshot: createBrandSnapshot(brand),
+  };
+}
+
+function createBrandSnapshot(brand: ReturnType<typeof mapBrand>) {
+  return {
+    brandId: brand.id,
+    brandName: brand.name,
+    revision: brand.revision || 1,
+    logoAssetId: brand.logoAssetId,
+    iconAssetId: brand.iconAssetId,
+    palette: {
+      customer: {
+        primaryColor: brand.primaryColor,
+        secondaryColor: brand.secondaryColor,
+        accentColor: brand.accentColor,
+        backgroundColor: brand.backgroundColor,
+        textColor: brand.textColor,
+      },
+      provenance: {
+        primaryColor: brand.primaryColor ? "customer" : "default",
+        secondaryColor: brand.secondaryColor ? "customer" : "derived",
+        accentColor: brand.accentColor ? "customer" : "default",
+        backgroundColor: brand.backgroundColor ? "customer" : "default",
+        textColor: brand.textColor ? "customer" : "derived",
+      },
+    },
+    typography: {
+      headingFont: brand.headingFont,
+      bodyFont: brand.bodyFont,
+      captionFont: brand.captionFont,
+    },
+    captionPreference: brand.captionStyle,
+    voicePreference: brand.voiceProfile,
+    cta: brand.defaultCtaText || brand.outroText,
+    watermark: brand.watermark,
+    intro: brand.intro,
+    outro: brand.outro,
+    websiteUrl: brand.websiteUrl,
+    socialHandle: brand.socialHandle,
+    socialHandles: brand.socialHandles,
+    toneOfVoice: brand.toneOfVoice,
+    keywords: brand.keywords,
+    preferredPhrases: brand.preferredPhrases,
+    avoidPhrases: brand.avoidPhrases,
+  };
+}
+
+async function getBrandById(db: V2Database, id?: string): Promise<ReturnType<typeof mapBrand> | null> {
+  if (!id) return null;
+  const rows = await db.query<BrandRow>("SELECT * FROM brands WHERE id = $1", [id]);
+  return rows[0] ? mapBrand(rows[0]) : null;
+}
+
+async function validateBrandMediaReferences(input: any) {
+  const ids = [input.logoAssetId, input.iconAssetId, input.watermark?.assetId].filter(Boolean) as string[];
+  for (const id of ids) {
+    const asset = await mediaUploadService.getAsset(id);
+    if (!asset || asset.status === "archived") throw new Error("Selected logo or watermark asset was not found.");
+    if (!asset.usability?.usableForLogo) throw new Error("Selected logo or watermark asset is not usable as a logo.");
+  }
+}
+
+function mapBuiltInTemplate(template: ReturnType<typeof listBusinessTemplates>[number], preferences: Map<string, boolean> = new Map()) {
+  return {
+    id: template.id,
+    name: template.displayName,
+    displayName: template.displayName,
+    description: template.description,
+    category: BUILT_IN_TEMPLATE_CATEGORY[template.id] || "business",
+    source: "built_in" as const,
+    builtIn: true,
+    custom: false,
+    favorite: preferences.get(template.id) === true,
+    archived: false,
+    revision: 1,
+    baseTemplateId: template.id,
+    targetUseCase: template.targetUseCase,
+    defaultTone: template.defaultTone,
+    suggestedDurationSeconds: template.suggestedDurationSeconds,
+    recommendedSceneCount: template.recommendedSceneCount,
+    targetDurationSeconds: template.targetDurationSeconds,
+    hookStyle: template.hookStyle,
+    ctaStyle: template.ctaStyle,
+    examplePrompt: template.examplePrompt,
+    pexelsSearchHints: template.pexelsSearchHints,
+    fallbackPexelsSearchHints: template.fallbackPexelsSearchHints,
+    qualityChecklist: template.qualityChecklist,
+    fields: template.fields,
+    variables: template.fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      type: field.type === "number" ? "number" : "text",
+      required: field.required,
+      defaultValue: "",
+      example: field.placeholder,
+      helpText: field.helperText,
+    })),
+    config: {
+      durationSeconds: template.targetDurationSeconds || template.suggestedDurationSeconds,
+      visualSource: "auto_best",
+      captionStyle: "bold",
+      quality: "standard",
+      aspectRatio: "9:16",
+    },
+  };
+}
+
+function mapCustomTemplate(row: TemplateRow) {
+  const variables = Array.isArray(row.variables) ? row.variables : [];
+  return {
+    id: row.id,
+    name: row.name,
+    displayName: row.name,
+    description: row.description,
+    category: row.category,
+    source: "custom" as const,
+    builtIn: false,
+    custom: true,
+    favorite: row.favorite,
+    archived: Boolean(row.archived_at),
+    archivedAt: row.archived_at?.toISOString(),
+    revision: row.revision,
+    baseTemplateId: row.base_template_id || undefined,
+    targetUseCase: row.description,
+    hookStyle: String(row.config?.creativeStyle || "Customer-defined opening"),
+    ctaStyle: String(row.config?.ctaBehavior || "Customer-defined CTA"),
+    examplePrompt: String(row.config?.promptGuidance || ""),
+    pexelsSearchHints: [],
+    qualityChecklist: [],
+    fields: variables.map((variable: any) => ({
+      key: variable.key,
+      label: variable.label,
+      type: variable.type === "number" ? "number" : variable.type === "text" ? "text" : "textarea",
+      required: Boolean(variable.required),
+      placeholder: variable.example,
+      helperText: variable.helpText,
+    })),
+    variables,
+    config: row.config || {},
+    revisions: Array.isArray(row.revisions) ? row.revisions.map((item) => ({
+      revision: item.revision,
+      createdAt: item.createdAt,
+      summary: item.summary,
+    })) : [],
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function templateSnapshot(template: any, resolvedVariables: Record<string, string> = {}) {
+  return {
+    templateId: template.id,
+    templateRevision: template.revision || 1,
+    templateName: template.displayName || template.name,
+    source: template.source,
+    baseTemplateId: template.baseTemplateId,
+    resolvedConfiguration: template.config || {},
+    resolvedVariables,
+  };
+}
+
+function validateTemplateVariables(template: any, values: Record<string, string> = {}) {
+  const missing: string[] = [];
+  const resolved: Record<string, string> = {};
+  for (const variable of template.variables || []) {
+    const value = String(values[variable.key] ?? variable.defaultValue ?? "").trim();
+    if (variable.required && !value) missing.push(variable.label || variable.key);
+    if (value) resolved[variable.key] = value;
+  }
+  const unresolved = Object.values(resolved).filter((value) => /\{\{[^}]+\}\}/.test(value));
+  return { ok: missing.length === 0 && unresolved.length === 0, missing, unresolved, resolved };
+}
+
+function applyVariablesToText(text: string | undefined, values: Record<string, string>) {
+  if (!text) return text;
+  return text.replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g, (_match, key) => values[key] || "");
+}
+
+async function getTemplateForSnapshot(db: V2Database, id?: string): Promise<any | null> {
+  if (!id) return null;
+  const builtIn = listBusinessTemplates().map((template) => mapBuiltInTemplate(template)).find((template) => template.id === id);
+  if (builtIn) return builtIn;
+  try {
+    const rows = await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [id]);
+    return rows[0] ? mapCustomTemplate(rows[0]) : null;
+  } catch {
+    return null;
+  }
 }
 
 function redactConfiguredKey(key?: string) {
@@ -528,26 +856,86 @@ async function canonicalizeProductionSpecForRequest(
 ) {
   const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
   const canonical = canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
+  const brandId = String(controls.brandId || canonical.brandId || "").trim();
+  const templateId = String(controls.templateId || controls.businessTemplateId || canonical.templateId || "").trim();
+  const brand = await getBrandById(db, brandId).catch(() => null);
+  const template = await getTemplateForSnapshot(db, templateId).catch(() => null);
+  const brandSnapshot = brand ? createBrandSnapshot(brand) : undefined;
+  const baseMetadata = {
+    ...(canonical.metadata || {}),
+    ...(brandSnapshot ? { brandSnapshot } : {}),
+    ...(template ? { templateSnapshot: templateSnapshot(template, controls.templateVariables || controls.businessTemplateData || {}) } : {}),
+    resolutionPrecedence: [
+      "Per-video explicit override",
+      "Selected Template value",
+      "Selected Brand default",
+      "System/user default",
+      "Engine fallback",
+    ],
+  };
+  const withSnapshots = validateProductionSpec({
+    ...canonical,
+    brandId: brandId || canonical.brandId,
+    templateId: templateId || canonical.templateId,
+    brandKit: brandSnapshot ? {
+      ...(canonical.brandKit || {}),
+      brandName: brand?.name,
+      description: brand?.description,
+      industry: brand?.industry,
+      tagline: brand?.tagline,
+      watermarkText: brand?.watermarkText,
+      primaryColor: brand?.primaryColor,
+      secondaryColor: brand?.secondaryColor,
+      accentColor: brand?.accentColor,
+      backgroundColor: brand?.backgroundColor,
+      textColor: brand?.textColor,
+      logoAssetId: brand?.logoAssetId,
+      iconAssetId: brand?.iconAssetId,
+      websiteUrl: brand?.websiteUrl,
+      socialHandle: brand?.socialHandle,
+      headingFont: brand?.headingFont,
+      bodyFont: brand?.bodyFont,
+      captionFont: brand?.captionFont,
+      captionStyle: canonical.captionStyle || brand?.captionStyle,
+      includeOutro: brand?.includeOutro,
+      outroText: brand?.outroText,
+      contactText: brand?.contactText,
+      voiceProfile: brand?.voiceProfile as any,
+      watermark: brand?.watermark as any,
+      intro: brand?.intro as any,
+      outro: brand?.outro as any,
+    } : canonical.brandKit,
+    metadata: {
+      ...baseMetadata,
+      uiContract: {
+        ...((baseMetadata as any).uiContract || {}),
+        brandId: brandId || undefined,
+        brandRevision: brandSnapshot?.revision,
+        templateId: templateId || undefined,
+        templateRevision: template?.revision,
+      },
+    },
+  });
   const characterProfileId = characterProfileIdFromControls(controls);
-  if (!characterProfileId) return canonical;
+  if (!characterProfileId) return withSnapshots;
 
   const providerIds = new Set<string>();
-  const aiVisualProvider = String(controls.aiVisualProvider || (canonical.metadata as any)?.uiContract?.aiVisualProvider || "auto");
+  const aiVisualProvider = String(controls.aiVisualProvider || (withSnapshots.metadata as any)?.uiContract?.aiVisualProvider || "auto");
   if (aiVisualProvider !== "auto") providerIds.add(aiVisualProvider);
   const referenceProviders = referenceCapableVisualProviders(providerIds);
   const snapshot = await mediaUploadService.snapshotCharacter(characterProfileId, {
     id: referenceProviders[0],
     supportsReferenceImages: referenceProviders.length > 0,
   });
-  if (!snapshot) return canonical;
+  if (!snapshot) return withSnapshots;
   return validateProductionSpec({
-    ...canonical,
+    ...withSnapshots,
     metadata: {
-      ...(canonical.metadata || {}),
+      ...(withSnapshots.metadata || {}),
       characterProfileId,
       characterSnapshot: snapshot,
       uiContract: {
-        ...((canonical.metadata as any)?.uiContract || {}),
+        ...((withSnapshots.metadata as any)?.uiContract || {}),
         characterProfileId,
         characterConsistencyMode:
           snapshot.consistencyMode === "reference_guided"
@@ -1772,12 +2160,28 @@ export function createV2PublicRouter(
           templateData: (resolvedPayload as any).businessTemplateData,
           config: (resolvedPayload as any).config,
           title: (resolvedPayload as any).title,
+          brandId: (resolvedPayload as any).brandId,
         });
+        const canonicalSpec = await canonicalizeProductionSpecForRequest(db, generatedSpec, {
+          ...rawPayload,
+          templateId: (resolvedPayload as any).businessTemplateId,
+          brandId: (resolvedPayload as any).brandId || generatedSpec.brandId,
+        });
+        const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
+        if (!readiness.ready) {
+          res.status(409).json({
+            error: "production_not_runnable",
+            message: readiness.missingRequirements[0] || "This production setup is not runnable.",
+            readiness,
+            action: readiness.capabilities.find((cap) => cap.required && !cap.ready)?.action,
+          });
+          return;
+        }
         resolvedPayload = {
           type: "video",
           creationMode: "template",
-          title: (resolvedPayload as any).title || generatedSpec.title,
-          productionSpec: generatedSpec,
+          title: (resolvedPayload as any).title || canonicalSpec.title,
+          productionSpec: canonicalSpec,
           idempotencyKey: resolvedPayload.idempotencyKey,
         } as any;
       }
@@ -1980,7 +2384,251 @@ export function createV2PublicRouter(
   });
 
   router.get("/templates", async (req, res) => {
-    res.status(200).json({ templates: listBusinessTemplates() });
+    const includeArchived = req.query.includeArchived === "true";
+    let preferences = new Map<string, boolean>();
+    try {
+      const preferenceRows = await db.query<TemplatePreferenceRow>("SELECT * FROM video_template_preferences");
+      preferences = new Map(preferenceRows.map((row) => [row.template_id, row.favorite]));
+    } catch {
+      preferences = new Map();
+    }
+    const builtIns = listBusinessTemplates().map((template) => mapBuiltInTemplate(template, preferences));
+    let custom: ReturnType<typeof mapCustomTemplate>[] = [];
+    try {
+      const rows = await db.query<TemplateRow>(
+        `SELECT * FROM video_templates
+         WHERE ($1::boolean = true OR archived_at IS NULL)
+         ORDER BY favorite DESC, updated_at DESC, name ASC`,
+        [includeArchived],
+      );
+      custom = rows.map(mapCustomTemplate);
+    } catch {
+      custom = [];
+    }
+    res.status(200).json({
+      templates: [...builtIns, ...custom],
+      categories: TEMPLATE_CATEGORIES,
+    });
+  });
+
+  router.post("/templates", async (req, res) => {
+    const parsed = reusableTemplateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid template payload", issues: parsed.error.flatten() });
+      return;
+    }
+    const id = cuid();
+    const revision = {
+      revision: 1,
+      createdAt: new Date().toISOString(),
+      summary: "Created reusable template",
+      snapshot: {
+        templateId: id,
+        templateName: parsed.data.name,
+        resolvedConfiguration: parsed.data.config,
+        variables: parsed.data.variables,
+      },
+    };
+    const rows = await db.query<TemplateRow>(
+      `INSERT INTO video_templates (
+        id, name, description, category, source, base_template_id, favorite,
+        archived_at, revision, config, variables, revisions, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,'custom',$5,$6,$7,1,$8::jsonb,$9::jsonb,$10::jsonb,now(),now())
+      RETURNING *`,
+      [
+        id,
+        parsed.data.name,
+        parsed.data.description,
+        parsed.data.category,
+        parsed.data.baseTemplateId || null,
+        parsed.data.favorite,
+        parsed.data.archived ? new Date() : null,
+        JSON.stringify(parsed.data.config),
+        JSON.stringify(parsed.data.variables),
+        JSON.stringify([revision]),
+      ],
+    );
+    res.status(201).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.put("/templates/:id", async (req, res) => {
+    if (listBusinessTemplates().some((template) => template.id === req.params.id)) {
+      res.status(409).json({ error: "Built-in templates cannot be edited. Duplicate it first." });
+      return;
+    }
+    const parsed = reusableTemplateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid template payload", issues: parsed.error.flatten() });
+      return;
+    }
+    const existingRows = await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [req.params.id]);
+    if (!existingRows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    const nextRevision = existingRows[0].revision + 1;
+    const revisions = [
+      ...(Array.isArray(existingRows[0].revisions) ? existingRows[0].revisions : []),
+      {
+        revision: nextRevision,
+        createdAt: new Date().toISOString(),
+        summary: "Updated reusable template",
+        snapshot: {
+          templateId: req.params.id,
+          templateName: parsed.data.name,
+          resolvedConfiguration: parsed.data.config,
+          variables: parsed.data.variables,
+        },
+      },
+    ];
+    const rows = await db.query<TemplateRow>(
+      `UPDATE video_templates
+       SET name = $2,
+           description = $3,
+           category = $4,
+           base_template_id = $5,
+           favorite = $6,
+           archived_at = CASE WHEN $7::boolean THEN COALESCE(archived_at, now()) ELSE NULL END,
+           revision = $8,
+           config = $9::jsonb,
+           variables = $10::jsonb,
+           revisions = $11::jsonb,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        req.params.id,
+        parsed.data.name,
+        parsed.data.description,
+        parsed.data.category,
+        parsed.data.baseTemplateId || null,
+        parsed.data.favorite,
+        parsed.data.archived,
+        nextRevision,
+        JSON.stringify(parsed.data.config),
+        JSON.stringify(parsed.data.variables),
+        JSON.stringify(revisions),
+      ],
+    );
+    res.status(200).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/duplicate", async (req, res) => {
+    const builtIn = listBusinessTemplates().map((template) => mapBuiltInTemplate(template)).find((template) => template.id === req.params.id);
+    const customRows = builtIn ? [] : await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [req.params.id]);
+    const source = builtIn || (customRows[0] ? mapCustomTemplate(customRows[0]) : null);
+    if (!source) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    const id = cuid();
+    const rows = await db.query<TemplateRow>(
+      `INSERT INTO video_templates (
+        id, name, description, category, source, base_template_id, favorite,
+        revision, config, variables, revisions, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,'custom',$5,false,1,$6::jsonb,$7::jsonb,$8::jsonb,now(),now())
+      RETURNING *`,
+      [
+        id,
+        `${source.displayName || source.name} Copy`,
+        source.description || "",
+        source.category || "social",
+        source.baseTemplateId || source.id,
+        JSON.stringify(source.config || {}),
+        JSON.stringify(source.variables || []),
+        JSON.stringify([{ revision: 1, createdAt: new Date().toISOString(), summary: "Duplicated template" }]),
+      ],
+    );
+    res.status(201).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/favorite", async (req, res) => {
+    const favorite = req.body?.favorite !== false;
+    const builtIn = listBusinessTemplates().some((template) => template.id === req.params.id);
+    if (builtIn) {
+      const rows = await db.query<TemplatePreferenceRow>(
+        `INSERT INTO video_template_preferences (template_id, favorite, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (template_id) DO UPDATE SET favorite = EXCLUDED.favorite, updated_at = now()
+         RETURNING *`,
+        [req.params.id, favorite],
+      );
+      const template = mapBuiltInTemplate(
+        listBusinessTemplates().find((item) => item.id === req.params.id)!,
+        new Map([[req.params.id, rows[0]?.favorite ?? favorite]]),
+      );
+      res.status(200).json({ template });
+      return;
+    }
+    const rows = await db.query<TemplateRow>(
+      "UPDATE video_templates SET favorite = $2, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id, favorite],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    res.status(200).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.delete("/templates/:id", async (req, res) => {
+    if (listBusinessTemplates().some((template) => template.id === req.params.id)) {
+      res.status(409).json({ error: "Built-in templates cannot be archived. Duplicate it first." });
+      return;
+    }
+    const rows = await db.query<TemplateRow>(
+      "UPDATE video_templates SET archived_at = now(), updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    res.status(200).json({ success: true, archived: true, template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/restore", async (req, res) => {
+    const rows = await db.query<TemplateRow>(
+      "UPDATE video_templates SET archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    res.status(200).json({ template: mapCustomTemplate(rows[0]) });
+  });
+
+  router.post("/templates/:id/resolve", async (req, res) => {
+    const builtIn = listBusinessTemplates().map((template) => mapBuiltInTemplate(template)).find((template) => template.id === req.params.id);
+    const customRows = builtIn ? [] : await db.query<TemplateRow>("SELECT * FROM video_templates WHERE id = $1", [req.params.id]);
+    const template = builtIn || (customRows[0] ? mapCustomTemplate(customRows[0]) : null);
+    if (!template) {
+      res.status(404).json({ error: "Template not found." });
+      return;
+    }
+    const validation = validateTemplateVariables(template, req.body?.variables || {});
+    if (!validation.ok) {
+      res.status(400).json({
+        error: "Template variables need attention.",
+        missing: validation.missing,
+        unresolved: validation.unresolved.length,
+      });
+      return;
+    }
+    const templateConfig = (template.config || {}) as Record<string, unknown>;
+    const resolvedConfig = {
+      ...templateConfig,
+      promptGuidance: applyVariablesToText(templateConfig.promptGuidance as string | undefined, validation.resolved),
+    };
+    res.status(200).json({
+      template,
+      resolvedConfig,
+      resolvedVariables: validation.resolved,
+      snapshot: templateSnapshot({ ...template, config: resolvedConfig }, validation.resolved),
+    });
   });
 
   router.get("/voices", async (req, res) => {
@@ -2862,8 +3510,12 @@ export function createV2PublicRouter(
   });
 
   router.get("/brands", async (req, res) => {
+    const includeArchived = req.query.includeArchived === "true";
     const rows = await db.query<BrandRow>(
-      "SELECT * FROM brands ORDER BY is_default DESC, updated_at DESC, name ASC",
+      `SELECT * FROM brands
+       WHERE ($1::boolean = true OR archived_at IS NULL)
+       ORDER BY is_default DESC, updated_at DESC, name ASC`,
+      [includeArchived],
     );
     res.status(200).json({ brands: rows.map(mapBrand) });
   });
@@ -2877,7 +3529,14 @@ export function createV2PublicRouter(
       });
       return;
     }
+    try {
+      await validateBrandMediaReferences(parsed.data);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid brand media reference." });
+      return;
+    }
     const id = cuid();
+    const kit = brandKitFromInput(parsed.data);
     if (parsed.data.isDefault) {
       await db.query("UPDATE brands SET is_default = false");
     }
@@ -2885,9 +3544,13 @@ export function createV2PublicRouter(
       `INSERT INTO brands (
         id, name, watermark_text, primary_color, accent_color, caption_style,
         include_outro, outro_text, contact_text, voice_profile, is_default,
-        secondary_color, logo_url, website_url, social_handle, created_at, updated_at
+        secondary_color, logo_url, website_url, social_handle,
+        description, industry, tagline, logo_asset_id, icon_asset_id,
+        background_color, text_color, heading_font, body_font, caption_font,
+        kit, revision, revisions, created_at, updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),now())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+              $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,1,'[]',now(),now())
       RETURNING *`,
       [
         id,
@@ -2905,9 +3568,25 @@ export function createV2PublicRouter(
         parsed.data.logoUrl || null,
         parsed.data.websiteUrl || null,
         parsed.data.socialHandle || null,
+        parsed.data.description || null,
+        parsed.data.industry || null,
+        parsed.data.tagline || null,
+        parsed.data.logoAssetId || null,
+        parsed.data.iconAssetId || null,
+        parsed.data.backgroundColor || null,
+        parsed.data.textColor || null,
+        parsed.data.headingFont || null,
+        parsed.data.bodyFont || null,
+        parsed.data.captionFont || null,
+        JSON.stringify(kit),
       ],
     );
-    res.status(201).json({ brand: mapBrand(rows[0]) });
+    const brand = mapBrand(rows[0]);
+    await db.query("UPDATE brands SET revisions = $2::jsonb WHERE id = $1", [
+      id,
+      JSON.stringify([brandRevisionEntry(1, brand, "Created Brand Kit")]),
+    ]);
+    res.status(201).json({ brand: { ...brand, revisions: [{ revision: 1, createdAt: new Date().toISOString(), summary: "Created Brand Kit" }] } });
   });
 
   router.put("/brands/:id", async (req, res) => {
@@ -2919,11 +3598,26 @@ export function createV2PublicRouter(
       });
       return;
     }
+    try {
+      await validateBrandMediaReferences(parsed.data);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid brand media reference." });
+      return;
+    }
+    const existing = await getBrandById(db, req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
     if (parsed.data.isDefault) {
       await db.query("UPDATE brands SET is_default = false WHERE id <> $1", [
         req.params.id,
       ]);
     }
+    const kit = brandKitFromInput(parsed.data);
+    const nextRevision = (existing.revision || 1) + 1;
+    const previousRows = await db.query<BrandRow>("SELECT revisions FROM brands WHERE id = $1", [req.params.id]);
+    const previousRevisions = Array.isArray(previousRows[0]?.revisions) ? previousRows[0].revisions : [];
     const rows = await db.query<BrandRow>(
       `UPDATE brands
        SET name = $2,
@@ -2940,6 +3634,20 @@ export function createV2PublicRouter(
            logo_url = $13,
            website_url = $14,
            social_handle = $15,
+           description = $16,
+           industry = $17,
+           tagline = $18,
+           logo_asset_id = $19,
+           icon_asset_id = $20,
+           background_color = $21,
+           text_color = $22,
+           heading_font = $23,
+           body_font = $24,
+           caption_font = $25,
+           kit = $26::jsonb,
+           revision = $27,
+           revisions = $28::jsonb,
+           archived_at = CASE WHEN $29::boolean THEN archived_at ELSE NULL END,
            updated_at = now()
        WHERE id = $1
        RETURNING *`,
@@ -2959,6 +3667,32 @@ export function createV2PublicRouter(
         parsed.data.logoUrl || null,
         parsed.data.websiteUrl || null,
         parsed.data.socialHandle || null,
+        parsed.data.description || null,
+        parsed.data.industry || null,
+        parsed.data.tagline || null,
+        parsed.data.logoAssetId || null,
+        parsed.data.iconAssetId || null,
+        parsed.data.backgroundColor || null,
+        parsed.data.textColor || null,
+        parsed.data.headingFont || null,
+        parsed.data.bodyFont || null,
+        parsed.data.captionFont || null,
+        JSON.stringify(kit),
+        nextRevision,
+        JSON.stringify([
+          ...previousRevisions,
+          {
+            revision: nextRevision,
+            createdAt: new Date().toISOString(),
+            summary: "Updated Brand Kit",
+            snapshot: {
+              brandId: req.params.id,
+              brandName: parsed.data.name,
+              revision: nextRevision,
+            },
+          },
+        ]),
+        parsed.data.archived === true,
       ],
     );
     if (!rows[0]) {
@@ -2971,7 +3705,7 @@ export function createV2PublicRouter(
   router.post("/brands/:id/default", async (req, res) => {
     await db.query("UPDATE brands SET is_default = false");
     const rows = await db.query<BrandRow>(
-      "UPDATE brands SET is_default = true, updated_at = now() WHERE id = $1 RETURNING *",
+      "UPDATE brands SET is_default = true, archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *",
       [req.params.id],
     );
     if (!rows[0]) {
@@ -2981,16 +3715,87 @@ export function createV2PublicRouter(
     res.status(200).json({ brand: mapBrand(rows[0]) });
   });
 
-  router.delete("/brands/:id", async (req, res) => {
+  router.post("/brands/:id/duplicate", async (req, res) => {
+    const source = await getBrandById(db, req.params.id);
+    if (!source) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    const duplicate = brandProfileSchema.parse({
+      ...source,
+      name: `${source.name} Copy`,
+      isDefault: false,
+    });
+    const kit = brandKitFromInput(duplicate);
     const rows = await db.query<BrandRow>(
-      "DELETE FROM brands WHERE id = $1 RETURNING *",
+      `INSERT INTO brands (
+        id, name, watermark_text, primary_color, accent_color, caption_style,
+        include_outro, outro_text, contact_text, voice_profile, is_default,
+        secondary_color, logo_url, website_url, social_handle,
+        description, industry, tagline, logo_asset_id, icon_asset_id,
+        background_color, text_color, heading_font, body_font, caption_font,
+        kit, revision, revisions, created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,$11,$12,$13,$14,
+              $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,1,'[]',now(),now())
+      RETURNING *`,
+      [
+        cuid(),
+        duplicate.name,
+        duplicate.watermarkText,
+        duplicate.primaryColor,
+        duplicate.accentColor,
+        duplicate.captionStyle,
+        duplicate.includeOutro,
+        duplicate.outroText,
+        duplicate.contactText,
+        duplicate.voiceProfile ? JSON.stringify(duplicate.voiceProfile) : null,
+        duplicate.secondaryColor || null,
+        duplicate.logoUrl || null,
+        duplicate.websiteUrl || null,
+        duplicate.socialHandle || null,
+        duplicate.description || null,
+        duplicate.industry || null,
+        duplicate.tagline || null,
+        duplicate.logoAssetId || null,
+        duplicate.iconAssetId || null,
+        duplicate.backgroundColor || null,
+        duplicate.textColor || null,
+        duplicate.headingFont || null,
+        duplicate.bodyFont || null,
+        duplicate.captionFont || null,
+        JSON.stringify(kit),
+      ],
+    );
+    res.status(201).json({ brand: mapBrand(rows[0]) });
+  });
+
+  router.delete("/brands/:id", async (req, res) => {
+    const usage = await db.query<{ count: string }>("SELECT count(*) as count FROM jobs WHERE brand_name = (SELECT name FROM brands WHERE id = $1)", [req.params.id]);
+    const hasUsage = Number(usage[0]?.count || 0) > 0;
+    const rows = await db.query<BrandRow>(
+      hasUsage
+        ? "UPDATE brands SET archived_at = now(), is_default = false, updated_at = now() WHERE id = $1 RETURNING *"
+        : "UPDATE brands SET archived_at = now(), is_default = false, updated_at = now() WHERE id = $1 RETURNING *",
       [req.params.id],
     );
     if (!rows[0]) {
       res.status(404).json({ error: "Brand not found." });
       return;
     }
-    res.status(200).json({ success: true });
+    res.status(200).json({ success: true, archived: true, dependencyAware: hasUsage, brand: mapBrand(rows[0]) });
+  });
+
+  router.post("/brands/:id/restore", async (req, res) => {
+    const rows = await db.query<BrandRow>(
+      "UPDATE brands SET archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *",
+      [req.params.id],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: "Brand not found." });
+      return;
+    }
+    res.status(200).json({ brand: mapBrand(rows[0]) });
   });
 
   // 1. System Info & Diagnostics

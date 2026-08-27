@@ -125,6 +125,8 @@ export const templateJobInputSchema = z.preprocess(
     creationMode: z.literal("template").optional().default("template"),
     businessTemplateId: z.string().trim().min(1).max(80),
     businessTemplateData: z.record(z.string()).optional(),
+    brandId: z.string().trim().max(140).optional(),
+    templateVariables: z.record(z.string()).optional(),
     config: renderConfig.optional(),
     requestedDurationSeconds: z.number().min(5).max(120).optional(),
     durationSeconds: z.number().min(5).max(120).optional(),
@@ -342,19 +344,59 @@ export type ComponentHealth = {
 
 export const brandProfileSchema = z.object({
   name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional().default(""),
+  industry: z.string().trim().max(120).optional().default(""),
+  tagline: z.string().trim().max(160).optional().default(""),
   watermarkText: z.string().trim().max(120).optional().default(""),
   primaryColor: z.string().trim().min(1).max(40).optional().default("#24545a"),
   // Optional so an existing brand keeps validating; the style resolver derives a
   // neutral companion rather than inventing a colour the customer never gave.
   secondaryColor: z.string().trim().max(40).optional(),
   accentColor: z.string().trim().min(1).max(40).optional().default("#d28b4c"),
+  backgroundColor: z.string().trim().max(40).optional().default("#ffffff"),
+  textColor: z.string().trim().max(40).optional().default("#0f172a"),
+  logoAssetId: z.string().trim().max(160).optional(),
+  iconAssetId: z.string().trim().max(160).optional(),
   logoUrl: z.string().trim().max(500).optional(),
   websiteUrl: z.string().trim().max(300).optional(),
   socialHandle: z.string().trim().max(120).optional(),
-  captionStyle: z.enum(["clean", "bold", "minimal"]).optional().default("bold"),
+  socialHandles: z.record(z.string().trim().max(120)).optional().default({}),
+  headingFont: z.enum(["ibm_plex_sans_arabic", "noto_sans_arabic", "noto_kufi_arabic", "cairo", "system_sans"]).optional().default("ibm_plex_sans_arabic"),
+  bodyFont: z.enum(["ibm_plex_sans_arabic", "noto_sans_arabic", "noto_kufi_arabic", "cairo", "system_sans"]).optional().default("ibm_plex_sans_arabic"),
+  captionFont: z.enum(["ibm_plex_sans_arabic", "noto_sans_arabic", "noto_kufi_arabic", "cairo", "system_sans"]).optional().default("ibm_plex_sans_arabic"),
+  captionStyle: captionStyleEnum.optional().default("bold"),
   includeOutro: z.boolean().optional().default(true),
   outroText: z.string().trim().max(220).optional().default(""),
   contactText: z.string().trim().max(180).optional().default(""),
+  toneOfVoice: z.string().trim().max(300).optional().default(""),
+  keywords: z.array(z.string().trim().max(80)).max(30).optional().default([]),
+  preferredPhrases: z.array(z.string().trim().max(120)).max(30).optional().default([]),
+  avoidPhrases: z.array(z.string().trim().max(120)).max(30).optional().default([]),
+  defaultCtaText: z.string().trim().max(220).optional().default(""),
+  defaultLanguage: videoLanguageEnum.optional().default("auto"),
+  defaultDurationSeconds: z.number().min(5).max(120).optional(),
+  defaultAspectRatio: aspectRatioEnum.optional().default("9:16"),
+  defaultQuality: qualityProfileEnum.optional().default("standard"),
+  defaultVisualSource: z.enum(["auto_best", "stock", "uploaded_media", "ai_generated", "mixed"]).optional().default("auto_best"),
+  defaultMusicMood: z.string().trim().max(80).optional(),
+  defaultCharacterProfileId: z.string().trim().max(160).optional(),
+  watermark: z.object({
+    enabled: z.boolean().optional().default(false),
+    assetId: z.string().trim().max(160).optional(),
+    position: z.enum(["top_left", "top_right", "bottom_left", "bottom_right"]).optional().default("bottom_right"),
+    size: z.enum(["small", "medium", "large"]).optional().default("small"),
+    opacity: z.number().min(0).max(1).optional().default(0.82),
+    respectSafeZone: z.boolean().optional().default(true),
+  }).optional().default({ enabled: false }),
+  intro: z.object({
+    type: z.enum(["none", "logo_reveal", "brand_title"]).optional().default("none"),
+    durationSeconds: z.number().min(0).max(3).optional().default(0),
+  }).optional().default({ type: "none", durationSeconds: 0 }),
+  outro: z.object({
+    type: z.enum(["none", "cta_card", "logo_website", "logo_social"]).optional().default("cta_card"),
+    durationSeconds: z.number().min(0).max(3).optional().default(2),
+  }).optional().default({ type: "cta_card", durationSeconds: 2 }),
+  archived: z.boolean().optional().default(false),
   isDefault: z.boolean().optional().default(false),
   voiceProfile: z
     .object({
@@ -366,6 +408,42 @@ export const brandProfileSchema = z.object({
       pronunciationDictionary: z.record(z.string().trim().max(120)).optional().default({}),
     })
     .optional(),
+});
+
+export const templateVariableSchema = z.object({
+  key: z.string().trim().regex(/^[a-zA-Z][a-zA-Z0-9_]{1,40}$/),
+  label: z.string().trim().min(1).max(80),
+  type: z.enum(["text", "number", "date", "url", "media_asset"]).default("text"),
+  required: z.boolean().optional().default(false),
+  defaultValue: z.string().trim().max(300).optional(),
+  example: z.string().trim().max(160).optional(),
+  helpText: z.string().trim().max(240).optional(),
+});
+
+export const reusableTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional().default(""),
+  category: z.enum(["social", "product", "business", "educational", "explainer", "event", "promotional"]).optional().default("social"),
+  baseTemplateId: z.string().trim().max(80).optional(),
+  favorite: z.boolean().optional().default(false),
+  archived: z.boolean().optional().default(false),
+  config: z.object({
+    productionMode: productionModeEnum.optional(),
+    contentStyle: z.string().trim().max(80).optional(),
+    creativeStyle: z.string().trim().max(80).optional(),
+    durationSeconds: z.number().min(5).max(120).optional(),
+    aspectRatio: aspectRatioEnum.optional(),
+    quality: qualityProfileEnum.optional(),
+    visualSource: z.enum(["auto_best", "stock", "uploaded_media", "ai_generated", "mixed"]).optional(),
+    mediaPolicy: z.enum(["auto_use_selected", "only_selected"]).optional(),
+    captionStyle: captionStyleEnum.optional(),
+    musicMood: z.string().trim().max(80).optional(),
+    brandId: z.string().trim().max(140).optional(),
+    characterProfileId: z.string().trim().max(160).optional(),
+    selectedMediaIds: z.array(z.string().trim().max(160)).max(24).optional().default([]),
+    promptGuidance: z.string().trim().max(1000).optional(),
+  }).optional().default({}),
+  variables: z.array(templateVariableSchema).max(12).optional().default([]),
 });
 
 export const appSettingsSchema = z.object({

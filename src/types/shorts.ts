@@ -91,11 +91,38 @@ export enum MusicVolumeEnum {
   high = "high",
 }
 
-export const captionStyleEnum = z.enum(["clean", "bold", "minimal"]);
+export const captionStyleEnum = z.enum([
+  "clean_professional",
+  "social_ad",
+  "minimal",
+  "kinetic_phrase",
+  "karaoke",
+  "legacy_cairo",
+  "none",
+  "cinematic",
+  "viral_bold",
+  "clean",
+  "product_ad",
+  "educational",
+  "bold",
+  "viral",
+  "brand",
+]);
 export type CaptionStyle = z.infer<typeof captionStyleEnum>;
+
+const brandFontEnum = z.enum([
+  "ibm_plex_sans_arabic",
+  "noto_sans_arabic",
+  "noto_kufi_arabic",
+  "cairo",
+  "system_sans",
+]);
 
 export const brandKitSchema = z.object({
   brandName: z.string().optional(),
+  description: z.string().max(500).optional(),
+  industry: z.string().max(120).optional(),
+  tagline: z.string().max(160).optional(),
   watermarkText: z.string().optional(),
   primaryColor: z.string().optional(),
   // Added in V2.2 so a Brand Profile can drive a full palette rather than two
@@ -103,13 +130,49 @@ export const brandKitSchema = z.object({
   // style resolver derives neutrals instead of inventing brand colours.
   secondaryColor: z.string().optional(),
   accentColor: z.string().optional(),
+  backgroundColor: z.string().optional(),
+  textColor: z.string().optional(),
+  logoAssetId: z.string().max(160).optional(),
+  iconAssetId: z.string().max(160).optional(),
   logoUrl: z.string().max(500).optional(),
   websiteUrl: z.string().max(300).optional(),
   socialHandle: z.string().max(120).optional(),
+  socialHandles: z.record(z.string().max(120)).optional(),
+  headingFont: brandFontEnum.optional(),
+  bodyFont: brandFontEnum.optional(),
+  captionFont: brandFontEnum.optional(),
   captionStyle: captionStyleEnum.optional(),
   includeOutro: z.boolean().optional(),
   outroText: z.string().optional(),
   contactText: z.string().optional(),
+  toneOfVoice: z.string().max(300).optional(),
+  keywords: z.array(z.string().max(80)).max(30).optional(),
+  preferredPhrases: z.array(z.string().max(120)).max(30).optional(),
+  avoidPhrases: z.array(z.string().max(120)).max(30).optional(),
+  defaultCtaText: z.string().max(220).optional(),
+  defaultLanguage: z.enum(["auto", "ar", "en"]).optional(),
+  defaultDurationSeconds: z.number().min(5).max(120).optional(),
+  defaultAspectRatio: z.enum(["9:16", "16:9", "1:1"]).optional(),
+  defaultQuality: z.enum(["draft", "standard", "high", "max_quality_local"]).optional(),
+  defaultVisualSource: z.enum(["auto_best", "stock", "uploaded_media", "ai_generated", "mixed"]).optional(),
+  defaultMusicMood: z.string().max(80).optional(),
+  defaultCharacterProfileId: z.string().max(160).optional(),
+  watermark: z.object({
+    enabled: z.boolean().optional(),
+    assetId: z.string().max(160).optional(),
+    position: z.enum(["top_left", "top_right", "bottom_left", "bottom_right"]).optional(),
+    size: z.enum(["small", "medium", "large"]).optional(),
+    opacity: z.number().min(0).max(1).optional(),
+    respectSafeZone: z.boolean().optional(),
+  }).optional(),
+  intro: z.object({
+    type: z.enum(["none", "logo_reveal", "brand_title"]).optional(),
+    durationSeconds: z.number().min(0).max(3).optional(),
+  }).optional(),
+  outro: z.object({
+    type: z.enum(["none", "cta_card", "logo_website", "logo_social"]).optional(),
+    durationSeconds: z.number().min(0).max(3).optional(),
+  }).optional(),
   voiceProfile: z
     .object({
       provider: z.enum(["auto", "kokoro", "piper", "google_cloud_tts", "elevenlabs"]).optional(),

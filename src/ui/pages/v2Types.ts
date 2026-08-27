@@ -97,17 +97,38 @@ export type V2HealthComponent = {
 export type BusinessTemplateField = {
   key: string;
   label: string;
-  type: "text" | "textarea" | "number" | "select";
+  type: "text" | "textarea" | "number" | "select" | "date" | "url" | "media_asset";
   required: boolean;
   placeholder?: string;
   helperText?: string;
   options?: string[];
 };
 
+export type TemplateVariable = {
+  key: string;
+  label: string;
+  type: "text" | "number" | "date" | "url" | "media_asset";
+  required?: boolean;
+  defaultValue?: string;
+  example?: string;
+  helpText?: string;
+};
+
 export type BusinessTemplateOption = {
   id: string;
+  name?: string;
   displayName: string;
   description: string;
+  category?: string;
+  source?: "built_in" | "custom";
+  builtIn?: boolean;
+  custom?: boolean;
+  favorite?: boolean;
+  archived?: boolean;
+  revision?: number;
+  baseTemplateId?: string;
+  config?: Record<string, any>;
+  variables?: TemplateVariable[];
   targetUseCase: string;
   defaultTone?: string;
   suggestedDurationSeconds?: number;
@@ -125,17 +146,50 @@ export type BusinessTemplateOption = {
 export type V2Brand = {
   id: string;
   name: string;
+  description?: string;
+  industry?: string;
+  tagline?: string;
   watermarkText?: string;
   primaryColor?: string;
   secondaryColor?: string;
   accentColor?: string;
+  backgroundColor?: string;
+  textColor?: string;
+  logoAssetId?: string;
+  iconAssetId?: string;
   logoUrl?: string;
   websiteUrl?: string;
   socialHandle?: string;
-  captionStyle?: "none" | "clean" | "bold" | "minimal";
+  socialHandles?: Record<string, string>;
+  headingFont?: string;
+  bodyFont?: string;
+  captionFont?: string;
+  captionStyle?: string;
   includeOutro?: boolean;
   outroText?: string;
   contactText?: string;
+  toneOfVoice?: string;
+  keywords?: string[];
+  preferredPhrases?: string[];
+  avoidPhrases?: string[];
+  defaultCtaText?: string;
+  defaultLanguage?: "auto" | "ar" | "en";
+  defaultDurationSeconds?: number;
+  defaultAspectRatio?: string;
+  defaultQuality?: string;
+  defaultVisualSource?: string;
+  defaultMusicMood?: string;
+  defaultCharacterProfileId?: string;
+  watermark?: {
+    enabled?: boolean;
+    assetId?: string;
+    position?: string;
+    size?: string;
+    opacity?: number;
+    respectSafeZone?: boolean;
+  };
+  intro?: { type?: string; durationSeconds?: number };
+  outro?: { type?: string; durationSeconds?: number };
   voiceProfile?: {
     provider?: "auto" | "kokoro" | "piper" | "google_cloud_tts" | "elevenlabs";
     voiceId?: string;
@@ -144,6 +198,10 @@ export type V2Brand = {
     pace?: string;
     pronunciationDictionary?: Record<string, string>;
   };
+  revision?: number;
+  revisions?: Array<{ revision: number; createdAt: string; summary?: string }>;
+  archived?: boolean;
+  archivedAt?: string;
   isDefault?: boolean;
   createdAt: string;
   updatedAt: string;

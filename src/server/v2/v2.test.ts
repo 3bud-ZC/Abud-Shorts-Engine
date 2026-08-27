@@ -61,6 +61,8 @@ class FakeDb {
   public events: any[] = [];
   public assets: any[] = [];
   public brands = new Map<string, any>();
+  public templates = new Map<string, any>();
+  public templatePreferences = new Map<string, any>();
   public settings = new Map<string, any>();
 
   async query(text: string, values: any[] = []) {
@@ -72,8 +74,20 @@ class FakeDb {
       this.settings.set(values[0], values[1]);
       return [{ key: values[0], value: values[1], updated_at: new Date() }];
     }
+    if (text.includes("SELECT count(*) as count FROM jobs WHERE brand_name")) {
+      return [{ count: "0" }];
+    }
+    if (text.includes("SELECT revisions FROM brands WHERE id")) {
+      const row = this.brands.get(values[0]);
+      return row ? [{ revisions: row.revisions || [] }] : [];
+    }
+    if (text.includes("SELECT * FROM brands WHERE id")) {
+      const row = this.brands.get(values[0]);
+      return row ? [row] : [];
+    }
     if (text.includes("SELECT * FROM brands")) {
-      return Array.from(this.brands.values());
+      const includeArchived = values[0] === true;
+      return Array.from(this.brands.values()).filter((row) => includeArchived || !row.archived_at);
     }
     if (text.includes("UPDATE brands SET is_default = false WHERE id <>")) {
       for (const [id, row] of this.brands) {
@@ -87,6 +101,8 @@ class FakeDb {
     }
     if (text.includes("INSERT INTO brands")) {
       const now = new Date();
+      const defaultIndex = values.length === 26 ? 10 : -1;
+      const offset = values.length === 26 ? 0 : -1;
       const row = {
         id: values[0],
         name: values[1],
@@ -97,19 +113,48 @@ class FakeDb {
         include_outro: values[6],
         outro_text: values[7],
         contact_text: values[8],
-        voice_profile: values.length > 10 ? values[9] : null,
-        is_default: values.length > 10 ? values[10] : values[9],
+        voice_profile: values[9] ? JSON.parse(values[9]) : null,
+        is_default: defaultIndex >= 0 ? values[defaultIndex] : false,
+        secondary_color: values[11 + offset] || null,
+        logo_url: values[12 + offset] || null,
+        website_url: values[13 + offset] || null,
+        social_handle: values[14 + offset] || null,
+        description: values[15 + offset] || null,
+        industry: values[16 + offset] || null,
+        tagline: values[17 + offset] || null,
+        logo_asset_id: values[18 + offset] || null,
+        icon_asset_id: values[19 + offset] || null,
+        background_color: values[20 + offset] || null,
+        text_color: values[21 + offset] || null,
+        heading_font: values[22 + offset] || null,
+        body_font: values[23 + offset] || null,
+        caption_font: values[24 + offset] || null,
+        kit: values[25 + offset] ? JSON.parse(values[25 + offset]) : {},
+        revision: 1,
+        revisions: [],
+        archived_at: null,
         created_at: now,
         updated_at: now,
       };
       this.brands.set(row.id, row);
       return [row];
     }
+    if (text.includes("UPDATE brands SET revisions")) {
+      const row = this.brands.get(values[0]);
+      if (row) row.revisions = JSON.parse(values[1]);
+      return [];
+    }
     if (text.includes("UPDATE brands") && text.includes("RETURNING *")) {
       const row = this.brands.get(values[0]);
       if (!row) return [];
       if (text.includes("SET is_default = true")) {
         row.is_default = true;
+        row.archived_at = null;
+      } else if (text.includes("SET archived_at = now()")) {
+        row.archived_at = new Date();
+        row.is_default = false;
+      } else if (text.includes("SET archived_at = NULL")) {
+        row.archived_at = null;
       } else {
         row.name = values[1];
         row.watermark_text = values[2];
@@ -119,8 +164,26 @@ class FakeDb {
         row.include_outro = values[6];
         row.outro_text = values[7];
         row.contact_text = values[8];
-        row.voice_profile = values.length > 10 ? values[9] : null;
-        row.is_default = values.length > 10 ? values[10] : values[9];
+        row.voice_profile = values[9] ? JSON.parse(values[9]) : null;
+        row.is_default = values[10];
+        row.secondary_color = values[11] || null;
+        row.logo_url = values[12] || null;
+        row.website_url = values[13] || null;
+        row.social_handle = values[14] || null;
+        row.description = values[15] || null;
+        row.industry = values[16] || null;
+        row.tagline = values[17] || null;
+        row.logo_asset_id = values[18] || null;
+        row.icon_asset_id = values[19] || null;
+        row.background_color = values[20] || null;
+        row.text_color = values[21] || null;
+        row.heading_font = values[22] || null;
+        row.body_font = values[23] || null;
+        row.caption_font = values[24] || null;
+        row.kit = values[25] ? JSON.parse(values[25]) : {};
+        row.revision = values[26] || row.revision;
+        row.revisions = values[27] ? JSON.parse(values[27]) : row.revisions;
+        row.archived_at = values[28] === true ? row.archived_at : null;
       }
       row.updated_at = new Date();
       return [row];
@@ -129,6 +192,67 @@ class FakeDb {
       const row = this.brands.get(values[0]);
       if (!row) return [];
       this.brands.delete(values[0]);
+      return [row];
+    }
+    if (text.includes("SELECT * FROM video_template_preferences")) {
+      return Array.from(this.templatePreferences.values());
+    }
+    if (text.includes("INSERT INTO video_template_preferences")) {
+      const row = { template_id: values[0], favorite: values[1], updated_at: new Date() };
+      this.templatePreferences.set(row.template_id, row);
+      return [row];
+    }
+    if (text.includes("SELECT * FROM video_templates WHERE id")) {
+      const row = this.templates.get(values[0]);
+      return row ? [row] : [];
+    }
+    if (text.includes("SELECT * FROM video_templates")) {
+      const includeArchived = values[0] === true;
+      return Array.from(this.templates.values()).filter((row) => includeArchived || !row.archived_at);
+    }
+    if (text.includes("INSERT INTO video_templates")) {
+      const now = new Date();
+      const row = {
+        id: values[0],
+        name: values[1],
+        description: values[2],
+        category: values[3],
+        source: "custom",
+        base_template_id: values[4] || null,
+        favorite: values[5] === true,
+        archived_at: text.includes("archived_at") && values[6] ? new Date(values[6]) : null,
+        revision: 1,
+        config: JSON.parse(text.includes("archived_at") ? values[7] : values[5]),
+        variables: JSON.parse(text.includes("archived_at") ? values[8] : values[6]),
+        revisions: JSON.parse(text.includes("archived_at") ? values[9] : values[7]),
+        created_at: now,
+        updated_at: now,
+      };
+      this.templates.set(row.id, row);
+      return [row];
+    }
+    if (text.includes("UPDATE video_templates") && text.includes("RETURNING *")) {
+      const row = this.templates.get(values[0]);
+      if (!row) return [];
+      if (text.includes("SET favorite = $2")) {
+        row.favorite = values[1] === true;
+      } else if (text.includes("SET archived_at = now()")) {
+        row.archived_at = new Date();
+      } else if (text.includes("SET archived_at = NULL")) {
+        row.archived_at = null;
+      } else {
+        row.name = values[1];
+        row.description = values[2];
+        row.category = values[3];
+        row.base_template_id = values[4] || null;
+        row.favorite = values[5] === true;
+        row.archived_at = values[6] === true ? row.archived_at || new Date() : null;
+        row.revision = values[7];
+        row.config = JSON.parse(values[8]);
+        row.variables = JSON.parse(values[9]);
+        row.revisions = JSON.parse(values[10]);
+      }
+      row.updated_at = new Date();
       return [row];
     }
     if (text.includes("INSERT INTO jobs")) {
@@ -880,6 +1004,8 @@ describe("V2 routes", () => {
     await request(app).delete(`/api/v2/brands/${created.body.brand.id}`).set(authHeader).expect(200);
     const empty = await request(app).get("/api/v2/brands").set(authHeader).expect(200);
     expect(empty.body.brands).toHaveLength(0);
+    const archived = await request(app).get("/api/v2/brands?includeArchived=true").set(authHeader).expect(200);
+    expect(archived.body.brands[0].archived).toBe(true);
   });
 
   it("serves backend template definitions through V2", async () => {
@@ -890,6 +1016,66 @@ describe("V2 routes", () => {
 
     const response = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
     expect(response.body.templates.some((template: any) => template.id === "product_ad")).toBe(true);
+  });
+
+  it("creates, resolves, favorites, archives, and restores reusable video templates", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const favorite = await request(app)
+      .post("/api/v2/templates/product_ad/favorite")
+      .set(authHeader)
+      .send({ favorite: true })
+      .expect(200);
+    expect(favorite.body.template.favorite).toBe(true);
+
+    const created = await request(app)
+      .post("/api/v2/templates")
+      .set(authHeader)
+      .send({
+        name: "Launch Offer",
+        description: "Reusable launch offer template",
+        category: "promotional",
+        favorite: true,
+        config: {
+          durationSeconds: 15,
+          visualSource: "stock",
+          captionStyle: "social_ad",
+          promptGuidance: "Launch {{productName}} with {{offer}}.",
+        },
+        variables: [
+          { key: "productName", label: "Product", type: "text", required: true },
+          { key: "offer", label: "Offer", type: "text", required: true },
+        ],
+      })
+      .expect(201);
+    expect(created.body.template.custom).toBe(true);
+    expect(created.body.template.revision).toBe(1);
+
+    const resolved = await request(app)
+      .post(`/api/v2/templates/${created.body.template.id}/resolve`)
+      .set(authHeader)
+      .send({ variables: { productName: "ABUD Studio", offer: "20% off" } })
+      .expect(200);
+    expect(resolved.body.resolvedConfig.promptGuidance).toContain("ABUD Studio");
+    expect(resolved.body.snapshot.resolvedVariables.offer).toBe("20% off");
+
+    await request(app)
+      .delete(`/api/v2/templates/${created.body.template.id}`)
+      .set(authHeader)
+      .expect(200);
+    const active = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
+    expect(active.body.templates.some((template: any) => template.id === created.body.template.id)).toBe(false);
+
+    await request(app)
+      .post(`/api/v2/templates/${created.body.template.id}/restore`)
+      .set(authHeader)
+      .expect(200);
+    const listed = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
+    expect(listed.body.templates.some((template: any) => template.id === created.body.template.id)).toBe(true);
   });
 });
 
