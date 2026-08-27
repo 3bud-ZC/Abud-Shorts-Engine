@@ -30,7 +30,9 @@ const STATUS_MAP: Record<string, LocalizedStatus> = {
   active: { key: "statuses.inProgress", tone: "info" },
   planning: { key: "statuses.stage.planning", tone: "info" },
   generating_content: { key: "statuses.stage.planning", tone: "info" },
-  preparing: { key: "statuses.inProgress", tone: "info" },
+  preparing: { key: "statuses.preparing", tone: "info" },
+  generating: { key: "statuses.generating", tone: "info" },
+  cancelling: { key: "statuses.cancelling", tone: "neutral" },
   processing: { key: "statuses.inProgress", tone: "info" },
   searching_assets: { key: "statuses.stage.collectingMedia", tone: "info" },
   collecting_media: { key: "statuses.stage.collectingMedia", tone: "info" },
@@ -107,6 +109,27 @@ export function localizedStatus(raw?: string | boolean | null): LocalizedStatus 
   if (!value) return STATUS_MAP.not_configured;
 
   return STATUS_MAP[value] || { key: "statuses.needsAttention", tone: "warning" };
+}
+
+/**
+ * The customer-facing Production vocabulary emitted by the backend
+ * (`job.customerStatus`). Kept here so the Productions list, Production Details
+ * and the dashboard all render the same word and colour for the same state.
+ */
+export const CUSTOMER_PRODUCTION_STATUS: Record<string, LocalizedStatus> = {
+  queued: { key: "statuses.queued", tone: "info" },
+  preparing: { key: "statuses.preparing", tone: "info" },
+  generating: { key: "statuses.generating", tone: "info" },
+  rendering: { key: "statuses.stage.rendering", tone: "info" },
+  ready: { key: "statuses.ready", tone: "success" },
+  needs_attention: { key: "statuses.needsAttention", tone: "warning" },
+  cancelling: { key: "statuses.cancelling", tone: "neutral" },
+  cancelled: { key: "statuses.cancelled", tone: "neutral" },
+};
+
+export function customerProductionStatus(raw?: string | null): LocalizedStatus {
+  if (!raw) return { key: "statuses.needsAttention", tone: "warning" };
+  return CUSTOMER_PRODUCTION_STATUS[raw] || { key: "statuses.needsAttention", tone: "warning" };
 }
 
 /** MUI severity colour for a tone, so the two never drift apart. */

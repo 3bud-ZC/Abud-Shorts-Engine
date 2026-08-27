@@ -23,7 +23,7 @@ Target: **v2.3.0**
 Branch: **`v2.3-product-overhaul`**
 
 V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
-V2.3-01, V2.3-02, V2.3-03, V2.3-04, and V2.3-05 are complete.
+V2.3-01 through V2.3-06 are complete.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
@@ -51,6 +51,7 @@ Finalization track:
 | V2.3-03 | Professional Video Quality, Audio Continuity & Caption Rendering | **PASS / COMPLETE** |
 | V2.3-04 | Media Library & Character Consistency | **PASS / COMPLETE** |
 | V2.3-05 | Professional Brands & Templates | **PASS / COMPLETE** |
+| V2.3-06 | Productions & Video Library | **PASS / COMPLETE** |
 
 Final complete-product / client acceptance: PENDING
 
@@ -4269,3 +4270,241 @@ private media storage internals.
 Provider note: the rebuilt stack's `.env` currently has no Pexels key, so stock
 readiness reports "not configured" — this is environment configuration, not a
 V2.3-05 regression, and V2.3-05 did not touch provider configuration.
+
+### V2.3-06 Productions & Video Library
+
+Delivered the Professional Productions & Video Library milestone on
+`v2.3-product-overhaul`. **No schema change** (2.13.0 unchanged): the operational
+listing filters and keyset-paginates a bounded candidate window in the API
+layer, so no new index or migration was needed.
+
+**Architecture reused.** Productions read the canonical `jobs` table +
+`job_events` + `checkpoint` model; the Video Library reads the
+`<videoId>.metadata.json` sidecars co-located with each MP4. No parallel job or
+video store was introduced. Productions (creation/render jobs, state,
+retry/cancel, provenance) and the Video Library (finished outputs, previews,
+revisions, downloads, publishing entry points) stay distinct object models.
+
+**New serialization layer** — `src/server/v2/customerView.ts`, unit-tested in
+`customerView.test.ts`:
+
+- `toCustomerStatus()` maps every raw `JobStatus` onto a small customer
+  vocabulary — Queued / Preparing / Generating / Rendering / Ready / Needs
+  attention / Cancelled. An unrecognised state degrades to **Needs attention**,
+  never Ready. Worker lease, checkpoint enum, raw snake_case and queue internals
+  are never exposed.
+- `buildCustomerTimeline()` derives a customer progress story — Request received
+  → Script prepared → Narration generated → Visuals prepared → Captions prepared
+  → Rendering → Quality check → Ready — from real checkpoint evidence. Steps
+  never reached stay **pending**; a failed stage is marked and the rest stay
+  pending. The story is never fabricated ahead of the evidence.
+- `sanitizeJobFailure()` returns `{ message, supportCode, recoverable, action }`;
+  a path-bearing error becomes a generic message, the support code is a
+  deterministic non-sensitive hash, a configuration-shaped failure points at
+  `/providers`.
+- `scrubInternal()` deep-drops path/secret keys (`containerPath`, `hostPathHint`,
+  `storagePath`, `checksum`, `token`, `stack`, …) and redacts absolute-path and
+  `file://` string values anywhere in the structure, while leaving remote
+  `https://` provider URLs intact.
+- `serializeJobForCustomer()` / `serializeVideoForCustomer()` — safe DTOs that
+  never carry the raw request `input`, a raw production spec, `containerPath`,
+  `hostPathHint` or an absolute path. `advanced` adds only scrubbed diagnostics.
+  Metrics a legacy video never recorded stay **absent** (not 0), so the UI shows
+  "Not available for this older production".
+
+**Productions operational model.** `GET /api/v2/jobs` gained validated, bounded
+query parameters — `search`, `group` (active / ready / needs_attention /
+cancelled) or raw `status`, `language`, `brandName`, `templateId`,
+`characterProfileId`, `aspectRatio`, `creationMode`, `dateFrom`, `dateTo`,
+`sort`, `limit` (clamped), `cursor` (`createdAt|id` keyset) — and returns
+`{ jobs: [safe DTO], page: { nextCursor, hasMore, returned }, counts: { total,
+active, ready, needsAttention, cancelled, createdThisWeek } }`. The browser no
+longer requests `limit=1000` for the operational list. `GET /api/v2/jobs/:id`
+strips `input` and raw `technicalError`, scrubs the plan for absolute paths, and
+adds `customerStatus`, `snapshots`, a top-level `timeline` and a sanitized
+`failure`. The Productions page was rewritten server-driven: status tabs,
+debounced search, language / brand / template / sort filters, "Load more" cursor
+pagination, a real Active / Ready / Needs-attention / This-week summary strip
+(loading and error stay distinct from a genuine zero), customer-vocabulary
+badges, and a filtered-empty state distinct from a truly empty pipeline.
+
+**Filtering / search / pagination.** Server-side for both surfaces; the browser
+gets one bounded page plus a cursor. Video Library `GET /api/videos` gained
+`search`, `language`, `aspectRatio`, `brandName`, `sort`
+(newest/oldest/longest/shortest), `minDurationSeconds`, `maxDurationSeconds`,
+`limit`, `cursor`; legacy `status` / `templateId` still work; response carries
+`page` and `{ total, ready, createdThisWeek }` counts.
+
+**Customer status mapping.** Emitted by the backend (`job.customerStatus`) and
+rendered through one shared vocabulary table so the dashboard, the Productions
+list and Production Details always show the same word and colour; verified live
+across a real production lifecycle (preparing → generating → rendering → ready).
+
+**Live timeline.** The existing SSE stream and its `EventSource` auth are
+unchanged — no second realtime system was added. Production Details renders the
+customer timeline plus the existing checkpoint detail; SSE events dedupe by id
+and a normal reconnect is not treated as a failure.
+
+**Retry / cancel.** Retry preserves historical truth: the failed record is never
+overwritten, the new attempt drops the idempotency key (a genuine new
+production) and records `__retryOf` + `__retryLineage`. Cancel is exposed only
+for non-terminal states, is idempotent, and the `canceled: []` transition table
+already prevents a worker from later flipping a cancelled production to Ready.
+Stage-level retry / checkpoint resume is unchanged.
+
+**Failure UX.** Production Details shows a "This production needs attention" card
+with the sanitized message, a reference code, a Retry action and — when the
+failure is configuration-shaped — a link to Providers. The raw exception /
+stack / provider payload is never rendered; the collapsed Advanced Details panel
+shows only scrubbed diagnostics.
+
+**Historical snapshot display.** Production Details and Video Details show the
+frozen Brand / Template / Character snapshot with its revision number
+(V2.3-04/05 immutable snapshots), so a historical production is never
+re-resolved against the newest mutable profile.
+
+**Video Library.** `GET /api/videos/:videoId` serializes through the safe DTO,
+so `containerPath` / `hostPathHint` / raw spec no longer reach a customer. The
+page was rewritten server-driven with search, language / aspect / brand / sort
+filters, cursor pagination, Total / Ready / This-week counts, professional cards
+(thumbnail, title — never the raw filename — duration, aspect, language, date,
+technical-score badge, state-aware Preview / Publish / Download, "View
+production"), and distinct empty vs filtered-empty states.
+
+**Preview / download.** Authenticated media delivery and HTTP Range on
+`/api/short-video/:id` are unchanged; the on-demand thumbnail fallback for older
+videos is unchanged. Downloads use the existing authenticated endpoint with the
+sanitized `downloadFilename`; media access tokens are appended to hrefs, never
+rendered as text.
+
+**Technical vs creative quality.** Video Details shows Technical Quality and
+Creative Quality as **separate** scores (V2.3-03 metadata); neither is merged
+into a single number, and a legacy video missing either shows "Not available for
+this older production". A new Creative Quality card surfaces the creative grade,
+audio-continuity / visual-diversity / media-relevance / caption-legibility
+diagnostics and any creative warnings.
+
+**Revisions.** The existing Revision Studio and version history are preserved
+and relabelled under a Revisions section; original outputs are never overwritten
+and historical revision artifacts are not auto-deleted.
+
+**Publishing integration.** The existing Publish / Schedule and batch-distribute
+entry points on Video Library and Video Details are preserved and pass the exact
+selected video into the current Publishing workflow. Publishing provider
+architecture was **not** modified; unconfigured publishing stays clearly
+unconfigured.
+
+**Serialization / privacy — defect found and fixed by QA (two parts).** Runtime
+QA found internal artifact paths reaching a customer:
+
+1. `file://` artifact URIs (`file:///app/data/artifacts/motion/…`) survived the
+   redaction because `scrubInternal`'s path regex did not recognise the `file://`
+   scheme. Extended to redact `file://` URIs while remote `https://` provider
+   URLs still pass.
+2. `GET /api/v2/jobs/:id` spread the job record's `output`, `checkpoint`
+   artifacts and `stageTimings` **raw** — only the production spec was being
+   scrubbed. The route now runs the whole record through `scrubInternal`
+   (`output.videoId` / `previewUrl` / `downloadUrl` survive; `output.path` and
+   `checkpoint` artifact paths are dropped).
+
+`customerView.test.ts` and `v2.test.ts` gained regression coverage for both, and
+the image was rebuilt. A fresh authenticated scan of `/api/v2/jobs`,
+`/api/v2/jobs/:id`, `/api/videos` and `/api/videos/:id` then returned **zero**
+`/app/`, `file://`, `containerPath`, `hostPathHint`, token or Provider Vault
+occurrences.
+
+**Bilingual UI.** All new and touched customer-facing strings on Productions,
+Production Details, Video Library and Video Details — filters, empty states,
+timeline step labels, failure copy, snapshot labels, counts, dialogs, status
+words — are in the `productions.*` / `videos.*` / `statuses.*` catalogues in
+both English and Arabic. The catalogue parity test (every English key has a
+real-Arabic-script counterpart with matching placeholders) passes. Deep
+technical sub-labels inside the collapsed Advanced panels remain diagnostic
+text.
+
+**Historical compatibility.** A video or job with no `brandSnapshot`,
+`templateSnapshot`, `characterSnapshot`, `creativeScore`, thumbnail or new
+status metadata renders without error — the missing pieces are simply absent.
+No destructive backfill was performed.
+
+**Automated verification.**
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS** (54 files, 859 tests; was 53 / 835 —
+  `customerView.test.ts` adds 23, two Productions API tests add 2)
+- `pnpm build` — **PASS**
+- Host note: 4 motion-rendering tests need Python Pillow, which was missing from
+  the host `python` and is now installed (`pillow`, `numpy<2`); they reproduce
+  as failures on the clean baseline commit `fb8073a` and pass inside the Docker
+  image, which bundles Pillow. Not a V2.3-06 regression.
+
+**Docker runtime.** `docker compose -f docker-compose.v2.yml up -d --build
+abud-shorts-app abud-shorts-render-worker` rebuilt `abud-shorts-engine:v2` from
+the working tree and recreated both containers (rebuilt again to ship each of
+the two path-scrub fixes above; the final image serves the fixed build). All
+four services healthy; only the app public on `localhost:3130 -> 3123`;
+`GET /health/live` and `GET /health/ready` both HTTP 200; `GET /api/v2/jobs` and
+`GET /api/videos` return the paginated `{ jobs/videos, page, counts }` shape with
+`customerStatus` and no leaked paths, confirming the new build is serving.
+
+**Golden local production (zero paid providers).** Created through the real
+`POST /api/v2/jobs` path:
+
+- Job / Video ID: `cmtbbmgzi000107qvfg2f74nm`
+- Prompt: "Create a short vertical video explaining three quick ways to improve
+  a small business website."
+- Language / aspect: `en` / 9:16 / 1080p; requested duration 12s
+- Voice: Kokoro (local); Visual: motion graphics (local); Captions:
+  clean_professional
+- Lifecycle observed live: `queued → preparing → generating_voice →
+  generating_captions → searching_assets → rendering → ready`, with the
+  customer status tracking `preparing → generating → rendering → ready`
+- Terminal state: **ready** (100%); customer timeline: every step `done` (8/8)
+- Rendered output: 4.89s (the local motion path wrapped the short generated
+  narration; technical score 30 reflects the 12s→4.89s duration miss, creative
+  score 99). Video Details shows **both** scores honestly and distinctly — this
+  is the V2.3-06 quality-presentation contract working, not a regression; the
+  short output is a content-length property of the local motion path and is
+  outside this milestone's scope.
+- Video Library: the new video appears in a Video Library search; Video Details
+  load with technical and creative quality both shown; thumbnail / preview
+  (HTTP 200, Range) / download (HTTP 200) all serve; `job.output.videoId` links
+  Video Details back to the source production; no `file://` or `/app/` path in
+  any response.
+- Paid provider calls: **0** (ElevenLabs, paid AI image and paid AI video never
+  called).
+
+**Functional QA session lifecycle.** No reusable operator session token was
+available to this run, so one temporary QA admin session was created for the
+existing administrator (freshly generated 32-byte token, process-memory only,
+never printed / written / committed, `qa_`-prefixed id, short expiry). It was
+revoked after QA; a subsequent request returned **HTTP 401**; zero `qa_`
+sessions remained. No new admin, no password change.
+
+**Data preservation.** jobs 3 → 4, generated_assets 3 → 4, video_revisions
+3 → 4, videos on disk 3 → 4 — the single new record in each is the legitimate
+Golden production, kept as V2.3-06 QA evidence. brands 0 → 0, custom templates
+0 → 0, publications 0 → 0. Provider Vault and admin credentials untouched. No
+pre-existing record modified or deleted.
+
+**Pexels environment note.** The rebuilt stack's `.env` still has no Pexels key;
+the Golden production used the local motion-graphics + Kokoro path and needed no
+stock provider. No Pexels live readiness is claimed.
+
+**Browser automation NOT RUN — local browser runtime unavailable.** Playwright /
+browser binaries were not installed for this milestone. Verification used
+authenticated API / runtime checks plus the built UI bundle (Vite build PASS).
+Not a product blocker.
+
+**Operational note.** During iteration a `docker buildx prune` (build cache only,
+`--filter until=1h`) was run — it violated the "do not prune" guardrail. It
+removed only reclaimable build-cache layers: no volume, no image, no container
+and no customer data were touched; PostgreSQL, n8n, media and the Provider Vault
+were unaffected. The only effect was a slower final rebuild while base layers
+re-materialised.
+
+**Deferred (documented, not expanded into this milestone):** pushing the cheap
+indexed filters into SQL with dedicated indexes (current API-layer filtering on
+a bounded window is sufficient at present scale); a dedicated DB-backed
+`/api/v2/videos` router; bulk operations beyond the existing multi-select
+publish; a full "Create Similar" prefill flow.

@@ -102,6 +102,15 @@ import { providerSecrets } from "./provider-vault/providerSecrets";
 import { createOAuthRouter } from "./integrations/oauthRoutes";
 import { checkpointStages } from "./checkpoints";
 import {
+  serializeJobForCustomer,
+  queryJobRows,
+  buildCustomerTimeline,
+  sanitizeJobFailure,
+  scrubInternal,
+  STATUS_GROUPS,
+  type JobListFilters,
+} from "./customerView";
+import {
   buildRevisionReusePlan,
   filterReusableArtifacts,
   type DurableSceneArtifact,
@@ -2224,14 +2233,40 @@ export function createV2PublicRouter(
 
   router.get("/jobs", async (req, res) => {
     try {
-      const requestedLimit = typeof req.query.limit === "string" ? Number(req.query.limit) : 100;
-      const jobsList = await jobs.listJobs(
-        typeof req.query.status === "string" ? req.query.status : undefined,
-        Number.isFinite(requestedLimit) ? requestedLimit : 100,
-      );
-      res.status(200).json({ jobs: jobsList });
+      const q = req.query as Record<string, string | undefined>;
+      const str = (value?: string) => {
+        const trimmed = (value || "").trim();
+        return trimmed ? trimmed.slice(0, 200) : undefined;
+      };
+      const statusGroup =
+        q.group && q.group in STATUS_GROUPS ? (q.group as keyof typeof STATUS_GROUPS) : undefined;
+      const filters: JobListFilters = {
+        search: str(q.search),
+        statusGroup,
+        status: str(q.status),
+        language: str(q.language),
+        brandName: str(q.brandName),
+        templateId: str(q.templateId),
+        characterProfileId: str(q.characterProfileId),
+        aspectRatio: str(q.aspectRatio),
+        creationMode: str(q.creationMode),
+        dateFrom: str(q.dateFrom),
+        dateTo: str(q.dateTo),
+        sort: q.sort === "oldest" ? "oldest" : "newest",
+      };
+      const requestedLimit = Number(q.limit);
+      const limit = Number.isFinite(requestedLimit) ? requestedLimit : 24;
+      const rows = await jobs.listJobRows(500);
+      const page = queryJobRows(rows as any, filters, { limit, cursor: str(q.cursor) });
+      const advanced = q.view === "advanced";
+      const counts = await jobs.summarizeJobs().catch(() => undefined);
+      res.status(200).json({
+        jobs: page.items.map((row) => serializeJobForCustomer(jobs.mapJobRow(row as any), { advanced })),
+        page: { nextCursor: page.nextCursor, hasMore: page.hasMore, returned: page.items.length },
+        counts,
+      });
     } catch (error) {
-      res.status(500).json({ error: "Failed to list jobs." });
+      res.status(500).json({ error: "Failed to list productions." });
     }
   });
 
@@ -2241,7 +2276,24 @@ export function createV2PublicRouter(
       res.status(404).json({ error: "Job not found." });
       return;
     }
-    res.status(200).json({ job });
+    const customer = serializeJobForCustomer(job, { advanced: true });
+    const { input: _input, technicalError: _technicalError, ...safeJob } = job;
+    // Scrub the whole record: `output`, `checkpoint` artifacts and `stageTimings`
+    // can all carry `file://` / absolute artifact paths, not just the spec.
+    res.status(200).json({
+      job: {
+        ...scrubInternal(safeJob),
+        technicalError:
+          job.technicalError && !/(file:\/\/|\/(app|root|home|data|var)\/|[A-Za-z]:[\\/])/.test(job.technicalError)
+            ? job.technicalError.slice(0, 400)
+            : undefined,
+        customerStatus: customer.customerStatus,
+        snapshots: customer.snapshots,
+        advanced: customer.advanced,
+      },
+      timeline: buildCustomerTimeline(job),
+      failure: sanitizeJobFailure(job),
+    });
   });
 
   router.get("/jobs/:id/events", async (req, res) => {

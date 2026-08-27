@@ -335,6 +335,16 @@ class FakeDb {
     if (text.includes("SELECT * FROM jobs WHERE status")) {
       return Array.from(this.jobs.values()).filter((job) => job.status === values[0]);
     }
+    if (text.includes("SELECT status, count(*)") && text.includes("FROM jobs")) {
+      const counts = new Map<string, number>();
+      for (const job of this.jobs.values()) {
+        counts.set(job.status, (counts.get(job.status) || 0) + 1);
+      }
+      return Array.from(counts.entries()).map(([status, count]) => ({ status, count }));
+    }
+    if (text.includes("count(*)::int AS count FROM jobs WHERE created_at")) {
+      return [{ count: this.jobs.size }];
+    }
     if (text.includes("SELECT * FROM jobs ORDER BY")) {
       return Array.from(this.jobs.values());
     }
@@ -1076,6 +1086,108 @@ describe("V2 routes", () => {
       .expect(200);
     const listed = await request(app).get("/api/v2/templates").set(authHeader).expect(200);
     expect(listed.body.templates.some((template: any) => template.id === created.body.template.id)).toBe(true);
+  });
+
+  it("serves Productions as a paginated, filtered, customer-safe list", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const now = Date.now();
+    for (let index = 0; index < 8; index += 1) {
+      db.jobs.set(`job_${index}`, {
+        id: `job_${index}`,
+        type: "video",
+        status: index % 2 === 0 ? "failed" : "ready",
+        progress: 100,
+        current_stage: "Ready",
+        title: `Production ${index}`,
+        original_prompt: index === 3 ? "unique kingfisher prompt" : "generic prompt",
+        language: index % 2 === 0 ? "en" : "ar",
+        aspect_ratio: "9:16",
+        creation_mode: "prompt",
+        brand_name: index < 2 ? "ACME" : null,
+        production_spec: {
+          userPrompt: "generic",
+          metadata: { brandSnapshot: { brandName: "ACME", revision: 2 } },
+        },
+        input: { prompt: "x", idempotencyKey: `key_${index}`, secretThing: "do-not-leak" },
+        error: index % 2 === 0 ? "Stock provider is not configured." : null,
+        output: index % 2 === 1 ? { videoId: `job_${index}` } : null,
+        checkpoint: {},
+        stage_timings: {},
+        created_at: new Date(now - index * 60000),
+        updated_at: new Date(now - index * 60000),
+      });
+    }
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const page1 = await request(app).get("/api/v2/jobs?limit=3").set(authHeader).expect(200);
+    expect(page1.body.jobs).toHaveLength(3);
+    expect(page1.body.page.hasMore).toBe(true);
+    expect(page1.body.counts.total).toBe(8);
+    expect(page1.body.counts.needsAttention).toBe(4);
+    // customer-safe: no raw request input, no leaked secret
+    expect(JSON.stringify(page1.body)).not.toContain("do-not-leak");
+    expect(page1.body.jobs[0].input).toBeUndefined();
+    expect(page1.body.jobs[0].customerStatus).toBeTruthy();
+
+    const page2 = await request(app)
+      .get(`/api/v2/jobs?limit=3&cursor=${encodeURIComponent(page1.body.page.nextCursor)}`)
+      .set(authHeader)
+      .expect(200);
+    expect(page2.body.jobs[0].id).not.toBe(page1.body.jobs[0].id);
+
+    const failedOnly = await request(app).get("/api/v2/jobs?group=needs_attention").set(authHeader).expect(200);
+    expect(failedOnly.body.jobs.every((job: any) => job.customerStatus === "needs_attention")).toBe(true);
+    expect(failedOnly.body.jobs[0].failure).toBeTruthy();
+
+    const searched = await request(app).get("/api/v2/jobs?search=kingfisher").set(authHeader).expect(200);
+    expect(searched.body.jobs).toHaveLength(1);
+
+    const detail = await request(app).get("/api/v2/jobs/job_1").set(authHeader).expect(200);
+    expect(detail.body.timeline).toBeTruthy();
+    expect(detail.body.job.input).toBeUndefined();
+    expect(detail.body.job.snapshots.brand.revision).toBe(2);
+  });
+
+  it("scrubs file:// and absolute artifact paths out of a Production Details response", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    db.jobs.set("job_leak", {
+      id: "job_leak",
+      type: "video",
+      status: "ready",
+      progress: 100,
+      current_stage: "Ready",
+      title: "Leak check",
+      original_prompt: "x",
+      language: "en",
+      aspect_ratio: "9:16",
+      creation_mode: "prompt",
+      production_spec: {
+        userPrompt: "x",
+        scenes: [{ mediaSegments: [{ url: "file:///app/data/artifacts/motion/motion_a.png" }] }],
+      },
+      input: { prompt: "x" },
+      output: { videoId: "job_leak", path: "/app/data/videos/job_leak.mp4", previewUrl: "/api/short-video/job_leak" },
+      checkpoint: { render: { status: "completed", artifacts: { file: "file:///app/data/artifacts/render/out.mp4" } } },
+      stage_timings: {},
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    const app = express();
+    app.use(express.json());
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const detail = await request(app).get("/api/v2/jobs/job_leak").set(authHeader).expect(200);
+    const serialized = JSON.stringify(detail.body);
+    expect(serialized).not.toContain("file://");
+    expect(serialized).not.toContain("/app/data");
+    // useful fields survive
+    expect(detail.body.job.output.videoId).toBe("job_leak");
+    expect(detail.body.job.output.previewUrl).toBe("/api/short-video/job_leak");
+    expect(detail.body.job.output.path).toBeUndefined();
   });
 });
 

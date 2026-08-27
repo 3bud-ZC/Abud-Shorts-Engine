@@ -31,6 +31,53 @@ export type V2Job = {
   startedAt?: string;
   completedAt?: string;
   updatedAt: string;
+
+  // Customer-view fields (V2.3-06). Emitted by the backend serializer.
+  customerStatus?:
+    | "queued"
+    | "preparing"
+    | "generating"
+    | "rendering"
+    | "ready"
+    | "needs_attention"
+    | "cancelling"
+    | "cancelled";
+  promptSummary?: string;
+  elapsedMs?: number;
+  durationSeconds?: number;
+  requestedDurationSeconds?: number;
+  actualDurationSeconds?: number;
+  productionMode?: string;
+  visualSource?: string;
+  characterProfileId?: string;
+  videoId?: string;
+  thumbnailUrl?: string;
+  isFree?: boolean;
+  retryOf?: string;
+  retryLineage?: string[];
+  snapshots?: ProductionSnapshots;
+  timeline?: CustomerTimelineStep[];
+  failure?: CustomerFailure;
+  advanced?: Record<string, unknown>;
+};
+
+export type ProductionSnapshots = {
+  brand?: { name?: string; revision?: number };
+  template?: { id?: string; name?: string; revision?: number };
+  character?: { id?: string; name?: string; revision?: number; consistencyMode?: string };
+};
+
+export type CustomerTimelineStep = {
+  key: string;
+  state: "done" | "active" | "pending" | "failed";
+  at?: string;
+};
+
+export type CustomerFailure = {
+  message: string;
+  supportCode: string;
+  recoverable: boolean;
+  action?: { label: string; href: string };
 };
 
 export type V2JobEvent = {
@@ -246,6 +293,12 @@ export type VideoItem = {
   technicalScore?: number;
   mediaPlanScore?: number;
   overallProductionScore?: number;
+  creativeScore?: number;
+  creativeGrade?: string;
+  creativeDiagnostics?: Record<string, number>;
+  creativeWarnings?: string[];
+  hasCreativeQuality?: boolean;
+  hasTechnicalQuality?: boolean;
   requestedDurationSeconds?: number;
   durationVarianceSeconds?: number;
   durationVariancePercent?: number;

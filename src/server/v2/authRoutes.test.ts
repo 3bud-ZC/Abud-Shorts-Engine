@@ -127,6 +127,16 @@ class AuthMatrixDb {
 function makeApp(db: AuthMatrixDb) {
   const jobs = {
     listJobs: async () => [],
+    listJobRows: async () => [],
+    mapJobRow: (row: any) => row,
+    summarizeJobs: async () => ({
+      total: 0,
+      active: 0,
+      ready: 0,
+      needsAttention: 0,
+      cancelled: 0,
+      createdThisWeek: 0,
+    }),
     subscribe: () => () => {},
   };
   const app = express();

@@ -220,6 +220,60 @@ export class JobService {
     return rows.map((row) => this.mapJob(row));
   }
 
+  /**
+   * Operational Productions listing. The database returns a bounded candidate
+   * window (never the whole table, never 1000 rows to a browser); the API layer
+   * filters and keyset-paginates that window. Returns raw rows so the route can
+   * hand them to the customer serializer.
+   */
+  public async listJobRows(windowSize = 400): Promise<DbJobRow[]> {
+    const bounded = Math.min(1000, Math.max(1, Math.floor(windowSize)));
+    return this.db.query<DbJobRow>(
+      "SELECT * FROM jobs ORDER BY created_at DESC LIMIT $1",
+      [bounded],
+    );
+  }
+
+  public mapJobRow(row: DbJobRow): JobRecord {
+    return this.mapJob(row);
+  }
+
+  /** Real summary counts for the Productions header. */
+  public async summarizeJobs(): Promise<{
+    total: number;
+    active: number;
+    ready: number;
+    needsAttention: number;
+    cancelled: number;
+    createdThisWeek: number;
+  }> {
+    const rows = await this.db.query<{ status: string; count: string }>(
+      "SELECT status, count(*)::int AS count FROM jobs GROUP BY status",
+    );
+    const week = await this.db.query<{ count: string }>(
+      "SELECT count(*)::int AS count FROM jobs WHERE created_at >= now() - interval '7 days'",
+    );
+    const byStatus = new Map(rows.map((row) => [row.status, Number(row.count)]));
+    const active = [
+      "queued",
+      "preparing",
+      "generating_content",
+      "searching_assets",
+      "generating_voice",
+      "generating_captions",
+      "rendering",
+      "finalizing",
+    ].reduce((sum, status) => sum + (byStatus.get(status) || 0), 0);
+    return {
+      total: Array.from(byStatus.values()).reduce((sum, count) => sum + count, 0),
+      active,
+      ready: byStatus.get("ready") || 0,
+      needsAttention: byStatus.get("failed") || 0,
+      cancelled: byStatus.get("canceled") || 0,
+      createdThisWeek: Number(week[0]?.count || 0),
+    };
+  }
+
   public async getJob(id: string): Promise<JobRecord | null> {
     const rows = await this.db.query<DbJobRow>("SELECT * FROM jobs WHERE id = $1", [
       id,
@@ -436,9 +490,20 @@ export class JobService {
     if (current.status !== "failed" && current.status !== "canceled") {
       throw new Error("Only failed or canceled jobs can be retried.");
     }
+    // Historical truth is preserved: the failed record is untouched and the new
+    // attempt records its lineage. Idempotency keys are not carried across so the
+    // retry is a genuinely new production, not a dedupe hit.
+    const { idempotencyKey, ...carried } = (current.input || {}) as Record<string, unknown>;
     return this.createVideoJob({
-      ...current.input,
+      ...carried,
       title: current.title ? `${current.title} retry` : undefined,
+      __retryOf: current.id,
+      __retryLineage: [
+        ...(Array.isArray((current.input as any)?.__retryLineage)
+          ? (current.input as any).__retryLineage
+          : []),
+        current.id,
+      ],
     });
   }
 

@@ -38,9 +38,9 @@ import {
   SectionCard,
   StatusBadge,
 } from "../components/v2";
-import { useT } from "../i18n";
+import { useI18n, useT } from "../i18n";
 import { localizedStatus } from "../i18n/status";
-import type { V2Job, V2JobEvent } from "./v2Types";
+import type { CustomerFailure, CustomerTimelineStep, V2Job, V2JobEvent } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
 
 function formatDuration(startedAt?: string, completedAt?: string) {
@@ -60,13 +60,17 @@ const JobDetailsContent: React.FC = () => {
   const effectiveId = jobId || id;
   const navigate = useNavigate();
 
+  const { t } = useI18n();
   const [job, setJob] = useState<V2Job | null>(null);
   const [events, setEvents] = useState<V2JobEvent[]>([]);
+  const [timeline, setTimeline] = useState<CustomerTimelineStep[]>([]);
+  const [failure, setFailure] = useState<CustomerFailure | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [retryingStage, setRetryingStage] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState(false);
 
   const load = useCallback(async () => {
     if (!effectiveId) {
@@ -83,6 +87,8 @@ const JobDetailsContent: React.FC = () => {
         axios.get(`/api/v2/jobs/${effectiveId}/events`),
       ]);
       setJob(jobResponse.data.job || null);
+      setTimeline(jobResponse.data.timeline || jobResponse.data.job?.timeline || []);
+      setFailure(jobResponse.data.failure || jobResponse.data.job?.failure || null);
       setEvents(eventsResponse.data.events || []);
       setError(null);
     } catch (err: any) {
@@ -151,6 +157,35 @@ const JobDetailsContent: React.FC = () => {
   const isPromptMode = job?.creationMode === "prompt";
   const cost = job?.costEstimate || job?.productionSpec?.costEstimate;
   const stageKeys = ["planning", "media", "voice", "captions", "render", "mastering", "validation"];
+
+  const isActive = job ? !["ready", "failed", "canceled"].includes(job.status) : false;
+  const canRetry = job ? ["failed", "canceled"].includes(job.status) : false;
+
+  const retryProduction = async () => {
+    if (!job) return;
+    setBusyAction(true);
+    try {
+      const res = await axios.post(`/api/v2/jobs/${job.id}/retry`);
+      navigate(`/jobs/${res.data.job.id}`);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || t("errors.loadFailed", { resource: t("errors.sourceJobs") }));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const cancelProduction = async () => {
+    if (!job) return;
+    setBusyAction(true);
+    try {
+      await axios.post(`/api/v2/jobs/${job.id}/cancel`);
+      await load();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || t("errors.loadFailed", { resource: t("errors.sourceJobs") }));
+    } finally {
+      setBusyAction(false);
+    }
+  };
 
   const retryStage = async (stage: string) => {
     if (!job) return;
@@ -225,17 +260,33 @@ const JobDetailsContent: React.FC = () => {
     <>
       <PageHeader
         title={displayTitle}
-        eyebrow="Production Job"
+        eyebrow={t("productions.title")}
         description={
-          `${isPromptMode ? "Prompt Studio" : (job.templateId || "Template Mode")}` +
-          `${job.brandName ? ` · Brand: ${job.brandName}` : ""}` +
-          ` · Created ${new Date(job.createdAt).toLocaleString()}`
+          `${isPromptMode ? t("productions.typePrompt") : (job.templateId || t("productions.typeTemplate"))}` +
+          `${job.brandName ? ` · ${job.brandName}` : ""}` +
+          ` · ${new Date(job.createdAt).toLocaleString()}`
         }
         actions={
           <Stack direction="row" spacing={1} flexWrap="wrap">
             <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={() => navigate("/jobs")}>
-              Back to Jobs
+              {t("common.back")}
             </Button>
+            {canRetry && (
+              <Button
+                variant="contained"
+                color="warning"
+                startIcon={<RefreshIcon />}
+                disabled={busyAction}
+                onClick={retryProduction}
+              >
+                {t("productions.retry")}
+              </Button>
+            )}
+            {isActive && (
+              <Button variant="outlined" color="error" disabled={busyAction} onClick={cancelProduction}>
+                {t("productions.cancel")}
+              </Button>
+            )}
             {job.status === "ready" && videoId && (
               <>
                 <Button
@@ -243,15 +294,15 @@ const JobDetailsContent: React.FC = () => {
                   startIcon={<MovieIcon />}
                   onClick={() => navigate(`/video/${videoId}`)}
                 >
-                  Preview Video
+                  {t("common.preview")}
                 </Button>
                 <Button
                   component="a"
-                  href={`/api/videos/${videoId}/download`}
+                  href={withMediaAccessToken(`/api/videos/${videoId}/download`)}
                   variant="outlined"
                   startIcon={<DownloadIcon />}
                 >
-                  Download MP4
+                  {t("videos.download")}
                 </Button>
                 <Button
                   variant="outlined"
@@ -259,7 +310,7 @@ const JobDetailsContent: React.FC = () => {
                   startIcon={<SendIcon />}
                   onClick={() => navigate(`/publishing?videoId=${videoId}`)}
                 >
-                  Publish
+                  {t("videos.publish")}
                 </Button>
               </>
             )}
@@ -278,7 +329,7 @@ const JobDetailsContent: React.FC = () => {
             {/* 1. Current Progress & Execution State */}
             <SectionCard
               title="Execution Progress"
-              actions={<StatusBadge status={job.status} />}
+              actions={<StatusBadge status={job.customerStatus || job.status} />}
             >
               <Stack spacing={2}>
                 <ProgressDisplay
@@ -333,6 +384,81 @@ const JobDetailsContent: React.FC = () => {
                 )}
               </Stack>
             </SectionCard>
+
+            {failure && (
+              <SectionCard title={t("productions.failureTitle")}>
+                <Stack spacing={1.5}>
+                  <Alert severity="warning" icon={<ErrorIcon />}>
+                    {failure.message}
+                  </Alert>
+                  <Typography variant="caption" color="text.secondary">
+                    {t("productions.supportCode")}: <code>{failure.supportCode}</code>
+                  </Typography>
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    {canRetry && (
+                      <Button
+                        variant="contained"
+                        color="warning"
+                        startIcon={<RefreshIcon />}
+                        disabled={busyAction}
+                        onClick={retryProduction}
+                      >
+                        {t("productions.retry")}
+                      </Button>
+                    )}
+                    {failure.action && failure.action.href !== `/jobs/${job.id}` && (
+                      <Button variant="outlined" onClick={() => navigate(failure.action!.href)}>
+                        {failure.action.label}
+                      </Button>
+                    )}
+                  </Stack>
+                </Stack>
+              </SectionCard>
+            )}
+
+            {timeline.length > 0 && (
+              <SectionCard title={t("productions.timeline")}>
+                <Stack spacing={1}>
+                  {timeline.map((step) => {
+                    const color =
+                      step.state === "failed"
+                        ? "error.main"
+                        : step.state === "done"
+                          ? "success.main"
+                          : step.state === "active"
+                            ? "primary.main"
+                            : "text.disabled";
+                    const stateLabel =
+                      step.state === "failed"
+                        ? t("productions.stepFailed")
+                        : step.state === "done"
+                          ? t("productions.stepDone")
+                          : step.state === "active"
+                            ? t("productions.stepActive")
+                            : t("productions.stepPending");
+                    return (
+                      <Stack
+                        key={step.key}
+                        direction="row"
+                        spacing={1.5}
+                        alignItems="center"
+                        justifyContent="space-between"
+                      >
+                        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 0 }}>
+                          <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: color, flexShrink: 0 }} />
+                          <Typography variant="body2" fontWeight={step.state === "active" ? 800 : 500}>
+                            {t(`productions.timeline.${step.key}`)}
+                          </Typography>
+                        </Stack>
+                        <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+                          {step.at ? new Date(step.at).toLocaleTimeString() : stateLabel}
+                        </Typography>
+                      </Stack>
+                    );
+                  })}
+                </Stack>
+              </SectionCard>
+            )}
 
             <SectionCard title="Production Timing & Checkpoints">
               <Stack spacing={1}>
@@ -625,45 +751,87 @@ const JobDetailsContent: React.FC = () => {
               </Stack>
             </SectionCard>
 
-            {/* 2. Brand Profile (if present) */}
-            {job.brandName && (
-              <SectionCard title="Brand Kit">
-                <Stack spacing={1}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Typography variant="body2" color="text.secondary">Brand Name</Typography>
-                    <Typography variant="body2" fontWeight={700}>{job.brandName}</Typography>
-                  </Stack>
+            {/* 2. Production snapshots — frozen at production time (V2.3-04/05). */}
+            {(job.snapshots?.brand || job.snapshots?.template || job.snapshots?.character) && (
+              <SectionCard title={t("productions.overview")}>
+                <Stack spacing={1.25}>
+                  {job.snapshots?.brand && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="body2" color="text.secondary">
+                        {t("productions.snapshotBrand")}
+                      </Typography>
+                      <Typography variant="body2" fontWeight={700}>
+                        {job.snapshots.brand.name || "—"}
+                        {job.snapshots.brand.revision
+                          ? ` · ${t("productions.revision", { n: job.snapshots.brand.revision })}`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {job.snapshots?.template && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="body2" color="text.secondary">
+                        {t("productions.snapshotTemplate")}
+                      </Typography>
+                      <Typography variant="body2" fontWeight={700}>
+                        {job.snapshots.template.name || job.snapshots.template.id || "—"}
+                        {job.snapshots.template.revision
+                          ? ` · ${t("productions.revision", { n: job.snapshots.template.revision })}`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
+                  {job.snapshots?.character && (
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="body2" color="text.secondary">
+                        {t("productions.snapshotCharacter")}
+                      </Typography>
+                      <Typography variant="body2" fontWeight={700}>
+                        {job.snapshots.character.name || job.snapshots.character.id || "—"}
+                        {job.snapshots.character.revision
+                          ? ` · ${t("productions.revision", { n: job.snapshots.character.revision })}`
+                          : ""}
+                      </Typography>
+                    </Stack>
+                  )}
                 </Stack>
               </SectionCard>
             )}
 
-            {/* 3. Technical Details Accordion */}
+            {/* 3. Advanced details — collapsed, sanitized (no paths/tokens/stack). */}
             <Accordion variant="outlined" sx={{ borderRadius: 2 }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Typography variant="subtitle2" fontWeight={800}>
-                  Advanced technical details
+                  {t("productions.advanced")}
                 </Typography>
               </AccordionSummary>
               <AccordionDetails>
                 <Stack spacing={1.5}>
                   <Stack direction="row" justifyContent="space-between" alignItems="center">
                     <Typography variant="caption" color="text.secondary">
-                      Internal Job ID: <code>{job.id}</code>
+                      Job ID: <code>{job.id}</code>
+                      {videoId ? <> · Video ID: <code>{videoId}</code></> : null}
                     </Typography>
                     <Button size="small" variant="text" startIcon={<ContentCopyIcon fontSize="small" />} onClick={copyId}>
                       {copied ? "Copied!" : "Copy ID"}
                     </Button>
                   </Stack>
 
+                  {failure?.supportCode && (
+                    <Typography variant="caption" color="text.secondary">
+                      {t("productions.supportCode")}: <code>{failure.supportCode}</code>
+                    </Typography>
+                  )}
+
                   {job.technicalError && (
                     <Alert severity="warning" sx={{ fontSize: "0.8rem" }}>
-                      <AlertTitle fontWeight={700}>Technical Error Details</AlertTitle>
+                      <AlertTitle fontWeight={700}>Technical detail</AlertTitle>
                       {job.technicalError}
                     </Alert>
                   )}
 
                   <Typography variant="caption" fontWeight={700} color="text.secondary">
-                    Production plan payload
+                    Diagnostics
                   </Typography>
                   <pre
                     style={{
@@ -679,7 +847,14 @@ const JobDetailsContent: React.FC = () => {
                       overflowY: "auto",
                     }}
                   >
-                    {JSON.stringify(job.productionSpec || { input: job.input, output: job.output }, null, 2)}
+                    {JSON.stringify(
+                      (job as any).advanced || {
+                        stageTimings: job.stageTimings,
+                        checkpoint: job.checkpoint,
+                      },
+                      null,
+                      2,
+                    )}
                   </pre>
                 </Stack>
               </AccordionDetails>

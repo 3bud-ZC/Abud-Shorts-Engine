@@ -526,6 +526,7 @@ export function RecentJobCard({
     templateId?: string;
     brandName?: string;
     status: string;
+    customerStatus?: string;
     progress: number;
     currentStage: string;
     creationMode?: string;
@@ -590,7 +591,7 @@ export function RecentJobCard({
                 </Typography>
               </Stack>
             </Box>
-            <StatusBadge status={job.status} />
+            <StatusBadge status={job.customerStatus || job.status} />
           </Stack>
 
           {/* Progress is only meaningful while the job is moving. A finished
