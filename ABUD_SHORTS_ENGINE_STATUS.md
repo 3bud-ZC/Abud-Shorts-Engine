@@ -62,35 +62,32 @@ Finalization track:
 | V2.3-U | V2.2.0 → V2.3.0 isolated online-update rehearsal | **PASS / COMPLETE** |
 | V2.3-AR | Arabic body-copy closure for Integrations / Publishing / Settings / Providers | **PASS / COMPLETE** |
 | V2.3-RN | Customer-facing v2.3.0 release notes prepared and verified | **PASS / COMPLETE** |
-| V2.3-RP | GHCR candidate workflow fixed; CI dispatch pending | **PARTIAL — CI DISPATCH BLOCKED** |
+| V2.3-RP | Production candidate image on GHCR + final verified package/manifest | **PASS / COMPLETE** |
 
 **V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
-merged to `main`, not tagged, no GitHub Release, no production GHCR image. The
-`v2.2.0` stable tag and its artifacts are untouched.
+merged to `main`, not tagged, no GitHub Release. The `v2.2.0` stable tag and its
+GHCR image are untouched. A production candidate image is on GHCR under an
+immutable `sha-` tag only (no `:2.3.0`, no `:stable`).
 
-Customer-facing `RELEASE_NOTES.md` for v2.3.0 is prepared and verified (see the
-V2.3-RN section). The `GHCR Candidate` workflow is fixed and version-agnostic
-(see the V2.3-RP section); the candidate source SHA is
-`a6c0dee52af86ce1da5cf5e557221de356d37b92`.
+Customer-facing `RELEASE_NOTES.md` for v2.3.0 is prepared and verified (V2.3-RN
+section). The production candidate image, its real remote digest, the final
+client package and the verified update manifest are prepared (V2.3-RP section):
 
-Remaining release-only work, in order:
+- Candidate source SHA: `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`
+- GHCR candidate: `ghcr.io/3bud-zc/abud-shorts-engine:sha-1a9dba6`
+- Remote digest: `sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`
+- Package: `ABUD-Shorts-Engine-2.3.0.tar.gz`
+  (`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`),
+  `update-manifest.json`, `verify-package.mjs` **PASS** on every check
 
-1. Dispatch `.github/workflows/ghcr-candidate.yml` (mode `candidate`,
-   `source_ref` = `v2.3-product-overhaul`, `expected_sha` = current branch HEAD)
-   in CI — it builds the exact source, runs typecheck/tests/build, and pushes
-   only `ghcr.io/3bud-zc/abud-shorts-engine:sha-<shortsha>`, then resolves the
-   real remote digest. This step could not be run from the local environment
-   (no `gh` CLI; no non-user credential to POST a `workflow_dispatch`).
-2. Regenerate the final client package and update manifest with that real
-   digest (`scripts/release/package-client.mjs --version 2.3.0 --channel stable
-   --image ghcr.io/3bud-zc/abud-shorts-engine:2.3.0 --digest sha256:<real>`).
-3. Run `scripts/release/verify-package.mjs` on the final artifacts — it must
-   pass every check, including the image-digest check.
-4. Obtain explicit user approval to release.
-5. Dispatch the same workflow in `promote` mode with the accepted digest to
+Remaining release-only work, in order, all after explicit user approval:
+
+1. Dispatch `ghcr-candidate.yml` in `promote` mode with the accepted digest to
    create `:2.3.0` and move `:stable` on GHCR.
-6. Merge to `main`, tag `v2.3.0`, create the GitHub Release with the verified
-   artifacts.
+2. Merge `v2.3-product-overhaul` into `main`.
+3. Create the annotated `v2.3.0` Git tag.
+4. Create the GitHub Release with the verified package, `.sha256` and manifest.
+5. Final published-release verification.
 
 Final complete-product / client acceptance: PENDING
 
@@ -5058,18 +5055,22 @@ localization pass and are not UI copy: the `validate` endpoint's free-text
 paths or secrets.
 
 V2.3.0 stays a **RELEASE CANDIDATE**. Not GA. Not merged, not tagged, no GitHub
-Release, no production GHCR image.
+Release. A candidate image exists on GHCR under an immutable `sha-` tag only
+(see V2.3-RP); `:2.3.0` and `:stable` are not created/moved until release.
 
-## V2.3-RP — Production Candidate Workflow & Artifact Preparation
+## V2.3-RP — Production Candidate Artifact & Final Package
 
-**Candidate source:** current `v2.3-product-overhaul` HEAD
-(`git rev-parse origin/v2.3-product-overhaul` at dispatch time —
-`9186021` when this section was written; `PRODUCT_VERSION` `2.3.0`,
-`DATABASE_SCHEMA_VERSION` `2.13.0`). The workflow fix landed in `a6c0dee`;
-every commit after it on this branch is documentation only, so the built
-application image is byte-identical regardless of which of them is used
-(`ABUD_SHORTS_ENGINE_STATUS.md` is excluded from both the package and the
-image).
+| Field | Value |
+| --- | --- |
+| Candidate source SHA | `1a9dba634a3d8c3142cefcd32faacc3ca0e64368` (branch `v2.3-product-overhaul`) |
+| Product version / schema | `2.3.0` / `2.13.0` (`package.json` == `src/version.ts`) |
+| CI run | GHCR Candidate `workflow_dispatch`, run id `33112473609`, conclusion **success** |
+| Candidate image | `ghcr.io/3bud-zc/abud-shorts-engine:sha-1a9dba6` |
+| **Remote content digest** | `sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12` |
+| Final client package | `ABUD-Shorts-Engine-2.3.0.tar.gz` (63 236 bytes) |
+| Package SHA-256 | `e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed` |
+| Update manifest | `update-manifest.json` — version `2.3.0`, schema `2.13.0`, channel `stable`, `imageDigest` = the digest above, `minimumUpdaterVersion` `2.2.0`, `schemaBackwardsCompatible: true` |
+| `verify-package.mjs` | **PASS** — sha256, no secrets/source/deps/dev data, installer+updater+compose+docs present, manifest matches package, image digest valid (no "not yet publishable" warning) |
 
 **Release-infrastructure fix.** `.github/workflows/ghcr-candidate.yml` was stale
 from the v2.2 candidate gate: it hard-failed on any `PRODUCT_VERSION` other than
@@ -5078,50 +5079,73 @@ from the v2.2 candidate gate: it hard-failed on any `PRODUCT_VERSION` other than
 
 - Removed the `VERSION != "2.2.0"` hard fail. The gate now checks only that
   `package.json` version equals `src/version.ts` `PRODUCT_VERSION` (plus a
-  plain-semver format check), and keeps the schema extraction.
-- The mandatory `expected_sha` check is unchanged.
+  plain-semver format check), and keeps the schema extraction. CI step
+  "Resolve candidate identity" passed, confirming the fix.
+- The mandatory `expected_sha` check is unchanged (matched `1a9dba6`).
 - `source_ref` default → `v2.3-product-overhaul`; stale F5.1 / v2.2 comments
   rewritten.
 
-Candidate mode is otherwise untouched and remains safe by construction:
-`permissions:` stays `contents: read` / `packages: write` (so it **cannot**
-create a Git tag or a GitHub Release), it publishes only the immutable
-`sha-<shortsha>` tag, and the promote step that would create `:2.3.0` and move
-`:stable` is gated on `mode == promote` and is **not run** here.
+Candidate mode is safe by construction: `permissions:` is `contents: read` /
+`packages: write` (so it **cannot** create a Git tag or a GitHub Release), it
+publishes only the immutable `sha-<shortsha>` tag, and the promote step that
+would create `:2.3.0` and move `:stable` is gated on `mode == promote`. In this
+run that step **was skipped** — no `:2.3.0` tag, no `:stable` move.
 
-**CI dispatch — BLOCKED (not a workflow defect).** The candidate build must run
-in GitHub Actions so it authenticates to GHCR with `secrets.GITHUB_TOKEN`
-(`packages: write`). The local environment cannot start a `workflow_dispatch`:
-the `gh` CLI is not installed, and the only local GitHub credential is a
-user-scoped credential managed by Git Credential Manager — using it to POST a
-workflow dispatch is out of scope for this task (no user PAT, no credential
-handling). No local `docker login ghcr.io` exists either (an anonymous
-push-scope token request for the repo returns HTTP 403).
+**CI acceptance.** Every step of run `33112473609` passed: checkout of
+`1a9dba6`, candidate identity (version + schema), `pnpm install --frozen-lockfile`,
+CPU quality-runtime setup, `pnpm typecheck`, `pnpm vitest run` (**56 test files
+passed**), `pnpm build`, Docker Buildx, GHCR login with `secrets.GITHUB_TOKEN`,
+`docker buildx build --file v2.Dockerfile --push` of `:sha-1a9dba6`, and digest
+resolution. The promote step was skipped.
 
-Consequently the following were **not produced** and are not recorded here:
-remote GHCR digest, digest verification, final client package, final update
-manifest, `verify-package` PASS. They are ready to run the moment the workflow
-is dispatched.
+**Digest verification.** The digest was confirmed three ways, all identical:
+the CI push log (`exporting manifest list sha256:c448a8ca…` /
+`pushing manifest for …:sha-1a9dba6@sha256:c448a8ca…`), an independent
+anonymous registry query (`GET …/manifests/sha-1a9dba6` →
+`Docker-Content-Digest: sha256:c448a8ca…`), and
+`docker buildx imagetools inspect …@sha256:c448a8ca…` (OCI image index →
+`linux/amd64` image `sha256:0a7830b6…` + attestation manifest). A
+`GET …/manifests/sha256:c448a8ca…` returns HTTP 200, so the image is
+addressable by digest; no full layer pull was performed.
 
-**To dispatch** (someone with repo Actions access, e.g. `gh` authenticated):
+**Image content check.** The image config carries only runtime env
+(`PATH`, `NODE_VERSION`, `PNPM_HOME`, `PYTHON_BIN`, `DATA_DIR_PATH=/app/data`,
+`WHISPER_MODEL`, `KOKORO_MODEL_PRECISION`, quality-runtime flags,
+`VIDEO_CACHE_SIZE_IN_BYTES`) — **no `*_API_KEY` / `*_SECRET` / `*_TOKEN` /
+`PASSWORD` / credentialed `DATABASE_URL`**. Layer history is the clean
+`v2.Dockerfile` multi-stage build: base OS → Node 22 → runtime apt packages →
+Python quality runtime → allow-listed `COPY` of `package.json` / `static` /
+`assets` / `scripts`, `COPY --from` of `whisper` / `node_modules` / `dist`,
+then font install + `node dist/scripts/install.js`. No `.env`, `.git`, host
+`node_modules`, host `dist`, tests, customer data or backups. `revision` label
+= `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`, `version` label = `2.3.0`.
 
-```
-SHA=$(git rev-parse origin/v2.3-product-overhaul)
-gh workflow run ghcr-candidate.yml \
-  --ref v2.3-product-overhaul \
-  -f mode=candidate \
-  -f source_ref=v2.3-product-overhaul \
-  -f expected_sha=$SHA
-```
+**Not done (and not authorised in this task):** merge to `main`, `v2.3.0` Git
+tag, GitHub Release, GHCR `:2.3.0` / `:stable` promotion. `v2.2.0` and its GHCR
+image are untouched.
 
-It pushes `ghcr.io/3bud-zc/abud-shorts-engine:sha-<shortsha>` and the run
-summary prints the real `sha256:` digest to feed `package-client.mjs`.
+**No paid provider calls. No customer data mutation. No local Docker build,
+push, pull or prune (registry/metadata inspection only). The primary
+`localhost:3130` stack is untouched** (uptimes unchanged, all four services
+healthy).
 
-**No paid provider calls. No customer data mutation. No Docker build, push or
-prune was run locally. The primary `localhost:3130` stack is untouched.**
-`v2.2.0` and its GHCR image are untouched.
+The final package + manifest are held outside the repository (the release
+policy's forbidden-path list excludes generated packages); they are ready to
+attach to the GitHub Release, or the same workflow can regenerate them.
 
 V2.3.0 stays a **RELEASE CANDIDATE**.
+
+Remaining release work, in order, all after explicit user approval:
+
+1. Dispatch `ghcr-candidate.yml` in `promote` mode with
+   `digest=sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`
+   to create `:2.3.0` and move `:stable` on GHCR.
+2. Merge `v2.3-product-overhaul` into `main`.
+3. Create the annotated `v2.3.0` Git tag.
+4. Create the GitHub Release with the verified `ABUD-Shorts-Engine-2.3.0.tar.gz`,
+   its `.sha256` and `update-manifest.json`.
+5. Final published-release verification (pull `…@sha256:c448a8ca…`, run the
+   package/manifest checks against the published assets).
 
 ## V2.3-RN — Customer-Facing v2.3.0 Release Notes
 
