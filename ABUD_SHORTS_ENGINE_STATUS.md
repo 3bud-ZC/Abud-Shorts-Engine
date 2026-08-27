@@ -76,11 +76,11 @@ V2.3-RN section). The `GHCR Candidate` workflow is fixed and version-agnostic
 Remaining release-only work, in order:
 
 1. Dispatch `.github/workflows/ghcr-candidate.yml` (mode `candidate`,
-   `source_ref` and `expected_sha` = `a6c0dee52af86ce1da5cf5e557221de356d37b92`)
+   `source_ref` = `v2.3-product-overhaul`, `expected_sha` = current branch HEAD)
    in CI — it builds the exact source, runs typecheck/tests/build, and pushes
-   only `ghcr.io/3bud-zc/abud-shorts-engine:sha-a6c0dee`, then resolves the real
-   remote digest. This step could not be run from the local environment (no
-   `gh` CLI; no non-user credential to POST a `workflow_dispatch`).
+   only `ghcr.io/3bud-zc/abud-shorts-engine:sha-<shortsha>`, then resolves the
+   real remote digest. This step could not be run from the local environment
+   (no `gh` CLI; no non-user credential to POST a `workflow_dispatch`).
 2. Regenerate the final client package and update manifest with that real
    digest (`scripts/release/package-client.mjs --version 2.3.0 --channel stable
    --image ghcr.io/3bud-zc/abud-shorts-engine:2.3.0 --digest sha256:<real>`).
@@ -5062,9 +5062,14 @@ Release, no production GHCR image.
 
 ## V2.3-RP — Production Candidate Workflow & Artifact Preparation
 
-**Candidate source SHA:** `a6c0dee52af86ce1da5cf5e557221de356d37b92`
-(branch `v2.3-product-overhaul`, `PRODUCT_VERSION` `2.3.0`,
-`DATABASE_SCHEMA_VERSION` `2.13.0`).
+**Candidate source:** current `v2.3-product-overhaul` HEAD
+(`git rev-parse origin/v2.3-product-overhaul` at dispatch time —
+`9186021` when this section was written; `PRODUCT_VERSION` `2.3.0`,
+`DATABASE_SCHEMA_VERSION` `2.13.0`). The workflow fix landed in `a6c0dee`;
+every commit after it on this branch is documentation only, so the built
+application image is byte-identical regardless of which of them is used
+(`ABUD_SHORTS_ENGINE_STATUS.md` is excluded from both the package and the
+image).
 
 **Release-infrastructure fix.** `.github/workflows/ghcr-candidate.yml` was stale
 from the v2.2 candidate gate: it hard-failed on any `PRODUCT_VERSION` other than
@@ -5101,15 +5106,16 @@ is dispatched.
 **To dispatch** (someone with repo Actions access, e.g. `gh` authenticated):
 
 ```
+SHA=$(git rev-parse origin/v2.3-product-overhaul)
 gh workflow run ghcr-candidate.yml \
   --ref v2.3-product-overhaul \
   -f mode=candidate \
   -f source_ref=v2.3-product-overhaul \
-  -f expected_sha=a6c0dee52af86ce1da5cf5e557221de356d37b92
+  -f expected_sha=$SHA
 ```
 
-It pushes `ghcr.io/3bud-zc/abud-shorts-engine:sha-a6c0dee` and the run summary
-prints the real `sha256:` digest to feed `package-client.mjs`.
+It pushes `ghcr.io/3bud-zc/abud-shorts-engine:sha-<shortsha>` and the run
+summary prints the real `sha256:` digest to feed `package-client.mjs`.
 
 **No paid provider calls. No customer data mutation. No Docker build, push or
 prune was run locally. The primary `localhost:3130` stack is untouched.**
