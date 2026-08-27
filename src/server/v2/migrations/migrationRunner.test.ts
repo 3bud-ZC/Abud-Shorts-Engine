@@ -4,7 +4,19 @@ import {
   SCHEMA_BACKWARDS_COMPATIBLE,
   getLatestMigrationVersion,
 } from "./migrationRunner";
-import { DATABASE_SCHEMA_VERSION } from "../../../version";
+import { DATABASE_SCHEMA_VERSION, PRODUCT_VERSION } from "../../../version";
+
+/** -1 / 0 / 1, numeric per component. */
+function cmpSemver(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10));
+  const pb = b.split(".").map((n) => parseInt(n, 10));
+  for (let i = 0; i < 3; i += 1) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
 
 /**
  * A customer may install stable v2.2.0 (schema 2.12.0) before v2.3 ships, then
@@ -37,6 +49,18 @@ const DESTRUCTIVE = [
 describe("migration safety — v2.2 to v2.3 upgrade compatibility", () => {
   it("keeps DATABASE_SCHEMA_VERSION equal to the latest migration", () => {
     expect(getLatestMigrationVersion()).toBe(DATABASE_SCHEMA_VERSION);
+  });
+
+  it("advances PRODUCT_VERSION whenever the schema moves past the last stable release (2.2.0 / 2.12.0)", () => {
+    // The shipped v2.2.0 updater verifies, after switching images, that the
+    // running app reports exactly the manifest version, and rolls back on any
+    // mismatch. A build that carries a newer schema but a stale PRODUCT_VERSION
+    // therefore cannot be delivered to a customer at all: the update installs
+    // and then un-installs itself. If the schema is ahead of 2.12.0, the
+    // product version must be ahead of 2.2.0.
+    if (cmpSemver(DATABASE_SCHEMA_VERSION, "2.12.0") > 0) {
+      expect(cmpSemver(PRODUCT_VERSION, "2.2.0")).toBe(1);
+    }
   });
 
   it("has migrations in ascending version order with unique versions", () => {
