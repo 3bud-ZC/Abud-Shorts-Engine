@@ -22,8 +22,11 @@ Target: **v2.3.0**
 
 Branch: **`v2.3-product-overhaul`**
 
-V2.3: **RELEASE CANDIDATE** — not merged, not tagged, not packaged, not published.
-V2.3-01 through V2.3-07 are complete.
+V2.3: **RELEASE CANDIDATE** — not merged, not tagged, not published. Version
+constants are stamped (`PRODUCT_VERSION` `2.3.0`, `PRODUCT_BUILD` `2026.08.27.1`)
+so the shipped v2.2.0 updater accepts the build; the V2.2→V2.3 online update path
+has been rehearsed end to end in a fully isolated environment. V2.3-01 through
+V2.3-07 are complete.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
@@ -53,6 +56,7 @@ Finalization track:
 | V2.3-05 | Professional Brands & Templates | **PASS / COMPLETE** |
 | V2.3-06 | Productions & Video Library | **PASS / COMPLETE** |
 | V2.3-07 | Publishing, Integrations, Settings, Setup & Final Product Closure | **PASS / COMPLETE** |
+| V2.3-U | V2.2.0 → V2.3.0 isolated online-update rehearsal | **PASS / COMPLETE** |
 
 **V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
 merged to `main`, not tagged, no GitHub Release, no production GHCR image. The
@@ -4759,3 +4763,163 @@ its authenticated API, and the privacy scan runs against live responses.
 **Release.** V2.3.0 is a **RELEASE CANDIDATE**. Not merged to `main`, no
 `v2.3.0` tag, no GitHub Release, no production GHCR image; `v2.2.0` stable is
 untouched. Awaiting the user's release approval after reviewing this report.
+
+## V2.2.0 → V2.3.0 Isolated Update Rehearsal
+
+Executed 2026-08-27 to prove an existing v2.2.0 customer installation can apply
+the current V2.3.0 Release Candidate through the normal online updater without
+data loss. Ran entirely beside the primary dev stack; the primary
+(`abud-shorts-*` on `localhost:3130`, its database, volumes, media, videos,
+jobs, Provider Vault, admin, settings, backups) was never touched, restarted or
+read into. **No prune of any kind was run.**
+
+**Compatibility defect found and fixed (smallest safe production change).** At
+`bef695d` the RC still declared `PRODUCT_VERSION = "2.2.0"` while the schema was
+`2.13.0`. The shipped v2.2.0 updater (`scripts/host/abud-shorts.ps1`) verifies,
+after switching images, that the running app reports exactly the manifest
+version and rolls back on any mismatch — so a `2.3.0` update would have
+installed and then un-installed itself. `.github/workflows/release.yml` also
+hard-fails a `v2.3.0` tag build unless `src/version.ts` already reads `2.3.0`.
+Fix: `PRODUCT_VERSION` → `2.3.0`, `PRODUCT_BUILD` → `2026.08.27.1`,
+`package.json` version → `2.3.0`. Regression coverage: `v2_05.test.ts` pin
+updated; `migrationRunner.test.ts` gains a test asserting that whenever the
+schema is ahead of the last stable release (`2.12.0`) the product version must
+be ahead of `2.2.0`. `pnpm typecheck`, `pnpm exec vitest run` (55 files / 872
+tests) and `pnpm build` all pass; `dist/version.js` reads `2.3.0`.
+
+**Isolation.** Compose project / container prefix `abudrc22`; app on host port
+`3145`; PostgreSQL and n8n on the internal network with no host port. Separate
+named volumes `abudrc22_abud-shorts-postgres-data` /
+`abudrc22_abud-shorts-n8n-data`, network `abudrc22_abud-shorts-v2`, install root
+and `ABUD_HOME` under a temp rehearsal directory, freshly generated secrets. A
+local OCI registry (`registry:2` on `127.0.0.1:5055`) and a local static release
+server (`127.0.0.1:5066`) stood in for GHCR and the GitHub release; the
+`ABUD_UPDATE_MANIFEST_URL` override pointed the updater at the local manifest.
+No local registry URL, QA port or temporary digest was written into tracked
+source.
+
+**Artifacts.** The real released **v2.2.0 client package**
+(`ABUD-Shorts-Engine-2.2.0-Client.zip`) drove the install through its own
+`install.ps1`. The v2.2.0 application image was never published to GHCR (the
+same F5 gate as the digest) and v2.2.0's own `v2.Dockerfile` `FROM`s an
+unpublished base, so it was reconstructed by building the v2.2.0 source tag
+(`80b5a13`) — its `dist` and dependency closure — onto the shared,
+version-agnostic runtime layers; the reconstructed image reports version
+`2.2.0` / schema `2.12.0` with migrations stopping at `2.12.0`. The RC image was
+a full `v2.Dockerfile` build of `bef695d` + the version fix, pushed to the local
+registry (digest `sha256:97602512…`). The RC update artifact was built with the
+**existing** tooling — `node scripts/release/package-client.mjs --version 2.3.0
+--image … --digest …` — producing `ABUD-Shorts-Engine-2.3.0.tar.gz` (55.9 KB),
+`.tar.gz.sha256` and `update-manifest.json`; `verify-package.mjs` passed and the
+tarball carries only the installer, updater, compose file, n8n workflows and
+docs — no `src`/`dist`/`.env`/`.git`/`node_modules`/tests/videos/backups/logs.
+
+**Pre-upgrade baseline.** Fresh v2.2.0 install: version `2.2.0`, schema
+`2.12.0`, 26 tables, 11 migrations (`2.0.0`→`2.12.0`), all four services
+healthy, only the app exposed, `/health/live` and `/health/ready` = 200. Seeded
+through the real v2.2.0 APIs: administrator (deterministic QA credential, never a
+real secret), settings, one Brand (`QA Rehearsal Brand`), one config+db backup,
+and one zero-paid seed production (English / Kokoro / motion graphics, rendered
+`ready`, 12.05 s, technical score 100) → jobs 1, generated_assets 1,
+video_revisions 1, scene_artifacts 9, job_events 30. Media library, custom
+templates, publications, social accounts, Provider Vault credentials: **0** —
+the media library and template tables do not exist at schema `2.12.0`, so a
+genuine v2.2.0 customer has none.
+
+**Update check (no mutation).** `abud-shorts update -Check` against the local
+manifest reported Installed `2.2.0` / Latest `2.3.0` (stable); version, image
+pointer, `current.txt` and containers unchanged afterwards.
+
+**Deterministic failed candidate + automatic rollback.** A manifest identical to
+the real one except `schemaVersion: "2.99.0"`. The updater ran the full sequence
+— disk check, download, SHA-256 verify, **image digest verify**, package
+contents verify, **pre-upgrade `pg_dump` backup**, version switch, 2.3.0 start,
+health — then step 8 caught the fault ("the database schema reports 2.13.0 after
+the update, not 2.99.0"), rolled back to the 2.2.0 image, returned **exit 1**,
+and recorded `state: ROLLED_BACK` with `rollback.result: succeeded` and the
+failure reason in `update-state.json`. v2.2.0 healthy again, all seeded data
+intact, the pre-upgrade `.sql` retained. The additive `2.13.0` migration that
+had already run stayed applied (the manifest declares
+`schemaBackwardsCompatible`, so no DB restore) and the 2.2.0 app ran cleanly
+against it — the designed forward-compatible behaviour. The isolated DB was then
+restored from that pre-upgrade dump back to exactly schema `2.12.0` so the real
+update would genuinely apply the migration.
+
+**Real update.** `abud-shorts update -Yes` against the correct manifest ran the
+full customer sequence — update lock, download, SHA-256 verify, image digest
+verify, pre-upgrade backup (`pre-upgrade-2.2.0-to-2.3.0-20260827155607`), switch
+to the digest-pinned image, migrations, app start, worker start, health,
+**"Version 2.3.0 and database schema 2.13.0 confirmed"**, video engine healthy —
+and completed **exit 0**. After: version `2.3.0`, schema `2.13.0`, build
+`2026.08.27.1`, all four isolated services healthy, `/health/live` and
+`/health/ready` = 200, `.env` `ABUD_IMAGE` pinned to
+`localhost:5055/abud-shorts-engine@sha256:97602512…`, `installation.json`
+`currentVersion 2.3.0` / `previousVersion 2.2.0`, the 2.2.0 release kept on disk
+for rollback.
+
+**Migration on the same volume.** Applied on the same PostgreSQL volume that
+began as v2.2.0: `schema_migrations` went 11 → 12 rows, adding **only** `2.13.0`;
+tables 26 → 28 (`video_templates`, `video_template_preferences` created empty);
+`brands` gained `kit`, `description`, `industry`, `tagline`, `logo_asset_id`,
+`background_color`, `heading_font`, `body_font` and the other V2.3 columns. No
+table dropped, no row deleted, no reset.
+
+**Data preservation (before vs after).** Every pre-existing table count
+identical: brands 1/1, jobs 1/1, generated_assets 1/1, video_revisions 1/1,
+scene_artifacts 9/9, job_events 30/30, backups 1/1, admin_users 1/1,
+app_settings 1/1, publications 0/0, social_accounts 0/0,
+provider_credentials_vault 0/0. The Brand row, the job row, the generated-asset
+row, the video-revision row, the admin row and the settings blob are
+byte-identical before and after. The seeded video's three files on disk
+(`…​.mp4` 2 135 594 bytes, `…​.thumb.jpg`, `…​.metadata.json`) have **identical
+SHA-256** after the upgrade.
+
+**Login after upgrade.** The existing v2.2 administrator authenticates against
+the 2.3.0 app (64-char token); wrong password → 401; `/auth/me` returns the
+username; after logout a protected route → 401. The admin account was never
+reset or replaced.
+
+**V2.3 customer surface (authenticated API).** `system/health`, `system/info`,
+`settings`, `brands`, `templates`, `jobs`, `/api/videos`, `media/assets`,
+`media/characters`, `media/folders`, `publishing/accounts`, `providers` (32),
+`analytics/overview`, `backups`, `system/updates`, `webhooks`, `voices` all
+return 200. Productions (`/api/v2/jobs`) and Video Library (`/api/videos`) stay
+distinct.
+
+**Old data on the new UI.** The v2.2 Brand serialises through the 2.3.0 API with
+`kit` null and no crash; the v2.2 job renders with `customerStatus: ready`; the
+job detail JSON contains no `undefined`, no `NaN`, no `/app/` path and no
+`file://` URI. The v2.2 seed video lists and plays in the 2.3.0 Video Library.
+
+**Post-upgrade zero-paid production.** English / Kokoro local / motion graphics /
+9:16 / 12 s requested, no Pexels / ElevenLabs / paid AI. Rendered **`ready`**,
+timeline 8/8 done, **actual duration 12.05 s (variance 0.05 s), technical score
+100, creative score 99**; thumbnail / preview / download all HTTP 200; appears
+in the Video Library (total 2, both `ready`). Paid provider calls: **0**.
+
+**Update check after success.** `abud-shorts update -Check` → "You are already
+running the latest version" (2.3.0 vs 2.3.0); no reinstall loop. The in-app
+transaction record shows `lastSuccessful` = the real update with its backup id,
+and `lastRollback` = the deliberate failed candidate.
+
+**Backup / rollback evidence.** `update-state.json` history holds both
+transactions (`ROLLED_BACK` then `SUCCESS`); two pre-upgrade `pg_dump` files
+(172 650 bytes each) plus their `.env` copies are on disk; the 2.2.0 release
+directory is retained. No manual rollback was performed after the successful
+update.
+
+**Primary installation.** Throughout and after: the four `abud-shorts-*`
+containers stayed up with their original uptimes (never restarted), version
+`2.2.0`, jobs count `5` (unchanged), `/health/ready` = 200; primary volumes,
+network and the `abud-shorts-engine:v2` image untouched.
+
+**Cleanup.** Removed by exact name only: the four `abudrc22-*` containers, the
+`abudrc22_abud-shorts-v2` network, both `abudrc22_*` volumes, the
+`abud-rc-registry` container, the reconstructed `abudrc22/abud-shorts-engine:2.2.0`
+and `localhost:5055/abud-shorts-engine:2.3.0` images, the `registry:2`,
+`postgres:16.10-alpine` and `n8nio/n8n:1.76.1` images pulled solely for the
+rehearsal, the local release server process, the git worktree and the temp
+rehearsal directories. `node:22-bookworm-slim` (a shared base image) was left in
+place and is noted here. No shared cache, no primary volume, network, image or
+container was removed; **no prune command was run**. `%ProgramData%\AbudShorts`
+was never created.
