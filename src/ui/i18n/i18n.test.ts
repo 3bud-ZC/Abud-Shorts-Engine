@@ -75,7 +75,29 @@ describe("catalogue integrity", () => {
     // Keys whose value is legitimately identical in both languages: product and
     // provider names are identifiers, not prose, and translating them would make
     // the interface disagree with the provider's own screens.
-    const identifierKeys = new Set(["common.appName", "setup.wizardTitle"]);
+    const identifierKeys = new Set([
+      "common.appName",
+      "setup.wizardTitle",
+      // Provider / product proper nouns shown as an integration catalogue label
+      // or a Settings integration-row heading. Kept verbatim so the label
+      // matches the provider's own console.
+      "integrations.catalog.gemini.label",
+      "integrations.catalog.elevenlabs.label",
+      "integrations.catalog.edge_tts.label",
+      "integrations.catalog.pexels.label",
+      "integrations.catalog.pixabay.label",
+      "integrations.catalog.veo.label",
+      "integrations.catalog.fal.label",
+      "integrations.catalog.youtube.label",
+      "integrations.catalog.tiktok.label",
+      "integrations.catalog.telegram.label",
+      "integrations.catalog.upload_post.label",
+      "settings.integrations.pexels",
+      "settings.integrations.gemini",
+      "settings.integrations.uploadPost",
+      "publishing.connect.dest.uploadPost.label",
+      "settings.publicAddress.metaLabel",
+    ]);
     const untranslated = Object.keys(CATALOGS.en).filter(
       (key) => !identifierKeys.has(key) && !arabicScript.test(CATALOGS.ar[key]),
     );

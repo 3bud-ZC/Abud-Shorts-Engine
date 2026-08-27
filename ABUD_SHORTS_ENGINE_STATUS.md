@@ -31,7 +31,10 @@ V2.3-07 are complete.
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
 interface producing English videos, and an English interface producing Arabic
-videos, are both ordinary supported cases.
+videos, are both ordinary supported cases. Every operator/customer screen -
+including Integrations, Publishing, Settings and Providers - resolves its body
+copy through the one i18n catalogue; there is **no remaining tracked Arabic
+localization gap**.
 
 Schema: **2.13.0**
 
@@ -57,6 +60,7 @@ Finalization track:
 | V2.3-06 | Productions & Video Library | **PASS / COMPLETE** |
 | V2.3-07 | Publishing, Integrations, Settings, Setup & Final Product Closure | **PASS / COMPLETE** |
 | V2.3-U | V2.2.0 → V2.3.0 isolated online-update rehearsal | **PASS / COMPLETE** |
+| V2.3-AR | Arabic body-copy closure for Integrations / Publishing / Settings / Providers | **PASS / COMPLETE** |
 
 **V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
 merged to `main`, not tagged, no GitHub Release, no production GHCR image. The
@@ -4923,3 +4927,109 @@ rehearsal directories. `node:22-bookworm-slim` (a shared base image) was left in
 place and is noted here. No shared cache, no primary volume, network, image or
 container was removed; **no prune command was run**. `%ProgramData%\AbudShorts`
 was never created.
+
+## V2.3-AR — Final Arabic Product Localization
+
+The last operator/customer configuration surfaces with hardcoded English body
+copy were localized: **Integrations, Publishing, Settings and Providers**, plus
+every child component they render copy through (`integrationsCatalog`,
+`PublicAddressPanel`, `AccountConnectModal`; `UpdateCenter` was already
+localized). No system was redesigned and no backend behaviour changed.
+
+**Central i18n reused.** All new strings live in `src/ui/i18n/locales/en.ts` and
+`ar.ts` under the existing namespaces. `integrations`, `publishing` and
+`settings` were extended; a dedicated `providers` namespace was added to
+`TRANSLATION_NAMESPACES` and the three `settings.providers*` keys moved into it.
+The integration catalogue (`integrationsCatalog.ts`) is now a pure structural
+map — provider → category, connection type, credential type — with every label,
+purpose, cost and credential-help string resolved from
+`integrations.catalog.<id>.*`. No `language === "ar"` branch, inline ternary,
+parallel dictionary or page-local translation system was introduced.
+
+**Shared status vocabulary reused.** `theme/statusModel.ts` no longer carries
+English `label`/`description` literals; `ABUD_STATUS` entries now hold i18n keys
+(`labelKey`, `descriptionKey`) resolved by the Integrations page. Providers and
+Publishing render status through `<StatusBadge>`, which already resolves through
+`i18n/status.ts` `localizedStatus`. Added shared states `statuses.configured`,
+`statuses.readyToConnect`, `statuses.expired` (wired into `localizedStatus` so
+`configured` reads "Configured" / "مُعَدّ" rather than a bare "Ready"). Dead
+`COST_TIER_LABEL` was removed.
+
+**Professional MSA.** Arabic is Modern Standard Arabic written for a business
+operator — natural, concise for UI controls, no Egyptian slang. "Ready to
+Connect" → "جاهز للربط", "Not Configured" → "غير مُعَدّ", "Needs Attention" →
+"يحتاج إلى مراجعة" (not an outage), "Test connection" → "اختبار الاتصال".
+Provider and product names (YouTube, TikTok, Instagram, Facebook, Telegram,
+Pexels, Pixabay, ElevenLabs, Kokoro, Gemini, Veo, fal.ai, ABUD Shorts Engine)
+stay in Latin script; only the surrounding explanation is translated.
+
+**English parity / placeholder parity.** `en.ts` ↔ `ar.ts` are key-for-key
+(`i18n.test.ts` enforces both directions); every `{placeholder}` matches between
+the two languages; working English copy was not rewritten beyond the small
+wording tidy-ups that came with keying it. A new suite
+`src/ui/arabicLocalization.test.ts` (33 tests) adds regression coverage: every
+key in the four target namespaces has a non-blank Arabic value with real Arabic
+script (a documented allow-set covers provider proper nouns), placeholders
+match, each catalogue provider has a bilingual label/purpose/cost, no `label` /
+`title` / `description` / `placeholder` / `helperText` prop on the surface files
+carries an English literal, no infrastructure vocabulary
+(`n8n`/`postgres`/`docker`/`.env`/`service token`/…) appears in those
+namespaces, and the Providers page exposes no `*_API_KEY` identifier.
+
+**Localization defect fixed (tiny supporting UI change).** `/api/v2/providers`
+emits raw developer strings in `message` — including environment-variable names
+such as "GEMINI_API_KEY is not configured." — which section 6 forbids on a
+customer screen. The Providers page no longer renders that field; it derives a
+localized description from the `status`/`configured` the same endpoint reports
+(`providers.msg.*`). The stored-credential health line now resolves through
+`localizedStatus` too. No backend change.
+
+**RTL / layout.** Arabic renders RTL, English LTR (`dir` on `<html>`, unchanged).
+Chip rows on Integrations, Providers and the Publishing accounts header use
+`flexWrap` / `useFlexGap` so longer Arabic wraps instead of truncating.
+LTR-sensitive technical values keep `dir="ltr"` with `text-align: start`:
+callback URLs, the OAuth redirect URI, video/account IDs, API-token scopes,
+SHA-256 fragments, backup filenames, the public-address input. Platform logos and
+media controls are not reversed. IANA time-zone identifiers in the Settings
+drop-down (`Africa/Cairo (EET)`, `UTC`, …) are kept verbatim as technical
+identifiers; the field label is localized.
+
+**User data preserved.** URLs, e-mail addresses, account handles, provider names
+and customer-entered text are never transformed. Secrets stay masked / write-only
+exactly as before.
+
+**No backend / data change.** No schema migration, no database mutation, no
+Provider Vault change, no admin change, no production job, no video render, no
+publication, **zero provider API calls, zero paid calls**. No Golden video was
+generated.
+
+**Automated verification.** `pnpm typecheck` — pass. `pnpm exec vitest run` —
+**56 files / 905 tests pass** (baseline 55 / 872; +1 file, +33 tests are the new
+Arabic-localization suite plus the two `productUx` catalogue checks it grew).
+`pnpm build` — pass.
+
+**Runtime.** The app image was rebuilt from the final working tree
+(`docker compose -f docker-compose.v2.yml up -d --build abud-shorts-app
+abud-shorts-render-worker`) and both containers recreated to serve the new
+bundle; no prune of any kind was run. `/integrations`, `/publishing`,
+`/settings` and `/providers` were checked in English and Arabic against the
+running runtime — see the milestone's runtime QA note.
+
+**Browser limitation.** No browser runtime is available in this environment and
+Playwright was not installed for this task. Verification is the built bundle, the
+translation-contract tests, source-to-catalogue audit and authenticated
+route/runtime checks.
+
+**Release-only work remaining** (unchanged, and NOT done here): V2.3.0 release
+notes (`RELEASE_NOTES.md` is still V2.2.0-specific and must be replaced during
+the release ceremony), the production GHCR image and its digest, the final
+release manifest/package, and the merge / tag / GitHub Release ceremony — each
+only after explicit user approval.
+
+Two dynamic string sources are deliberately left for a future backend-side
+localization pass and are not UI copy: the `validate` endpoint's free-text
+`message` and a provider's server-supplied `billingNotice` line. Neither leaks
+paths or secrets.
+
+V2.3.0 stays a **RELEASE CANDIDATE**. Not GA. Not merged, not tagged, no GitHub
+Release, no production GHCR image.

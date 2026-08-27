@@ -1,11 +1,15 @@
 /**
  * CLIENT INTEGRATION CATALOG
  * --------------------------
- * Describes each integration in the customer's language: what it is for, what
- * it costs, and how it is connected.
+ * The structural map: for each provider the engine really implements, which
+ * customer category it belongs to and how it is connected.
  *
- * Every entry here corresponds to a provider the engine really implements. No
- * integration is invented, and infrastructure the customer never configures
+ * All customer-visible prose (label, purpose, cost, credential help, default
+ * badge) lives in the `integrations.catalog.<id>.*` keys of the i18n catalogue,
+ * resolved by the Integrations page, so an Arabic operator reads Arabic and a
+ * missing translation is a one-file data problem rather than a rendering bug.
+ *
+ * No integration is invented, and infrastructure the customer never configures
  * (n8n, PostgreSQL, the render worker) is deliberately absent - it is not shown
  * on this page at all.
  */
@@ -25,200 +29,174 @@ export const CLIENT_CATEGORY_ORDER: ClientCategory[] = [
   "Optional & Advanced",
 ];
 
+/** i18n key for a customer integration category heading. */
+export const CLIENT_CATEGORY_KEY: Record<ClientCategory, string> = {
+  "AI & Script": "integrations.category.aiScript",
+  Voice: "integrations.category.voice",
+  "Visuals & Stock": "integrations.category.visualsStock",
+  Publishing: "integrations.category.publishing",
+  "Optional & Advanced": "integrations.category.advanced",
+};
+
 export type ConnectionType = "key" | "oauth" | "builtin";
 
 export type IntegrationEntry = {
-  /** Shown instead of a bare "Default" chip, e.g. "Arabic Default". */
-  defaultLabel?: string;
-  label: string;
+  /** Provider id, also the i18n key stem: `integrations.catalog.<id>.*`. */
+  id: string;
+  /** Short brand name for inline use ("Set up YouTube"). Proper nouns only. */
   shortName: string;
   category: ClientCategory;
-  purpose: string;
-  costLabel: string;
   connectionType: ConnectionType;
   credentialType?: string;
-  keyHelp?: string;
+  /** Whether an `integrations.catalog.<id>.default` badge key exists. */
+  hasDefault?: boolean;
   optional?: boolean;
 };
+
+/**
+ * The i18n key stem for a catalogue entry. The Integrations page resolves
+ * `<stem>.label`, `<stem>.purpose`, `<stem>.cost`, `<stem>.keyHelp` and
+ * `<stem>.default` through the active-language catalogue.
+ */
+export function catalogKey(id: string, field: "label" | "purpose" | "cost" | "keyHelp" | "default"): string {
+  return `integrations.catalog.${id}.${field}`;
+}
 
 export const INTEGRATION_CATALOG: Record<string, IntegrationEntry> = {
   // ------------------------------------------------------------ AI & Script
   local_ai: {
-    label: "Built-in Creative Director",
+    id: "local_ai",
     shortName: "Built-in AI",
-    defaultLabel: "Script Default",
+    hasDefault: true,
     category: "AI & Script",
-    purpose: "Writes the script and scene plan on your own machine.",
-    costLabel: "Free · Local",
     connectionType: "builtin",
   },
   gemini: {
-    label: "Google Gemini",
+    id: "gemini",
     shortName: "Gemini",
     category: "AI & Script",
-    purpose: "Optional cloud writer for more varied scripts.",
-    costLabel: "Usage Based",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Create an API key in Google AI Studio, then paste it here.",
     optional: true,
   },
   ollama: {
-    label: "Local LLM (Ollama)",
+    id: "ollama",
     shortName: "Ollama",
     category: "Optional & Advanced",
-    purpose: "Run a local language model instead of the built-in writer.",
-    costLabel: "Free · Local",
     connectionType: "builtin",
     optional: true,
   },
 
   // ------------------------------------------------------------------ Voice
   elevenlabs: {
-    label: "ElevenLabs",
+    id: "elevenlabs",
     shortName: "ElevenLabs",
-    defaultLabel: "Arabic Default",
+    hasDefault: true,
     category: "Voice",
-    purpose: "Required for Arabic narration. Also used for premium English voices.",
-    costLabel: "Usage Based",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Copy your API key from the ElevenLabs profile page and paste it here.",
   },
   kokoro: {
-    label: "Built-in English Voice",
+    id: "kokoro",
     shortName: "Kokoro",
-    defaultLabel: "English Default",
+    hasDefault: true,
     category: "Voice",
-    purpose: "Free English narration that runs on your own machine.",
-    costLabel: "Free · Local",
     connectionType: "builtin",
   },
   google_cloud_tts: {
-    label: "Google Cloud Text-to-Speech",
+    id: "google_cloud_tts",
     shortName: "Google TTS",
     category: "Optional & Advanced",
-    purpose: "Alternative cloud voice provider.",
-    costLabel: "Cloud",
     connectionType: "key",
     credentialType: "service_account_json",
-    keyHelp: "Paste the contents of your Google service account JSON file.",
     optional: true,
   },
   edge_tts: {
-    label: "Edge TTS",
+    id: "edge_tts",
     shortName: "Edge TTS",
     category: "Optional & Advanced",
-    purpose: "Experimental online voice option, disabled by default.",
-    costLabel: "Free · Online",
     connectionType: "builtin",
     optional: true,
   },
   piper: {
-    label: "Piper (Legacy)",
+    id: "piper",
     shortName: "Piper",
     category: "Optional & Advanced",
-    purpose: "Kept so older videos stay readable. Not used for new productions.",
-    costLabel: "Free · Local",
     connectionType: "builtin",
     optional: true,
   },
 
   // -------------------------------------------------------- Visuals & Stock
   pexels: {
-    label: "Pexels",
+    id: "pexels",
     shortName: "Pexels",
-    defaultLabel: "Stock Default",
+    hasDefault: true,
     category: "Visuals & Stock",
-    purpose: "Free stock footage library used for most B-roll.",
-    costLabel: "Free",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Create a free Pexels API key at pexels.com/api and paste it here.",
   },
   pixabay: {
-    label: "Pixabay",
+    id: "pixabay",
     shortName: "Pixabay",
     category: "Visuals & Stock",
-    purpose: "Optional second free library. More footage to choose between.",
-    costLabel: "Free",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Create a free Pixabay API key at pixabay.com/api/docs and paste it here.",
     optional: true,
   },
   veo: {
-    label: "Google Veo",
+    id: "veo",
     shortName: "Veo",
     category: "Optional & Advanced",
-    purpose: "Paid AI video generation. Not required for normal productions.",
-    costLabel: "Usage Based",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Paste your Google Veo API key.",
     optional: true,
   },
   fal: {
-    label: "fal.ai",
+    id: "fal",
     shortName: "fal.ai",
     category: "Optional & Advanced",
-    purpose: "Paid AI video generation (Kling, Wan, Seedance).",
-    costLabel: "Usage Based",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Paste your fal.ai API key.",
     optional: true,
   },
 
   // ------------------------------------------------------------- Publishing
   youtube: {
-    label: "YouTube",
+    id: "youtube",
     shortName: "YouTube",
     category: "Publishing",
-    purpose: "Publish finished videos straight to your channel.",
-    costLabel: "Free",
     connectionType: "oauth",
     optional: true,
   },
   meta: {
-    label: "Instagram & Facebook",
+    id: "meta",
     shortName: "Meta",
     category: "Publishing",
-    purpose: "Publish to your Instagram and Facebook pages.",
-    costLabel: "Free",
     connectionType: "oauth",
     optional: true,
   },
   tiktok: {
-    label: "TikTok",
+    id: "tiktok",
     shortName: "TikTok",
     category: "Publishing",
-    purpose: "Publish to your TikTok account.",
-    costLabel: "Free",
     connectionType: "oauth",
     optional: true,
   },
   telegram: {
-    label: "Telegram",
+    id: "telegram",
     shortName: "Telegram",
     category: "Publishing",
-    purpose: "Send finished videos to a Telegram channel or chat.",
-    costLabel: "Free",
     connectionType: "key",
     credentialType: "bot_token",
-    keyHelp: "Create a bot with @BotFather and paste the bot token here.",
     optional: true,
   },
   upload_post: {
-    label: "Upload-Post",
+    id: "upload_post",
     shortName: "Upload-Post",
-    defaultLabel: "Publishing Default",
+    hasDefault: true,
     category: "Publishing",
-    purpose: "Publish to several platforms through one service.",
-    costLabel: "Cloud",
     connectionType: "key",
     credentialType: "api_key",
-    keyHelp: "Paste your Upload-Post API key.",
     optional: true,
   },
 };

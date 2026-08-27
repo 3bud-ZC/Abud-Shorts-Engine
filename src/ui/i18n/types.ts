@@ -75,6 +75,7 @@ export const TRANSLATION_NAMESPACES = [
   "media",
   "publishing",
   "integrations",
+  "providers",
   "settings",
   "health",
   "updates",

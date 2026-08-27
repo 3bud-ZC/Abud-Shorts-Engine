@@ -4,10 +4,13 @@ import { abudDark, abudLight, ABUD_FONT_STACK } from "./theme/tokens";
 import { ABUD_STATUS, statusDescriptor, toAbudStatus } from "./theme/statusModel";
 import {
   CLIENT_CATEGORY_ORDER,
+  CLIENT_CATEGORY_KEY,
   INTEGRATION_CATALOG,
+  catalogKey,
   clientCategoryFor,
   customerConfigurableProviders,
 } from "./pages/integrationsCatalog";
+import { CATALOGS } from "./i18n/catalog";
 import {
   CAPTION_FONT_LABELS,
   CAPTION_STYLE_LABELS,
@@ -81,10 +84,15 @@ describe("Canonical status vocabulary", () => {
     expect(toAbudStatus("")).toBe("not_configured");
   });
 
-  it("gives every state a human label and description", () => {
+  it("gives every state a bilingual label and description through the catalogue", () => {
     Object.values(ABUD_STATUS).forEach((descriptor) => {
-      expect(descriptor.label.length).toBeGreaterThan(2);
-      expect(descriptor.description.length).toBeGreaterThan(10);
+      for (const locale of ["en", "ar"] as const) {
+        expect(CATALOGS[locale][descriptor.labelKey], `${locale} ${descriptor.labelKey}`).toBeTruthy();
+        expect(
+          (CATALOGS[locale][descriptor.descriptionKey] || "").length,
+          `${locale} ${descriptor.descriptionKey}`,
+        ).toBeGreaterThan(10);
+      }
     });
   });
 });
@@ -115,11 +123,26 @@ describe("Integration catalog", () => {
     });
   });
 
-  it("describes each integration in plain language with a cost label", () => {
+  it("describes each integration in plain bilingual language with a cost label", () => {
     Object.values(INTEGRATION_CATALOG).forEach((entry) => {
-      expect(entry.purpose.length).toBeGreaterThan(15);
-      expect(entry.costLabel).toBeTruthy();
-      expect(entry.purpose).not.toMatch(/API endpoint|vault|schema|enum|env/i);
+      for (const locale of ["en", "ar"] as const) {
+        const purpose = CATALOGS[locale][catalogKey(entry.id, "purpose")] || "";
+        const cost = CATALOGS[locale][catalogKey(entry.id, "cost")] || "";
+        const label = CATALOGS[locale][catalogKey(entry.id, "label")] || "";
+        expect(purpose.length, `${locale} purpose for ${entry.id}`).toBeGreaterThan(15);
+        expect(cost, `${locale} cost for ${entry.id}`).toBeTruthy();
+        expect(label, `${locale} label for ${entry.id}`).toBeTruthy();
+        // No engine jargon in customer copy.
+        expect(purpose).not.toMatch(/API endpoint|vault|schema|enum|\benv\b/i);
+      }
+    });
+  });
+
+  it("gives every customer category a bilingual heading", () => {
+    CLIENT_CATEGORY_ORDER.forEach((category) => {
+      const key = CLIENT_CATEGORY_KEY[category];
+      expect(CATALOGS.en[key], `en ${key}`).toBeTruthy();
+      expect(CATALOGS.ar[key], `ar ${key}`).toBeTruthy();
     });
   });
 
