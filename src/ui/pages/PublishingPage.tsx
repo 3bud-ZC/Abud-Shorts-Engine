@@ -43,6 +43,7 @@ import FacebookIcon from "@mui/icons-material/Facebook";
 import TelegramIcon from "@mui/icons-material/Telegram";
 import TwitterIcon from "@mui/icons-material/Twitter";
 import { EmptyState, LoadingState, PageHeader, SectionCard, StatusBadge } from "../components/v2";
+import { useT } from "../i18n";
 import { AccountConnectModal } from "../components/publishing/AccountConnectModal";
 import { withMediaAccessToken } from "../utils/auth";
 import type {
@@ -74,6 +75,7 @@ function getPlatformIcon(platform: PublishingPlatform) {
 
 export const PublishingPage: React.FC = () => {
   const navigate = useNavigate();
+  const tr = useT();
   const [tab, setTab] = useState<"overview" | "scheduled" | "published" | "failed" | "accounts">("overview");
   const [summary, setSummary] = useState<PublishingSummary | null>(null);
   const [publications, setPublications] = useState<Publication[]>([]);
@@ -201,9 +203,9 @@ export const PublishingPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Publishing"
-        eyebrow="Distribute"
-        description="Unified multi-platform distribution, scheduling engine, automated retries, and social accounts."
+        title={tr("publishing.title")}
+        eyebrow={tr("publishing.eyebrow")}
+        description={tr("publishing.description")}
         actions={
           <Stack direction="row" spacing={1}>
             <Button

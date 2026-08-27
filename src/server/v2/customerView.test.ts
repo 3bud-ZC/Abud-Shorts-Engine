@@ -130,6 +130,17 @@ describe("internal scrubbing", () => {
     expect(scrubbed.list[1]).toBe("plain");
   });
 
+  it("redacts absolute container paths that leaked through system health / settings", () => {
+    const scrubbed = scrubInternal({
+      whisper: { path: "/app/data/libs/whisper" },
+      storage: { dataDir: "/app/data", videosDir: "/app/data/videos", tempDir: "/app/data/temp", bytes: 123 },
+      app: { videosDir: "/app/data/videos", webPort: "3123" },
+    }) as any;
+    expect(JSON.stringify(scrubbed)).not.toContain("/app/data");
+    expect(scrubbed.storage.bytes).toBe(123);
+    expect(scrubbed.app.webPort).toBe("3123");
+  });
+
   it("redacts file:// URIs pointing at internal artifacts but keeps remote URLs", () => {
     const scrubbed = scrubInternal({
       shots: [

@@ -271,7 +271,7 @@ export async function getV2Health(
       message: fs.existsSync(config.whisperInstallPath)
         ? "Whisper model directory exists."
         : "Whisper model directory is missing.",
-      details: { path: config.whisperInstallPath },
+      details: { modelPresent: fs.existsSync(config.whisperInstallPath) },
     })),
     timedCheck("Pexels", async () => {
       const pexels = await validatePexelsProvider(config);
@@ -298,7 +298,15 @@ export async function getV2Health(
       return {
         ok: storage.ok,
         message: storage.ok ? "Video storage is writable." : "Video storage failed readiness checks.",
-        details: { ...storage, bytes },
+        // Absolute container paths (dataDir / videosDir / tempDir) are internal
+        // and deliberately excluded from the customer-facing health detail.
+        details: {
+          ok: storage.ok,
+          availableDiskBytes: storage.availableDiskBytes,
+          minFreeDiskBytes: storage.minFreeDiskBytes,
+          issues: storage.issues,
+          bytes,
+        },
       };
     }),
   ]);

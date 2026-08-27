@@ -26,6 +26,7 @@ import {
   StatusBadge,
 } from "../components/v2";
 import type { ProviderItem } from "./v2Types";
+import { useT } from "../i18n";
 
 type DiscoveredVoice = {
   id: string;
@@ -49,6 +50,7 @@ type VoiceLabConfig = {
 };
 
 const ProvidersPage: React.FC = () => {
+  const tr = useT();
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -242,12 +244,12 @@ const ProvidersPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Providers"
-        eyebrow="Configuration"
-        description="Review which local, cloud, and premium services are available. Credentials stay server-side and are never shown in the browser."
+        title={tr("settings.providersTitle")}
+        eyebrow={tr("settings.providersEyebrow")}
+        description={tr("settings.providersDescription")}
         actions={
           <Button startIcon={<RefreshIcon />} onClick={load}>
-            Refresh Status
+            {tr("common.refresh")}
           </Button>
         }
       />

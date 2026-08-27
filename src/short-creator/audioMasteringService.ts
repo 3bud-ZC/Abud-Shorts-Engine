@@ -47,7 +47,18 @@ export class AudioMasteringService {
   constructor(private ffmpeg: FFMpeg) {}
 
   public analyzeDeadAir(
-    speechWindows: Array<{ sceneIndex: number; startMs: number; endMs: number }>,
+    speechWindows: Array<{
+      sceneIndex: number;
+      startMs: number;
+      endMs: number;
+      /**
+       * Milliseconds this scene deliberately holds its own motion/visual past
+       * the narration (music and animation keep playing) so the video reaches
+       * its requested duration. A gap that is just this intentional hold is
+       * editorial pacing, not dead air, and is not flagged.
+       */
+      intentionalHoldMs?: number;
+    }>,
     options: {
       warningThresholdMs?: number;
       defectThresholdMs?: number;
@@ -65,7 +76,10 @@ export class AudioMasteringService {
     for (let i = 0; i < speechWindows.length - 1; i++) {
       const current = speechWindows[i];
       const next = speechWindows[i + 1];
-      const gapMs = Math.max(0, next.startMs - current.endMs);
+      const rawGapMs = Math.max(0, next.startMs - current.endMs);
+      // Discount the portion of the gap that is this scene's deliberate visual
+      // hold - music and motion are playing there, it is not dead air.
+      const gapMs = Math.max(0, rawGapMs - Math.max(0, current.intentionalHoldMs || 0));
       totalNarrationSilenceMs += gapMs;
       if (gapMs > maxNarrationSilenceMs) {
         maxNarrationSilenceMs = gapMs;

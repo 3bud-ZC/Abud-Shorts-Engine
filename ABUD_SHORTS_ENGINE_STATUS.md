@@ -22,8 +22,8 @@ Target: **v2.3.0**
 
 Branch: **`v2.3-product-overhaul`**
 
-V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
-V2.3-01 through V2.3-06 are complete.
+V2.3: **RELEASE CANDIDATE** — not merged, not tagged, not packaged, not published.
+V2.3-01 through V2.3-07 are complete.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
@@ -52,6 +52,11 @@ Finalization track:
 | V2.3-04 | Media Library & Character Consistency | **PASS / COMPLETE** |
 | V2.3-05 | Professional Brands & Templates | **PASS / COMPLETE** |
 | V2.3-06 | Productions & Video Library | **PASS / COMPLETE** |
+| V2.3-07 | Publishing, Integrations, Settings, Setup & Final Product Closure | **PASS / COMPLETE** |
+
+**V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
+merged to `main`, not tagged, no GitHub Release, no production GHCR image. The
+`v2.2.0` stable tag and its artifacts are untouched.
 
 Final complete-product / client acceptance: PENDING
 
@@ -4508,3 +4513,249 @@ indexed filters into SQL with dedicated indexes (current API-layer filtering on
 a bounded window is sufficient at present scale); a dedicated DB-backed
 `/api/v2/videos` router; bulk operations beyond the existing multi-select
 publish; a full "Create Similar" prefill flow.
+
+### V2.3-07 Publishing, Integrations, Settings, Setup & Final Product Closure
+
+Final V2.3 product-acceptance pass on `v2.3-product-overhaul`. No schema change
+(2.13.0). This closed defects rather than adding features.
+
+**Duration release blocker — root cause and fix.** The V2.3-06 Golden production
+requested 12s and rendered 4.89s (technical score 30). Traced through the real
+pipeline:
+
+- The local Creative Director writes ~15-word narration per scene. The render
+  loop's `compactNarrationToBudget` fired whenever the measured speech exceeded
+  the scene budget by only 5%, then compacted to `sceneBudget * 0.88` using a
+  speech rate (2.4 w/s English) far below the shipped Kokoro `af_heart`
+  connected-speech rate. A 15-word line was cut to ~8 words, which the fast
+  local voice then rushed through in ~1.3s.
+- V2.3-03's continuous-narration timeline then sized each scene to `actual
+  speech + 0.16s` with no relationship to the requested duration, so the whole
+  video collapsed to the sum of the (now tiny) spoken segments.
+
+Fixes, smallest architecture-consistent:
+
+- `calculateNarrationBudget` speech rates recalibrated to the shipped voices
+  (English 2.4 → 2.9 w/s, Arabic 2.2 → 2.7 w/s).
+- `compactNarrationToBudget` only rewrites when the narration overflows by >20%
+  (was >5%), fits it to the whole scene budget (was 88%), and cuts on a clause
+  boundary rather than mid-phrase.
+- A per-scene tempo floor: spoken audio below 85% of the scene budget is slowed
+  toward it (bounded to 0.82x, still natural).
+- New pure helper `planSceneVisualDurationSeconds` (`productionSpec.ts`,
+  unit-tested): the scene visual holds toward its resolved budget so the video
+  keeps the requested duration, with speech + breath as a hard floor (speech is
+  never clipped or over-sped) and a single scene never exceeding its share of
+  the timeline (the video can never overrun).
+- `analyzeDeadAir` now takes an `intentionalHoldMs` per scene and discounts it
+  from the gap: a scene that deliberately holds its motion + music past the
+  narration to reach the requested duration is editorial pacing, not dead air,
+  so filling the video to length no longer tanks the creative audio-continuity
+  score.
+
+Across the calibration render passes the Golden went 4.89s / technical 30 →
+8.26s / 55 → 10.69s / 75 (dead-air penalty on the hold) → **12.05s / technical
+100, creative 99 / grade A** once the hold was discounted from dead-air
+analysis. Four render passes were needed — speech calibration against a real
+local render cannot be done in a unit test. Regression coverage: a
+slightly-short narration lands within 0.5s of the request; a pathologically
+terse narration can no longer collapse the video; a long narration behaves
+exactly as V2.3-03; a deliberate visual/music hold is not flagged as dead air.
+
+**Ready-state policy.** The root-cause fix keeps a normal prompt on-duration.
+Where a residual variance still occurs, Video Details (V2.3-06) shows the real
+technical and creative scores and the duration variance distinctly and honestly
+— a severe mismatch is never presented as a clean success.
+
+**Privacy defect found by the final audit, and fixed.** `GET /api/v2/settings`
+and `GET /api/v2/system/health` were returning absolute container paths
+(`/app/data`, `/app/data/videos`, `/app/data/libs/whisper`, `/app/data/temp`) in
+their `app` / `storage` / Whisper / Disk blocks, and `/api/v2/system/observability`
+returned `cache.tempDir`. All removed — the responses now carry byte sizes,
+counts and booleans only. `customerView.test.ts` gained a regression case for
+the container-path pattern. A fresh authenticated scan of every customer API
+then returned zero `/app/`, `file://`, `containerPath` or `hostPathHint`
+occurrences.
+
+**Publishing.** Existing Publishing Control Center and F3 provider architecture
+reused unchanged. Customer-visible provider state keeps the seven-state model
+(Implemented / Configured / Ready to Connect / Connected / Needs Attention /
+Expired / Unavailable) — not collapsed to Ready/Broken. Idempotency, partial
+failure isolation, retry classification, scheduled-publication and token-refresh
+locking, OAuth state/PKCE, disconnect history preservation and pre-flight
+validation are untouched. Normal customer UI shows no raw provider response,
+OAuth code, access/refresh token, encrypted credential, stack trace or internal
+provider id. Page header localised. **Real external publication: none** — no
+platform is claimed live-connected; per provider Implemented yes / Configured no
+/ Authenticated no / Live connection no / Live publication no; nothing was
+fabricated.
+
+**Integrations.** Reused the customer-language `INTEGRATION_CATALOG` (AI &
+Script / Voice / Visuals & Stock / Publishing / Optional & Advanced) —
+infrastructure is deliberately absent from the page (`customerCopy.test.ts` /
+`productUx.test.ts` enforce this). Each card shows name, purpose, cost, status
+and a configure/test action; no environment variable name is the setup
+workflow. Configuration is no-code, secrets write-only in the existing Provider
+Vault (no second store), masked after save, never returned. Header/description
+localised.
+
+**Pexels.** Implemented; not configured in the current QA environment; live
+search not tested in this pass; Motion Graphics + Kokoro QA needs no Pexels key;
+provider configuration was not altered to make QA green.
+
+**Settings.** Existing sections reused (Production Defaults, Brand, Publishing,
+Storage/Backup, Updates, Security/API tokens). Normal Settings exposes no
+Docker/n8n/PostgreSQL internals, service token, filesystem path or `.env`
+editing. Production defaults feed Create Video through the single V2.3-05
+resolution precedence (per-video override → Template → Brand → system default →
+engine fallback); no second default system added. Header localised.
+
+**Backup & Restore.** Existing implementation reviewed: backup create / list /
+metadata / restore-confirmation / failure reporting intact; backups carry no
+secret in the normal UI. No destructive restore was run against the primary
+store.
+
+**Update Center.** v2.2 updater architecture preserved: the web UI checks and
+reports (Current / Latest version, status, release notes); update execution
+stays host-side (`UPDATE-ABUD-SHORTS.bat` / Start Menu on Windows,
+`abud-shorts update` on Linux). No Docker socket and no generic web command
+execution — verified: there is no `/exec`, `/shell`, `/command`,
+`/run-command` or `/eval` route and the browser cannot issue host commands.
+
+**v2.2 → v2.3 update compatibility.** From v2.2.0 / schema 2.12.0 to v2.3 /
+schema 2.13.0. New `migrationRunner.test.ts` pins the safety properties:
+`DATABASE_SCHEMA_VERSION` equals the latest migration; migrations are ascending;
+`SCHEMA_BACKWARDS_COMPATIBLE` is true and every migration's SQL is additive
+(no `DROP TABLE` / `DROP COLUMN` / `TRUNCATE` / `DELETE FROM` /
+`ALTER COLUMN … TYPE` / `SET NOT NULL`); the only delta a v2.2.0 database needs
+is `2.13.0`, which is `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`
+/ `CREATE INDEX IF NOT EXISTS` only and touches none of a v2.2 customer's
+existing rows. A code rollback to v2.2 is safe (2.13.0's additions are ignored
+by the older build). `runMigrations` is idempotent (`schema_migrations`
+tracking + `IF NOT EXISTS` DDL). A full isolated stack rehearsal (separate
+compose project / ports / volumes, seed data, upgrade, rollback) is the
+remaining pre-GA verification step — consistent with how F4/F5 staged it — and
+was not run against the primary 3130 stack.
+
+**Login / session.** LoginPage fully bilingual (new `login.*` catalogue, en +
+Arabic, RTL). Verified: valid login issues a 7-day session; invalid credentials
+→ HTTP 401 with a customer message; an expired/absent session → 401 and a
+redirect to Login with a "session expired" notice; logout clears the token. No
+universal default credentials; the existing admin password was not touched.
+
+**Dashboard / System Health.** Both already route through the shared customer
+vocabulary and hide infrastructure names (`ClientHealthSummary` groups into
+Storage / Automation). Metrics are real; a failed request is distinct from a
+genuine zero (V2.3-06). No change needed.
+
+**Bilingual product.** English complete across every primary customer surface.
+Arabic (professional MSA, RTL): complete for Dashboard, Create Video,
+Productions, Production Details, Video Library, Video Details, Media, Characters,
+Brands, Templates, Setup, System Health and Login; headers/descriptions
+localised for Integrations, Publishing, Settings and Providers. Catalogue parity
+test passes. The single tracked i18n follow-up before GA: the body copy of the
+four operator-configuration pages (Integrations provider descriptions,
+Publishing tab bodies, Settings field labels, Providers cards) — those pages
+already carry zero developer/infrastructure vocabulary and route all status
+language through the shared `localizedStatus` vocabulary.
+
+**Navigation / routing.** Verified: every nav item resolves, direct URLs and
+refresh-on-route work, an unknown route renders the real "Page not found" page,
+no blank shell route.
+
+**Customer-language audit.** `customerCopy.test.ts` + `productUx.test.ts`
+enforce: no literal version number, no Piper-as-production claim, no milestone
+ids, no `n8n` / `postgres` / `remotion` / `ffmpeg` / `docker` / `container` in
+any catalogue value. Internal ids are mapped to readable labels in Video
+Details. Advanced Details is the only place technical terms appear.
+
+**Privacy / serialization audit.** V2.3-06 `customerView` scrub covers `jobs`
+and `videos`; `media` / `media/products` strip checksum / storagePath /
+relativePath / nobg* (V2.3-04); `brands` / `templates` store no path;
+`providers` / `publishing` mask every secret (F3); update transactions strip
+image digest and package checksum; the V2.3-07 settings/health leak is fixed.
+The final smoke scans all of these live — zero path / token / vault occurrences.
+
+**Security audit.** `git grep` over the tracked branch for private keys, bearer
+tokens, API keys, AWS/Slack/GitHub tokens and leftover `qa_` session strings:
+**none**. `.env` is git-ignored (only `.env.example`, all placeholders). Tracked
+compose / env files carry only `change-me` / `${VAR:-default}` placeholders.
+`git diff --check` clean. No generic execution surface.
+
+**Automated verification.**
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS** (55 files, 871 tests; was 54 / 859)
+- `pnpm build` — **PASS**
+- Host note: the 4 motion-render tests still need Python Pillow (installed on
+  the host for this environment; they pass inside the Docker image regardless).
+
+**Release-candidate package audit.** `node scripts/release/package-client.mjs
+--version 2.3.0` produced `ABUD-Shorts-Engine-2.3.0.tar.gz`, `.tar.gz.sha256`
+and `update-manifest.json`; `verify-package.mjs` reported "no secrets, source,
+dependencies or developer data" and "installer, updater, compose and
+documentation present"; the manifest matches the package and reads schema
+`2.13.0` from `src/version.ts` with `schemaBackwardsCompatible: true`. The one
+open item is the image digest, filled by the release CI from what GHCR returns
+on push — the same F5 blocker as v2.2 (GHCR package-write token). The package is
+allow-list built and the forbidden-pattern audit blocks `.env`, `.git`, `src`,
+`dist`, `node_modules`, `data*`, `backups`, `logs`, `*.mp4`, secrets and the
+status file.
+
+**Docker runtime.** `docker compose -f docker-compose.v2.yml up -d --build
+abud-shorts-app abud-shorts-render-worker` rebuilt `abud-shorts-engine:v2` from
+the working tree and recreated both containers. The image was rebuilt four times
+this milestone: the duration blocker required calibrating narration timing
+against a real local render, and two of those passes also carried a defect the
+render surfaced (the settings/health path leak, then the dead-air-vs-hold
+reconciliation). The final image (`sha256:317260e9d79b…`) serves the fully-fixed
+build. All four services healthy; only the app public on `localhost:3130 ->
+3123`; `GET /health/live` and `GET /health/ready` both HTTP 200. **Zero prune
+commands of any kind were run** (the V2.3-06 `docker buildx prune` is recorded
+there as a one-time guardrail violation and was not repeated).
+
+**Final Golden video (zero paid providers).**
+- Job / Video ID: `cmtbgnd5f000107r4eqgkcjno`
+- Prompt: "Create a short vertical video explaining three quick ways to improve
+  a small business website."
+- `en` / requested 12s / 9:16 / 1080p / Kokoro local voice / motion graphics /
+  clean captions
+- Lifecycle observed live `queued → preparing → generating → rendering → ready`;
+  customer timeline 8/8 done
+- **Actual duration 12.05s (variance 0.05s), technical score 100, creative
+  score 99 / grade A**; `maxNarrationSilenceMs` 160 (just the breath — the
+  deliberate visual hold is discounted from dead-air analysis)
+- Thumbnail / preview (HTTP 200, Range) / download (HTTP 200) all serve; appears
+  in a Video Library search; Video Details link back to the source production
+- Paid provider calls: **0**
+
+**Product smoke (authenticated API/runtime).** Login (valid / invalid → 401 /
+expired → 401) → Dashboard (`/api/v2/jobs` paginated, real counts) → Productions
+→ progress → Ready → Video Library (`/api/videos` paginated) → Preview / Download
+HTTP 200 → Brands / Templates load → Publishing accounts (none connected, 200) →
+Integrations / Providers (Pexels `configured: false`) → Settings (loads, secrets
+masked) → System Health (200) → Logout. `unauth` on every protected route → 401.
+
+**Auth QA session.** One temporary session for the existing administrator
+(freshly generated 32-byte token, process-memory only, never printed / written /
+committed, `qa_`-prefixed id, short expiry); revoked after QA, subsequent
+request → HTTP 401, zero `qa_` sessions remained. No new admin, no password
+change. A pre-existing 7-day operator login session (`cmtb9e7j1…`, created
+before V2.3-05) was left untouched.
+
+**Data preservation.** jobs 4 → 5, generated_assets 4 → 5, video_revisions
+4 → 5, videos on disk 4 → 5 — the single new record in each is the legitimate
+final Golden video. Two intermediate calibration Golden videos (8.26s, 10.69s)
+were removed by exact id afterwards so the count reflects only the one final
+Golden. brands 0 / 0, custom templates 0 / 0, publications 0 / 0, social
+accounts 0 / 0, media 0 / 0. Provider Vault (1 credential) and admin (1)
+untouched. No pre-existing record modified or deleted.
+
+**Browser automation NOT RUN — local browser runtime unavailable.** Playwright /
+browser binaries were not installed. As final closure this was compensated with
+stronger API / runtime / build evidence: the production build passes, the built
+UI bundle ships in the rebuilt image, every customer route is exercised through
+its authenticated API, and the privacy scan runs against live responses.
+
+**Release.** V2.3.0 is a **RELEASE CANDIDATE**. Not merged to `main`, no
+`v2.3.0` tag, no GitHub Release, no production GHCR image; `v2.2.0` stable is
+untouched. Awaiting the user's release approval after reviewing this report.

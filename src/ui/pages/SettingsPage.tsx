@@ -28,6 +28,7 @@ import UpdateCenter from "../components/UpdateCenter";
 import PublicAddressPanel from "../components/PublicAddressPanel";
 import type { ApiTokenItem, BusinessTemplateOption, V2Brand } from "./v2Types";
 import { DURATION_OPTIONS } from "./videoTypes";
+import { useT } from "../i18n";
 
 /** Keeps a duration saved under an older option list selectable. */
 function durationChoicesFor(saved: number): number[] {
@@ -37,6 +38,7 @@ function durationChoicesFor(saved: number): number[] {
 }
 
 const SettingsPage: React.FC = () => {
+  const tr = useT();
   const [settings, setSettings] = useState<any>(null);
   const [brands, setBrands] = useState<V2Brand[]>([]);
   const [templates, setTemplates] = useState<BusinessTemplateOption[]>([]);
@@ -82,9 +84,9 @@ const SettingsPage: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Settings"
-        eyebrow="Configuration"
-        description="Defaults for new videos, your brand, publishing, security and backups."
+        title={tr("settings.title")}
+        eyebrow={tr("settings.eyebrow")}
+        description={tr("settings.description")}
         actions={
           <Button
             variant="contained"

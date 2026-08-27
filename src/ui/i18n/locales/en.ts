@@ -298,6 +298,8 @@ export const en: TranslationCatalog = {
   // ------------------------------------------------------------ publishing
   "publishing.title": "Publishing",
   "publishing.eyebrow": "Distribute",
+  "publishing.description":
+    "Send finished videos to your connected social channels, on a schedule or right away.",
   "publishing.channels": "Channels",
   "publishing.publishedToday": "Published today",
   "publishing.scheduled": "Scheduled",
@@ -306,10 +308,19 @@ export const en: TranslationCatalog = {
   // ---------------------------------------------------------- integrations
   "integrations.title": "Integrations",
   "integrations.eyebrow": "Configure",
+  "integrations.description":
+    "Connect the services ABUD Shorts uses. Anything marked Optional can be skipped — the engine works without it.",
+  "integrations.storageUnavailable":
+    "Secure storage is unavailable, so integrations cannot be saved right now. Contact your installer.",
 
   // -------------------------------------------------------------- settings
   "settings.title": "Settings",
   "settings.eyebrow": "Configure",
+  "settings.description": "Product preferences, video defaults, storage, backups and updates.",
+  "settings.providersTitle": "Providers",
+  "settings.providersEyebrow": "Configure",
+  "settings.providersDescription":
+    "AI, voice, stock and publishing providers. Local options work with no key; cloud options need a key you add here.",
   "settings.appearance": "Appearance",
   "settings.interfaceLanguage": "Interface language",
   "settings.interfaceLanguageHint":
@@ -521,6 +532,18 @@ export const en: TranslationCatalog = {
   "errors.sourceVideos": "videos",
   "errors.sourceHealth": "system status",
   "errors.sourcePublishing": "publishing",
+
+  // ----------------------------------------------------------------- login
+  "login.title": "Sign in",
+  "login.username": "Username",
+  "login.password": "Password",
+  "login.submit": "Sign In",
+  "login.showPassword": "Show password",
+  "login.hidePassword": "Hide password",
+  "login.enterBoth": "Please enter both username and password.",
+  "login.invalidCredentials": "Invalid credentials.",
+  "login.failed": "Sign-in failed. Please check your credentials.",
+  "login.sessionExpired": "Your session expired. Sign in again to continue.",
 
   // -------------------------------------------------------------- statuses
   "statuses.ready": "Ready",

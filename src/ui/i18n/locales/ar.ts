@@ -295,6 +295,8 @@ export const ar: TranslationCatalog = {
   // ------------------------------------------------------------ publishing
   "publishing.title": "النشر",
   "publishing.eyebrow": "النشر والتوزيع",
+  "publishing.description":
+    "أرسل الفيديوهات المكتملة إلى قنواتك الاجتماعية المتصلة، وفق جدول أو فورًا.",
   "publishing.channels": "القنوات",
   "publishing.publishedToday": "نُشِر اليوم",
   "publishing.scheduled": "مجدولة",
@@ -303,10 +305,19 @@ export const ar: TranslationCatalog = {
   // ---------------------------------------------------------- integrations
   "integrations.title": "التكاملات",
   "integrations.eyebrow": "الإعداد",
+  "integrations.description":
+    "اربط الخدمات التي يستخدمها ABUD Shorts. كل ما هو مُعلَّم كاختياري يمكن تخطّيه، فالمحرّك يعمل بدونه.",
+  "integrations.storageUnavailable":
+    "التخزين الآمن غير متاح، لذا لا يمكن حفظ التكاملات الآن. تواصل مع جهة التثبيت.",
 
   // -------------------------------------------------------------- settings
   "settings.title": "الإعدادات",
   "settings.eyebrow": "الإعداد",
+  "settings.description": "تفضيلات المنتج وإعدادات الفيديو الافتراضية والتخزين والنسخ الاحتياطي والتحديثات.",
+  "settings.providersTitle": "المزوّدون",
+  "settings.providersEyebrow": "الإعداد",
+  "settings.providersDescription":
+    "مزوّدو الذكاء الاصطناعي والصوت واللقطات والنشر. الخيارات المحلية تعمل بلا مفتاح؛ وخيارات السحابة تحتاج مفتاحًا تضيفه هنا.",
   "settings.appearance": "المظهر",
   "settings.interfaceLanguage": "لغة الواجهة",
   "settings.interfaceLanguageHint":
@@ -509,6 +520,18 @@ export const ar: TranslationCatalog = {
   "errors.sourceVideos": "مقاطع الفيديو",
   "errors.sourceHealth": "حالة النظام",
   "errors.sourcePublishing": "النشر",
+
+  // ----------------------------------------------------------------- login
+  "login.title": "تسجيل الدخول",
+  "login.username": "اسم المستخدم",
+  "login.password": "كلمة المرور",
+  "login.submit": "تسجيل الدخول",
+  "login.showPassword": "إظهار كلمة المرور",
+  "login.hidePassword": "إخفاء كلمة المرور",
+  "login.enterBoth": "الرجاء إدخال اسم المستخدم وكلمة المرور.",
+  "login.invalidCredentials": "بيانات الدخول غير صحيحة.",
+  "login.failed": "فشل تسجيل الدخول. يرجى التحقق من بيانات الدخول.",
+  "login.sessionExpired": "انتهت جلستك. سجّل الدخول مرة أخرى للمتابعة.",
 
   // -------------------------------------------------------------- statuses
   "statuses.ready": "جاهز",

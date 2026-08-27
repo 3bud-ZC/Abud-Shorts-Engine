@@ -506,6 +506,8 @@ function redactConfiguredKey(key?: string) {
 }
 
 function readStorageDetails(config: Config) {
+  // Size only - the absolute container path is an internal detail and must not
+  // reach a customer (privacy standard).
   fs.ensureDirSync(config.videosDirPath);
   const files = fs.readdirSync(config.videosDirPath);
   const bytes = files.reduce((total, file) => {
@@ -513,7 +515,7 @@ function readStorageDetails(config: Config) {
     const stats = fs.statSync(filePath);
     return stats.isFile() ? total + stats.size : total;
   }, 0);
-  return { videosDir: config.videosDirPath, bytes };
+  return { videoCount: files.filter((file) => file.endsWith(".mp4")).length, bytes };
 }
 
 async function readAppSettings(db: V2Database) {
@@ -3537,7 +3539,6 @@ export function createV2PublicRouter(
       app: {
         v2Enabled: process.env.V2_ENABLED === "true",
         webPort: process.env.PORT || "3123",
-        videosDir: config.videosDirPath,
         docker: process.env.DOCKER === "true",
       },
       storage: readStorageDetails(config),
@@ -3945,7 +3946,6 @@ export function createV2PublicRouter(
         recentStageBottleneck: worker.recentStageBottleneck,
         jobCounts: Object.fromEntries(statusRows.map((row) => [row.status, Number(row.count)])),
         cache: {
-          tempDir: config.tempDirPath,
           maxStorageBytes: config.videoCacheSizeInBytes,
           usedProjectStorageBytes: (storage as any).usedProjectStorageBytes,
           cacheStorageBytes: (storage as any).cacheStorageBytes,

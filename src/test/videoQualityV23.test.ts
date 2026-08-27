@@ -50,6 +50,22 @@ describe("Milestone V2.3-03: Professional Quality, Audio Continuity & Caption Re
       expect(report.issues.length).toBe(1);
       expect(report.issues[0]).toContain("2200ms");
     });
+
+    it("does not flag a gap that is a scene's deliberate visual/music hold (V2.3-07)", () => {
+      // A short generated script: each scene holds ~2s of motion + music past
+      // the narration so the video reaches its requested duration. That hold is
+      // editorial pacing, not dead air.
+      const speechWindows = [
+        { sceneIndex: 0, startMs: 0, endMs: 1800, intentionalHoldMs: 2040 },
+        { sceneIndex: 1, startMs: 4000, endMs: 5800, intentionalHoldMs: 2040 },
+        { sceneIndex: 2, startMs: 8000, endMs: 10200 },
+      ];
+      const report = audioMastering.analyzeDeadAir(speechWindows);
+      expect(report.hasDeadAir).toBe(false);
+      expect(report.hasSuspiciousPauses).toBe(false);
+      // only the ~160ms breath remains after discounting the hold
+      expect(report.maxNarrationSilenceMs).toBeLessThanOrEqual(200);
+    });
   });
 
   describe("Captions Styles & Safe Zone Margin Enforcement", () => {

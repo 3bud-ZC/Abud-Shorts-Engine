@@ -29,6 +29,7 @@ import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import BoltIcon from "@mui/icons-material/Bolt";
 
 import { ConfirmDialog, ErrorBoundary, LoadingState, PageHeader, SectionCard } from "../components/v2";
+import { useI18n } from "../i18n";
 import { statusDescriptor, type StatusTone } from "../theme/statusModel";
 import {
   CLIENT_CATEGORY_ORDER,
@@ -110,6 +111,7 @@ const OAUTH_PLATFORMS: Record<string, string[]> = {
 const IntegrationsContent: React.FC = () => {
   const theme = useTheme();
   const t = theme.abud;
+  const { t: tr } = useI18n();
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [vaultAvailable, setVaultAvailable] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -430,15 +432,14 @@ const IntegrationsContent: React.FC = () => {
   return (
     <>
       <PageHeader
-        title="Integrations"
-        eyebrow="Configure"
-        description="Connect the services ABUD Shorts uses. Everything marked Optional can be skipped — the engine works without it."
+        title={tr("integrations.title")}
+        eyebrow={tr("integrations.eyebrow")}
+        description={tr("integrations.description")}
       />
 
       {!vaultAvailable && (
         <Alert severity="warning" sx={{ mb: 3 }}>
-          Secure storage is unavailable, so integrations cannot be saved right now. Contact your
-          installer.
+          {tr("integrations.storageUnavailable")}
         </Alert>
       )}
       {error && (

@@ -79,6 +79,7 @@ export const TRANSLATION_NAMESPACES = [
   "health",
   "updates",
   "setup",
+  "login",
   "errors",
   "statuses",
 ] as const;
