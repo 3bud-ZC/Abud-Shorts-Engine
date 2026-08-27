@@ -61,10 +61,24 @@ Finalization track:
 | V2.3-07 | Publishing, Integrations, Settings, Setup & Final Product Closure | **PASS / COMPLETE** |
 | V2.3-U | V2.2.0 → V2.3.0 isolated online-update rehearsal | **PASS / COMPLETE** |
 | V2.3-AR | Arabic body-copy closure for Integrations / Publishing / Settings / Providers | **PASS / COMPLETE** |
+| V2.3-RN | Customer-facing v2.3.0 release notes prepared and verified | **PASS / COMPLETE** |
 
 **V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
 merged to `main`, not tagged, no GitHub Release, no production GHCR image. The
 `v2.2.0` stable tag and its artifacts are untouched.
+
+Customer-facing `RELEASE_NOTES.md` for v2.3.0 is prepared and verified (see the
+V2.3-RN section). Remaining release-only work, in order:
+
+1. Build and publish the production application image to GHCR and capture its
+   real content digest.
+2. Regenerate the final client package and update manifest with that digest
+   (`scripts/release/package-client.mjs`).
+3. Run `scripts/release/verify-package.mjs` on the final artifacts — it must
+   pass every check, including the image-digest check.
+4. Obtain explicit user approval to release.
+5. Merge to `main`, tag `v2.3.0`, create the GitHub Release, move the stable
+   channel.
 
 Final complete-product / client acceptance: PENDING
 
@@ -5033,3 +5047,55 @@ paths or secrets.
 
 V2.3.0 stays a **RELEASE CANDIDATE**. Not GA. Not merged, not tagged, no GitHub
 Release, no production GHCR image.
+
+## V2.3-RN — Customer-Facing v2.3.0 Release Notes
+
+`RELEASE_NOTES.md` was replaced: it described v2.2.0 as the current release and
+is now the canonical customer-facing notes for **v2.3.0** (schema `2.13.0`,
+previous stable `2.2.0`). Written from the canonical status file, the git history
+`v2.2.0..HEAD` and the version constants — not from memory.
+
+**Structure.** Header → Highlights → Create Video → Video Quality & Rendering →
+Media Library → Character Profiles → Brand Kits → Templates → Productions →
+Video Library → Publishing → Integrations → Arabic & English Interface →
+Installation & Updates → Data & Compatibility → Security & Privacy →
+Requirements / Notes → Upgrade from v2.2.0. Historical comparison to v2.2.0 is
+kept only where it helps (the upgrade path).
+
+**Truthfulness.** No feature that is not implemented is described. Explicitly
+*not* claimed: perfect/guaranteed character consistency, guaranteed quality on
+every video, any social account already connected, any real social post
+published during verification, or that every provider works without credentials.
+The zero-paid reference production (requested 12s / rendered 12.05s / technical
+100 / creative 99) is presented as verification evidence with an explicit "not a
+guaranteed output score" caveat. Publishing is described as requiring the
+customer's own accounts and provider setup. The production GHCR image is
+described as *what the release process publishes*, not as an artifact that
+already exists.
+
+**Hygiene.** No milestone IDs, gate names, raw enum/fixture names, temporary job
+IDs, internal image names, database internals, environment-variable names,
+localhost/QA URLs, rehearsal-only registry ports or digests, or developer
+debugging history. Secrets scan of the diff: clean.
+
+**Verification (documentation-only — no Docker rebuild, no full test run).**
+
+- `git diff --check` — clean.
+- `node scripts/release/package-client.mjs --version 2.3.0 --channel stable`
+  (non-publishing, no digest) — builds `ABUD-Shorts-Engine-2.3.0.tar.gz` +
+  `.sha256` + `update-manifest.json`; schema read as `2.13.0` from
+  `src/version.ts`.
+- `node scripts/release/verify-package.mjs` on that output —
+  **ok: no secrets, source, dependencies or developer data** /
+  **ok: installer, updater, compose and documentation present** /
+  **ok: manifest matches the package for 2.3.0**. The one expected FAIL is
+  "the manifest has no valid image digest, so it is not publishable" — that
+  digest is the remaining F5 step and is not part of this documentation task.
+  `RELEASE_NOTES.md` ships inside the package with nothing forbidden alongside
+  it.
+
+No schema, database, Provider Vault, admin, provider-API or application-behaviour
+change. No Docker rebuild. `PRODUCT_VERSION` `2.3.0` / `DATABASE_SCHEMA_VERSION`
+`2.13.0` were already correct and were not modified.
+
+V2.3.0 stays a **RELEASE CANDIDATE**.
