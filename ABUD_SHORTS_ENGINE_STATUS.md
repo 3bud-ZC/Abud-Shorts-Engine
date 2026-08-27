@@ -23,7 +23,7 @@ Target: **v2.3.0**
 Branch: **`v2.3-product-overhaul`**
 
 V2.3: **IN DEVELOPMENT** — not merged, not tagged, not packaged, not published.
-V2.3-01, V2.3-02, and V2.3-03 are complete.
+V2.3-01, V2.3-02, V2.3-03, and V2.3-04 are complete.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
@@ -49,6 +49,7 @@ Finalization track:
 | V2.3-01 | Foundation & Core Architectural Upgrade | **PASS / COMPLETE** |
 | V2.3-02 | Production Workflows & Rendering Stability | **PASS / COMPLETE** |
 | V2.3-03 | Professional Video Quality, Audio Continuity & Caption Rendering | **PASS / COMPLETE** |
+| V2.3-04 | Media Library & Character Consistency | **PASS / COMPLETE** |
 
 Final complete-product / client acceptance: PENDING
 
@@ -4048,7 +4049,30 @@ Verification after the fix:
 - `pnpm typecheck` — **PASS**
 - `npm run test -- --run` — **PASS** (53 files, 834 tests)
 - `pnpm build` — **PASS**
-- Docker health before the serialization rebuild request: app, render worker,
-  n8n and PostgreSQL were healthy. The running app image was built before the
-  serializer fix, so a final Docker rebuild/recreate and authenticated API smoke
-  require fresh explicit approval.
+- Final Docker runtime rebuild/recreate — **PASS** for app and render worker
+  from commit `754f2219bc4e5c5a226b51687a3b52af867dfde2`
+- Rebuilt runtime source verification — **PASS**; app container contains the
+  serializer fix
+- Final authenticated API smoke — **PASS** via one temporary QA session; session
+  was revoked and post-revocation `/api/v2/auth/me` returned HTTP 401
+- Health — **PASS** for `/health/live` and `/health/ready`; app, render worker,
+  n8n and PostgreSQL were healthy, and only the app exposed public port 3130
+- Private media fields — **PASS**; `/media/assets`, `/media/products` and
+  `/media/characters` did not expose `storagePath`, `relativePath`, `checksum`,
+  `nobgArtifactId`, `nobgRelativePath` or absolute filesystem paths
+- Data preservation — **PASS**; jobs, videos, media assets, character profiles,
+  settings, Provider Vault rows, admin user, brands, templates and publications
+  were unchanged by the smoke
+- Temporary QA session — **PASS**; no `qa_` sessions remained afterward
+- Browser automation was not required for this closure because API/runtime
+  evidence is sufficient and the local Playwright binary is not installed
+  locally.
+
+V2.3-04 shipped the unified Media Library for images, videos, logos, audio and
+references; folders and tags; duplicate handling without auto-delete;
+context-aware usability; archive/delete dependency safety; Create Video media
+picker; Character Profiles with multiple references, a primary reference,
+revisioning and immutable production snapshots; provider capability gating; and
+truthful Stock + Character incompatibility. Live character generation was not
+tested, no fake character consistency guarantee is made, and no secrets were
+committed.
