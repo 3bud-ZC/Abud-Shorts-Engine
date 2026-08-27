@@ -15,28 +15,44 @@
 
 Product: ABUD Shorts Engine V2
 
-Stable: **v2.2.0** — released to the customer and **immutable**. Its tag, GitHub
-Release, release assets and GHCR image are never moved, rewritten or patched.
+Version: **2.3.0**
 
-Target: **v2.3.0**
+Release: **GENERAL AVAILABILITY / RELEASED**
 
-Branch: **`v2.3-product-overhaul`**
+Schema: **2.13.0**
 
-V2.3: **RELEASE CANDIDATE** — not merged, not tagged, not published. Version
-constants are stamped (`PRODUCT_VERSION` `2.3.0`, `PRODUCT_BUILD` `2026.08.27.1`)
-so the shipped v2.2.0 updater accepts the build; the V2.2→V2.3 online update path
-has been rehearsed end to end in a fully isolated environment. V2.3-01 through
-V2.3-07 are complete.
+**Owner release approval:** APPROVED — explicit "RELEASE ABUD SHORTS ENGINE
+V2.3.0" instruction from the user.
+
+Release commit (merge to `main`): `829bb7e740cf6f5c2f0290c3bd4ad67ac81a245f`
+Accepted candidate source: `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`
+Tag: `v2.3.0` (annotated, on `829bb7e…`) ·
+Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.0
+
+Image: `ghcr.io/3bud-zc/abud-shorts-engine` — tags `2.3.0`, `stable` and
+`sha-1a9dba6` all resolve to
+`sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`.
+The image is public, so a client installation needs no registry credentials, and
+both installers and the updater pull it by digest.
+
+Client package: `ABUD-Shorts-Engine-2.3.0.tar.gz`
+(`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`), with
+`ABUD-Shorts-Engine-2.3.0.tar.gz.sha256` and `update-manifest.json`, published as
+release assets and independently re-verified after publication.
+
+Previous stable: **v2.2.0 — immutable historical release.** Its `v2.2.0` tag,
+GitHub Release and GHCR `2.2.0` image
+(`sha256:a767d1c96e9bd0c6fd2786afd4b66c475e2ec718b3f703575c444b2af7231196`) were
+not moved, rewritten or patched during the v2.3.0 ceremony.
+
+Human visual review of the final Golden video: not separately recorded.
 
 Interface languages: **English and Arabic, both first class.** The interface
 language is independent of the language a video is narrated in - an Arabic
 interface producing English videos, and an English interface producing Arabic
 videos, are both ordinary supported cases. Every operator/customer screen -
 including Integrations, Publishing, Settings and Providers - resolves its body
-copy through the one i18n catalogue; there is **no remaining tracked Arabic
-localization gap**.
-
-Schema: **2.13.0**
+copy through the one i18n catalogue.
 
 Arabic voice: **ElevenLabs / Mamdoh / Energetic Ad / APPROVED**
 (`68MRVrnQAt8vLbu0FCzw`, model `eleven_multilingual_v2`, persisted in
@@ -51,7 +67,7 @@ Finalization track:
 | F2 | Creative and animation engine finalization | **PASS / CLOSED** |
 | F3 | Integrations and real publishing closure | **PASS / CLOSED** |
 | F4 | Client installation, operations and delivery closure | **PASS** |
-| F5 | Final audit, release candidate packaging and release ceremony | **PARTIAL / BLOCKED** |
+| F5 | Final audit, release candidate packaging and release ceremony | **PASS / CLOSED** |
 | V2.3-01 | Foundation & Core Architectural Upgrade | **PASS / COMPLETE** |
 | V2.3-02 | Production Workflows & Rendering Stability | **PASS / COMPLETE** |
 | V2.3-03 | Professional Video Quality, Audio Continuity & Caption Rendering | **PASS / COMPLETE** |
@@ -63,35 +79,25 @@ Finalization track:
 | V2.3-AR | Arabic body-copy closure for Integrations / Publishing / Settings / Providers | **PASS / COMPLETE** |
 | V2.3-RN | Customer-facing v2.3.0 release notes prepared and verified | **PASS / COMPLETE** |
 | V2.3-RP | Production candidate image on GHCR + final verified package/manifest | **PASS / COMPLETE** |
+| V2.3-GA | v2.3.0 general-availability release ceremony | **PASS / RELEASED** |
 
-**V2.3.0 is a RELEASE CANDIDATE awaiting the user's release approval.** Not
-merged to `main`, not tagged, no GitHub Release. The `v2.2.0` stable tag and its
-GHCR image are untouched. A production candidate image is on GHCR under an
-immutable `sha-` tag only (no `:2.3.0`, no `:stable`).
+**V2.3.0 is GENERALLY AVAILABLE.** `v2.3-product-overhaul` is merged into `main`
+(`829bb7e…`), the annotated `v2.3.0` tag is pushed, the GitHub Release is
+published (not draft), and GHCR `2.3.0` / `stable` point at the accepted digest.
+The v2.2.0 release and its GHCR image are untouched. See the V2.3-GA section for
+the full ceremony record.
 
-Customer-facing `RELEASE_NOTES.md` for v2.3.0 is prepared and verified (V2.3-RN
-section). The production candidate image, its real remote digest, the final
-client package and the verified update manifest are prepared (V2.3-RP section):
+Post-publication verification: the published package SHA-256 matches
+`e6c7ab23…`; the published manifest carries version `2.3.0`, schema `2.13.0` and
+digest `sha256:c448a8ca…`; `scripts/release/verify-package.mjs` passes every
+check against the downloaded public assets; `releases/latest/download/update-manifest.json`
+(the shipped updater's default manifest URL) serves the v2.3.0 manifest and its
+`packageUrl` resolves with a matching checksum; the shipped v2.2.0
+`Compare-SemVer` reports `2.3.0` as an available update from `2.2.0` with no
+minimum-updater block. Zero paid provider calls, no customer data mutation, no
+Docker prune.
 
-- Candidate source SHA: `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`
-- GHCR candidate: `ghcr.io/3bud-zc/abud-shorts-engine:sha-1a9dba6`
-- Remote digest: `sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`
-- Package: `ABUD-Shorts-Engine-2.3.0.tar.gz`
-  (`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`),
-  `update-manifest.json`, `verify-package.mjs` **PASS** on every check
-
-Remaining release-only work, in order, all after explicit user approval:
-
-1. Dispatch `ghcr-candidate.yml` in `promote` mode with the accepted digest to
-   create `:2.3.0` and move `:stable` on GHCR.
-2. Merge `v2.3-product-overhaul` into `main`.
-3. Create the annotated `v2.3.0` Git tag.
-4. Create the GitHub Release with the verified package, `.sha256` and manifest.
-5. Final published-release verification.
-
-Final complete-product / client acceptance: PENDING
-
-Final complete-video acceptance: PENDING USER REVIEW
+Final complete-product / client acceptance: **RELEASED**
 
 Canonical URL: http://localhost:3130
 
@@ -191,6 +197,12 @@ A real end-to-end production was executed via `POST /api/v2/jobs` against the li
 
 Date: 2026-08-25. Branch `v2.2-finalization`. Stable remains `v2.1.0`;
 target remains `v2.2.0`.
+
+> **Superseded.** This section is preserved as written on 2026-08-25, when the
+> v2.2.0 GHCR push was still blocked. It was resolved shortly after: **v2.2.0
+> went GA on 2026-08-25** (tag `v2.2.0`, GitHub Release, public GHCR image), and
+> **v2.3.0 went GA on 2026-08-27** (see "Current Product State" and the
+> **V2.3-GA** section). F5 is now **PASS / CLOSED**.
 
 F5 is **PARTIAL / BLOCKED**. The release ceremony was not completed: no merge to
 `main`, no `v2.2.0` tag, no GitHub Release and no official GHCR production
@@ -5043,20 +5055,17 @@ Playwright was not installed for this task. Verification is the built bundle, th
 translation-contract tests, source-to-catalogue audit and authenticated
 route/runtime checks.
 
-**Release-only work remaining** (unchanged, and NOT done here): V2.3.0 release
-notes (`RELEASE_NOTES.md` is still V2.2.0-specific and must be replaced during
-the release ceremony), the production GHCR image and its digest, the final
-release manifest/package, and the merge / tag / GitHub Release ceremony — each
-only after explicit user approval.
+**Release-only work remaining** (as recorded when this section was written; all
+subsequently completed — see V2.3-RN, V2.3-RP and V2.3-GA): V2.3.0 release notes,
+the production GHCR image and its digest, the final release manifest/package, and
+the merge / tag / GitHub Release ceremony.
 
 Two dynamic string sources are deliberately left for a future backend-side
 localization pass and are not UI copy: the `validate` endpoint's free-text
 `message` and a provider's server-supplied `billingNotice` line. Neither leaks
 paths or secrets.
 
-V2.3.0 stays a **RELEASE CANDIDATE**. Not GA. Not merged, not tagged, no GitHub
-Release. A candidate image exists on GHCR under an immutable `sha-` tag only
-(see V2.3-RP); `:2.3.0` and `:stable` are not created/moved until release.
+V2.3.0 is now **GENERALLY AVAILABLE** — see the **V2.3-GA** section.
 
 ## V2.3-RP — Production Candidate Artifact & Final Package
 
@@ -5130,22 +5139,10 @@ push, pull or prune (registry/metadata inspection only). The primary
 healthy).
 
 The final package + manifest are held outside the repository (the release
-policy's forbidden-path list excludes generated packages); they are ready to
-attach to the GitHub Release, or the same workflow can regenerate them.
+policy's forbidden-path list excludes generated packages); they were attached to
+the published GitHub Release in the V2.3-GA ceremony.
 
-V2.3.0 stays a **RELEASE CANDIDATE**.
-
-Remaining release work, in order, all after explicit user approval:
-
-1. Dispatch `ghcr-candidate.yml` in `promote` mode with
-   `digest=sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`
-   to create `:2.3.0` and move `:stable` on GHCR.
-2. Merge `v2.3-product-overhaul` into `main`.
-3. Create the annotated `v2.3.0` Git tag.
-4. Create the GitHub Release with the verified `ABUD-Shorts-Engine-2.3.0.tar.gz`,
-   its `.sha256` and `update-manifest.json`.
-5. Final published-release verification (pull `…@sha256:c448a8ca…`, run the
-   package/manifest checks against the published assets).
+This candidate was **accepted and promoted** — see the **V2.3-GA** section.
 
 ## V2.3-RN — Customer-Facing v2.3.0 Release Notes
 
@@ -5197,4 +5194,100 @@ No schema, database, Provider Vault, admin, provider-API or application-behaviou
 change. No Docker rebuild. `PRODUCT_VERSION` `2.3.0` / `DATABASE_SCHEMA_VERSION`
 `2.13.0` were already correct and were not modified.
 
-V2.3.0 stays a **RELEASE CANDIDATE**.
+`RELEASE_NOTES.md` was published as the body of the v2.3.0 GitHub Release
+(V2.3-GA).
+
+## V2.3-GA — v2.3.0 General-Availability Release Ceremony
+
+Executed 2026-08-27 on explicit user approval ("RELEASE ABUD SHORTS ENGINE
+V2.3.0"). No product features were added, no application bytes were rebuilt, and
+the accepted candidate digest was not changed.
+
+| Field | Value |
+| --- | --- |
+| Owner approval | APPROVED (explicit) |
+| Accepted candidate source SHA | `1a9dba634a3d8c3142cefcd32faacc3ca0e64368` |
+| Pre-release `v2.3-product-overhaul` HEAD | `2807782905876eae9354890666b5cac8d6234a37` |
+| Previous `main` | `105358b689c1c807b693c5476409d81065c39645` |
+| **Release merge commit (`main`)** | `829bb7e740cf6f5c2f0290c3bd4ad67ac81a245f` |
+| Annotated tag | `v2.3.0` → `829bb7e…` (tag object `b92df8eb…`) |
+| GitHub Release | https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.0 — published, not draft, `make_latest` |
+| GHCR image | `ghcr.io/3bud-zc/abud-shorts-engine` |
+| GHCR `sha-1a9dba6` / `2.3.0` / `stable` | all `sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12` |
+| Client package | `ABUD-Shorts-Engine-2.3.0.tar.gz` — `e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed` |
+| Other assets | `ABUD-Shorts-Engine-2.3.0.tar.gz.sha256`, `update-manifest.json` |
+
+**Pre-release freeze.** Release branch clean, HEAD `2807782…` as expected, local
+== remote. `git merge-base --is-ancestor 1a9dba6 2807782` → PASS. Delta
+`1a9dba6..2807782` = `ABUD_SHORTS_ENGINE_STATUS.md` **only** — zero product
+drift after the accepted candidate. No `v2.3*` tag existed.
+
+**Merge.** `git checkout main` (ff-only pull), `git merge --no-ff
+origin/v2.3-product-overhaul -m "release: ABUD Shorts Engine v2.3.0"`. Two
+conflicts, both resolved intentionally (not blanket ours/theirs):
+
+- `.github/workflows/ghcr-candidate.yml` → the `v2.3-product-overhaul` version.
+  `main`'s copy still built a separate base image via `main-tiny.Dockerfile`
+  with `--build-arg BASE_IMAGE`; on v2.3 the `v2.Dockerfile` is self-contained
+  (V2.3-05), so that two-stage step is obsolete and would break the build. The
+  v2.3 version is also version-agnostic and was just proven in CI run
+  `33112473609`. Stale v2.2-only hardcoding was not restored.
+- `ABUD_SHORTS_ENGINE_STATUS.md` → the `v2.3-product-overhaul` version (full
+  V2.3 milestone history), then edited here: "Current Product State" set to
+  v2.3.0 GA, F5 gate row → PASS/CLOSED, the historical `## F5` section marked
+  superseded (preserved as written), v2.2.0 recorded as the previous immutable
+  historical release.
+
+Post-merge tree vs candidate `1a9dba6`: differs **only** in
+`ABUD_SHORTS_ENGINE_STATUS.md`. No change to `src/`, `package.json`,
+`pnpm-lock.yaml`, `v2.Dockerfile`, `docker-compose.prod.yml`, installer,
+updater, `package-client.mjs`, `verify-package.mjs`, `RELEASE_NOTES.md` or the
+n8n workflows beyond what was in the accepted candidate. `pnpm typecheck` on
+merged `main` — PASS. `git diff --check` — clean.
+
+**Main pushed.** `105358b..829bb7e main -> main` (no force). local == origin.
+
+**Tag.** `git tag -a v2.3.0 -m "ABUD Shorts Engine v2.3.0"` on `829bb7e…`,
+pushed as a new ref. `refs/tags/v2.2.0` still `96e214bd…` → commit `80b5a13…`
+(unchanged).
+
+**GHCR promotion.** `ghcr-candidate.yml` dispatched in `promote` mode
+(`digest=sha256:c448a8ca…`, run `33123454531`, success). The build/test/push
+steps were **skipped**; only "Promote accepted digest without rebuild" ran
+(`docker buildx imagetools create --tag :2.3.0 --tag :stable <image>@<digest>`).
+Independent registry query afterwards: `sha-1a9dba6`, `2.3.0` and `stable` all
+resolve to `sha256:c448a8ca…`; `GET …/manifests/sha256:c448a8ca…` → HTTP 200;
+the OCI index resolves to a `linux/amd64` image. GHCR `2.2.0` unchanged at
+`sha256:a767d1c96e9bd0c6fd2786afd4b66c475e2ec718b3f703575c444b2af7231196`.
+
+**GitHub Release.** Created via the API for tag `v2.3.0`, body = `RELEASE_NOTES.md`,
+`draft: false`, `prerelease: false`, `make_latest: true`. All three assets
+uploaded (`state: uploaded`).
+
+**Post-publication verification.**
+- Downloaded `ABUD-Shorts-Engine-2.3.0.tar.gz` from the Release → SHA-256
+  `e6c7ab23…` (matches). Downloaded `update-manifest.json` → version `2.3.0`,
+  schema `2.13.0`, channel `stable`, `imageDigest sha256:c448a8ca…`,
+  `packageSha256 e6c7ab23…` (all match). `.sha256` asset content correct.
+- `scripts/release/verify-package.mjs` on the **downloaded public** artifact
+  set → **every check PASS** (sha256; no secrets/source/deps/dev data;
+  installer + updater + compose + docs present; manifest matches the package).
+  Tarball forbidden-pattern scan → zero matches; allow-list only.
+- Update discovery: `releases/latest/download/update-manifest.json` (the shipped
+  updater's default manifest URL) serves the v2.3.0 manifest; its `packageUrl`
+  downloads with a matching checksum; the image digest is registry-addressable.
+- The **shipped v2.2.0** `Compare-SemVer` (extracted from the published v2.2.0
+  release): `Compare-SemVer("2.3.0","2.2.0") = 1` (a v2.2.0 install sees an
+  update) and `Compare-SemVer("2.2.0","2.2.0") = 0` (no minimum-updater block).
+  No updater was executed and no installation was touched — the full
+  v2.2 → v2.3 upgrade + rollback was already rehearsed in isolation (V2.3-U).
+
+**No product data mutation.** No database reset, no jobs/videos/media deleted,
+no admin change, no Provider Vault change, no social publication. **Zero paid
+provider calls. Zero Docker prune / build / pull / down -v locally** — the image
+build and promotion ran in GitHub Actions; local work was git, registry API and
+GitHub API only. The primary `localhost:3130` stack was not touched.
+
+**Result:** ABUD Shorts Engine **v2.3.0 is GENERALLY AVAILABLE**. The `v2.3.0`
+tag is attached to the actual release commit `829bb7e…` and must not be moved.
+`v2.2.0` remains an immutable historical release. F5 is **PASS / CLOSED**.
