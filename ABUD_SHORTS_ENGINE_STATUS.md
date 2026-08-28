@@ -5747,3 +5747,96 @@ Schema remains `2.13.0`.
 
 **Status: V2.3.1 HOTFIX FULLY VERIFIED on `hotfix/v2.3.1-render-failure` (render
 routing + duration contract) — awaiting release review.**
+
+## V2.3.1 Release Candidate Preparation
+
+Prepared 2026-08-28 on `hotfix/v2.3.1-render-failure`. This is candidate
+preparation only — **not GA**. `main`, the `v2.3.0` tag, the v2.3.0 GitHub
+Release, GHCR `:2.3.0` / `:stable` / `:sha-1a9dba6` and `:2.2.0` are all
+untouched. No `:2.3.1` tag, no `:latest`, no `:stable` move, no Git tag, no
+GitHub Release.
+
+| Field | Value |
+| --- | --- |
+| Candidate source SHA | `47d27979a0b77ff93d9c74d65653fcd0890d09c2` (branch `hotfix/v2.3.1-render-failure`) |
+| Product / schema | `2.3.1` / `2.13.0` (schema unchanged, no migration) |
+| Hotfix scope vs `main` | Auto→Motion routing, customer-safe render-error classification, Arabic Job Details localisation, duration-budget closure, `2.3.0`→`2.3.1` bump, regression tests, status + release notes. Runtime `v2.Dockerfile` and `scripts/release/` **unchanged**. No unrelated feature work. |
+| Release notes | `RELEASE_NOTES.md` rewritten as concise v2.3.1 patch notes (What's Fixed: Auto rendering, duration accuracy, error messages, Arabic UI; Upgrade: normal updater, schema 2.13.0, no migration). Verified free of `PEXELS_API_KEY`/`PIXABAY_API_KEY`, internal class/function names, milestone IDs, and any "already public" claim. |
+| Automated preflight (frozen SHA) | `pnpm typecheck` PASS · `pnpm exec vitest run` PASS **57 files / 927 tests** · `pnpm build` PASS |
+
+### GHCR candidate
+
+`ghcr-candidate.yml` dispatched in **candidate** mode
+(`source_ref` / `expected_sha` = the frozen SHA above), run
+[`33159765235`](https://github.com/3bud-ZC/Abud-Shorts-Engine/actions/runs/33159765235)
+— **success**. Every step passed: checkout of the exact SHA, identity check
+(SHA + `package.json`==`PRODUCT_VERSION`==`2.3.1` + schema grep), `pnpm install
+--frozen-lockfile`, quality runtime, `pnpm typecheck` + `vitest` + `pnpm build`,
+`docker buildx build --file v2.Dockerfile --push`, GHCR login with the workflow
+`GITHUB_TOKEN`, candidate push, and remote digest capture. Promote and
+retag-stable steps were **skipped** (candidate mode).
+
+| | |
+| --- | --- |
+| Candidate tag | `ghcr.io/3bud-zc/abud-shorts-engine:sha-47d2797` (the only tag pushed) |
+| **Remote digest** | `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
+| Independent verification | anonymous GHCR query: `sha-47d2797` → that exact digest; `GET …/manifests/sha256:5076022e…` → HTTP 200 (addressable by digest). OCI image index: `linux/amd64` child `sha256:b703a9da…` + a build-provenance attestation manifest `sha256:72ca8de9…`. |
+| GHCR side effects | none — `:2.3.0` still `sha256:0ed76823…`, `:stable` still `sha256:0ed76823…`, `:sha-1a9dba6` still `sha256:c448a8ca…`, `:2.2.0` still `sha256:a767d1c9…`, `:2.3.1` and `:latest` absent (HTTP 404). |
+
+### Final V2.3.1 client package
+
+Built with the canonical `scripts/release/package-client.mjs` against the **real
+candidate digest** (no dummy):
+
+| Artifact | Size | SHA-256 |
+| --- | --- | --- |
+| `ABUD-Shorts-Engine-2.3.1.tar.gz` | 56 010 bytes | `3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570` |
+| `ABUD-Shorts-Engine-2.3.1.tar.gz.sha256` | 98 bytes | (checksum file — content matches the tarball SHA) |
+| `update-manifest.json` | 788 bytes | — |
+
+`update-manifest.json`: `version 2.3.1`, `schemaVersion 2.13.0`, `channel stable`,
+`imageDigest sha256:5076022e…`, `packageSha256 3647ef32…`,
+`minimumUpdaterVersion 2.2.0`, `schemaBackwardsCompatible true`,
+`requiresRestart true`. No `localhost`, no temporary registry, no v2.3.0 package
+hash, no dummy digest. (Package smaller than v2.3.0's 65 337 bytes only because
+`RELEASE_NOTES.md` was rewritten from the 382-line v2.3.0 document to the
+49-line patch note.)
+
+### verify-package + package safety
+
+`node scripts/release/verify-package.mjs` on the generated set — **every check
+PASS**: sha256 `3647ef32…`; "no secrets, source, dependencies or developer
+data"; "installer, updater, compose and documentation present"; "manifest
+matches the package for 2.3.1". Independent tarball scan: **37 entries,
+allow-list only** — installers (`install.sh`/`.ps1` + `.bat` wrappers),
+updaters (`abud-update.sh`, `abud-shorts.sh`/`.ps1`), `docker-compose.prod.yml`,
+the three n8n workflow JSONs, `docs/UPDATING.md` + `docs/SERVER_INSTALL.md`,
+`CLIENT_QUICK_START.md`, `CLIENT_HANDOFF.md`, `RELEASE_NOTES.md`, `release.json`,
+`LICENSE`, `THIRD_PARTY_NOTICES.md`, `nginx.conf.reference`. No `src/`, `dist/`,
+`node_modules/`, `.git/`, `.env`, tests, `data/`, `backups/`, `logs/`, status
+file, media or credentials. Secret-pattern scan across every packaged text file
+→ nothing. `release.json` carries `version 2.3.1` / `imageDigest sha256:5076022e…`
+/ schema `2.13.0`.
+
+### Safety
+
+No new product QA render (the hotfix already has real live verification —
+30 s → 30.06 s and 12 s → 12.05 s, both `valid: true` / technicalScore 100).
+**Zero paid provider calls.** No `docker … prune`, no `compose down -v`. No DB
+reset, no migration, no Provider Vault change, no media deletion. v2.3.0 and
+v2.2.0 artifacts untouched. `:stable` not moved.
+
+### Result
+
+**V2.3.1 = RELEASE CANDIDATE — READY FOR RELEASE APPROVAL. NOT GA.**
+
+Explicit user approval is still required before any of: merge to `main`, the
+`v2.3.1` Git tag, GHCR `:2.3.1` promotion, moving `:stable`, or publishing the
+GitHub Release.
+
+| Frozen candidate identity | Value |
+| --- | --- |
+| Source SHA | `47d27979a0b77ff93d9c74d65653fcd0890d09c2` |
+| Candidate image | `ghcr.io/3bud-zc/abud-shorts-engine:sha-47d2797` @ `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
+| Package | `ABUD-Shorts-Engine-2.3.1.tar.gz` — `3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570` |
+| Manifest | `update-manifest.json` — version `2.3.1`, schema `2.13.0`, channel `stable` |
