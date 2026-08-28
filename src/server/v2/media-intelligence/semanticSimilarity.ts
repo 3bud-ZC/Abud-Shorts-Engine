@@ -250,7 +250,8 @@ export async function analyzeVideoSemanticSimilarity(
     };
   }
 
-  const pythonBin = capabilityManager.getQualityPythonPath();
+  const openClipPython = process.env.ABUD_OPENCLIP_PYTHON_BIN?.trim();
+  const pythonBin = openClipPython || capabilityManager.getQualityPythonPath();
   return new Promise<VideoSemanticAnalysis>((resolve) => {
     execFile(
       pythonBin || "python",
