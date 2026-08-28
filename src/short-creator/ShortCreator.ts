@@ -94,6 +94,7 @@ import { AutoVisualRouter } from "../server/v2/visual-providers/router";
 import { sceneSourceRouter } from "../server/v2/visual-providers/sceneSourceRouter";
 import { mediaIntelligenceService } from "../server/v2/media-intelligence/mediaIntelligenceService";
 import { mediaCache } from "../server/v2/media-cache/mediaCache";
+import { providerSecrets } from "../server/v2/provider-vault/providerSecrets";
 import { AudioMasteringService } from "./audioMasteringService";
 import { postProductionPipeline } from "../server/v2/post-production/postProductionPipeline";
 import { qualityEngine } from "../server/v2/quality/qualityEngine";
@@ -371,7 +372,16 @@ export class ShortCreator {
       (spec.metadata as any)?.productImageId || spec.productionMode === "product_ad",
     );
     const motionRuntimeAvailable = capabilityManager.isPythonQualityVenvInstalled();
-    const stockRuntimeAvailable = Boolean(this.config.pexelsApiKey) || Boolean(process.env.PIXABAY_API_KEY);
+    const pexelsVaultKey = await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
+    const pixabayVaultKey = await providerSecrets.refresh("pixabay", "api_key").catch(() => undefined);
+    const stockRuntimeAvailable = Boolean(
+      this.config.pexelsApiKey ||
+        process.env.PIXABAY_API_KEY ||
+        pexelsVaultKey ||
+        pixabayVaultKey ||
+        providerSecrets.peek("pexels", "api_key") ||
+        providerSecrets.peek("pixabay", "api_key"),
+    );
 
     // An explicitly graphic production must not depend on stock footage: asking
     // for Motion Graphics and receiving four stock clips is not the mode the
