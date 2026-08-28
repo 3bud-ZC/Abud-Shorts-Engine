@@ -25,25 +25,41 @@ Schema: **2.13.0**
 V2.3.0" instruction from the user.
 
 Release commit (merge to `main`): `829bb7e740cf6f5c2f0290c3bd4ad67ac81a245f`
-Accepted candidate source: `1a9dba634a3d8c3142cefcd32faacc3ca0e64368`
-Tag: `v2.3.0` (annotated, on `829bb7e…`) ·
+Tag: `v2.3.0` (annotated, on `829bb7e…`, never moved) ·
 Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.0
 
-Image: `ghcr.io/3bud-zc/abud-shorts-engine` — tags `2.3.0`, `stable` and
-`sha-1a9dba6` all resolve to
-`sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`.
+**Canonical GA identity.** The public v2.3.0 GitHub Release was produced by the
+`Release` workflow (run `33123403928`) building the GA merge commit `829bb7e…`
+after the tag push. That output is the canonical release. Its identity:
+
+Image: `ghcr.io/3bud-zc/abud-shorts-engine` — tags `2.3.0` and `stable` both
+resolve to
+`sha256:0ed76823c2c87cd84a001b6164fb9b1283cd748f6f81b680740ae4551d3fd11e`
+(`application/vnd.docker.distribution.manifest.v2+json`, `linux/amd64`).
 The image is public, so a client installation needs no registry credentials, and
 both installers and the updater pull it by digest.
 
 Client package: `ABUD-Shorts-Engine-2.3.0.tar.gz`
-(`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`), with
-`ABUD-Shorts-Engine-2.3.0.tar.gz.sha256` and `update-manifest.json`, published as
-release assets and independently re-verified after publication.
+(`0d420daec12f4be1aff2c3af4c9afe4411b3a530ce62f8985b3f0d07f6203368`, 65337 bytes),
+with `ABUD-Shorts-Engine-2.3.0.tar.gz.sha256` and `update-manifest.json`,
+published as release assets and independently re-verified after publication. The
+published `update-manifest.json` carries version `2.3.0`, schema `2.13.0`,
+channel `stable`, `imageDigest sha256:0ed76823…`, `packageSha256 0d420dae…`.
+
+Pre-release candidate (historical evidence, retained): source SHA
+`1a9dba634a3d8c3142cefcd32faacc3ca0e64368`, GHCR tag `sha-1a9dba6` →
+`sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`,
+package SHA-256
+`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`. This
+candidate was verified and accepted before GA; the automatic `release.yml`
+rebuild then produced the canonical identity above. `sha-1a9dba6` is left in
+place as the candidate audit trail and is not a release channel. See the
+**V2.3-GA-R** section for the full reconciliation.
 
 Previous stable: **v2.2.0 — immutable historical release.** Its `v2.2.0` tag,
 GitHub Release and GHCR `2.2.0` image
 (`sha256:a767d1c96e9bd0c6fd2786afd4b66c475e2ec718b3f703575c444b2af7231196`) were
-not moved, rewritten or patched during the v2.3.0 ceremony.
+not moved, rewritten or patched during the v2.3.0 ceremony or its reconciliation.
 
 Human visual review of the final Golden video: not separately recorded.
 
@@ -80,16 +96,20 @@ Finalization track:
 | V2.3-RN | Customer-facing v2.3.0 release notes prepared and verified | **PASS / COMPLETE** |
 | V2.3-RP | Production candidate image on GHCR + final verified package/manifest | **PASS / COMPLETE** |
 | V2.3-GA | v2.3.0 general-availability release ceremony | **PASS / RELEASED** |
+| V2.3-GA-R | v2.3.0 release-identity reconciliation after the release.yml rebuild | **PASS / RECONCILED** |
 
 **V2.3.0 is GENERALLY AVAILABLE.** `v2.3-product-overhaul` is merged into `main`
-(`829bb7e…`), the annotated `v2.3.0` tag is pushed, the GitHub Release is
-published (not draft), and GHCR `2.3.0` / `stable` point at the accepted digest.
-The v2.2.0 release and its GHCR image are untouched. See the V2.3-GA section for
-the full ceremony record.
+(`829bb7e…`), the annotated `v2.3.0` tag is pushed (and never moved), the GitHub
+Release is published (not draft), and GHCR `2.3.0` / `stable` both resolve to the
+canonical digest `sha256:0ed76823…`. The v2.2.0 release and its GHCR image are
+untouched. The public release was produced by an automatic `release.yml` rebuild
+triggered by the tag push; that output was accepted as canonical and the mutable
+`stable` tag reconciled onto it without a rebuild. See the **V2.3-GA** section
+for the ceremony as originally executed and **V2.3-GA-R** for the reconciliation.
 
 Post-publication verification: the published package SHA-256 matches
-`e6c7ab23…`; the published manifest carries version `2.3.0`, schema `2.13.0` and
-digest `sha256:c448a8ca…`; `scripts/release/verify-package.mjs` passes every
+`0d420dae…`; the published manifest carries version `2.3.0`, schema `2.13.0` and
+digest `sha256:0ed76823…`; `scripts/release/verify-package.mjs` passes every
 check against the downloaded public assets; `releases/latest/download/update-manifest.json`
 (the shipped updater's default manifest URL) serves the v2.3.0 manifest and its
 `packageUrl` resolves with a matching checksum; the shipped v2.2.0
@@ -5199,6 +5219,17 @@ change. No Docker rebuild. `PRODUCT_VERSION` `2.3.0` / `DATABASE_SCHEMA_VERSION`
 
 ## V2.3-GA — v2.3.0 General-Availability Release Ceremony
 
+> **Superseded in part by V2.3-GA-R.** This section records the ceremony as it
+> was originally executed: the accepted candidate digest
+> `sha256:c448a8ca…` was promoted onto `:2.3.0` and `:stable`, and the GitHub
+> Release was created by API. Minutes later the annotated tag push auto-triggered
+> the legacy `release.yml` (it still carried `on: push: tags`), which rebuilt the
+> GA merge commit and replaced the public image digest and all three release
+> assets. The rebuilt output — image `sha256:0ed76823…`, package `0d420dae…` — is
+> the **canonical** GA identity. The narrative below is preserved unchanged as
+> the record of what was done; the digests it cites for `:2.3.0` / `:stable` /
+> the package were current only until the reconciliation. See **V2.3-GA-R**.
+
 Executed 2026-08-27 on explicit user approval ("RELEASE ABUD SHORTS ENGINE
 V2.3.0"). No product features were added, no application bytes were rebuilt, and
 the accepted candidate digest was not changed.
@@ -5291,3 +5322,124 @@ GitHub API only. The primary `localhost:3130` stack was not touched.
 **Result:** ABUD Shorts Engine **v2.3.0 is GENERALLY AVAILABLE**. The `v2.3.0`
 tag is attached to the actual release commit `829bb7e…` and must not be moved.
 `v2.2.0` remains an immutable historical release. F5 is **PASS / CLOSED**.
+
+## V2.3-GA-R — v2.3.0 Release-Identity Reconciliation
+
+Executed 2026-08-28 on explicit user instruction (Remediation Option A). This is
+a release-identity reconciliation only: no product feature change, no schema
+change, no application rebuild initiated for this task. The history in **V2.3-GA**
+is preserved and not rewritten.
+
+### What went wrong
+
+The ceremony in V2.3-GA promoted the accepted candidate digest
+`sha256:c448a8ca…` onto `:2.3.0` / `:stable` and created the GitHub Release by
+API (assets = package `e6c7ab23…`). Pushing the annotated `v2.3.0` tag then
+auto-triggered the `Release` workflow, **run `33123403928`** (`event=push`,
+`head_branch=v2.3.0`, `head_sha=829bb7e…`, conclusion `success`, 2026-08-27
+22:40Z): `release.yml` still carried `on: push: tags: - "v*.*.*"` and forced
+`PUBLISH=true` for push events. That run checked out `829bb7e…`, ran
+typecheck + tests + build (all PASS), built `v2.Dockerfile` from scratch, pushed
+`:2.3.0` to a **new** digest `sha256:0ed76823…`, regenerated the client package
+(`0d420dae…`, 65337 bytes) and `update-manifest.json`, ran
+`verify-package.mjs` (PASS), and `softprops/action-gh-release@v2` overwrote all
+three release assets (asset `updated_at` 22:51:44Z).
+
+Residual inconsistency before reconciliation: `:2.3.0` → `0ed76823…` (rebuild)
+but `:stable` → `c448a8ca…` (the earlier promote); published assets → `0d420dae…`
+with manifest `imageDigest sha256:0ed76823…`, no longer the pre-accepted
+`e6c7ab23…` / `c448a8ca…`.
+
+This is a **release-automation defect**, not a product defect. The rebuild ran
+the same typecheck/test/build/verify gate the candidate did, the rebuilt image
+carries coherent OCI labels for `829bb7e…` (`revision`, `version=2.3.0`,
+`source`, `created 2026-08-27T22:43:10Z`), and the regenerated package passes
+every hygiene check. The divergence is build provenance — a second clean build
+of the same commit, plain `manifest.v2` vs the candidate's buildx OCI index —
+not behaviour. Byte-for-byte reproducibility is **not** claimed.
+
+### Decision
+
+Accept the `release.yml` public output as the canonical GA identity. Do not
+restore or overwrite the public image, package, manifest or Release. Reconcile
+only the mutable `:stable` tag; keep `sha-1a9dba6` as candidate audit evidence.
+
+| Canonical GA identity | Value |
+| --- | --- |
+| Release commit (`main`) | `829bb7e740cf6f5c2f0290c3bd4ad67ac81a245f` |
+| Tag | `v2.3.0` → `829bb7e…` (**not moved**) |
+| Image digest (`:2.3.0` and `:stable`) | `sha256:0ed76823c2c87cd84a001b6164fb9b1283cd748f6f81b680740ae4551d3fd11e` |
+| Package SHA-256 | `0d420daec12f4be1aff2c3af4c9afe4411b3a530ce62f8985b3f0d07f6203368` (65337 bytes) |
+| Manifest | version `2.3.0`, schema `2.13.0`, channel `stable`, `imageDigest sha256:0ed76823…`, `packageSha256 0d420dae…` |
+| Pre-release candidate (retained) | source `1a9dba6…`, GHCR `sha-1a9dba6` → `sha256:c448a8ca…`, package `e6c7ab23…` |
+
+### Consistency gate (before any change)
+
+- `scripts/release/verify-package.mjs` on the **downloaded public** asset set →
+  exit 0: sha256 `0d420dae…`; no secrets/source/deps/dev data; installer +
+  updater + compose + docs present; manifest matches the package for `2.3.0`.
+- `.sha256` asset content correct; tarball forbidden-pattern scan → zero
+  matches, allow-list only.
+- Release run `33123403928` built from `829bb7e…` (== GA merge commit);
+  image OCI `revision` label == `829bb7e…`.
+
+### Actions taken
+
+1. **`release.yml` made manual-only** (commit `5d42f57`). Removed
+   `on: push: tags: - "v*.*.*"` entirely — a Git tag push can no longer invoke
+   the production release workflow. Removed the `github.event_name == "push"`
+   branch that derived the version from the ref name and forced publish; version,
+   channel and publish now come only from `workflow_dispatch` inputs. Every
+   publishing step stays gated on the explicit `publish` input. The
+   `PRODUCT_VERSION` consistency check and `contents: write` / `packages: write`
+   are unchanged.
+2. **`ghcr-candidate.yml` gained a `retag-stable` mode** (commits `5d42f57`,
+   `83cef2c`). It moves only the `:stable` pointer by re-uploading the exact
+   manifest bytes of a given digest under the `stable` tag (registry `PUT`), so
+   `stable` resolves to that identical digest. It never touches `:version`,
+   never rebuilds, never creates a Git tag or a Release, and keeps
+   `contents: read`. `docker buildx imagetools create` is deliberately not used:
+   given a single-platform manifest it wraps it in a fresh index with a new
+   digest (the first attempt, run `33128502939`, did exactly that and failed its
+   own verification, leaving an **untagged** wrapper manifest `sha256:8486f478…`
+   that references the canonical manifest and is attached to no channel — inert).
+3. **Regression protection** (commit `5d42f57`) —
+   `src/test/clientDelivery.test.ts`, describe block "release automation cannot
+   be triggered by a Git tag push": asserts `release.yml` runs only on
+   `workflow_dispatch` (no `push` / `tags` / `schedule` / `pull_request` /
+   `release` trigger), has no `github.event_name` or `GITHUB_REF_NAME` logic,
+   gates every publishing step on the explicit `publish` input, and that the
+   candidate workflow never creates a Git tag or a GitHub Release and keeps
+   `contents: read`.
+4. **`:stable` reconciled** — `ghcr-candidate.yml` dispatched in `retag-stable`
+   mode (`digest=sha256:0ed76823…`, run `33128783623`, success). Only step 15
+   ran; build/test/promote steps skipped.
+
+### Post-reconciliation verification (independent anonymous registry query)
+
+| Tag | Digest | State |
+| --- | --- | --- |
+| `:2.3.0` | `sha256:0ed76823…` (`manifest.v2+json`) | canonical, unchanged |
+| `:stable` | `sha256:0ed76823…` (`manifest.v2+json`) | **moved onto canonical**; `== :2.3.0` |
+| `:sha-1a9dba6` | `sha256:c448a8ca…` (OCI index) | candidate evidence, unchanged |
+| `:2.2.0` | `sha256:a767d1c96e9bd0c6fd2786afd4b66c475e2ec718b3f703575c444b2af7231196` | immutable historical, unchanged |
+| `:latest` | absent | never created |
+
+Public release still consistent: `verify-package.mjs` PASS on the downloaded
+assets; `releases/latest/download/update-manifest.json` serves the v2.3.0
+manifest (`imageDigest sha256:0ed76823…`, `packageSha256 0d420dae…`) and its
+`packageUrl` resolves with a matching checksum; the shipped v2.2.0
+`Compare-SemVer` still reports `2.3.0` as an available update from `2.2.0`.
+
+### Safety / cost
+
+Zero paid provider calls. GHCR writes ran in GitHub Actions; local work was git,
+the GitHub API and anonymous registry queries only. No `docker` build / pull /
+prune / `down -v`. No database or Provider Vault mutation. The `v2.3.0` tag was
+not moved. `v2.2.0` and the pre-release candidate image were not deleted or
+altered.
+
+**Result:** the v2.3.0 release identity is consistent — public Release, public
+image (`:2.3.0` and `:stable`), and published manifest all describe
+`sha256:0ed76823…` / package `0d420dae…`, built from `829bb7e…`. **PASS /
+RECONCILED.**
