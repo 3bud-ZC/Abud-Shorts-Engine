@@ -212,23 +212,53 @@ jobs:
 
       # Moves ONLY the :stable channel pointer. The :version tag is immutable
       # once a release is published, so it is never touched here. No rebuild.
+      #
+      # This re-uploads the exact manifest bytes of the accepted digest under
+      # the stable tag, so stable resolves to that identical digest.
+      # `imagetools create` is deliberately not used: given a single-platform
+      # manifest it wraps it in a fresh index with a new digest, which would
+      # leave stable and the version tag pointing at different digests.
       - name: Move only the stable tag without rebuild
         if: inputs.mode == 'retag-stable'
+        env:
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ inputs.digest }}
         run: |
           set -euo pipefail
-          IMAGE="${{ steps.identity.outputs.image }}"
-          docker buildx imagetools create \
-            --tag "$IMAGE:stable" \
-            "$IMAGE@${{ inputs.digest }}"
-          RESOLVED="$(docker buildx imagetools inspect "$IMAGE:stable" | awk '/^Digest:/ {print $2; exit}')"
-          if [ "$RESOLVED" != "${{ inputs.digest }}" ]; then
-            echo "::error::stable resolved to $RESOLVED, expected ${{ inputs.digest }}."
+          REPO="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          ACCEPT="application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json"
+
+          TOKEN="$(curl -fsS -u "$GHCR_ACTOR:$GHCR_PASSWORD" \
+            "https://ghcr.io/token?scope=repository:${REPO}:pull,push&service=ghcr.io" | jq -r .token)"
+
+          # The accepted manifest, fetched by digest so the bytes are exact.
+          CONTENT_TYPE="$(curl -fsS -o manifest.bin -D - \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
+            "https://ghcr.io/v2/${REPO}/manifests/${DIGEST}" \
+            | tr -d '\r' | awk 'tolower($1)=="content-type:"{print $2}')"
+          echo "source manifest content-type: $CONTENT_TYPE"
+
+          # Re-tag: PUT the identical bytes under :stable. The registry derives
+          # the digest from the bytes, so stable == the accepted digest.
+          curl -fsS -X PUT \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: $CONTENT_TYPE" \
+            --data-binary @manifest.bin \
+            "https://ghcr.io/v2/${REPO}/manifests/stable"
+
+          RESOLVED="$(curl -fsS -I \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
+            "https://ghcr.io/v2/${REPO}/manifests/stable" \
+            | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}')"
+          if [ "$RESOLVED" != "$DIGEST" ]; then
+            echo "::error::stable resolved to $RESOLVED, expected $DIGEST."
             exit 1
           fi
           {
             echo "### GHCR stable retag"
             echo ""
-            echo "- Image: \`$IMAGE\`"
-            echo "- Stable tag now points at: \`${{ inputs.digest }}\`"
+            echo "- Image: \`ghcr.io/${REPO}\`"
+            echo "- Stable tag now points at: \`$DIGEST\`"
             echo "- Version tag: untouched"
           } >> "$GITHUB_STEP_SUMMARY"
