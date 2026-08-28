@@ -6079,6 +6079,10 @@ Implementation pass started 2026-08-28 on branch
 `v2.4-professional-video-engine`. This section is the canonical running status
 for the V2.4 professional video overhaul.
 
+Second implementation pass continued 2026-08-28. Implementation commit:
+`6f9d309` (`Advance v2.4 professional video engine`). No merge to `main`, no
+tag, no release, no paid provider call and no Docker destructive operation.
+
 ### Root Cause Of Old Output
 
 - Auto visual routing was Pexels-centric: `AutoVisualRouter` accepted one
@@ -6138,6 +6142,29 @@ for the V2.4 professional video overhaul.
   real visual coverage, provider mix, unique/repeated assets, semantic score
   summary, text-only timeline percentage, source timeline mix, raw-prompt leak
   count, invented-claim risk count and professional-auto readiness.
+- Updated free-stock contracts against the current official APIs: Pexels video
+  search now uses `https://api.pexels.com/v1/videos/search`; Pixabay video
+  search remains `https://pixabay.com/api/videos/` with `key`, `q`,
+  orientation and per-page bounds.
+- Expanded stock candidates with query provenance, file/fps/size metadata and
+  an explainable decision breakdown: semantic match, technical quality,
+  duration fit and orientation fit.
+- Added first-class shot-plan fields to the canonical EDL: scene index, visual
+  intent, subject/action/environment, framing, camera movement, lighting/mood,
+  source preferences, fallback classes, overlay/caption/music/SFX intent,
+  source windows, timeline windows, crop/speed/scale and candidate rejection
+  metadata.
+- The multi-shot visual bed now resolves later stock shots sequentially with
+  shot-specific query families, dedupe exclusions, prior-candidate context,
+  per-shot download/cache validation and deterministic crop/window decisions.
+- Added final black-frame analysis after render and folded real coverage,
+  text-only timeline percent, black-frame percent, repeated assets, prompt
+  leaks and unsupported-claim risk into the creative score and persisted
+  metadata.
+- Updated Luma from the historical Dream Machine endpoint to the current Agents
+  API contract: `https://agents.lumalabs.ai/v1/generations`, default model
+  `ray-3.2`, and support for `LUMA_AGENTS_API_KEY` while keeping
+  `LUMA_API_KEY` as a compatibility fallback.
 
 ### Prompt Compiler V3
 
@@ -6155,14 +6182,14 @@ for the V2.4 professional video overhaul.
 
 | Provider | Implemented | Configured | Healthy | Live Verified | Blocked Reason |
 | --- | --- | --- | --- | --- | --- |
-| Pexels | Yes, first-class stock provider | No usable `.env` key detected | Not live-tested in this pass | No | `.env` contains blank/placeholder Pexels value |
-| Pixabay | Yes, first-class stock provider | No usable `.env` key detected | Not live-tested in this pass | No | `PIXABAY_API_KEY` missing from `.env` |
-| Local ComfyUI | Yes, optional sidecar adapter | No endpoint configured | Not live-tested in this pass | No | `COMFYUI_BASE_URL` blank/placeholder and `127.0.0.1:8188` did not respond |
+| Pexels | Yes, first-class stock provider using `/v1/videos/search` | No usable process or `.env` key detected | Not live-tested in this pass | No | `PEXELS_API_KEY` absent/unconfigured |
+| Pixabay | Yes, first-class stock provider using `/api/videos/` | No usable process or `.env` key detected | Not live-tested in this pass | No | `PIXABAY_API_KEY` absent/unconfigured |
+| Local ComfyUI | Yes, optional sidecar adapter | No endpoint configured | Not live-tested in this pass | No | `COMFYUI_BASE_URL` absent and `127.0.0.1:8188` timed out |
 | Google Veo | Yes, async operation adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Google/Veo key detected |
 | Runway | Yes, async task adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Runway key detected |
 | fal.ai | Yes, async queue adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no fal.ai key detected |
 | Replicate | Yes, async prediction adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Replicate token detected |
-| Luma | Yes, adapter point implemented | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Luma key detected |
+| Luma | Yes, Agents API adapter implemented | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no `LUMA_AGENTS_API_KEY` / `LUMA_API_KEY` detected |
 | ABUD Motion | Existing local motion runtime | Local runtime dependent | Existing tests cover motion rendering | Not human creative verified | Now treated as overlay/explicit motion mode, not silent Auto fallback |
 
 ### Local Hardware / Runtime Detection
@@ -6174,6 +6201,10 @@ for the V2.4 professional video overhaul.
 - Local ComfyUI: no reachable response from `http://127.0.0.1:8188/system_stats`
   during this pass, so local video-generation benchmarking is blocked until a
   workflow endpoint and model stack are installed/running.
+- Current decision: do not make ComfyUI the default professional route on this
+  laptop. The RTX 3050 6GB profile is suitable only for explicit low-VRAM local
+  experiments after the model/workflow stack is installed; free stock remains
+  the safest default professional path.
 
 ### Verification
 
@@ -6201,6 +6232,22 @@ for the V2.4 professional video overhaul.
 - Production build:
   `CI=true pnpm -s build` → **PASS**. Vite emitted only non-blocking warnings
   about Browserslist data age and chunk size.
+- Pass 2 typecheck:
+  `pnpm typecheck` → **PASS** for server and UI.
+- Pass 2 focused V2.4 suite:
+  `.\\node_modules\\.bin\\vitest.cmd run src/server/v2/v24ProfessionalVideoEngine.test.ts`
+  → **PASS**, 15 tests.
+- Pass 2 focused regression suites:
+  `.\\node_modules\\.bin\\vitest.cmd run src/server/v2/creativeQualityV22.test.ts src/test/videoQualityV23.test.ts src/test/realVideoQualityQa.test.ts src/ui/productUx.test.ts`
+  → **PASS**, 4 files, 113 tests.
+- Pass 2 production build:
+  `pnpm -s build` → **PASS**. Vite emitted only the existing non-blocking
+  Browserslist-age and chunk-size warnings.
+- Provider config UX was re-audited in code: the Providers page exposes
+  Configure, masked saved credentials, vault-backed `PUT
+  /api/v2/providers/:provider/credentials`, and Test Connection through
+  `POST /api/v2/providers/:provider/validate`. No `.env` or terminal edit is
+  required for Pexels/Pixabay when the app is running.
 
 ### Safety
 
@@ -6210,17 +6257,27 @@ for the V2.4 professional video overhaul.
 - No model weights downloaded.
 - No paid provider generation call executed.
 - No secrets printed.
-- No live stock provider calls succeeded because no usable free stock API key
-  was configured in `.env`.
+- No live stock provider call was executed or succeeded because no usable
+  Pexels/Pixabay key was configured in the process or `.env`; Provider Vault was
+  not mutated during this pass.
 - No end-to-end benchmark render was executed; current local configuration has
   no live professional visual source to satisfy the V2.4 acceptance gate.
 - `main`, `v2.3.1` tag/release/GHCR image and historical releases untouched.
 
 ### Current Completion State
 
-V2.4 is partially implemented. The unified provider mesh, async contracts,
-provider UI/vault metadata, professional Auto blocking, prompt truth guards and
-visual quality reporting are in code and have focused deterministic tests.
+V2.4 pass 2 is code-complete for the independent engineering work that can be
+done without external credentials or local model installation. The unified
+provider mesh, official free-stock API contracts, provider UI/vault path,
+expanded ShotPlan/EDL, multi-shot composition, deterministic candidate ranking,
+download validation, black-frame QA, prompt/claim QA, Luma Agents API adapter and
+rebuilt creative scoring are in code and have focused deterministic tests.
+
+Final V2.4 acceptance remains blocked by external runtime configuration, not by
+known compile/test failure: a usable Pexels or Pixabay key must be saved through
+Provider Vault or available in runtime config for live stock benchmarks; local
+ComfyUI must be installed/running for local AI benchmarks; paid providers remain
+intentionally disabled until the user explicitly enables spending.
 
 ### Git / Publication State
 
@@ -6229,6 +6286,8 @@ visual quality reporting are in code and have focused deterministic tests.
   professional visual engine`).
 - Verification/status follow-up commit: `33b4e66` (`Update v2.4 status after
   verification`).
+- Second-pass implementation commit: `6f9d309` (`Advance v2.4 professional
+  video engine`).
 - Remote branch: pushed and tracking
   `origin/v2.4-professional-video-engine`.
 - Pull request URL:
