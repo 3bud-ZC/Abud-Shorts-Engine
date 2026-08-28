@@ -682,6 +682,36 @@ describe("V2 routes", () => {
     expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_best");
   });
 
+  it("accepts production job Free Only visual routing controls", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/production/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 20-second vertical Reel with real stock footage.",
+        language: "en",
+        durationSeconds: 20,
+        visualMode: "auto",
+        visualSource: "auto_free",
+        stockProvider: "auto_stock",
+        qualityProfile: "balanced",
+      })
+      .expect(202);
+
+    const job = await db.jobs.get(res.body.jobId);
+    expect(job?.production_spec?.metadata?.uiContract?.visualSource).toBe("auto_free");
+    expect(job?.production_spec?.metadata?.uiContract?.sourceStrategy).toBe("Auto Free");
+    expect(job?.production_spec?.metadata?.uiContract?.stockProvider).toBe("auto_stock");
+  });
+
   it("supports captions off without requiring caption artifacts", async () => {
     nock("http://127.0.0.1:1")
       .post("/webhook/abud-v2/jobs/start")

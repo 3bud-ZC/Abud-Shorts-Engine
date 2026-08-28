@@ -834,7 +834,11 @@ export function canonicalizeProductionSpecContract(
         sourceStrategy:
           visualSource === "auto_best"
             ? "Auto Best"
-            : visualSource === "stock"
+            : visualSource === "auto_free"
+              ? "Auto Free"
+              : visualSource === "auto_budget"
+                ? "Auto Budget"
+                : visualSource === "stock"
               ? "Stock"
               : visualSource === "uploaded_media"
                 ? "Uploaded Media"
