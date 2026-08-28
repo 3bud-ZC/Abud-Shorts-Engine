@@ -5600,18 +5600,12 @@ Against the real running stack (worker + app restarted onto the built hotfix
   (`/api/videos/…/thumbnail` → 200 `image/jpeg`, 27 KB) all serve. Job JSON
   carries no `NaN`/`undefined`. Creative score 99 (grade A), audio QA pass, no
   dead air.
-- **Known separate issue (pre-existing, not caused by this hotfix):** with the
-  very short auto-generated narration (~6 s of speech) the continuous-narration
-  timeline sized the video to **15.77 s vs the 30 s request** (47% variance), so
-  `validationResult.valid` is `false` and `technicalScore` is 30. Identical
-  behaviour is present on stock v2.3.0 for explicit `motion_graphics`
-  productions with short narration (`cmtac0yd5…` → 4.89 s / 12 s / score 30;
-  `cmtabtl93…` → 4.52 s / 12 s / score 30 — both `ready`, both `valid: false`).
-  A `valid: false` validation result lowers the score but does **not** fail the
-  job. Bringing short-narration motion productions to full requested length is a
-  distinct timeline defect and is deliberately out of scope for this hotfix.
+- **First retry (render-routing fix only)** produced a `ready` video that was
+  only **15.77 s vs the 30 s request** (47% variance, `valid: false`,
+  `technicalScore` 30). That was **not acceptable** and is closed below in
+  **Duration Contract Closure**.
 
-### Automated verification (hotfix branch)
+### Automated verification (render-routing fix)
 
 - `pnpm typecheck` — **PASS**
 - `pnpm exec vitest run` — **PASS**, **57 files / 919 tests** (was 56 / 909;
@@ -5633,4 +5627,123 @@ Canvas + FFmpeg, all local). GHCR and the v2.3.0 release were not touched.
 `2026.08.28.1`, `package.json` `2.3.1`. `DATABASE_SCHEMA_VERSION` **unchanged at
 `2.13.0`**. Not merged, not tagged, not published.
 
-**Status: HOTFIX VERIFIED ON `hotfix/v2.3.1-render-failure` — awaiting review.**
+## Duration Contract Closure
+
+The first retry after the render-routing fix reached `ready` but produced a
+**15.77 s video for a 30 s request** (`valid: false`, `technicalScore` 30). Not
+acceptable for release. Root-caused and fixed on the same branch.
+
+### Why 30 s became 15.77 s
+
+The timeline was correct. `resolveProductionTimeline` gave each of the 3 scenes
+a **10 s budget** (`durationFrames` 250, `visualDurationSeconds` 10,
+`finalExpectedDurationSeconds` 30). The collapse happened one step later, in
+`planSceneVisualDurationSeconds` (`src/types/productionSpec.ts`):
+
+```
+value = max(0.5, speechFloor, min(budget, speechFloor + maxHold))   // maxHold = 3.0
+```
+
+With ~1.2–3.2 s of Kokoro speech per scene, `speechFloor + 3.0` (≈ 4–6.4 s) is
+**less than the 10 s budget**, so `min(...)` capped every scene at ~4–6 s:
+6.4 + 4.76 + 4.59 = **15.75 s**. That value flows straight through:
+`ShortCreator` sets `targetSceneDuration = calculatedVisualDuration`, writes it
+to each `scene.audio.duration`, and hands
+`durationMs = Σ scene.audio.duration` to Remotion — so the MP4 is exactly the
+sum of the capped scene durations.
+
+- **First incorrect stage:** `planSceneVisualDurationSeconds` — the `maxHold`
+  cap. Everything upstream (timeline, budgets) was right; everything downstream
+  faithfully rendered the wrong number.
+- **Why V2.3-07 did not cover this route:** V2.3-07 fixed the *opposite*
+  collapse (scenes wrapping to `speech + breath`) and added the hold, but only
+  exercised **12 s / 3-scene** requests — ~4 s per scene, which is *below* the
+  3 s cap, so the cap never bound and the bug was invisible. It is not
+  path-specific: an explicit `motion_graphics` 30 s request with terse
+  narration collapses identically. The Auto→motion route only *surfaced* it
+  because the incident used a 30 s request with a locally-generated (very
+  short) script.
+
+### Fix
+
+`planSceneVisualDurationSeconds` now holds a scene to its **full resolved
+budget** by default:
+
+```
+hold  = maxVisualHoldSeconds != null ? min(budget, speechFloor + maxVisualHoldSeconds) : budget
+value = max(0.5, speechFloor, hold)
+```
+
+- The hold is legitimate: the scene's own animation and the music bed keep
+  playing, and `analyzeDeadAir` already subtracts `intentionalHoldMs`
+  (computed from this returned duration) from every inter-scene gap, so a
+  full-budget hold nets a ~0 ms silent gap — verified live (`maxSilenceMs` 160,
+  `hasDeadAir false`).
+- Speech stays the hard floor (`max(..., speechFloor, ...)`) — long narration
+  still gets `speech + breath`, nothing is clipped.
+- The budget is one scene's fair share of the timeline, so a scene can never
+  exceed its share.
+- `maxVisualHoldSeconds` is kept as an explicit opt-in cap for any future
+  caller; there is no default cap below the budget.
+
+- **Behaviour:** short-narration productions now hold their motion to the
+  requested length instead of collapsing.
+- **Explicit motion (`motion_graphics` / `animated_explainer`):** same code
+  path, same result — 12 s and 30 s both land within ±0.5 s.
+- **Auto→motion (`auto_hybrid` + plan-resolved motion):** identical, because
+  `planSceneVisualDurationSeconds` runs for every scene *before* the
+  stock/motion branch.
+- **Mixed plan:** total duration is treatment-independent for the same reason
+  (locked by a regression test asserting a stock scene and a motion scene of
+  the same budget yield the same length).
+- **Schema:** unchanged, `2.13.0`, no migration.
+- **Files:** `src/types/productionSpec.ts` (the cap), `src/types/productionSpec.test.ts`
+  (strengthened + incident/scaling cases), `src/test/v231RenderFailureHotfix.test.ts`
+  (timeline→duration integration cases + dead-air hold check).
+
+### Live verification (real running hotfix stack)
+
+| | 30 s acceptance | 12 s regression |
+| --- | --- | --- |
+| Job | `cmtcalfs2000007qd363642r1` (Retry of `cmtc850gc…`) | `cmtcphpgz000407qddaye666j` (new create) |
+| Flow | customer Retry | customer Create (Prompt Studio) |
+| Contract | Prompt Studio · Auto (`auto_hybrid`/`auto`) · EN · 9:16 · standard 1080p · Kokoro · no stock key | Motion Graphics · EN · 9:16 · standard 1080p · Kokoro |
+| Status | `ready` | `ready` |
+| Requested / actual (ffprobe) | 30 s / **30.06 s** | 12 s / **12.05 s** |
+| Variance | **0.2 %** (0.06 s) | **0.4 %** (0.05 s) |
+| `validationResult.valid` | **true**, `issues: []` | **true**, `issues: []` |
+| technicalScore | **100** | **100** |
+| creativeScore | 99 (grade A) | 99 (grade A) |
+| Media | `motion_canvas`, `sourceTypeCounts {motion:10}` | `motion_canvas`, `{motion:5}` |
+| Pexels / stock calls | **0** | **0** |
+| Preview / download / thumbnail | 200 `video/mp4` / 200 `video/mp4` / 200 `image/jpeg` | all present |
+| Audio QA | **pass** (mix -18.79 LUFS, no clip, not silent) | pass |
+| Dead-air defect | **0** (`maxNarrationSilenceMs` 160 — breath only) | 0 |
+
+### Render-failure hotfix — still intact
+
+The no-stock Auto→motion route still: does not call Pexels, does not require
+`PIXABAY_API_KEY`, uses `motion_canvas`, completes the media checkpoint, and
+renders successfully (both live jobs above). `classifyRenderFailure` and the
+Arabic Job Details localisation are unchanged. Existing render-routing
+regression tests kept.
+
+### Automated verification (full hotfix branch)
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS**, **57 files / 927 tests** (was 57 / 919;
+  +5 in `v231RenderFailureHotfix.test.ts`, +3 in `productionSpec.test.ts`)
+- `pnpm build` — **PASS**
+
+### Data safety (duration closure)
+
+Original failed job `cmtc850gc…` and the first successful retry
+`cmtc9marj000007qdbrww8h2o` both preserved unchanged. New QA jobs
+`cmtcalfs2000007qd363642r1` and `cmtcphpgz000407qddaye666j` retained as hotfix
+evidence. No DB reset, no migration, no Provider Vault change, no media
+deletion. No `docker … prune`, no `compose down`. Temporary admin sessions for
+the Retry/Create API calls were deleted afterward. **Zero paid provider calls.**
+Schema remains `2.13.0`.
+
+**Status: V2.3.1 HOTFIX FULLY VERIFIED on `hotfix/v2.3.1-render-failure` (render
+routing + duration contract) — awaiting release review.**
