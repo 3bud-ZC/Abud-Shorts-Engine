@@ -6222,6 +6222,15 @@ V2.4 is partially implemented. The unified provider mesh, async contracts,
 provider UI/vault metadata, professional Auto blocking, prompt truth guards and
 visual quality reporting are in code and have focused deterministic tests.
 
+### Git / Publication State
+
+- Local feature branch: `v2.4-professional-video-engine`.
+- Implementation commit created locally: `b1fce24` (`Implement v2.4
+  professional visual engine`).
+- Push attempt: `git push -u origin v2.4-professional-video-engine` attempted
+  on 2026-08-28 and failed because the host could not connect to
+  `github.com:443` after ~21 seconds. No remote branch was confirmed.
+
 Still pending before final V2.4 acceptance:
 
 - Live Pexels/Pixabay credential verification and real stock downloads through
