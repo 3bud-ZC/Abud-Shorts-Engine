@@ -134,6 +134,17 @@ describe("V2.3.1: an Auto production with no stock provider renders through moti
       }),
     ).toBe(false);
   });
+
+  it("does not let a motion creative treatment override explicit stock mode", () => {
+    expect(
+      sceneRendersAsMotion({
+        productionMode: "auto_hybrid",
+        visualMode: "stock",
+        sceneVisualSource: "stock",
+        plannedTreatmentRuntime: "motion",
+      }),
+    ).toBe(false);
+  });
 });
 
 /**

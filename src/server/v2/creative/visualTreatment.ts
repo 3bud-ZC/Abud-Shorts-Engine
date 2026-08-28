@@ -149,11 +149,14 @@ export function sceneRendersAsMotion(input: {
   sceneVisualSource?: string | null;
   plannedTreatmentRuntime?: TreatmentRuntime | null;
 }): boolean {
-  return (
+  const explicitGraphic =
     input.productionMode === "motion_graphics" ||
     input.productionMode === "animated_explainer" ||
     input.visualMode === "motion_graphics" ||
-    input.sceneVisualSource === "motion_graphics" ||
+    input.sceneVisualSource === "motion_graphics";
+  if (explicitGraphic) return true;
+  if (input.visualMode === "stock") return false;
+  return (
     input.plannedTreatmentRuntime === "motion"
   );
 }

@@ -378,10 +378,20 @@ export class ShortCreator {
     // customer chose. Auto Hybrid keeps every source available.
     const graphicOnlyMode =
       spec.productionMode === "motion_graphics" || spec.productionMode === "animated_explainer";
+    const requestedVisualSource = String(
+      (spec.metadata as any)?.uiContract?.visualSource ||
+        (spec as any).visualSource ||
+        "",
+    );
+    const forceStockFootage =
+      spec.visualMode === "stock" ||
+      requestedVisualSource === "stock" ||
+      requestedVisualSource === "auto_free";
 
     const isTreatmentAvailable = (treatment: VisualTreatment): boolean => {
       const runtime = TREATMENT_RUNTIME[treatment];
       if (graphicOnlyMode) return runtime === "motion";
+      if (forceStockFootage && runtime !== "stock") return false;
       if (runtime === "motion") return motionRuntimeAvailable;
       if (runtime === "stock") return stockRuntimeAvailable;
       if (runtime === "upload") return hasUploadedMediaForProduction;
@@ -1580,6 +1590,7 @@ export class ShortCreator {
 
               if (
                 planned &&
+                !forceStockFootage &&
                 isMotionTreatment(planned.treatment) &&
                 (indexInScene === 0 || graphicOnlyMode || sceneResolvedToMotion)
               ) {
@@ -1590,7 +1601,7 @@ export class ShortCreator {
                 };
               }
 
-              if (planned && indexInScene === 0 && TREATMENT_RUNTIME[planned.treatment] === "mockup") {
+              if (!forceStockFootage && planned && indexInScene === 0 && TREATMENT_RUNTIME[planned.treatment] === "mockup") {
                 return {
                   sourceType: "mockup",
                   provider: "abud_mockup",
@@ -1602,7 +1613,7 @@ export class ShortCreator {
               // more generic footage, but only where the intent calls for it
               // and never for every shot in the scene.
               const template = websiteAdContext ? mockupForIntent(shot.intent) : null;
-              if (template && indexInScene > 0) {
+              if (!forceStockFootage && template && indexInScene > 0) {
                 return { sourceType: "mockup", provider: "abud_mockup", routingReason: `website_intent:${shot.intent}` };
               }
               return { sourceType: "stock", provider: visualAsset.provider, routingReason: "stock_footage_best_available" };
