@@ -18,14 +18,19 @@ import type {
 
 export class LumaVisualProvider implements VisualProvider {
   public readonly id = "luma";
-  public readonly displayName = "Luma Dream Machine";
+  public readonly displayName = "Luma Agents API";
   public readonly category = "ai_video" as const;
   public readonly providerClass = "GENERATED_VIDEO" as const;
 
-  constructor(private apiKey?: string, private model = process.env.LUMA_VIDEO_MODEL || "ray-flash-2") {}
+  constructor(private apiKey?: string, private model = process.env.LUMA_VIDEO_MODEL || "ray-3.2") {}
 
   private getApiKey(): string | undefined {
-    return this.apiKey || process.env.LUMA_API_KEY || providerSecrets.peek("luma", "api_key");
+    return (
+      this.apiKey ||
+      process.env.LUMA_AGENTS_API_KEY ||
+      process.env.LUMA_API_KEY ||
+      providerSecrets.peek("luma", "api_key")
+    );
   }
 
   public isConfigured(): boolean {
@@ -97,12 +102,12 @@ export class LumaVisualProvider implements VisualProvider {
       throw new Error("Paid Luma generation is disabled.");
     }
     const response = await axios.post(
-      "https://api.lumalabs.ai/dream-machine/v1/generations",
+      "https://agents.lumalabs.ai/v1/generations",
       {
         prompt: request.prompt,
         model: request.modelId || this.model,
         aspect_ratio: request.aspectRatio || "9:16",
-        ...(request.imageUrl ? { keyframes: { frame0: { type: "image", url: request.imageUrl } } } : {}),
+        ...(request.imageUrl ? { source: { type: "image", url: request.imageUrl } } : {}),
       },
       {
         headers: { Authorization: `Bearer ${this.getApiKey()}`, "Content-Type": "application/json" },
@@ -113,7 +118,7 @@ export class LumaVisualProvider implements VisualProvider {
   }
 
   public async poll(job: ProviderGenerationJob): Promise<ProviderGenerationJob> {
-    const response = await axios.get(`https://api.lumalabs.ai/dream-machine/v1/generations/${job.providerRequestId}`, {
+    const response = await axios.get(`https://agents.lumalabs.ai/v1/generations/${job.providerRequestId}`, {
       headers: { Authorization: `Bearer ${this.getApiKey()}` },
       timeout: 30000,
     });
@@ -126,7 +131,7 @@ export class LumaVisualProvider implements VisualProvider {
   }
 
   public async cancel(job: ProviderGenerationJob): Promise<ProviderGenerationJob> {
-    await axios.delete(`https://api.lumalabs.ai/dream-machine/v1/generations/${job.providerRequestId}`, {
+    await axios.delete(`https://agents.lumalabs.ai/v1/generations/${job.providerRequestId}`, {
       headers: { Authorization: `Bearer ${this.getApiKey()}` },
       timeout: 15000,
     }).catch(() => undefined);
@@ -139,7 +144,7 @@ export class LumaVisualProvider implements VisualProvider {
 
   public normalizeResult(payload: unknown, request: ProviderGenerationRequest): ProviderGenerationJob {
     const data = (payload || {}) as Record<string, any>;
-    const outputUrl = extractFirstUrl(data.assets?.video || data.video || data.output);
+    const outputUrl = extractFirstUrl(data.assets?.video || data.video || data.output || data.result);
     return {
       provider: "luma",
       providerRequestId: String(data.id || ""),
@@ -160,12 +165,12 @@ export class LumaVisualProvider implements VisualProvider {
         configured: false,
         healthy: false,
         status: "not_configured",
-        message: "LUMA_API_KEY is not configured.",
+        message: "LUMA_AGENTS_API_KEY or LUMA_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
       };
     }
     return {
-      provider: "Luma Dream Machine",
+      provider: "Luma Agents API",
       category: "Visuals",
       configured: true,
       healthy: true,

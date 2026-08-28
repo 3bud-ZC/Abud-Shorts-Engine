@@ -13,6 +13,7 @@ import {
 type PexelsVideoFile = {
   id?: number;
   quality?: string;
+  file_type?: string;
   width?: number;
   height?: number;
   fps?: number;
@@ -102,7 +103,7 @@ export class PexelsStockProvider implements StockProvider {
       return applyExclusions(cached.candidates, request);
     }
 
-    const url = new URL("https://api.pexels.com/videos/search");
+    const url = new URL("https://api.pexels.com/v1/videos/search");
     url.searchParams.set("query", request.query);
     url.searchParams.set("orientation", pexelsOrientation(request.orientation));
     url.searchParams.set("size", "medium");
@@ -146,6 +147,9 @@ export class PexelsStockProvider implements StockProvider {
         contributor: hit.user?.name,
         contributorUrl: hit.user?.url,
         sourcePageUrl: hit.url,
+        queryUsed: request.query,
+        fileType: file.file_type || file.quality,
+        fps: file.fps,
         tags: [request.query],
       });
     }

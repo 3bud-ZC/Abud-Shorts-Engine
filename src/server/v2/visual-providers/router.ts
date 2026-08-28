@@ -111,6 +111,18 @@ export class AutoVisualRouter {
     const winner = this.pickBestCandidate(candidates);
     if (winner) {
       const attribution = this.stockRegistry.attributionFor(winner);
+      const topCandidates = candidates.slice(0, 20).map((candidate) => ({
+        provider: candidate.provider,
+        assetId: candidate.id,
+        queryUsed: candidate.queryUsed,
+        width: candidate.width,
+        height: candidate.height,
+        durationSeconds: candidate.durationSeconds,
+        semanticScore: candidate.semanticScore,
+        qualityScore: candidate.qualityScore,
+        decisionScore: candidate.totalScore,
+        decisionBreakdown: candidate.decisionBreakdown,
+      }));
       return {
         sceneIndex: scene.sceneIndex,
         provider: winner.provider,
@@ -129,12 +141,21 @@ export class AutoVisualRouter {
           contributorUrl: winner.contributorUrl,
           attributionUrl: winner.sourcePageUrl,
           originalSourceUrl: winner.sourcePageUrl,
-          searchTerm: (winner.tags || [])[0] || searchTerms[0],
+          searchTerm: winner.queryUsed || (winner.tags || [])[0] || searchTerms[0],
           searchTermsUsed: searchTerms,
           candidateCount: candidates.length,
+          candidates: topCandidates,
+          rejectedCandidates: topCandidates
+            .filter((candidate) => candidate.assetId !== winner.id)
+            .slice(0, 8)
+            .map((candidate) => ({
+              ...candidate,
+              reason: "lower_decision_score",
+            })),
           selectedScore: winner.totalScore,
           semanticScore: winner.semanticScore,
           qualityScore: winner.qualityScore,
+          decisionBreakdown: winner.decisionBreakdown,
           attribution,
           width: winner.width,
           height: winner.height,

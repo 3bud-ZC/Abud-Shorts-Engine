@@ -1587,7 +1587,9 @@ export class ShortCreator {
           const frameWidth = orientation === OrientationEnum.portrait ? 1080 : 1920;
           const frameHeight = orientation === OrientationEnum.portrait ? 1920 : 1080;
           let previousCropPlan: SmartCropPlan | null = null;
-          const shotInputs = await Promise.all(sceneEdl.shots.map(async (shot, shotIndex) => {
+          const shotInputs = [];
+          for (let shotIndex = 0; shotIndex < sceneEdl.shots.length; shotIndex += 1) {
+            const shot = sceneEdl.shots[shotIndex];
             // A motion-treated shot is rendered to its own short MP4 and then
             // handed to the composer as an ordinary clip, so graphic scenes and
             // footage go through exactly one compositing path.
@@ -1631,7 +1633,8 @@ export class ShortCreator {
                   language: spec.language,
                 });
                 if (fs.existsSync(motionScene.absolutePath)) {
-                  return { shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 };
+                  shotInputs.push({ shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 });
+                  continue;
                 }
               } catch (motionError) {
                 logger.warn(
@@ -1645,14 +1648,15 @@ export class ShortCreator {
                   // from the bed instead, and the scene keeps whatever other
                   // graphic shots rendered.
                   shot.routingReason = `${shot.routingReason || ""}|motion_failed_graphic_only`;
-                  return { shot };
+                  shotInputs.push({ shot });
+                  continue;
                 }
                 shot.routingReason = `${shot.routingReason || ""}|motion_fallback_to_stock`;
                 shot.sourceType = "stock";
               }
             }
             if (shot.sourceType === "mockup") {
-              return {
+              shotInputs.push({
                 shot,
                 mockupTemplate: mockupForIntent(shot.intent) || undefined,
                 // A mockup carries the customer's own brand when they supplied
@@ -1668,27 +1672,155 @@ export class ShortCreator {
                   subheadline: String((originalSceneSpec as any).displayText || ""),
                   ctaLabel: String(brandStyle.ctaText || spec.cta?.text || "ابدأ دلوقتي"),
                 },
-              };
+              });
+              continue;
             }
-            const window = selectBestWindow(detection, mediaDuration, shot.duration);
+            let selectedShotVisualAsset = visualAsset;
+            let selectedShotVideoPath = tempVideoPath;
+            let selectedShotMediaDuration = mediaDuration;
+
+            if (shot.sourceType === "stock" && !reusableMediaArtifact) {
+              const shotQueryFamilies = buildStockQueryFamilies({
+                narration: String(originalSceneSpec.narration || ""),
+                onScreenText: String(originalSceneSpec.onScreenText || ""),
+                purpose: String(originalSceneSpec.purpose || ""),
+                visualIntent: shot.visualIntent || sceneMediaPlan.visualIntent,
+                shotIntent: shot.intent,
+                industryHint: String((spec.metadata as any)?.creativeProfile?.industryHint || spec.title || ""),
+                mood: creativePlan.pacing,
+                providedTerms: [
+                  shot.searchQuery,
+                  ...(shot.alternativeQueries || []),
+                  ...(sceneMediaPlan.searchTerms || []),
+                ].filter(Boolean) as string[],
+                orientation: orientation === OrientationEnum.portrait ? "portrait" : "landscape",
+                maxQueries: 6,
+              });
+              const shotIntentPolicy = applyVisualIntentPolicy({
+                terms: queryFamilyTerms(shotQueryFamilies),
+                narration: String(originalSceneSpec.narration || ""),
+                isWebsiteAd: websiteAdContext,
+                sceneIndex: index,
+              });
+              shot.searchTerms = shotIntentPolicy.terms;
+              shot.searchQuery = shotIntentPolicy.terms[0] || shot.searchQuery;
+              shot.alternativeQueries = shotIntentPolicy.terms.slice(1);
+
+              if (shotIndex > 0) {
+                try {
+                  const shotAsset = await this.visualRouter.resolveSceneVisual(
+                    {
+                      ...originalSceneSpec,
+                      stockSearchTerms: shotIntentPolicy.terms,
+                      visualIntent: shot.visualIntent || sceneMediaPlan.visualIntent,
+                    } as any,
+                    spec,
+                    {
+                      excludeIds: excludeVideoIds,
+                      orientation,
+                      tempDirPath: this.config.tempDirPath,
+                      targetDurationSeconds: shot.duration,
+                      previousCandidates: previousVisualCandidates,
+                    },
+                  );
+                  selectedShotVisualAsset = shotAsset;
+                  visualProvidersUsed.add(shotAsset.provider);
+                  if (shotAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
+
+                  const shotAssetId =
+                    shotAsset.metadata?.providerAssetId ||
+                    shotAsset.metadata?.stockAssetId ||
+                    shotAsset.metadata?.pexelsVideoId ||
+                    shotAsset.metadata?.pixabayVideoId;
+                  const shotCacheId = shotAssetId || shotAsset.url;
+                  const shotPath = path.join(this.config.tempDirPath, `${tempId}.shot${shotIndex}.mp4`);
+                  tempFiles.push(shotPath);
+                  const cachedShot = shotCacheId ? mediaCache.getCachedAsset(shotAsset.provider, shotCacheId as any) : null;
+                  if (cachedShot) {
+                    fs.copySync(cachedShot.filePath, shotPath);
+                  } else {
+                    await this.downloadFile(shotAsset.url, shotPath);
+                    if (shotCacheId) mediaCache.saveCachedAsset(shotAsset.provider, shotCacheId as any, shotPath);
+                  }
+                  selectedShotVideoPath = shotPath;
+                  selectedShotMediaDuration = await this.ffmpeg.getMediaDuration(shotPath).catch(() => shot.duration);
+                  shot.sourceId = shotAssetId ? String(shotAssetId) : undefined;
+                  shot.provider = shotAsset.provider;
+                  shot.semanticScore = Number(shotAsset.metadata?.semanticScore ?? shotAsset.metadata?.selectedScore ?? 0) || undefined;
+                  shot.qualityScore = Number(shotAsset.metadata?.qualityScore ?? 0) || undefined;
+                  shot.decisionScore = Number(shotAsset.metadata?.selectedScore ?? 0) || undefined;
+                  shot.decisionBreakdown = {
+                    semantic: Number(shotAsset.metadata?.semanticScore ?? 0) || 0,
+                    technical: Number(shotAsset.metadata?.qualityScore ?? 0) || 0,
+                    durationFit: selectedShotMediaDuration >= shot.duration ? 100 : 60,
+                  };
+                  if (shotAssetId) excludeVideoIds.push(shotAssetId as string | number);
+                  previousVisualCandidates.push({
+                    id: shotAssetId || shotAsset.url,
+                    url: shotAsset.url,
+                    width: shotAsset.metadata?.width || 0,
+                    height: shotAsset.metadata?.height || 0,
+                    duration: shotAsset.durationSeconds,
+                    tags: shotAsset.metadata?.searchTermsUsed,
+                    provider: shotAsset.provider,
+                  });
+                  selectedVisuals.push({
+                    sceneIndex: index,
+                    shotId: shot.shotId,
+                    provider: shotAsset.provider,
+                    source: shotAsset.source,
+                    url: shotAsset.url,
+                    durationSeconds: shot.duration,
+                    metadata: {
+                      ...shotAsset.metadata,
+                      shotSearchQuery: shot.searchQuery,
+                      shotAlternativeQueries: shot.alternativeQueries,
+                    },
+                  });
+                } catch (shotAssetError) {
+                  shot.rejectedCandidates = [
+                    ...(shot.rejectedCandidates || []),
+                    {
+                      provider: "stock_mesh",
+                      assetId: shot.searchQuery || "unknown",
+                      reason: shotAssetError instanceof Error ? shotAssetError.message : String(shotAssetError),
+                    },
+                  ];
+                  shot.routingReason = `${shot.routingReason || ""}|shot_specific_asset_failed_reused_scene_asset`;
+                }
+              }
+            }
+
+            const detectionForShot =
+              selectedShotVideoPath === tempVideoPath
+                ? detection
+                : await detectShots(selectedShotVideoPath, { scriptDir: this.config.tempDirPath }).catch(() => detection);
+            const window = selectBestWindow(detectionForShot, selectedShotMediaDuration, shot.duration);
             // Different shots from the same clip must not repeat the same
             // seconds, so later shots step further into the source.
             const offset = Math.min(
-              Math.max(0, mediaDuration - shot.duration),
+              Math.max(0, selectedShotMediaDuration - shot.duration),
               window.startSeconds + shotIndex * shot.duration,
             );
             const cropPlan = planSmartCrop({
-              sourceWidth: Number(visualAsset?.width || visualAsset?.metadata?.width) || frameWidth,
-              sourceHeight: Number(visualAsset?.height || visualAsset?.metadata?.height) || frameHeight,
+              sourceWidth: Number(selectedShotVisualAsset?.width || selectedShotVisualAsset?.metadata?.width) || frameWidth,
+              sourceHeight: Number(selectedShotVisualAsset?.height || selectedShotVisualAsset?.metadata?.height) || frameHeight,
               targetWidth: frameWidth,
               targetHeight: frameHeight,
-              tags: visualAsset?.metadata?.searchTermsUsed || sceneMediaPlan.searchTerms,
-              visualIntent: sceneMediaPlan.visualIntent,
+              tags: selectedShotVisualAsset?.metadata?.searchTermsUsed || shot.searchTerms || sceneMediaPlan.searchTerms,
+              visualIntent: shot.visualIntent || sceneMediaPlan.visualIntent,
               manualFocalPoint: (originalSceneSpec as any).focalPoint,
               probe: focusProbe,
               previousPlan: previousCropPlan,
             });
             previousCropPlan = cropPlan;
+            shot.sourceId = shot.sourceId || String(selectedShotVisualAsset?.metadata?.providerAssetId || selectedShotVisualAsset?.metadata?.stockAssetId || selectedShotVisualAsset?.metadata?.pexelsVideoId || selectedShotVisualAsset?.metadata?.pixabayVideoId || "");
+            shot.provider = selectedShotVisualAsset?.provider || shot.provider;
+            shot.sourceStartSeconds = offset;
+            shot.sourceEndSeconds = Number((offset + shot.duration).toFixed(3));
+            shot.semanticScore = shot.semanticScore || Number(selectedShotVisualAsset?.metadata?.semanticScore ?? selectedShotVisualAsset?.metadata?.selectedScore ?? 0) || undefined;
+            shot.qualityScore = shot.qualityScore || Number(selectedShotVisualAsset?.metadata?.qualityScore ?? 0) || undefined;
+            shot.decisionScore = shot.decisionScore || Number(selectedShotVisualAsset?.metadata?.selectedScore ?? 0) || undefined;
             shot.crop = {
               mode: cropPlan.mode,
               xCenter: cropPlan.xCenter,
@@ -1696,8 +1828,8 @@ export class ShortCreator {
               safetyScore: Math.round(cropPlan.confidence * 100),
             };
             shot.routingReason = `${shot.routingReason || ""}|crop:${cropPlan.mode}`;
-            return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset, cropPlan };
-          }));
+            shotInputs.push({ shot, sourcePath: selectedShotVideoPath, sourceStartSeconds: offset, cropPlan });
+          }
 
           // Persist the reframing decision so a rejected video can be explained
           // rather than guessed at, and so a revision reuses the same framing.
@@ -1979,6 +2111,10 @@ export class ShortCreator {
         videoPath,
         timeline.requestedDurationSeconds,
       );
+      const blackFrameReport = await this.ffmpeg.analyzeBlackFrames(
+        videoPath,
+        validationResult.durationSeconds || timeline.requestedDurationSeconds,
+      );
       const masteringStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "finalizing",
@@ -2050,6 +2186,14 @@ export class ShortCreator {
       });
       const deadAirReport = this.audioMastering.analyzeDeadAir(speechWindowsForDeadAir);
 
+      const professionalVisualQuality = calculateProfessionalVisualQualityReport({
+        spec,
+        shots: plannedShots,
+        selectedVisuals,
+        totalDurationSeconds: validationResult.durationSeconds || totalDurationSeconds,
+        blackFramePercent: blackFrameReport.blackFramePercent,
+      });
+
       const creativeQualityResult = qualityEngine.calculateCreativeQualityScore({
         deadAirDurationMs: deadAirReport.totalNarrationSilenceMs,
         maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
@@ -2061,13 +2205,28 @@ export class ShortCreator {
         captionStyle: spec.captionStyle,
         hasCaptions: spec.captionStyle !== "none",
         mediaRelevanceScores: sceneQa.map((item) => Number(item.visualRelevanceScore) || 90),
+        realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+        textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
+        blackFramePercent: blackFrameReport.blackFramePercent,
+        duplicateAssetCount: professionalVisualQuality.repeatedAssetCount,
+        promptLeakCount: professionalVisualQuality.rawPromptLeakCount,
+        inventedClaimRiskCount: professionalVisualQuality.inventedClaimRiskCount,
       });
-      const professionalVisualQuality = calculateProfessionalVisualQualityReport({
-        spec,
-        shots: plannedShots,
-        selectedVisuals,
-        totalDurationSeconds: validationResult.durationSeconds || totalDurationSeconds,
-      });
+      const mediaPlanScoreV24 = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(
+            professionalVisualQuality.realVisualCoveragePercent * 0.24 +
+            (100 - professionalVisualQuality.textOnlyTimelinePercent) * 0.16 +
+            (100 - Math.min(100, blackFrameReport.blackFramePercent * 25)) * 0.16 +
+            Math.min(100, professionalVisualQuality.averageSemanticScore || 70) * 0.18 +
+            (professionalVisualQuality.repeatedAssetCount === 0 ? 100 : Math.max(30, 100 - professionalVisualQuality.repeatedAssetCount * 25)) * 0.12 +
+            (selectedVisuals.filter((item) => item.metadata?.fallback || item.metadata?.fallbackReason).length === 0 ? 100 : 70) * 0.07 +
+            (plannedShots.length >= Math.max(4, Math.floor((validationResult.durationSeconds || totalDurationSeconds) / 4)) ? 100 : 65) * 0.07,
+          ),
+        ),
+      );
 
       const metadata: VideoMetadata = {
         videoId,
@@ -2161,6 +2320,8 @@ export class ShortCreator {
         averageSemanticScore: professionalVisualQuality.averageSemanticScore,
         minimumSemanticScore: professionalVisualQuality.minimumSemanticScore,
         blackFramePercent: professionalVisualQuality.blackFramePercent,
+        longestBlackRunMs: blackFrameReport.longestBlackRunMs,
+        blackFrameReport,
         textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
         generatedTimelinePercent: professionalVisualQuality.generatedTimelinePercent,
         stockTimelinePercent: professionalVisualQuality.stockTimelinePercent,
@@ -2192,7 +2353,19 @@ export class ShortCreator {
         creativeWarnings: creativeQualityResult.warnings,
         maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
         deadAirReport,
-        mediaPlanScore: mediaPlan.qualityReview?.overallScore || 90,
+        mediaPlanScore: mediaPlanScoreV24,
+        mediaPlanScoreV24: {
+          score: mediaPlanScoreV24,
+          previousPlannerScore: mediaPlan.qualityReview?.overallScore,
+          components: {
+            realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+            textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
+            blackFramePercent: blackFrameReport.blackFramePercent,
+            averageSemanticScore: professionalVisualQuality.averageSemanticScore,
+            repeatedAssetCount: professionalVisualQuality.repeatedAssetCount,
+            plannedShotCount: plannedShots.length,
+          },
+        },
         qualityScoreV2: {
           technical: validationResult.technicalScore,
           audioQa: finalAudioQa.pass ? 100 : 0,
@@ -2288,6 +2461,17 @@ export class ShortCreator {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
           },
         });
+        const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+        const expectsVideo = path.extname(destPath).toLowerCase() === ".mp4";
+        if (
+          expectsVideo &&
+          contentType &&
+          !contentType.includes("video/") &&
+          !contentType.includes("octet-stream") &&
+          !contentType.includes("application/mp4")
+        ) {
+          throw new Error(`Provider returned non-video content type: ${contentType}`);
+        }
 
         await new Promise<void>((resolve, reject) => {
           const writer = fs.createWriteStream(destPath);
@@ -2301,6 +2485,14 @@ export class ShortCreator {
             reject(err);
           });
         });
+
+        if (expectsVideo) {
+          const validation = await this.ffmpeg.validateDownloadedVideoAsset(destPath);
+          if (!validation.valid) {
+            fs.removeSync(destPath);
+            throw new Error(`Downloaded provider video failed validation: ${validation.issues.join("; ")}`);
+          }
+        }
 
         return;
       } catch (err: any) {

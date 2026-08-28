@@ -24,7 +24,7 @@ export class VisualRegistry {
     const runway = new RunwayVisualProvider(process.env.RUNWAY_API_KEY);
     const replicate = new ReplicateVisualProvider(process.env.REPLICATE_API_TOKEN);
     const comfyui = new ComfyUIProvider(process.env.COMFYUI_BASE_URL);
-    const luma = new LumaVisualProvider(process.env.LUMA_API_KEY);
+    const luma = new LumaVisualProvider(process.env.LUMA_AGENTS_API_KEY || process.env.LUMA_API_KEY);
     const stockRegistry = new StockProviderRegistry([
       new PexelsStockProvider(config?.pexelsApiKey),
       new PixabayProvider(),

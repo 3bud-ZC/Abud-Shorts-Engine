@@ -67,12 +67,21 @@ export type CreativeQualityInput = {
   captionStyle?: string;
   hasCaptions?: boolean;
   mediaRelevanceScores?: number[];
+  realVisualCoveragePercent?: number;
+  textOnlyTimelinePercent?: number;
+  blackFramePercent?: number;
+  duplicateAssetCount?: number;
+  promptLeakCount?: number;
+  inventedClaimRiskCount?: number;
 };
 
 export type CreativeQualityDiagnostics = {
   audioContinuityScore: number;
   visualDiversityScore: number;
   mediaRelevanceScore: number;
+  realVisualCoverageScore: number;
+  textOnlyScore: number;
+  blackFrameScore: number;
   fallbackScore: number;
   captionLegibilityScore: number;
   maxNarrationSilenceMs: number;
@@ -130,6 +139,32 @@ export class QualityEngine {
       warnings.push("Generic fallback queries used for one or more scenes");
     }
 
+    const realVisualCoverageScore = input.realVisualCoveragePercent === undefined
+      ? 90
+      : Math.max(0, Math.min(100, Math.round(input.realVisualCoveragePercent)));
+    if (realVisualCoverageScore < 90) {
+      issues.push(`Real visual coverage below professional target: ${realVisualCoverageScore}%`);
+    }
+
+    const textOnlyPercent = input.textOnlyTimelinePercent ?? 0;
+    const textOnlyScore = Math.max(0, Math.min(100, Math.round(100 - Math.max(0, textOnlyPercent - 10) * 4)));
+    if (textOnlyPercent > 10) {
+      issues.push(`Text-only timeline exceeds professional target: ${textOnlyPercent}%`);
+    }
+
+    const blackFramePercent = input.blackFramePercent ?? 0;
+    const blackFrameScore = Math.max(0, Math.min(100, Math.round(100 - blackFramePercent * 25)));
+    if (blackFramePercent > 1) {
+      issues.push(`Black-frame percentage is high: ${blackFramePercent}%`);
+    }
+
+    if ((input.promptLeakCount || 0) > 0) {
+      issues.push(`Raw prompt leakage detected: ${input.promptLeakCount}`);
+    }
+    if ((input.inventedClaimRiskCount || 0) > 0) {
+      issues.push(`Invented claim risk detected: ${input.inventedClaimRiskCount}`);
+    }
+
     // 4. Fallback Penalty Score (Weight: 15%)
     const fallbackCount = input.fallbackCount || 0;
     const genericCount = input.genericFallbackCount || 0;
@@ -151,11 +186,16 @@ export class QualityEngine {
       Math.min(
         100,
         Math.round(
-          audioContinuityScore * 0.30 +
-          visualDiversityScore * 0.25 +
-          mediaRelevanceScore * 0.20 +
-          fallbackScore * 0.15 +
-          captionLegibilityScore * 0.10,
+          audioContinuityScore * 0.18 +
+          visualDiversityScore * 0.14 +
+          mediaRelevanceScore * 0.16 +
+          realVisualCoverageScore * 0.20 +
+          textOnlyScore * 0.10 +
+          blackFrameScore * 0.10 +
+          fallbackScore * 0.07 +
+          captionLegibilityScore * 0.05 -
+          (input.promptLeakCount || 0) * 25 -
+          (input.inventedClaimRiskCount || 0) * 20,
         ),
       ),
     );
@@ -173,6 +213,9 @@ export class QualityEngine {
         audioContinuityScore,
         visualDiversityScore,
         mediaRelevanceScore,
+        realVisualCoverageScore,
+        textOnlyScore,
+        blackFrameScore,
         fallbackScore,
         captionLegibilityScore,
         maxNarrationSilenceMs: input.maxNarrationSilenceMs,

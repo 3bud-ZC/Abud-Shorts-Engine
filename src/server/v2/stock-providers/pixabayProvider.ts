@@ -48,6 +48,12 @@ type PixabayImageHit = {
 
 type CacheEntry = { at: number; candidates: StockCandidate[] };
 
+function pixabayContributorUrl(user?: string, userId?: number): string | undefined {
+  if (!userId) return undefined;
+  if (!user) return `https://pixabay.com/users/-${userId}/`;
+  return `https://pixabay.com/users/${encodeURIComponent(user)}-${userId}/`;
+}
+
 /** Prefers the largest stream that still fits a sane download size. */
 function pickVideoStream(hit: PixabayVideoHit): PixabayVideoStream | null {
   const streams = hit.videos || {};
@@ -150,8 +156,10 @@ export class PixabayProvider implements StockProvider {
           height,
           durationSeconds: video.duration,
           contributor: video.user,
-          contributorUrl: video.user_id ? `https://pixabay.com/users/-${video.user_id}/` : undefined,
+          contributorUrl: pixabayContributorUrl(video.user, video.user_id),
           sourcePageUrl: video.pageURL,
+          queryUsed: request.query,
+          fileSizeBytes: stream.size,
           tags: (video.tags || "").split(",").map((t) => t.trim()).filter(Boolean),
         });
       } else {
@@ -167,7 +175,7 @@ export class PixabayProvider implements StockProvider {
           width: image.imageWidth || 0,
           height: image.imageHeight || 0,
           contributor: image.user,
-          contributorUrl: image.user_id ? `https://pixabay.com/users/-${image.user_id}/` : undefined,
+          contributorUrl: pixabayContributorUrl(image.user, image.user_id),
           sourcePageUrl: image.pageURL,
           tags: (image.tags || "").split(",").map((t) => t.trim()).filter(Boolean),
         });

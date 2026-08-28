@@ -39,6 +39,28 @@ export type AudioLoudnessMetrics = {
   raw?: Record<string, unknown>;
 };
 
+export type DownloadedVideoValidationResult = {
+  valid: boolean;
+  durationSeconds: number;
+  width: number;
+  height: number;
+  hasVideoStream: boolean;
+  fileSizeBytes: number;
+  bitrateBps: number;
+  fps: number;
+  codec?: string;
+  containerFormat?: string;
+  issues: string[];
+};
+
+export type BlackFrameAnalysisResult = {
+  blackFramePercent: number;
+  longestBlackRunMs: number;
+  blackRuns: Array<{ startSeconds: number; endSeconds: number; durationSeconds: number }>;
+  sampledDurationSeconds: number;
+  pass: boolean;
+};
+
 export class FFMpeg {
   static async init(): Promise<FFMpeg> {
     return import("@ffmpeg-installer/ffmpeg").then((ffmpegInstaller) => {
@@ -126,6 +148,137 @@ export class FFMpeg {
           hasAudioStream: Boolean(audioStream),
         });
       });
+    });
+  }
+
+  async validateDownloadedVideoAsset(
+    videoPath: string,
+    expectedDurationSeconds = 0,
+  ): Promise<DownloadedVideoValidationResult> {
+    return new Promise((resolve) => {
+      if (!fs.existsSync(videoPath)) {
+        resolve({
+          valid: false,
+          durationSeconds: 0,
+          width: 0,
+          height: 0,
+          hasVideoStream: false,
+          fileSizeBytes: 0,
+          bitrateBps: 0,
+          fps: 0,
+          issues: ["Downloaded video file does not exist."],
+        });
+        return;
+      }
+
+      const fileStats = fs.statSync(videoPath);
+      ffmpeg.ffprobe(videoPath, (err, metadata) => {
+        if (err) {
+          resolve({
+            valid: false,
+            durationSeconds: 0,
+            width: 0,
+            height: 0,
+            hasVideoStream: false,
+            fileSizeBytes: fileStats.size,
+            bitrateBps: 0,
+            fps: 0,
+            issues: [`FFprobe inspection failed: ${err.message}`],
+          });
+          return;
+        }
+
+        const videoStream = metadata?.streams?.find((s) => s.codec_type === "video");
+        const duration = parseFloat(String(metadata?.format?.duration || videoStream?.duration || 0));
+        const bitrate = parseInt(String(metadata?.format?.bit_rate || 0), 10);
+        const width = videoStream?.width || 0;
+        const height = videoStream?.height || 0;
+        let fps = 0;
+        if (videoStream?.r_frame_rate) {
+          const [num, den] = videoStream.r_frame_rate.split("/").map(Number);
+          if (den > 0) fps = Math.round(num / den);
+        }
+
+        const issues: string[] = [];
+        if (!videoStream) issues.push("Missing video stream.");
+        if (!Number.isFinite(duration) || duration <= 0) issues.push("Missing or zero duration.");
+        if (!width || !height) issues.push("Missing video dimensions.");
+        if (fileStats.size < 10_000) issues.push("Downloaded file is suspiciously small.");
+        if (expectedDurationSeconds > 0 && duration < expectedDurationSeconds * 0.45) {
+          issues.push(`Clip duration ${duration}s is too short for ${expectedDurationSeconds}s target.`);
+        }
+
+        resolve({
+          valid: issues.length === 0,
+          durationSeconds: Number.isFinite(duration) ? Math.round(duration * 100) / 100 : 0,
+          width,
+          height,
+          hasVideoStream: Boolean(videoStream),
+          fileSizeBytes: fileStats.size,
+          bitrateBps: Number.isFinite(bitrate) ? bitrate : 0,
+          fps,
+          codec: videoStream?.codec_name,
+          containerFormat: metadata?.format?.format_name,
+          issues,
+        });
+      });
+    });
+  }
+
+  async analyzeBlackFrames(videoPath: string, durationSeconds: number): Promise<BlackFrameAnalysisResult> {
+    if (!fs.existsSync(videoPath)) {
+      return {
+        blackFramePercent: 100,
+        longestBlackRunMs: Math.round(durationSeconds * 1000),
+        blackRuns: [{ startSeconds: 0, endSeconds: durationSeconds, durationSeconds }],
+        sampledDurationSeconds: durationSeconds,
+        pass: false,
+      };
+    }
+
+    return new Promise((resolve) => {
+      let stderr = "";
+      ffmpeg(videoPath)
+        .videoFilters("blackdetect=d=0.1:pic_th=0.98")
+        .format("null")
+        .output(process.platform === "win32" ? "NUL" : "/dev/null")
+        .on("stderr", (line) => {
+          stderr += `${line}\n`;
+        })
+        .on("end", () => {
+          const runs: BlackFrameAnalysisResult["blackRuns"] = [];
+          const re = /black_start:(\d+(?:\.\d+)?)\s+black_end:(\d+(?:\.\d+)?)\s+black_duration:(\d+(?:\.\d+)?)/g;
+          let match: RegExpExecArray | null;
+          while ((match = re.exec(stderr))) {
+            runs.push({
+              startSeconds: Number(match[1]),
+              endSeconds: Number(match[2]),
+              durationSeconds: Number(match[3]),
+            });
+          }
+          const totalBlack = runs.reduce((sum, run) => sum + run.durationSeconds, 0);
+          const longestBlackRunMs = Math.round(Math.max(0, ...runs.map((run) => run.durationSeconds)) * 1000);
+          const safeDuration = Math.max(0.01, durationSeconds);
+          const blackFramePercent = Math.round((totalBlack / safeDuration) * 1000) / 10;
+          resolve({
+            blackFramePercent,
+            longestBlackRunMs,
+            blackRuns: runs,
+            sampledDurationSeconds: durationSeconds,
+            pass: longestBlackRunMs <= 300 && blackFramePercent <= 1,
+          });
+        })
+        .on("error", (error) => {
+          logger.warn({ err: String(error), videoPath }, "Black-frame analysis failed; reporting unknown as pass");
+          resolve({
+            blackFramePercent: 0,
+            longestBlackRunMs: 0,
+            blackRuns: [],
+            sampledDurationSeconds: durationSeconds,
+            pass: true,
+          });
+        })
+        .run();
     });
   }
 

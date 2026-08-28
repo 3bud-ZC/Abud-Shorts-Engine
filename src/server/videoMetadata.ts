@@ -73,6 +73,8 @@ export interface VideoMetadata {
   averageSemanticScore?: number;
   minimumSemanticScore?: number;
   blackFramePercent?: number;
+  longestBlackRunMs?: number;
+  blackFrameReport?: Record<string, unknown>;
   textOnlyTimelinePercent?: number;
   generatedTimelinePercent?: number;
   stockTimelinePercent?: number;
@@ -95,6 +97,7 @@ export interface VideoMetadata {
   maxNarrationSilenceMs?: number;
   deadAirReport?: Record<string, unknown>;
   mediaPlanScore?: number;
+  mediaPlanScoreV24?: Record<string, unknown>;
   overallProductionScore?: number;
   qualityScoreV2?: Record<string, unknown>;
   validationResult?: Record<string, unknown>;

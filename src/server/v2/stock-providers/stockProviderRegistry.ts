@@ -25,7 +25,28 @@ export type ScoredCandidate = StockCandidate & {
   qualityScore: number;
   semanticScore: number;
   totalScore: number;
+  decisionBreakdown: {
+    semantic: number;
+    technical: number;
+    durationFit: number;
+    orientationFit: number;
+  };
 };
+
+function scoreDurationFit(candidate: StockCandidate, request: StockSearchRequest): number {
+  if (candidate.kind !== "video" || !candidate.durationSeconds || !request.minDurationSeconds) return 75;
+  if (candidate.durationSeconds >= request.minDurationSeconds && candidate.durationSeconds <= 60) return 100;
+  if (candidate.durationSeconds >= request.minDurationSeconds * 0.5) return 70;
+  return 25;
+}
+
+function scoreOrientationFit(candidate: StockCandidate, request: StockSearchRequest): number {
+  if (!candidate.width || !candidate.height) return 30;
+  const aspect = candidate.height / candidate.width;
+  if (request.orientation === "portrait") return aspect >= 1.2 ? 100 : aspect >= 1 ? 75 : 35;
+  if (request.orientation === "landscape") return aspect <= 1 ? 100 : 40;
+  return Math.abs(aspect - 1) <= 0.25 ? 100 : 60;
+}
 
 /** Portrait 9:16 wants height >= width and enough pixels to survive a crop. */
 export function scoreCandidateQuality(
@@ -178,12 +199,25 @@ export class StockProviderRegistry {
       result.value.forEach((candidate) => {
         const qualityScore = scoreCandidateQuality(candidate, request);
         const semanticScore = scoreCandidateSemantics(candidate, request.query);
+        const durationFit = scoreDurationFit(candidate, request);
+        const orientationFit = scoreOrientationFit(candidate, request);
+        const totalScore = Math.round(
+          semanticScore * 0.52 +
+            qualityScore * 0.28 +
+            durationFit * 0.10 +
+            orientationFit * 0.10,
+        );
         all.push({
           ...candidate,
           qualityScore,
           semanticScore,
-          // Relevance leads; quality breaks ties between relevant clips.
-          totalScore: Math.round(semanticScore * 0.6 + qualityScore * 0.4),
+          totalScore,
+          decisionBreakdown: {
+            semantic: semanticScore,
+            technical: qualityScore,
+            durationFit,
+            orientationFit,
+          },
         });
       });
     });

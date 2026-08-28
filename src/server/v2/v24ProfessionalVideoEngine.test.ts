@@ -13,14 +13,20 @@ import {
 } from "./quality/professionalVisualQuality";
 import {
   StockProviderRegistry,
+  scoreCandidateQuality,
   type ScoredCandidate,
 } from "./stock-providers/stockProviderRegistry";
 import type { StockProvider } from "./stock-providers/types";
+import { PexelsStockProvider } from "./stock-providers/pexelsProvider";
+import { PixabayProvider } from "./stock-providers/pixabayProvider";
 import { PexelsVisualProvider } from "./visual-providers/pexelsVisualProvider";
 import { AutoVisualRouter } from "./visual-providers/router";
 import { FalVisualProvider } from "./visual-providers/falVisualProvider";
 import { ReplicateVisualProvider } from "./visual-providers/replicateVisualProvider";
+import { LumaVisualProvider } from "./visual-providers/lumaVisualProvider";
 import { downloadGeneratedAsset } from "./visual-providers/asyncProviderRuntime";
+import { buildEditDecisionList } from "./editing/editDecisionList";
+import { ProviderCredentialsVault, allowedCredentialTypes } from "./provider-vault/providerCredentialsVault";
 
 const scene: ProductionSceneSpec = {
   sceneIndex: 0,
@@ -129,6 +135,122 @@ describe("V2.4 Professional Video Production Engine", () => {
     expect(result.metadata?.attribution).toMatchObject({ provider: "pixabay" });
   });
 
+  it("uses the current Pexels v1 video search contract", async () => {
+    const originalFetch = global.fetch;
+    const fetchMock = vi.fn(async (url: any, init: any) => {
+      const parsed = new URL(String(url));
+      expect(parsed.origin + parsed.pathname).toBe("https://api.pexels.com/v1/videos/search");
+      expect(parsed.searchParams.get("orientation")).toBe("portrait");
+      expect(Number(parsed.searchParams.get("per_page"))).toBeLessThanOrEqual(80);
+      expect(init.headers.Authorization).toBe("pexels-test-key");
+      return {
+        ok: true,
+        json: async () => ({
+          videos: [{
+            id: 123,
+            url: "https://www.pexels.com/video/123/",
+            image: "https://images.pexels.com/123.jpg",
+            duration: 9,
+            user: { name: "Creator", url: "https://www.pexels.com/@creator" },
+            video_files: [{ id: 1, quality: "hd", width: 1080, height: 1920, fps: 25, link: "https://cdn.pexels.com/123.mp4" }],
+          }],
+        }),
+      } as any;
+    });
+    global.fetch = fetchMock as any;
+
+    try {
+      const provider = new PexelsStockProvider("pexels-test-key");
+      const results = await provider.search({
+        query: "business owner laptop",
+        orientation: "portrait",
+        kind: "video",
+        perPage: 12,
+      });
+
+      expect(results[0]).toMatchObject({
+        provider: "pexels",
+        id: "123",
+        queryUsed: "business owner laptop",
+        fileType: "hd",
+        fps: 25,
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("uses the current Pixabay video search contract", async () => {
+    nock("https://pixabay.com")
+      .get("/api/videos/")
+      .query((query) => query.key === "pixabay-test-key" && query.q === "business owner laptop" && query.orientation === "vertical")
+      .reply(200, {
+        hits: [{
+          id: 77,
+          pageURL: "https://pixabay.com/videos/77/",
+          duration: 8,
+          tags: "business, laptop, office",
+          user: "Creator",
+          user_id: 55,
+          videos: { medium: { url: "https://cdn.pixabay.com/77.mp4", width: 1080, height: 1920, size: 1234567 } },
+        }],
+      });
+
+    const provider = new PixabayProvider("pixabay-test-key");
+    const results = await provider.search({
+      query: "business owner laptop",
+      orientation: "portrait",
+      kind: "video",
+      perPage: 12,
+    });
+
+    expect(results[0]).toMatchObject({
+      provider: "pixabay",
+      id: "77",
+      queryUsed: "business owner laptop",
+      fileSizeBytes: 1234567,
+    });
+    nock.cleanAll();
+  });
+
+  it("keeps Pexels and Pixabay configurable through the encrypted vault contract", async () => {
+    expect(allowedCredentialTypes("pexels")).toEqual(["api_key"]);
+    expect(allowedCredentialTypes("pixabay")).toEqual(["api_key"]);
+
+    const rows: any[] = [];
+    const db = {
+      query: vi.fn(async (sql: string, values: unknown[] = []) => {
+        if (sql.includes("INSERT INTO provider_credentials_vault")) {
+          const row = {
+            provider_id: values[0],
+            credential_type: values[1],
+            ciphertext: values[2],
+            iv: values[3],
+            auth_tag: values[4],
+            key_version: 1,
+            masked_hint: values[5],
+            metadata: {},
+            health: "configured",
+            configured_at: new Date("2026-08-28T00:00:00Z"),
+            updated_at: new Date("2026-08-28T00:00:00Z"),
+          };
+          rows.push(row);
+          return [row];
+        }
+        if (sql.includes("SELECT provider_id")) return rows;
+        return [];
+      }),
+    };
+    const vault = new ProviderCredentialsVault(db as any, {
+      providerVaultMasterKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    } as any);
+    const saved = await vault.put({ providerId: "pixabay", credentialType: "api_key", plaintext: "pixabay_secret_key_123456" });
+
+    expect(saved.maskedHint).toBe("pixa••••3456");
+    expect(JSON.stringify(saved)).not.toContain("pixabay_secret_key");
+    expect(JSON.stringify(rows)).not.toContain("pixabay_secret_key");
+  });
+
   it("blocks professional Auto when no real visual provider exists", async () => {
     const registry = new StockProviderRegistry([]);
     const legacyPexels = new PexelsVisualProvider({ findVideo: vi.fn() } as any, "");
@@ -161,6 +283,88 @@ describe("V2.4 Professional Video Production Engine", () => {
     }, { scene, prompt: "test", durationSeconds: 5 });
     expect(prediction.status).toBe("COMPLETE");
     expect(prediction.outputUrl).toContain("replicate.delivery");
+  });
+
+  it("submits Luma jobs against the current Agents API contract when paid calls are explicitly authorized", async () => {
+    nock("https://agents.lumalabs.ai", {
+      reqheaders: { authorization: "Bearer luma-agents-key-123456" },
+    })
+      .post("/v1/generations", (body: any) => (
+        body.prompt === "test prompt" &&
+        body.model === "ray-3.2" &&
+        body.aspect_ratio === "9:16"
+      ))
+      .reply(200, {
+        id: "generation-1",
+        state: "queued",
+      });
+
+    const provider = new LumaVisualProvider("luma-agents-key-123456");
+    const job = await provider.submit({
+      scene,
+      prompt: "test prompt",
+      durationSeconds: 5,
+      aspectRatio: "9:16",
+      paidCallAuthorized: true,
+    });
+
+    expect(job.providerRequestId).toBe("generation-1");
+    expect(job.status).toBe("QUEUED");
+    expect(job.metadata?.model).toBe("ray-3.2");
+    nock.cleanAll();
+  });
+
+  it("builds a professional shot plan with richer shot contract fields", () => {
+    const edl = buildEditDecisionList({
+      totalDurationSeconds: 20,
+      pacingProfile: "editorial_ad",
+      scenes: [
+        { sceneId: "scene0", sceneIndex: 0, purpose: "hook", durationSeconds: 6, startSeconds: 0, narration: "Show a business owner reviewing a website", searchTerms: ["business owner laptop website", "designer presenting responsive website"] },
+        { sceneId: "scene1", sceneIndex: 1, purpose: "solution", durationSeconds: 8, startSeconds: 6, narration: "Show the transformed workflow", searchTerms: ["startup team reviewing interface", "website mobile desktop closeup"] },
+        { sceneId: "scene2", sceneIndex: 2, purpose: "cta", durationSeconds: 6, startSeconds: 14, narration: "Invite the viewer to follow for more details", searchTerms: ["small business owner smiling laptop"] },
+      ],
+    });
+
+    expect(edl.shots.length).toBeGreaterThan(3);
+    expect(edl.averageShotSeconds).toBeGreaterThanOrEqual(1);
+    expect(edl.averageShotSeconds).toBeLessThanOrEqual(3.5);
+    expect(edl.shots[0]).toMatchObject({
+      sceneIndex: 0,
+      visualIntent: expect.any(String),
+      subject: expect.any(String),
+      framing: expect.any(String),
+      cameraMovement: expect.any(String),
+      sourcePreference: "stock",
+      fallbackClasses: expect.arrayContaining(["STOCK_VIDEO"]),
+      overlayIntent: expect.any(String),
+      captionPriority: expect.any(String),
+      musicEnergy: expect.any(String),
+      sfxIntent: expect.any(String),
+      timelineIn: 0,
+    });
+  });
+
+  it("scores candidate decisions from explainable measurable components", () => {
+    const portrait = scoreCandidateQuality({
+      provider: "pexels",
+      id: "portrait",
+      kind: "video",
+      downloadUrl: "https://cdn.example/portrait.mp4",
+      width: 1080,
+      height: 1920,
+      durationSeconds: 12,
+    }, { query: "business", orientation: "portrait", kind: "video", minDurationSeconds: 3 });
+    const landscape = scoreCandidateQuality({
+      provider: "pixabay",
+      id: "landscape",
+      kind: "video",
+      downloadUrl: "https://cdn.example/landscape.mp4",
+      width: 1280,
+      height: 720,
+      durationSeconds: 2,
+    }, { query: "business", orientation: "portrait", kind: "video", minDurationSeconds: 3 });
+
+    expect(portrait).toBeGreaterThan(landscape);
   });
 
   it("ffprobe-validates generated provider downloads before accepting them", async () => {
