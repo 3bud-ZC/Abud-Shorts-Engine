@@ -5781,6 +5781,7 @@ retag-stable steps were **skipped** (candidate mode).
 | Candidate tag | `ghcr.io/3bud-zc/abud-shorts-engine:sha-47d2797` (the only tag pushed) |
 | **Remote digest** | `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
 | Independent verification | anonymous GHCR query: `sha-47d2797` → that exact digest; `GET …/manifests/sha256:5076022e…` → HTTP 200 (addressable by digest). OCI image index: `linux/amd64` child `sha256:b703a9da…` + a build-provenance attestation manifest `sha256:72ca8de9…`. |
+| Image content audit | amd64 config `sha256:c3ae612e…`, 18 layers / 2 516 705 454 bytes. OCI labels: `revision 47d27979…` (the frozen SHA), `version 2.3.1`, `source …/Abud-Shorts-Engine`, `licenses MIT`. Env carries only runtime config (`PATH`, `NODE_VERSION`, `PYTHON_BIN`, `DATA_DIR_PATH`, `WHISPER_MODEL`, …) — **no `*_API_KEY`, token, or password**. Build history: every `COPY` is `package.json` / `static` / `assets` / `scripts` / `node_modules` / `dist` / the whisper build — **no `src/`, `.env`, `.git`, `data/`, `backups/`, media, credentials or vault export**. `v2.Dockerfile` is byte-identical to the audited v2.3.0 build. |
 | GHCR side effects | none — `:2.3.0` still `sha256:0ed76823…`, `:stable` still `sha256:0ed76823…`, `:sha-1a9dba6` still `sha256:c448a8ca…`, `:2.2.0` still `sha256:a767d1c9…`, `:2.3.1` and `:latest` absent (HTTP 404). |
 
 ### Final V2.3.1 client package
