@@ -5443,3 +5443,194 @@ altered.
 image (`:2.3.0` and `:stable`), and published manifest all describe
 `sha256:0ed76823…` / package `0d420dae…`, built from `829bb7e…`. **PASS /
 RECONCILED.**
+
+## V2.3.1 Hotfix — Production Render Failure
+
+Branch `hotfix/v2.3.1-render-failure` off `main` (`2021c74…`). Not released:
+v2.3.0 tag, GitHub Release, GHCR `:2.3.0` / `:stable` and v2.2.0 are all
+untouched. Schema stays `2.13.0` — no migration.
+
+### Incident
+
+| Field | Value |
+| --- | --- |
+| Reported | 2026-08-28, real running product |
+| Failed job | `cmtc850gc000107qde3ay2o88` (no video row created) |
+| Customer reference (UI) | `ASE-TLZ09P` (support code is `supportCode(jobId:stage:msg)`) |
+| Started / failed | 2026-08-28 00:39:22Z → 00:40:09Z (~46s), progress 100% then `failed` |
+| Contract | Prompt Studio, `productionMode: auto_hybrid`, `visualMode: auto`, EN, 9:16, 30s target, standard/1080p, Kokoro, visual provider "auto", Free ($0.00) |
+| Last successful stage | captions (checkpoint `captions: completed`); planning + voice + captions all completed; failed the instant the `media` stage started (`media.status: running` → job `failed` 13 ms later) |
+| Customer error (stored) | "Video render failed." |
+| Technical error (stored) | "Pexels search exhausted 8 terms (timeouts=0, noResults=0, rejected=0); attempted: cinematic hero shot, modern lifestyle, …" |
+
+### Root cause — deterministic product defect
+
+The host has **no `PEXELS_API_KEY`** (and no `PIXABAY_API_KEY`). The creative
+plan correctly handled that: `buildCreativePlan` saw `isTreatmentAvailable(stock)`
+false and fell **every scene** back to a motion treatment
+(`runtimeCounts: {motion: 3}`, `fallbackScenes: 2`, worker log "Creative plan
+resolved").
+
+`ShortCreator.renderProductionSpec` then **ignored that plan for a non-graphic
+production**. The per-scene branch decided "is this a motion scene?" only from
+`spec.productionMode === "motion_graphics" | "animated_explainer"`,
+`spec.visualMode === "motion_graphics"` and
+`scene.visualSource === "motion_graphics"`. For an Auto (`auto_hybrid`)
+production all three are false, so every scene walked the stock path
+(`ShortCreator.ts` multi-segment branch and the single-segment `else`), calling
+`AutoVisualRouter.resolveSceneVisual` → `PexelsVisualProvider.fetchOrGenerateScene`
+→ `PexelsAPI.findVideo`. With no key, `_findVideo` throws `"API key not set"` for
+every one of the 8 search terms; that error matches none of the loop's counted
+reasons (timeout / no-result / rejected), so the loop "exhausts all terms" and
+throws (`src/short-creator/libraries/Pexels.ts:347-351`). `AutoVisualRouter` and
+`PexelsVisualProvider` have no fallback, so the exception propagated and failed
+the whole job.
+
+- **Category:** deterministic product defect (renderer ignores the creative
+  plan). Not transient, not environmental beyond "no stock key", not resource
+  exhaustion.
+- **Exact source:** `src/short-creator/ShortCreator.ts` — scene-routing
+  decision (multi-segment branch guard and the `isMotionGraphics` local);
+  `src/server/v2/visual-providers/router.ts` and `pexelsVisualProvider.ts` (no
+  fallback); `src/short-creator/libraries/Pexels.ts:298-351` (the "exhausted"
+  throw).
+- **Why V2.3 QA missed it:** `graphicProductionNoStock.test.ts` covers stock
+  removed only for **explicit** `motion_graphics` / `animated_explainer`. No test
+  covered `productionMode: auto_hybrid` (or any non-graphic mode) with no stock
+  provider. Every earlier "auto" success in this database was actually
+  `productionMode: motion_graphics` — the broken `auto_hybrid` + no-stock
+  combination had never run to completion before.
+
+### Runtime evidence
+
+| Check | Result |
+| --- | --- |
+| `abud-shorts-app` / `render-worker` / `n8n` / `postgres` | all healthy; `RestartCount` 0; clean compose restart at 00:37Z, ~2 min before the job |
+| OOM / kernel kill | none (`State.OOMKilled` false on every container) |
+| Disk | 305 GB free (`availableDiskBytes` 3.27e11), well above the 512 MB floor |
+| Chromium / FFmpeg SIGKILL | none — the job never reached render; it threw at stock search |
+| Container restart during job | none |
+| Worker log | "Creative plan resolved" (`runtimeCounts {motion:3}`) → 8× "Error finding acceptable video for term; continuing" → "Pexels search exhausted all terms" (`timeoutCount 0, noResultCount 0, rejectedCount 0`) |
+
+Artifacts from the failed job (preserved): narration checkpoint `completed`
+(Kokoro, 3.24 s, `voice_d39f97cd…`), captions `completed` (Whisper, 8 captions),
+planning `completed` (3 scenes, `mediaPlanId cmtc850oj…`); media `running`, never
+completed; no timeline/render/FFmpeg/Remotion output (never reached).
+
+### Fix — smallest change that honours the plan
+
+`src/server/v2/creative/visualTreatment.ts` — new pure helper
+`sceneRendersAsMotion({ productionMode, visualMode, sceneVisualSource,
+plannedTreatmentRuntime })`: the old three conditions **plus**
+`plannedTreatmentRuntime === "motion"`.
+
+`src/short-creator/ShortCreator.ts` — compute `sceneResolvedToMotion` once per
+scene from `creativePlan.sceneTreatments[sceneIndex].runtime` via that helper,
+then:
+- the multi-segment stock branch is skipped when `sceneResolvedToMotion`;
+- `isMotionGraphics` (which selects the `motionEngine.renderMotionScene` path)
+  is now exactly `sceneResolvedToMotion`;
+- the visual-bed `assignSource` and the per-shot motion-failure guard treat a
+  plan-resolved motion scene like an explicit graphic production, so it never
+  silently acquires a stock dependency.
+
+Behaviour change: an Auto production whose plan resolved a scene to motion now
+renders that scene through the offline motion runtime instead of failing. When a
+stock provider **is** configured, stock-preferred scenes still resolve to stock
+and are unchanged (locked by the regression test).
+
+`src/server/v2/routes.ts` + `src/server/v2/customerView.ts` — new
+`classifyRenderFailure(rawTechnicalMessage)` maps a raw render error to one of
+five customer-safe categories (`resources`, `asset_unreadable`, `composition`,
+`visuals_unavailable`, `unknown`), each a fixed sentence — it never echoes the
+raw message, so no path / env var / command line / stack can leak. The render
+`/fail` callback now stores that sentence as the customer message; the raw text
+still goes to `technical_error` for support. The support code is unchanged.
+
+- **Files changed:** `src/server/v2/creative/visualTreatment.ts`,
+  `src/short-creator/ShortCreator.ts`, `src/server/v2/customerView.ts`,
+  `src/server/v2/routes.ts`, `src/ui/pages/JobDetails.tsx`,
+  `src/ui/i18n/locales/en.ts`, `src/ui/i18n/locales/ar.ts`, `src/version.ts`,
+  `package.json`, `src/server/v2/v2_05.test.ts`, and the new
+  `src/test/v231RenderFailureHotfix.test.ts`.
+- **Schema changed:** no. `DATABASE_SCHEMA_VERSION` stays `2.13.0`, no migration
+  added.
+
+### Customer error quality
+
+| | |
+| --- | --- |
+| Previous | "Video render failed." for every failure |
+| New | one of five recoverable categories — for this incident: "The production could not be matched with stock footage. Try again, or configure a stock provider under Providers." |
+| Internal details exposed | none — the classifier only ever returns fixed phrases; `technical_error` keeps the raw text for support and is not shown on the customer surface |
+
+### Arabic UI defect (same surface)
+
+The Job Details surface (`src/ui/pages/JobDetails.tsx`) had hard-coded English
+labels that never entered the RTL catalogue: **Execution Progress**, **Started /
+Completed / Duration / Last update**, **Job execution error**, **Production
+Specs**, **Creation Mode**, **Language / Dialect**, **Aspect Ratio**, **Target
+Duration**, **Quality Profile**, **Visual Provider**, **Voice Synthesizer**,
+**Estimated Cost**, and the `Free ($0.00)` chip.
+
+- **Fixed:** all of the above now resolve through new `productions.detail.*`
+  keys in the one i18n catalogue (`en.ts` + `ar.ts`, key-for-key, real MSA, no
+  page-local ternary). `productions.typePrompt` / `productions.typeTemplate` are
+  reused for the mode value.
+- **Remaining English on this surface:** the collapsed **Advanced details**
+  accordion still holds diagnostic/technical sub-labels (deliberately
+  developer-facing, mirrors the existing V2.3-AR convention of leaving Advanced
+  panels as diagnostic text). Not part of this hotfix.
+
+### Reproduction / live verification
+
+Against the real running stack (worker + app restarted onto the built hotfix
+`dist`, Postgres/n8n untouched):
+
+- **Customer Retry path** on the failed job `cmtc850gc…` → new job
+  `cmtc9marj000007qdbrww8h2o` (`__retryOf` lineage preserved, original job
+  untouched).
+- Result: **`ready`**, progress 100, `error`/`technical_error` empty. Media
+  checkpoint `completed`, `provider: motion_canvas`, `source: motion_graphics`,
+  `sourceTypeCounts {motion: 7}`, `visualProvidersUsed: [motion_canvas]` — **no
+  Pexels call, no stock, $0.00**.
+- MP4 present (`cmtc9marj….mp4`, 2,036,780 bytes, h264 **1080×1920**, AAC).
+  Preview (`/api/short-video/…` → 200 `video/mp4`), download
+  (`/api/videos/…/download` → 200 `video/mp4`) and thumbnail
+  (`/api/videos/…/thumbnail` → 200 `image/jpeg`, 27 KB) all serve. Job JSON
+  carries no `NaN`/`undefined`. Creative score 99 (grade A), audio QA pass, no
+  dead air.
+- **Known separate issue (pre-existing, not caused by this hotfix):** with the
+  very short auto-generated narration (~6 s of speech) the continuous-narration
+  timeline sized the video to **15.77 s vs the 30 s request** (47% variance), so
+  `validationResult.valid` is `false` and `technicalScore` is 30. Identical
+  behaviour is present on stock v2.3.0 for explicit `motion_graphics`
+  productions with short narration (`cmtac0yd5…` → 4.89 s / 12 s / score 30;
+  `cmtabtl93…` → 4.52 s / 12 s / score 30 — both `ready`, both `valid: false`).
+  A `valid: false` validation result lowers the score but does **not** fail the
+  job. Bringing short-narration motion productions to full requested length is a
+  distinct timeline defect and is deliberately out of scope for this hotfix.
+
+### Automated verification (hotfix branch)
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS**, **57 files / 919 tests** (was 56 / 909;
+  `src/test/v231RenderFailureHotfix.test.ts` adds 10)
+- `pnpm build` — **PASS**
+
+### Data safety
+
+Original failed job `cmtc850gc…` preserved unchanged (still `failed` /
+"Video render failed."). No other job, video or media row mutated. No DB reset,
+no migration, no volume removed, no `docker … prune`, no `compose down`. The
+temporary admin session created for the Retry API call was deleted afterwards.
+**Zero paid provider calls** (the whole pipeline is Kokoro + Whisper + Motion
+Canvas + FFmpeg, all local). GHCR and the v2.3.0 release were not touched.
+
+### Version
+
+`PRODUCT_VERSION` `2.3.0` → **`2.3.1`**, `PRODUCT_BUILD` `2026.08.27.1` →
+`2026.08.28.1`, `package.json` `2.3.1`. `DATABASE_SCHEMA_VERSION` **unchanged at
+`2.13.0`**. Not merged, not tagged, not published.
+
+**Status: HOTFIX VERIFIED ON `hotfix/v2.3.1-render-failure` — awaiting review.**
