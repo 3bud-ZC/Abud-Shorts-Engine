@@ -328,7 +328,7 @@ const JobDetailsContent: React.FC = () => {
           <Stack spacing={2.5}>
             {/* 1. Current Progress & Execution State */}
             <SectionCard
-              title="Execution Progress"
+              title={t("productions.detail.executionProgress")}
               actions={<StatusBadge status={job.customerStatus || job.status} />}
             >
               <Stack spacing={2}>
@@ -336,7 +336,7 @@ const JobDetailsContent: React.FC = () => {
                   stage={job.currentStage}
                   progress={job.progress}
                   timestamp={latestEvent?.createdAt || job.updatedAt}
-                  message={job.error || latestEvent?.message || "Orchestration active."}
+                  message={job.error || latestEvent?.message || t("productions.detail.orchestrationActive")}
                 />
 
                 <Divider />
@@ -344,23 +344,23 @@ const JobDetailsContent: React.FC = () => {
                 <Grid container spacing={1.5}>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700}>
-                      STARTED
+                      {t("productions.detail.started")}
                     </Typography>
                     <Typography variant="body2" fontWeight={600}>
-                      {job.startedAt ? new Date(job.startedAt).toLocaleTimeString() : "Pending"}
+                      {job.startedAt ? new Date(job.startedAt).toLocaleTimeString() : t("productions.detail.pending")}
                     </Typography>
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700}>
-                      COMPLETED
+                      {t("productions.detail.completed")}
                     </Typography>
                     <Typography variant="body2" fontWeight={600}>
-                      {job.completedAt ? new Date(job.completedAt).toLocaleTimeString() : "In Progress"}
+                      {job.completedAt ? new Date(job.completedAt).toLocaleTimeString() : t("productions.detail.inProgress")}
                     </Typography>
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700}>
-                      DURATION
+                      {t("productions.detail.durationLabel")}
                     </Typography>
                     <Typography variant="body2" fontWeight={600}>
                       {formatDuration(job.startedAt, job.completedAt)}
@@ -368,7 +368,7 @@ const JobDetailsContent: React.FC = () => {
                   </Grid>
                   <Grid item xs={6} sm={3}>
                     <Typography variant="caption" color="text.secondary" fontWeight={700}>
-                      LAST UPDATE
+                      {t("productions.detail.lastUpdate")}
                     </Typography>
                     <Typography variant="body2" fontWeight={600}>
                       {new Date(job.updatedAt).toLocaleTimeString()}
@@ -378,7 +378,7 @@ const JobDetailsContent: React.FC = () => {
 
                 {job.error && (
                   <Alert severity="error" icon={<ErrorIcon />} sx={{ mt: 1 }}>
-                    <Typography fontWeight={700}>Job Execution Error:</Typography>
+                    <Typography fontWeight={700}>{t("productions.detail.executionError")}</Typography>
                     <Typography variant="body2" sx={{ wordBreak: "break-word" }}>{job.error}</Typography>
                   </Alert>
                 )}
@@ -683,18 +683,18 @@ const JobDetailsContent: React.FC = () => {
         <Grid item xs={12} lg={5}>
           <Stack spacing={2.5}>
             {/* 1. Production Overview */}
-            <SectionCard title="Production Specs">
+            <SectionCard title={t("productions.detail.specs")}>
               <Stack spacing={1.5}>
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Creation Mode</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.creationMode")}</Typography>
                   <Typography variant="body2" fontWeight={700}>
-                    {isPromptMode ? "Prompt Studio" : (job.templateId || "Template Mode")}
+                    {isPromptMode ? t("productions.typePrompt") : (job.templateId || t("productions.typeTemplate"))}
                   </Typography>
                 </Stack>
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Language / Dialect</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.languageDialect")}</Typography>
                   <Typography variant="body2" fontWeight={700}>
                     {job.language?.toUpperCase() || "AR"}{job.dialect && job.dialect !== "none" ? ` (${job.dialect})` : ""}
                   </Typography>
@@ -702,13 +702,13 @@ const JobDetailsContent: React.FC = () => {
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Aspect Ratio</Typography>
-                  <Typography variant="body2" fontWeight={700}>{job.aspectRatio || "9:16 (Vertical)"}</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.aspectRatio")}</Typography>
+                  <Typography variant="body2" fontWeight={700}>{job.aspectRatio || "9:16"}</Typography>
                 </Stack>
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Target Duration</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.targetDuration")}</Typography>
                   <Typography variant="body2" fontWeight={700}>
                     {job.productionSpec?.durationSeconds ? `${job.productionSpec.durationSeconds}s` : "30s"}
                   </Typography>
@@ -716,7 +716,7 @@ const JobDetailsContent: React.FC = () => {
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Quality Profile</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.qualityProfile")}</Typography>
                   <Typography variant="body2" fontWeight={700}>
                     {job.qualityProfile || "Standard"} · {job.resolution || "1080p"}
                   </Typography>
@@ -724,27 +724,27 @@ const JobDetailsContent: React.FC = () => {
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Visual Provider</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.visualProvider")}</Typography>
                   <Typography variant="body2" fontWeight={700}>
-                    {job.visualMode || "Stock Footage (Pexels)"}
+                    {job.visualMode || "auto"}
                   </Typography>
                 </Stack>
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Voice Synthesizer</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.voiceSynth")}</Typography>
                   <Typography variant="body2" fontWeight={700}>
-                    {job.voiceProvider || "Auto-selected local voice"}
+                    {job.voiceProvider || "kokoro"}
                   </Typography>
                 </Stack>
                 <Divider />
 
                 <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="body2" color="text.secondary">Estimated Cost</Typography>
+                  <Typography variant="body2" color="text.secondary">{t("productions.detail.estimatedCost")}</Typography>
                   <Chip
                     size="small"
                     color={cost?.isFree || cost?.estimatedCost === 0 ? "success" : "warning"}
-                    label={cost?.isFree || cost?.estimatedCost === 0 ? "Free ($0.00)" : `$${cost?.estimatedCost} USD`}
+                    label={cost?.isFree || cost?.estimatedCost === 0 ? t("productions.detail.costFree") : `$${cost?.estimatedCost} USD`}
                     sx={{ fontWeight: 700 }}
                   />
                 </Stack>

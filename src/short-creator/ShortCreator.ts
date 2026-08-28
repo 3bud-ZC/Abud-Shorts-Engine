@@ -33,6 +33,7 @@ import {
   isMotionTreatment,
   TREATMENT_MOTION_TEMPLATE,
   TREATMENT_RUNTIME,
+  sceneRendersAsMotion,
   type VisualTreatment,
 } from "../server/v2/creative/visualTreatment";
 import { splitNarrationBeats } from "../server/v2/creative/visualIntentClassifier";
@@ -558,6 +559,22 @@ export class ShortCreator {
         searchTerms: originalSceneSpec.stockSearchTerms || ["video"],
       };
 
+      // The creative plan already decided how this scene is shown. When it
+      // resolved the scene to a motion treatment - which is what happens for
+      // every scene once no stock provider is configured - the renderer has to
+      // follow that decision. Before v2.3.1 only an explicitly graphic
+      // production took the motion path here, so an Auto production with no
+      // Pexels key still tried to pull stock footage and failed the whole job.
+      const plannedSceneTreatment = creativePlan.sceneTreatments.find(
+        (entry) => entry.sceneIndex === index,
+      );
+      const sceneResolvedToMotion = sceneRendersAsMotion({
+        productionMode: spec.productionMode,
+        visualMode: spec.visualMode,
+        sceneVisualSource: (originalSceneSpec as any).visualSource,
+        plannedTreatmentRuntime: plannedSceneTreatment?.runtime,
+      });
+
       const sceneProgressBase = 15 + Math.round((index / timeline.scenes.length) * 55);
 
       const voiceStartedAt = Date.now();
@@ -1021,8 +1038,10 @@ export class ShortCreator {
         },
       });
 
-      // Handle multi-asset segment scenes if planned
-      if (sceneMediaPlan.segments && sceneMediaPlan.segments.length > 1) {
+      // Handle multi-asset segment scenes if planned. A scene the plan resolved
+      // to motion is rendered as a single generated clip and never enters the
+      // stock-only segment path.
+      if (!sceneResolvedToMotion && sceneMediaPlan.segments && sceneMediaPlan.segments.length > 1) {
         // Strict invariant: sum(segment durations) strictly equals targetSceneDuration
         const normalizedSegments = mediaIntelligenceService.normalizeSceneSegments(
           sceneMediaPlan.segments,
@@ -1163,11 +1182,9 @@ export class ShortCreator {
         let visualAsset: any;
         let mediaArtifact: DurableSceneArtifact | undefined;
 
-        const isMotionGraphics =
-          spec.productionMode === "motion_graphics" ||
-          spec.productionMode === "animated_explainer" ||
-          spec.visualMode === "motion_graphics" ||
-          originalSceneSpec.visualSource === "motion_graphics";
+        // Explicit graphic modes and any scene the creative plan resolved to a
+        // motion treatment (see sceneResolvedToMotion above).
+        const isMotionGraphics = sceneResolvedToMotion;
 
         const isProductAd =
           spec.productionMode === "product_ad" ||
@@ -1506,7 +1523,11 @@ export class ShortCreator {
                 (entry) => entry.sceneIndex === index,
               );
 
-              if (planned && isMotionTreatment(planned.treatment) && (indexInScene === 0 || graphicOnlyMode)) {
+              if (
+                planned &&
+                isMotionTreatment(planned.treatment) &&
+                (indexInScene === 0 || graphicOnlyMode || sceneResolvedToMotion)
+              ) {
                 return {
                   sourceType: "motion",
                   provider: "abud_motion",
@@ -1597,11 +1618,12 @@ export class ShortCreator {
                   { err: String(motionError), sceneIndex: index, template },
                   "Motion scene render failed",
                 );
-                if (graphicOnlyMode) {
-                  // An explicitly graphic production must not silently acquire a
-                  // stock dependency because one template failed. The shot is
-                  // dropped from the bed instead, and the scene keeps whatever
-                  // other graphic shots rendered.
+                if (graphicOnlyMode || sceneResolvedToMotion) {
+                  // A scene the plan resolved to motion must not silently
+                  // acquire a stock dependency because one template failed - the
+                  // host may have no stock provider at all. The shot is dropped
+                  // from the bed instead, and the scene keeps whatever other
+                  // graphic shots rendered.
                   shot.routingReason = `${shot.routingReason || ""}|motion_failed_graphic_only`;
                   return { shot };
                 }

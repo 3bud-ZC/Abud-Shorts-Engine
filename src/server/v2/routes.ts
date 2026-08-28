@@ -106,6 +106,7 @@ import {
   queryJobRows,
   buildCustomerTimeline,
   sanitizeJobFailure,
+  classifyRenderFailure,
   scrubInternal,
   STATUS_GROUPS,
   type JobListFilters,
@@ -4835,10 +4836,12 @@ export function createV2InternalRouter(
       })
       .catch(async (error) => {
         const rawMsg = error instanceof Error ? error.message : String(error);
+        // The customer sees a recoverable category, never the raw message.
+        const { message: customerMessage } = classifyRenderFailure(rawMsg);
         await axios.post(
           `${callbackBaseUrl}/internal/v1/jobs/${jobId}/fail`,
           {
-            message: "Video render failed.",
+            message: customerMessage,
             technicalMessage: rawMsg.slice(0, 4000),
           },
           { headers: { "x-internal-token": internalServiceToken }, timeout: 15000 },
