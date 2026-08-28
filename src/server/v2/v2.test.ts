@@ -860,7 +860,7 @@ describe("V2 routes", () => {
   it("lists categorized providers and tests connection endpoints", async () => {
     nock("http://127.0.0.1:1").get("/healthz").reply(200, { ok: true });
     nock("http://127.0.0.1:1").get("/health").reply(200, { ok: true });
-    nock("https://api.pexels.com").get("/videos/search").query(true).reply(200, { videos: [] });
+    nock("https://api.pexels.com").get("/v1/videos/search").query(true).reply(200, { videos: [] });
     const config = makeConfig();
     const db = new FakeDb();
     const app = express();
@@ -886,7 +886,7 @@ describe("V2 routes", () => {
 
   it("aggregates health without exposing provider secrets", async () => {
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(200, { videos: [] });
     const config = makeConfig();
@@ -901,7 +901,7 @@ describe("V2 routes", () => {
 
   it("validates healthy Pexels provider state without returning the secret", async () => {
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(200, { videos: [] });
     const config = makeConfig();
@@ -918,7 +918,7 @@ describe("V2 routes", () => {
 
   it("validates invalid Pexels credentials without returning the secret", async () => {
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(401, { error: "invalid" });
     const config = makeConfig();
@@ -947,7 +947,7 @@ describe("V2 routes", () => {
     expect(malformedResult.componentStatus).toBe("unhealthy");
 
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(429, { error: "rate limited" });
     const limited = makeConfig();
@@ -957,7 +957,7 @@ describe("V2 routes", () => {
     expect(limitedResult.componentStatus).toBe("degraded");
 
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(503, { error: "down" });
     const unavailable = makeConfig();
@@ -967,10 +967,9 @@ describe("V2 routes", () => {
     expect(unavailableResult.componentStatus).toBe("degraded");
 
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
-      .delayConnection(50)
-      .reply(200, { videos: [] });
+      .replyWithError(Object.assign(new Error("timeout"), { code: "ECONNABORTED" }));
     const timeout = makeConfig();
     timeout.pexelsApiKey = "D".repeat(56);
     const timeoutResult = await validatePexelsProvider(timeout, { bypassCache: true, timeoutMs: 5 });

@@ -25,7 +25,7 @@ export class RunwayVisualProvider implements VisualProvider {
   constructor(private apiKey?: string, private model = process.env.RUNWAY_MODEL_ID || "gen4_turbo") {}
 
   private getApiKey(): string | undefined {
-    return this.apiKey || process.env.RUNWAY_API_KEY || providerSecrets.peek("runway", "api_key");
+    return providerSecrets.peek("runway", "api_key") || this.apiKey || process.env.RUNWAY_API_KEY;
   }
 
   public isConfigured(): boolean {

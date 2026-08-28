@@ -79,7 +79,7 @@ export class PixabayProvider implements StockProvider {
   }
 
   public getApiKey(): string | undefined {
-    return this.apiKey || process.env.PIXABAY_API_KEY || providerSecrets.peek("pixabay", "api_key");
+    return providerSecrets.peek("pixabay", "api_key") || this.apiKey || process.env.PIXABAY_API_KEY;
   }
 
   public isConfigured(): boolean {

@@ -2438,6 +2438,7 @@ export function createV2PublicRouter(
   });
 
   const sendHealth = async (_req: express.Request, res: express.Response) => {
+    await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
     const health = await getV2Health(config, db);
     res.status(200).json(health);
   };
@@ -2469,12 +2470,17 @@ export function createV2PublicRouter(
       }
 
       const aiProvider = contentAIRegistry.getProvider();
+      const vaultCredentials = providerVault.isAvailable()
+        ? await providerVault.list().catch(() => [])
+        : [];
+      const vaultByProvider = new Map(vaultCredentials.map((credential) => [credential.providerId, credential]));
       const snapshot: ProviderConfigurationSnapshot = {
         elevenLabsConfigured: new ElevenLabsVoiceProvider().isConfigured(),
         pexelsConfigured: Boolean(
-          config.pexelsApiKey &&
+          vaultByProvider.has("pexels") ||
+          (config.pexelsApiKey &&
             config.pexelsApiKey !== "dummy-key" &&
-            !config.pexelsApiKey.includes("your_pexels"),
+            !config.pexelsApiKey.includes("your_pexels")),
         ),
         aiConfigured: aiProvider.id !== "local_ai",
         publishingAccountCount,
@@ -2906,6 +2912,8 @@ export function createV2PublicRouter(
   });
 
   router.get("/providers", async (req, res) => {
+    await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
+    await providerSecrets.refresh("pixabay", "api_key").catch(() => undefined);
     const health = await getV2Health(config, db);
     const shouldValidateLocalVoiceModels = process.env.NODE_ENV !== "test" && process.env.VITEST !== "true";
     const voiceResults = shouldValidateLocalVoiceModels
@@ -2914,10 +2922,10 @@ export function createV2PublicRouter(
 
     const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasVeoKey = Boolean(process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY);
-    const hasFalKey = Boolean(process.env.FAL_KEY);
+    const hasFalKey = Boolean(process.env.FAL_KEY || process.env.FAL_API_KEY);
     const hasRunwayKey = Boolean(process.env.RUNWAY_API_KEY);
     const hasReplicateKey = Boolean(process.env.REPLICATE_API_TOKEN);
-    const hasLumaKey = Boolean(process.env.LUMA_API_KEY);
+    const hasLumaKey = Boolean(process.env.LUMA_AGENTS_API_KEY || process.env.LUMA_API_KEY);
     const hasComfyUiUrl = Boolean(process.env.COMFYUI_BASE_URL);
     const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
     await providerSecrets.refreshElevenLabsApiKey();
@@ -2983,7 +2991,9 @@ export function createV2PublicRouter(
         name: "Pexels",
         category: "Visuals",
         tier: "stock",
-        status: pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "not_configured"),
+        status: vaultByProvider.has("pexels")
+          ? pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "configured")
+          : pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "not_configured"),
         configured: (pexelsComp?.details?.configured ?? false) || vaultByProvider.has("pexels"),
         isDefault: true,
         message: pexelsComp?.message || "Pexels stock footage integration.",
@@ -3013,7 +3023,7 @@ export function createV2PublicRouter(
         name: "Pixabay",
         category: "Visuals",
         tier: "stock",
-        status: vaultByProvider.has("pixabay") || process.env.PIXABAY_API_KEY ? "healthy" : "not_configured",
+        status: vaultByProvider.has("pixabay") || process.env.PIXABAY_API_KEY ? "configured" : "not_configured",
         configured: vaultByProvider.has("pixabay") || Boolean(process.env.PIXABAY_API_KEY),
         isDefault: false,
         message:
@@ -3124,7 +3134,7 @@ export function createV2PublicRouter(
       },
       {
         id: "luma",
-        name: "Luma Dream Machine",
+        name: "Luma Agents API",
         category: "Visuals",
         tier: "ai_video",
         status: hasLumaKey || vaultByProvider.has("luma") ? "configured" : "not_configured",
@@ -3132,7 +3142,7 @@ export function createV2PublicRouter(
         isDefault: false,
         message: hasLumaKey || vaultByProvider.has("luma")
           ? "Luma key stored. Paid generation requires explicit product authorization."
-          : "LUMA_API_KEY is not configured.",
+          : "LUMA_AGENTS_API_KEY or LUMA_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
         details: {
           visualCapabilities: new LumaVisualProvider().getCapabilities(),

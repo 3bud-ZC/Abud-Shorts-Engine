@@ -48,6 +48,10 @@ import {
   probeVisualFocus,
   type SmartCropPlan,
 } from "../server/v2/media-intelligence/smartCrop";
+import {
+  analyzeVideoSemanticSimilarity,
+  arePerceptuallyNearDuplicate,
+} from "../server/v2/media-intelligence/semanticSimilarity";
 import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
 import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
@@ -1435,6 +1439,36 @@ export class ShortCreator {
             if (cacheId) mediaCache.saveCachedAsset(visualAsset.provider, cacheId as any, tempVideoPath);
           }
 
+          const semanticAssetId = String(cacheId || visualAsset.url);
+          const semanticAnalysis = await analyzeVideoSemanticSimilarity({
+            videoPath: tempVideoPath,
+            intentText: String(sceneMediaPlan.visualIntent || originalSceneSpec.purpose || ""),
+            provider: visualAsset.provider,
+            assetId: semanticAssetId,
+            cacheDir: path.join(this.config.dataDirPath, "semantic-cache"),
+          });
+          if (visualAsset.metadata) {
+            visualAsset.metadata.semanticAnalysis = semanticAnalysis;
+            visualAsset.metadata.perceptualHash = semanticAnalysis.perceptualHash;
+            visualAsset.metadata.frameSampleCount = semanticAnalysis.frameSampleCount;
+            visualAsset.metadata.semanticModelId = semanticAnalysis.modelId;
+            visualAsset.metadata.semanticRuntime = semanticAnalysis.runtime;
+            if (semanticAnalysis.semanticAvailable) {
+              visualAsset.metadata.visualSemanticScore = semanticAnalysis.visualSemanticScore;
+            }
+            const nearDuplicate = previousVisualCandidates.find((candidate) =>
+              arePerceptuallyNearDuplicate(
+                String(candidate.perceptualHash || ""),
+                semanticAnalysis.perceptualHash,
+              ),
+            );
+            if (nearDuplicate) {
+              visualAsset.metadata.perceptualDuplicateOf = nearDuplicate.id || nearDuplicate.url;
+              visualAsset.metadata.diversityPenalty = 35;
+              visualAsset.metadata.rejectedCandidateReason = "perceptual_near_duplicate_previous_shot";
+            }
+          }
+
           if (capabilityManager.isPythonQualityVenvInstalled() && fs.existsSync(tempVideoPath) && fs.statSync(tempVideoPath).size > 1024) {
             try {
               const sceneAnalysis = await qualityEngine.analyzeScenes(tempVideoPath, targetSceneDuration);
@@ -1500,6 +1534,7 @@ export class ShortCreator {
           duration: visualAsset.durationSeconds,
           tags: visualAsset.metadata?.searchTermsUsed,
           provider: visualAsset.provider,
+          perceptualHash: visualAsset.metadata?.perceptualHash,
         });
         selectedVisuals.push({
           sceneIndex: index,
@@ -1744,16 +1779,60 @@ export class ShortCreator {
                   }
                   selectedShotVideoPath = shotPath;
                   selectedShotMediaDuration = await this.ffmpeg.getMediaDuration(shotPath).catch(() => shot.duration);
+                  const shotSemanticAnalysis = await analyzeVideoSemanticSimilarity({
+                    videoPath: shotPath,
+                    intentText: String(shot.visualIntent || shot.intent || sceneMediaPlan.visualIntent || ""),
+                    provider: shotAsset.provider,
+                    assetId: String(shotCacheId || shotAsset.url),
+                    cacheDir: path.join(this.config.dataDirPath, "semantic-cache"),
+                  });
+                  const nearDuplicate = previousVisualCandidates.find((candidate) =>
+                    arePerceptuallyNearDuplicate(
+                      String(candidate.perceptualHash || ""),
+                      shotSemanticAnalysis.perceptualHash,
+                    ),
+                  );
                   shot.sourceId = shotAssetId ? String(shotAssetId) : undefined;
                   shot.provider = shotAsset.provider;
-                  shot.semanticScore = Number(shotAsset.metadata?.semanticScore ?? shotAsset.metadata?.selectedScore ?? 0) || undefined;
+                  shot.semanticScore = Number(
+                    shotSemanticAnalysis.visualSemanticScore ??
+                    shotAsset.metadata?.visualSemanticScore ??
+                    shotAsset.metadata?.semanticScore ??
+                    shotAsset.metadata?.selectedScore ??
+                    0,
+                  ) || undefined;
                   shot.qualityScore = Number(shotAsset.metadata?.qualityScore ?? 0) || undefined;
                   shot.decisionScore = Number(shotAsset.metadata?.selectedScore ?? 0) || undefined;
                   shot.decisionBreakdown = {
                     semantic: Number(shotAsset.metadata?.semanticScore ?? 0) || 0,
                     technical: Number(shotAsset.metadata?.qualityScore ?? 0) || 0,
                     durationFit: selectedShotMediaDuration >= shot.duration ? 100 : 60,
+                    diversityPenalty: nearDuplicate ? 35 : 0,
                   };
+                  if (shotAsset.metadata) {
+                    shotAsset.metadata.semanticAnalysis = shotSemanticAnalysis;
+                    shotAsset.metadata.perceptualHash = shotSemanticAnalysis.perceptualHash;
+                    shotAsset.metadata.frameSampleCount = shotSemanticAnalysis.frameSampleCount;
+                    shotAsset.metadata.semanticModelId = shotSemanticAnalysis.modelId;
+                    shotAsset.metadata.semanticRuntime = shotSemanticAnalysis.runtime;
+                    if (shotSemanticAnalysis.semanticAvailable) {
+                      shotAsset.metadata.visualSemanticScore = shotSemanticAnalysis.visualSemanticScore;
+                    }
+                    if (nearDuplicate) {
+                      shotAsset.metadata.perceptualDuplicateOf = nearDuplicate.id || nearDuplicate.url;
+                      shotAsset.metadata.diversityPenalty = 35;
+                    }
+                  }
+                  if (nearDuplicate) {
+                    shot.rejectedCandidates = [
+                      ...(shot.rejectedCandidates || []),
+                      {
+                        provider: shotAsset.provider,
+                        assetId: shotAssetId ? String(shotAssetId) : shotAsset.url,
+                        reason: "perceptual_near_duplicate_previous_shot",
+                      },
+                    ];
+                  }
                   if (shotAssetId) excludeVideoIds.push(shotAssetId as string | number);
                   previousVisualCandidates.push({
                     id: shotAssetId || shotAsset.url,
@@ -1763,6 +1842,7 @@ export class ShortCreator {
                     duration: shotAsset.durationSeconds,
                     tags: shotAsset.metadata?.searchTermsUsed,
                     provider: shotAsset.provider,
+                    perceptualHash: shotAsset.metadata?.perceptualHash,
                   });
                   selectedVisuals.push({
                     sceneIndex: index,

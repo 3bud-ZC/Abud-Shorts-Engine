@@ -26,10 +26,10 @@ export class LumaVisualProvider implements VisualProvider {
 
   private getApiKey(): string | undefined {
     return (
+      providerSecrets.peek("luma", "api_key") ||
       this.apiKey ||
       process.env.LUMA_AGENTS_API_KEY ||
-      process.env.LUMA_API_KEY ||
-      providerSecrets.peek("luma", "api_key")
+      process.env.LUMA_API_KEY
     );
   }
 

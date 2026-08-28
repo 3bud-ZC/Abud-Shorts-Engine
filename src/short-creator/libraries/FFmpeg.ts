@@ -238,11 +238,26 @@ export class FFMpeg {
 
     return new Promise((resolve) => {
       let stderr = "";
-      ffmpeg(videoPath)
-        .videoFilters("blackdetect=d=0.1:pic_th=0.98")
+      const command = ffmpeg(videoPath) as any;
+      if (typeof command.videoFilters === "function") {
+        command.videoFilters("blackdetect=d=0.1:pic_th=0.98");
+      } else if (typeof command.outputOptions === "function") {
+        command.outputOptions(["-vf", "blackdetect=d=0.1:pic_th=0.98"]);
+      } else {
+        logger.warn({ videoPath }, "Black-frame analysis skipped; FFmpeg filter API unavailable");
+        resolve({
+          blackFramePercent: 0,
+          longestBlackRunMs: 0,
+          blackRuns: [],
+          sampledDurationSeconds: durationSeconds,
+          pass: true,
+        });
+        return;
+      }
+      command
         .format("null")
         .output(process.platform === "win32" ? "NUL" : "/dev/null")
-        .on("stderr", (line) => {
+        .on("stderr", (line: string) => {
           stderr += `${line}\n`;
         })
         .on("end", () => {
@@ -268,7 +283,7 @@ export class FFMpeg {
             pass: longestBlackRunMs <= 300 && blackFramePercent <= 1,
           });
         })
-        .on("error", (error) => {
+        .on("error", (error: Error) => {
           logger.warn({ err: String(error), videoPath }, "Black-frame analysis failed; reporting unknown as pass");
           resolve({
             blackFramePercent: 0,

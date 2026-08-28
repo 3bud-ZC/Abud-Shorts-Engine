@@ -25,7 +25,7 @@ export class VeoVisualProvider implements VisualProvider {
   constructor(private apiKey?: string, private model = process.env.VEO_MODEL_ID || "veo-3.1-generate-preview") {}
 
   private getApiKey(): string | undefined {
-    return this.apiKey || process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY || providerSecrets.peek("veo", "api_key") || providerSecrets.peek("gemini", "api_key");
+    return providerSecrets.peek("veo", "api_key") || providerSecrets.peek("gemini", "api_key") || this.apiKey || process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY;
   }
 
   public isConfigured(): boolean {

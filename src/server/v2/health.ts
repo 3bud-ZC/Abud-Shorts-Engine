@@ -3,6 +3,7 @@ import fs from "fs-extra";
 import path from "path";
 import { Config } from "../../config";
 import { V2Database } from "./db";
+import { providerSecrets } from "./provider-vault/providerSecrets";
 import type { ComponentHealth, PexelsValidationResult } from "./types";
 import { checkStoragePolicy } from "./storage/storagePolicy";
 
@@ -27,6 +28,10 @@ function keyFingerprint(key?: string): string {
   return `${configuredKey.length}:${configuredKey.slice(-4)}`;
 }
 
+function configuredPexelsKey(config: Config): string | undefined {
+  return providerSecrets.peek("pexels", "api_key") || config.pexelsApiKey;
+}
+
 export async function validatePexelsProvider(
   config: Config,
   options: { timeoutMs?: number; bypassCache?: boolean } = {},
@@ -34,9 +39,10 @@ export async function validatePexelsProvider(
   const checkedAt = new Date().toISOString();
   const started = Date.now();
   const timeout = options.timeoutMs ?? config.pexelsValidationTimeoutMs;
-  const fingerprint = keyFingerprint(config.pexelsApiKey);
+  const apiKey = configuredPexelsKey(config);
+  const fingerprint = keyFingerprint(apiKey);
 
-  if (!isConfiguredPexelsKey(config.pexelsApiKey)) {
+  if (!isConfiguredPexelsKey(apiKey)) {
     return {
       provider: "Pexels",
       configured: false,
@@ -50,7 +56,7 @@ export async function validatePexelsProvider(
     };
   }
 
-  if (!hasPlausiblePexelsKeyShape(config.pexelsApiKey)) {
+  if (!hasPlausiblePexelsKeyShape(apiKey)) {
     return {
       provider: "Pexels",
       configured: true,
@@ -82,10 +88,10 @@ export async function validatePexelsProvider(
 
   const validationPromise = (async (): Promise<PexelsValidationResult> => {
     try {
-    const response = await axios.get("https://api.pexels.com/videos/search", {
+    const response = await axios.get("https://api.pexels.com/v1/videos/search", {
       timeout,
       params: { query: "business", per_page: 1, orientation: "portrait" },
-      headers: { Authorization: config.pexelsApiKey },
+      headers: { Authorization: apiKey },
       validateStatus: () => true,
     });
 
@@ -149,7 +155,13 @@ export async function validatePexelsProvider(
   } catch (error) {
     const isTimeout =
       axios.isAxiosError(error) &&
-      (error.code === "ECONNABORTED" || error.message.toLowerCase().includes("timeout"));
+      (
+        error.code === "ECONNABORTED" ||
+        error.code === "ETIMEDOUT" ||
+        error.code === "ERR_CANCELED" ||
+        error.code === "ECONNRESET" ||
+        /timeout|timed out|aborted/i.test(error.message)
+      );
     const result: PexelsValidationResult = {
       provider: "Pexels",
       configured: true,

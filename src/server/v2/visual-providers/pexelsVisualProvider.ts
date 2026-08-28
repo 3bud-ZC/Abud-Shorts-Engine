@@ -18,7 +18,7 @@ export class PexelsVisualProvider implements VisualProvider {
   constructor(private pexelsApi: PexelsAPI, private apiKey?: string) {}
 
   private getApiKey(): string | undefined {
-    return this.apiKey || process.env.PEXELS_API_KEY || providerSecrets.peek("pexels", "api_key");
+    return providerSecrets.peek("pexels", "api_key") || this.apiKey || process.env.PEXELS_API_KEY;
   }
 
   public isConfigured(): boolean {

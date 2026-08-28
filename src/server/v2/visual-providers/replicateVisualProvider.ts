@@ -28,7 +28,7 @@ export class ReplicateVisualProvider implements VisualProvider {
   ) {}
 
   private getApiKey(): string | undefined {
-    return this.apiKey || process.env.REPLICATE_API_TOKEN || providerSecrets.peek("replicate", "api_key");
+    return providerSecrets.peek("replicate", "api_key") || this.apiKey || process.env.REPLICATE_API_TOKEN;
   }
 
   public isConfigured(): boolean {

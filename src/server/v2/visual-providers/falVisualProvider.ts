@@ -34,7 +34,7 @@ export class FalVisualProvider implements VisualProvider {
   constructor(private apiKey?: string, private defaultModel: FalModel = "kling") {}
 
   private getApiKey(): string | undefined {
-    return this.apiKey || process.env.FAL_KEY || providerSecrets.peek("fal", "api_key");
+    return providerSecrets.peek("fal", "api_key") || this.apiKey || process.env.FAL_KEY || process.env.FAL_API_KEY;
   }
 
   public isConfigured(): boolean {

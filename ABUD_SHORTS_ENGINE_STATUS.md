@@ -6302,3 +6302,104 @@ Still pending before final V2.4 acceptance:
 - Local ComfyUI model/workflow installation and benchmark, or explicit use of a
   hosted paid provider after enabling `ABUD_ALLOW_PAID_VIDEO_CALLS=true`.
 - Human creative review remains pending.
+
+## V2.4 Pass 3 - Live Professional Video Validation And Semantic Media Intelligence
+
+### Current Runtime Finding
+
+- Public live app health at `http://localhost:3130` was reachable, but the
+  running container image still reported Pexels as not configured.
+- Read-only Provider Vault metadata inspection confirmed saved masked
+  credentials exist for both Pexels and Pixabay. Plaintext credential values
+  were not displayed or copied.
+- Direct product provider routes still require admin authentication. The normal
+  login credentials available to this pass failed, and extracting an active DB
+  session token was rejected as unsafe credential probing. Because of that, the
+  live authenticated provider validation route and normal benchmark job
+  creation remain blocked until the user supplies a valid admin session/login or
+  performs the validation in the UI.
+- No paid provider generation call was made, and no ComfyUI blocker was added.
+  Free stock remains the intended primary professional path.
+
+### Pass 3 Implementation
+
+- Provider credential precedence now consistently uses Provider Vault first,
+  installation/runtime config second, and Not Configured last across Pexels,
+  Pixabay, Pexels visual fallback and generated-video provider adapters.
+- Pexels health validation now uses the current `/v1/videos/search` API route,
+  refreshes Provider Vault state before reporting, and recognizes vault-backed
+  configuration instead of only process environment keys.
+- The providers matrix route refreshes Pexels/Pixabay Provider Vault state
+  before returning status so Providers UI, health, Auto routing and stock
+  registry no longer disagree about credential identity.
+- Legacy Pexels stock search was also moved from `/videos/search` to
+  `/v1/videos/search` so the old and new stock paths use the same official
+  endpoint contract.
+- Added semantic media intelligence support in
+  `src/server/v2/media-intelligence/semanticSimilarity.ts`.
+- The semantic analyzer samples real video frames at 20%, 50% and 80%, computes
+  deterministic perceptual hashes, records frame count/runtime/model id, and
+  never fabricates CLIP similarity when a reviewed local OpenCLIP checkpoint is
+  not installed.
+- Optional OpenCLIP execution is gated by
+  `ABUD_ENABLE_OPENCLIP_SEMANTICS=true` plus an existing
+  `ABUD_OPENCLIP_LOCAL_WEIGHTS` path. No model weights are bundled or
+  downloaded automatically.
+- Semantic cache keys are scoped by provider, hashed asset identity and model
+  version; secrets and raw URLs are not stored in cache keys.
+- ShortCreator now persists semantic analysis metadata, frame-sample count,
+  semantic model/runtime, visual semantic score when genuinely available, and
+  perceptual hash data onto selected visual assets.
+- Shot-level visual selection now applies perceptual near-duplicate detection
+  against prior candidates, stores diversity penalties, and persists duplicate
+  rejections in shot candidate metadata.
+- Black-frame analysis is now tolerant of the mocked FFmpeg API used in tests
+  while preserving real FFmpeg analysis when the filter API is available.
+
+### Model Audit
+
+- Reviewed OpenAI CLIP and OpenCLIP/LAION references for licensing and runtime
+  suitability.
+- Candidate model id recorded by code:
+  `openclip:ViT-B-32/laion2b_s34b_b79k`.
+- License recorded by code: MIT.
+- Deployment stance: optional local checkpoint only; no bundled weights, no
+  automatic checkpoint download, and no claim of semantic similarity unless the
+  local model actually runs.
+
+### Pass 3 Verification
+
+- `pnpm typecheck` -> **PASS** for server and UI.
+- Focused V2.4 suite:
+  `.\\node_modules\\.bin\\vitest.cmd run src/server/v2/v24ProfessionalVideoEngine.test.ts`
+  -> **PASS**, 17 tests.
+- Focused regression suites:
+  `.\\node_modules\\.bin\\vitest.cmd run src/server/v2/v2.test.ts src/short-creator/ShortCreator.test.ts`
+  -> **PASS**, 2 files, 33 tests.
+- Full test suite:
+  `.\\node_modules\\.bin\\vitest.cmd run --silent --reporter=dot`
+  -> **PASS**, 58 test files, 944 tests.
+- Production build:
+  `pnpm -s build` -> **PASS**. Vite emitted only the existing non-blocking
+  Browserslist-age and chunk-size warnings.
+
+### Pass 3 Acceptance State
+
+Pass 3 is not final-acceptance complete yet. Code-level provider precedence,
+official Pexels endpoint alignment, semantic/perceptual media intelligence,
+cache safety and regression coverage are implemented and verified. The remaining
+acceptance blocker is live authenticated product execution: a valid admin
+session/login is required to test Pexels/Pixabay through the real validation
+route and to create the required benchmark videos A-D through the normal product
+pipeline.
+
+### Pass 3 Safety
+
+- No roadmap or implementation-plan document was created.
+- No additional provider adapter was added.
+- No secrets were printed.
+- No model weights were downloaded or committed.
+- No paid provider calls were made.
+- No Docker prune command was run.
+- No Docker compose down or volume-removal command was run.
+- `main`, release tags and historical release state remain untouched.

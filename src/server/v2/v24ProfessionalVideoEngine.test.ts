@@ -27,6 +27,14 @@ import { LumaVisualProvider } from "./visual-providers/lumaVisualProvider";
 import { downloadGeneratedAsset } from "./visual-providers/asyncProviderRuntime";
 import { buildEditDecisionList } from "./editing/editDecisionList";
 import { ProviderCredentialsVault, allowedCredentialTypes } from "./provider-vault/providerCredentialsVault";
+import { providerSecrets } from "./provider-vault/providerSecrets";
+import { validatePexelsProvider } from "./health";
+import {
+  arePerceptuallyNearDuplicate,
+  perceptualHashDistance,
+  semanticAssetIdentity,
+  semanticCacheKey,
+} from "./media-intelligence/semanticSimilarity";
 
 const scene: ProductionSceneSpec = {
   sceneIndex: 0,
@@ -251,6 +259,38 @@ describe("V2.4 Professional Video Production Engine", () => {
     expect(JSON.stringify(rows)).not.toContain("pixabay_secret_key");
   });
 
+  it("prefers Provider Vault credentials over installation config for free stock runtime", async () => {
+    const vaultKey = "V".repeat(40);
+    providerSecrets.registerResolver(async (providerId, credentialType) => {
+      if (providerId === "pexels" && credentialType === "api_key") return vaultKey;
+      return null;
+    });
+    await providerSecrets.refresh("pexels", "api_key");
+
+    try {
+      const provider = new PexelsStockProvider("E".repeat(40));
+      expect(provider.getApiKey()).toBe(vaultKey);
+
+      nock("https://api.pexels.com", {
+        reqheaders: { authorization: vaultKey },
+      })
+        .get("/v1/videos/search")
+        .query((query) => query.query === "business" && query.orientation === "portrait")
+        .reply(200, { videos: [] });
+
+      const result = await validatePexelsProvider({
+        pexelsApiKey: "",
+        pexelsValidationTimeoutMs: 1000,
+      } as any, { bypassCache: true });
+
+      expect(result.configured).toBe(true);
+      expect(result.status).toBe("healthy");
+    } finally {
+      providerSecrets.unregisterResolver();
+      nock.cleanAll();
+    }
+  });
+
   it("blocks professional Auto when no real visual provider exists", async () => {
     const registry = new StockProviderRegistry([]);
     const legacyPexels = new PexelsVisualProvider({ findVideo: vi.fn() } as any, "");
@@ -365,6 +405,22 @@ describe("V2.4 Professional Video Production Engine", () => {
     }, { query: "business", orientation: "portrait", kind: "video", minDurationSeconds: 3 });
 
     expect(portrait).toBeGreaterThan(landscape);
+  });
+
+  it("creates stable semantic cache keys and detects perceptual near-duplicates without secrets", () => {
+    const key = semanticCacheKey("pexels", "https://cdn.example/video.mp4?token=secret", "model-v1");
+    expect(key).toContain("pexels");
+    expect(key).toContain("model-v1");
+    expect(key).not.toContain("https://");
+    expect(key).not.toContain("secret");
+    const assetIdentity = semanticAssetIdentity("https://cdn.example/video.mp4?token=secret");
+    expect(assetIdentity).toHaveLength(20);
+    expect(assetIdentity).not.toContain("https://");
+    expect(assetIdentity).not.toContain("secret");
+
+    expect(perceptualHashDistance("ffffffffffffffff", "ffffffffffffffff")).toBe(0);
+    expect(arePerceptuallyNearDuplicate("ffffffffffffffff", "fffffffffffffffe")).toBe(true);
+    expect(arePerceptuallyNearDuplicate("ffffffffffffffff", "0000000000000000")).toBe(false);
   });
 
   it("ffprobe-validates generated provider downloads before accepting them", async () => {

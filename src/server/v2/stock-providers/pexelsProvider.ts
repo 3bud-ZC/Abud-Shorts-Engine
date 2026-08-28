@@ -77,7 +77,7 @@ export class PexelsStockProvider implements StockProvider {
   constructor(private apiKey?: string) {}
 
   public getApiKey(): string | undefined {
-    return this.apiKey || process.env.PEXELS_API_KEY || providerSecrets.peek("pexels", "api_key");
+    return providerSecrets.peek("pexels", "api_key") || this.apiKey || process.env.PEXELS_API_KEY;
   }
 
   public isConfigured(): boolean {
