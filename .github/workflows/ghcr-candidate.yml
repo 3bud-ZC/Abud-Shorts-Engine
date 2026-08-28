@@ -11,6 +11,12 @@
 # release candidate. Candidate mode never creates a Git tag or a GitHub
 # Release and never moves the version or stable tag - that is promote mode,
 # run only after the release is approved.
+#
+# retag-stable mode moves ONLY the mutable :stable channel pointer onto an
+# already-published digest. It never touches the immutable :version tag, never
+# rebuilds application bytes, and never creates a Git tag or a Release. It
+# exists so the stable channel can be reconciled to a canonical release digest
+# without going through promote (which would also move :version).
 # ==============================================================================
 
 name: GHCR Candidate
@@ -28,13 +34,13 @@ on:
         default: v2.3-product-overhaul
         type: string
       mode:
-        description: "Build candidate image or promote an accepted digest"
+        description: "Build a candidate, promote an accepted digest, or move only :stable"
         required: true
         default: candidate
         type: choice
-        options: [candidate, promote]
+        options: [candidate, promote, retag-stable]
       digest:
-        description: "Accepted image digest for promote mode, sha256:<64 hex>"
+        description: "Accepted image digest for promote / retag-stable mode, sha256:<64 hex>"
         required: false
         type: string
 
@@ -95,13 +101,13 @@ jobs:
             echo "created=$CREATED"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Validate promote input
-        if: inputs.mode == 'promote'
+      - name: Validate digest input
+        if: inputs.mode != 'candidate'
         shell: bash
         run: |
           set -euo pipefail
           if ! [[ "${{ inputs.digest }}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-            echo "::error::promote mode requires digest=sha256:<64 hex>."
+            echo "::error::${{ inputs.mode }} mode requires digest=sha256:<64 hex>."
             exit 1
           fi
 
@@ -202,4 +208,27 @@ jobs:
             echo "- Stable tag: \`stable\`"
             echo "- Digest: \`${{ inputs.digest }}\`"
             echo "- Revision: \`${{ steps.identity.outputs.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Moves ONLY the :stable channel pointer. The :version tag is immutable
+      # once a release is published, so it is never touched here. No rebuild.
+      - name: Move only the stable tag without rebuild
+        if: inputs.mode == 'retag-stable'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.identity.outputs.image }}"
+          docker buildx imagetools create \
+            --tag "$IMAGE:stable" \
+            "$IMAGE@${{ inputs.digest }}"
+          RESOLVED="$(docker buildx imagetools inspect "$IMAGE:stable" | awk '/^Digest:/ {print $2; exit}')"
+          if [ "$RESOLVED" != "${{ inputs.digest }}" ]; then
+            echo "::error::stable resolved to $RESOLVED, expected ${{ inputs.digest }}."
+            exit 1
+          fi
+          {
+            echo "### GHCR stable retag"
+            echo ""
+            echo "- Image: \`$IMAGE\`"
+            echo "- Stable tag now points at: \`${{ inputs.digest }}\`"
+            echo "- Version tag: untouched"
           } >> "$GITHUB_STEP_SUMMARY"

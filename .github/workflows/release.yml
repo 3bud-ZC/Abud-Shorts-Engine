@@ -4,8 +4,13 @@
 # Publishes the immutable application image to GitHub Container Registry and
 # attaches the client package plus the update manifest to a GitHub Release.
 #
-# This workflow is PREPARED but not yet exercised: F4 does not publish anything.
-# F5 runs the release ceremony, and that is the first time an image is pushed.
+# MANUAL ONLY. This workflow has no tag-push trigger: pushing an annotated
+# vX.Y.Z tag never rebuilds or republishes anything. It runs only from an
+# explicit workflow_dispatch, and it publishes only when that dispatch sets
+# publish=true. This is deliberate - the v2.3.0 GA reconciliation (see
+# ABUD_SHORTS_ENGINE_STATUS.md) removed the old `push: tags` trigger after a
+# tag push silently rebuilt an already-verified release. The clientDelivery
+# test suite asserts the trigger stays gone.
 #
 # The registry owner is derived from ${{ github.repository }} rather than typed
 # in, so the image name always matches wherever this repository actually lives.
@@ -18,9 +23,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
     inputs:
       version:
@@ -59,15 +61,11 @@ jobs:
         id: identity
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "push" ]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-            CHANNEL="stable"
-            PUBLISH="true"
-          else
-            VERSION="${{ inputs.version }}"
-            CHANNEL="${{ inputs.channel }}"
-            PUBLISH="${{ inputs.publish }}"
-          fi
+          # Manual dispatch is the only trigger, so every value comes from the
+          # dispatch inputs. Nothing here reacts to a tag push.
+          VERSION="${{ inputs.version }}"
+          CHANNEL="${{ inputs.channel }}"
+          PUBLISH="${{ inputs.publish }}"
 
           # The canonical image name, derived from this repository.
           IMAGE_NAME="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"

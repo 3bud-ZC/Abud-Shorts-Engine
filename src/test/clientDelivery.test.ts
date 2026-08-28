@@ -368,6 +368,64 @@ describe("F4 - client-facing language", () => {
   });
 });
 
+describe("release automation cannot be triggered by a Git tag push", () => {
+  // Context: pushing the annotated v2.3.0 tag once auto-triggered release.yml
+  // (it still had `on: push: tags`), which rebuilt and republished an
+  // already-verified release under a new digest. The GA reconciliation removed
+  // that trigger. These assertions keep it removed: the production release
+  // workflow must stay manual-only, and the candidate workflow must stay a
+  // separate, non-releasing path.
+  // Comment lines are stripped: both files document the triggers they refuse
+  // to use ("no tag-push trigger", "never creates a Git tag"), and a raw-text
+  // search would flag the documentation instead of the workflow logic.
+  const releaseYml = readExecutable(".github/workflows/release.yml");
+  const candidateYml = readExecutable(".github/workflows/ghcr-candidate.yml");
+
+  /** The `on:` block only, up to the first top-level key that follows it. */
+  const triggerBlock = (yml: string): string => {
+    const start = yml.search(/^on:\s*$/m);
+    expect(start).toBeGreaterThan(-1);
+    const rest = yml.slice(start + 3);
+    const nextTop = rest.search(/^\S/m);
+    return nextTop < 0 ? rest : rest.slice(0, nextTop);
+  };
+
+  it("release.yml runs only on manual workflow_dispatch", () => {
+    const on = triggerBlock(releaseYml);
+    expect(on).toMatch(/^\s{2}workflow_dispatch:/m);
+    // No push / tag / schedule / pull_request trigger of any kind.
+    expect(on).not.toMatch(/^\s{2}push:/m);
+    expect(on).not.toMatch(/tags:/);
+    expect(on).not.toMatch(/^\s{2}(schedule|pull_request|release):/m);
+  });
+
+  it("release.yml has no tag-derived version or forced-publish branch", () => {
+    // The old code did `if [ "$github.event_name" = "push" ]` and forced
+    // PUBLISH=true. Nothing may key off a push event or a ref name again.
+    expect(releaseYml).not.toMatch(/github\.event_name/);
+    expect(releaseYml).not.toMatch(/GITHUB_REF_NAME/);
+  });
+
+  it("release.yml only ever publishes when the dispatch asks for it", () => {
+    // Every publishing step stays gated on the explicit `publish` input.
+    for (const step of ["Log in to GitHub Container Registry", "Push the application image", "Publish the GitHub Release"]) {
+      const at = releaseYml.indexOf(step);
+      expect(at, `${step} step present`).toBeGreaterThan(-1);
+      const window = releaseYml.slice(Math.max(0, at - 200), at + 200);
+      expect(window, `${step} gated on publish`).toMatch(/if:\s*steps\.identity\.outputs\.publish == 'true'/);
+    }
+    expect(releaseYml).toMatch(/PUBLISH="\$\{\{ inputs\.publish \}\}"/);
+  });
+
+  it("the candidate workflow never creates a Git tag or a GitHub Release", () => {
+    expect(triggerBlock(candidateYml)).not.toMatch(/push:|tags:/);
+    expect(candidateYml).not.toMatch(/action-gh-release|softprops/);
+    expect(candidateYml).not.toMatch(/tag_name|git tag|create.*release/i);
+    // It keeps only read access to contents; it cannot write the repo.
+    expect(candidateYml).toMatch(/contents:\s*read/);
+  });
+});
+
 describe("F4 - image reference parsing", () => {
   /**
    * Mirrors `image_repository` in abud-update.sh and `Get-ImageRepository` in
