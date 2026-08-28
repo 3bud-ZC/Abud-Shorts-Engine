@@ -9,6 +9,12 @@ import {
   sceneRendersAsMotion,
 } from "../server/v2/creative/visualTreatment";
 import { classifyRenderFailure } from "../server/v2/customerView";
+import {
+  planSceneVisualDurationSeconds,
+  resolveProductionTimeline,
+  type ProductionSpec,
+} from "../types/productionSpec";
+import { AudioMasteringService } from "../short-creator/audioMasteringService";
 import { CATALOGS } from "../ui/i18n/catalog";
 
 /**
@@ -127,6 +133,104 @@ describe("V2.3.1: an Auto production with no stock provider renders through moti
         plannedTreatmentRuntime: "stock",
       }),
     ).toBe(false);
+  });
+});
+
+/**
+ * Mirrors what ShortCreator.renderProductionSpec does with duration: resolve the
+ * timeline, then size each scene's visual to
+ * planSceneVisualDurationSeconds({ speech, budget: sceneTimeline.durationSeconds }).
+ * The sum is the value handed to Remotion as `durationMs`, i.e. the final MP4
+ * length. This runs for every scene BEFORE the stock/motion branch, so the
+ * result is identical whether a scene renders as motion or stock.
+ */
+function renderedVideoSeconds(spec: ProductionSpec, speechPerScene: number[]): number {
+  const timeline = resolveProductionTimeline(spec as ProductionSpec, 25);
+  return (
+    Math.round(
+      timeline.scenes.reduce((sum, scene, i) => {
+        const speech = speechPerScene[i] ?? speechPerScene[speechPerScene.length - 1] ?? 2;
+        return (
+          sum +
+          planSceneVisualDurationSeconds({
+            speechSeconds: speech,
+            resolvedSceneBudgetSeconds: scene.durationSeconds,
+            isLastScene: i === timeline.scenes.length - 1,
+          })
+        );
+      }, 0) * 100,
+    ) / 100
+  );
+}
+
+const adSpec = (durationSeconds: number, productionMode: string, visualMode: string): ProductionSpec =>
+  ({
+    id: "spec_test",
+    creationMode: "prompt",
+    title: "AI Production",
+    language: "en",
+    dialect: "none",
+    tone: "energetic",
+    contentStyle: "advertisement",
+    durationSeconds,
+    aspectRatio: "9:16",
+    resolution: "1080p",
+    quality: "standard",
+    sceneCount: 3,
+    visualMode,
+    productionMode,
+    voiceProvider: "kokoro",
+    scenes: [
+      { sceneIndex: 0, purpose: "hook", durationSeconds: durationSeconds / 3, narration: "Hook line.", visualSource: "stock" },
+      { sceneIndex: 1, purpose: "solution", durationSeconds: durationSeconds / 3, narration: "Solution line.", visualSource: "stock" },
+      { sceneIndex: 2, purpose: "cta", durationSeconds: durationSeconds / 3, narration: "Call to action.", visualSource: "stock" },
+    ],
+  }) as unknown as ProductionSpec;
+
+describe("V2.3.1: a plan-resolved motion scene keeps the requested duration (duration contract)", () => {
+  it("keeps the 30s incident contract at ~30s with the incident's terse narration", () => {
+    // The exact failure: 30s Auto production, ~1.2-3.2s of Kokoro speech per scene.
+    const seconds = renderedVideoSeconds(adSpec(30, "auto_hybrid", "auto"), [3.24, 1.6, 1.24]);
+    expect(Math.abs(seconds - 30)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("keeps the V2.3-07 explicit-motion 12s contract at ~12s", () => {
+    const seconds = renderedVideoSeconds(adSpec(12, "motion_graphics", "motion_graphics"), [1.4, 1.4, 1.4]);
+    expect(Math.abs(seconds - 12)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("gives the SAME video duration whether the scene renders as motion or stock", () => {
+    // planSceneVisualDurationSeconds runs before the treatment branch, so the
+    // Auto->motion path and a stock path must produce the same length.
+    const motion = renderedVideoSeconds(adSpec(30, "auto_hybrid", "auto"), [2, 2, 2]);
+    const stock = renderedVideoSeconds(adSpec(30, "auto_hybrid", "stock"), [2, 2, 2]);
+    expect(motion).toBe(stock);
+    expect(Math.abs(motion - 30)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("does not clip speech: a scene with long narration still fits all of it", () => {
+    // 30s / 3 scenes = 10s budget, but scene 0 has 14s of speech.
+    const timeline = resolveProductionTimeline(adSpec(30, "auto_hybrid", "auto"), 25);
+    const d = planSceneVisualDurationSeconds({
+      speechSeconds: 14,
+      resolvedSceneBudgetSeconds: timeline.scenes[0].durationSeconds,
+      isLastScene: false,
+    });
+    expect(d).toBeGreaterThanOrEqual(14 + 0.16);
+  });
+
+  it("the intentional hold of a full-budget motion scene is not counted as dead air", () => {
+    const audio = new AudioMasteringService({} as never);
+    // 10s scene, 3s speech -> ~6.84s of held motion + music between scenes.
+    const holdMs = Math.round((10 - 3 - 0.16) * 1000);
+    const report = audio.analyzeDeadAir([
+      { sceneIndex: 0, startMs: 0, endMs: 3000, intentionalHoldMs: holdMs },
+      { sceneIndex: 1, startMs: 10000, endMs: 13000, intentionalHoldMs: holdMs },
+      { sceneIndex: 2, startMs: 20000, endMs: 23000 },
+    ]);
+    expect(report.hasDeadAir).toBe(false);
+    expect(report.hasSuspiciousPauses).toBe(false);
+    expect(report.maxNarrationSilenceMs).toBeLessThanOrEqual(200);
   });
 });
 

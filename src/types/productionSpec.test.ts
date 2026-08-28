@@ -333,15 +333,62 @@ describe("Scene visual duration — duration-adherence invariant (V2.3-07)", () 
     expect(d).toBeLessThanOrEqual(7 + 0.16 + 0.01);
   });
 
-  it("holds a short-narration scene toward its budget but never past it", () => {
+  it("holds a short-narration scene to its full budget, never just speech + a fixed pad", () => {
     const d = planSceneVisualDurationSeconds({
       speechSeconds: 0.6,
       resolvedSceneBudgetSeconds: 6,
       isLastScene: false,
     });
-    // holds meaningfully toward budget rather than wrap-to-speech...
-    expect(d).toBeGreaterThan(0.6 + 0.16 + 2.5);
-    // ...but a single scene never exceeds its share of the timeline
-    expect(d).toBeLessThanOrEqual(6);
+    // The whole budget, not speech + a 3s cap (which would give ~3.76s).
+    expect(d).toBe(6);
+  });
+
+  it("keeps a 30s / 3-scene request at ~30s even with very terse narration (V2.3.1 incident ASE-TLZ09P)", () => {
+    // resolveProductionTimeline gives ~10s per scene for a 30s request; the
+    // Kokoro narration in the incident was ~1.2-3.2s per scene.
+    const budgetPerScene = 10;
+    const speech = [3.24, 1.6, 1.24];
+    const total = speech.reduce(
+      (sum, s, i) =>
+        sum +
+        planSceneVisualDurationSeconds({
+          speechSeconds: s,
+          resolvedSceneBudgetSeconds: budgetPerScene,
+          isLastScene: i === speech.length - 1,
+        }),
+      0,
+    );
+    // Pre-fix this summed to ~15.75s (each scene capped at speech + 3s).
+    expect(Math.abs(total - 30)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("scales with the budget: the same terse narration fills a 12s, a 30s and a 60s request", () => {
+    for (const [requested, perScene] of [
+      [12, 4],
+      [30, 10],
+      [60, 20],
+    ] as const) {
+      const total = [0, 1, 2].reduce(
+        (sum, i) =>
+          sum +
+          planSceneVisualDurationSeconds({
+            speechSeconds: 1.5,
+            resolvedSceneBudgetSeconds: perScene,
+            isLastScene: i === 2,
+          }),
+        0,
+      );
+      expect(Math.abs(total - requested), `${requested}s request`).toBeLessThanOrEqual(0.5);
+    }
+  });
+
+  it("still respects an explicit maxVisualHoldSeconds cap when a caller sets one", () => {
+    const d = planSceneVisualDurationSeconds({
+      speechSeconds: 1,
+      resolvedSceneBudgetSeconds: 10,
+      isLastScene: false,
+      maxVisualHoldSeconds: 2,
+    });
+    expect(d).toBe(1 + 0.16 + 2);
   });
 });
