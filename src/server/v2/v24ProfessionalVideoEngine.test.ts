@@ -20,7 +20,7 @@ import type { StockProvider } from "./stock-providers/types";
 import { PexelsStockProvider } from "./stock-providers/pexelsProvider";
 import { PixabayProvider } from "./stock-providers/pixabayProvider";
 import { PexelsVisualProvider } from "./visual-providers/pexelsVisualProvider";
-import { AutoVisualRouter } from "./visual-providers/router";
+import { AutoVisualRouter, rankStockCandidatesWithVisualSemantics } from "./visual-providers/router";
 import { FalVisualProvider } from "./visual-providers/falVisualProvider";
 import { ReplicateVisualProvider } from "./visual-providers/replicateVisualProvider";
 import { LumaVisualProvider } from "./visual-providers/lumaVisualProvider";
@@ -141,6 +141,75 @@ describe("V2.4 Professional Video Production Engine", () => {
     expect(result.provider).toBe("pixabay");
     expect(result.metadata?.providerAssetId).toBe("selected-pixabay");
     expect(result.metadata?.attribution).toMatchObject({ provider: "pixabay" });
+  });
+
+  it("lets OpenCLIP semantic ranking override the lexical stock order before shot selection", async () => {
+    const previous = process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS;
+    process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS = "true";
+    const candidates: ScoredCandidate[] = [
+      {
+        provider: "pexels",
+        id: "lexical-first",
+        kind: "video",
+        downloadUrl: "https://cdn.example/lexical-first.mp4",
+        width: 1080,
+        height: 1920,
+        durationSeconds: 9,
+        tags: ["business", "laptop"],
+        qualityScore: 90,
+        semanticScore: 95,
+        totalScore: 94,
+        decisionBreakdown: { semantic: 95, technical: 90, durationFit: 100, orientationFit: 100 },
+      },
+      {
+        provider: "pixabay",
+        id: "visually-best",
+        kind: "video",
+        downloadUrl: "https://cdn.example/visually-best.mp4",
+        width: 1080,
+        height: 1920,
+        durationSeconds: 9,
+        tags: ["workspace", "founder"],
+        qualityScore: 90,
+        semanticScore: 50,
+        totalScore: 71,
+        decisionBreakdown: { semantic: 50, technical: 90, durationFit: 100, orientationFit: 100 },
+      },
+    ];
+
+    try {
+      const ranked = await rankStockCandidatesWithVisualSemantics(candidates, {
+        cacheRoot: "/tmp",
+        intentText: "founder reviewing website analytics in a modern workspace",
+        downloadCandidate: vi.fn(async (_candidate, destinationPath) => {
+          await fs.ensureFile(destinationPath);
+        }),
+        analyzer: vi.fn(async (input) => ({
+          provider: input.provider,
+          assetId: input.assetId,
+          modelId: "openclip:ViT-B-32/laion2b_s34b_b79k",
+          modelVersion: "test",
+          license: "MIT",
+          cacheKey: input.assetId,
+          cacheHit: false,
+          frameSampleCount: 3,
+          frameSamplePercents: [20, 50, 80],
+          perceptualAvailable: true,
+          perceptualHashes: ["a", "b", "c"],
+          semanticAvailable: true,
+          visualSemanticScore: input.assetId.includes("visually-best") ? 98 : 40,
+          runtime: "open_clip",
+        })),
+      });
+
+      expect(ranked[0].id).toBe("visually-best");
+      expect(ranked[0].semanticRuntime).toBe("open_clip");
+      expect(ranked[0].visualSemanticScore).toBe(98);
+      expect(ranked[0].totalScore).toBeGreaterThan(ranked[1].totalScore);
+    } finally {
+      if (previous === undefined) delete process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS;
+      else process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS = previous;
+    }
   });
 
   it("uses the current Pexels v1 video search contract", async () => {

@@ -1,3 +1,7 @@
+import crypto from "crypto";
+import fs from "fs-extra";
+import path from "path";
+import axios from "axios";
 import { logger } from "../../../logger";
 import type {
   ProductionSceneSpec,
@@ -15,6 +19,10 @@ import type {
   VisualRenderOptions,
 } from "./types";
 import { PexelsVisualProvider } from "./pexelsVisualProvider";
+import {
+  analyzeVideoSemanticSimilarity,
+  type VideoSemanticAnalysis,
+} from "../media-intelligence/semanticSimilarity";
 
 export type ResolvedSceneAsset = {
   sceneIndex: number;
@@ -26,6 +34,129 @@ export type ResolvedSceneAsset = {
   estimatedCost: number | null;
   metadata?: Record<string, unknown>;
 };
+
+type SemanticRankedCandidate = ScoredCandidate & {
+  visualSemanticScore?: number;
+  semanticRuntime?: VideoSemanticAnalysis["runtime"];
+  semanticAvailable?: boolean;
+  semanticError?: string;
+};
+
+type SemanticRankerOptions = {
+  cacheRoot: string;
+  intentText: string;
+  maxCandidates?: number;
+  timeoutMs?: number;
+  downloadCandidate?: (candidate: ScoredCandidate, destinationPath: string) => Promise<void>;
+  analyzer?: typeof analyzeVideoSemanticSimilarity;
+};
+
+function semanticCandidateFileName(candidate: ScoredCandidate): string {
+  const key = crypto
+    .createHash("sha256")
+    .update(`${candidate.provider}:${candidate.id}:${candidate.downloadUrl}`)
+    .digest("hex")
+    .slice(0, 24);
+  return `${key}.mp4`;
+}
+
+async function downloadCandidateForSemanticRanking(
+  candidate: ScoredCandidate,
+  destinationPath: string,
+): Promise<void> {
+  if (await fs.pathExists(destinationPath)) return;
+  await fs.ensureDir(path.dirname(destinationPath));
+  const response = await axios.get<ArrayBuffer>(candidate.downloadUrl, {
+    responseType: "arraybuffer",
+    timeout: 30000,
+    maxContentLength: 250 * 1024 * 1024,
+    validateStatus: (status) => status >= 200 && status < 300,
+  });
+  await fs.writeFile(destinationPath, Buffer.from(response.data));
+}
+
+function rebuildCandidateScore(
+  candidate: ScoredCandidate,
+  visualSemanticScore: number,
+): SemanticRankedCandidate {
+  const semanticScore = Math.round(candidate.semanticScore * 0.25 + visualSemanticScore * 0.75);
+  const totalScore = Math.round(
+    semanticScore * 0.58 +
+      candidate.qualityScore * 0.24 +
+      candidate.decisionBreakdown.durationFit * 0.09 +
+      candidate.decisionBreakdown.orientationFit * 0.09,
+  );
+  return {
+    ...candidate,
+    semanticScore,
+    totalScore,
+    visualSemanticScore,
+    semanticAvailable: true,
+    semanticRuntime: "open_clip",
+    decisionBreakdown: {
+      ...candidate.decisionBreakdown,
+      semantic: semanticScore,
+    },
+  };
+}
+
+export async function rankStockCandidatesWithVisualSemantics(
+  candidates: ScoredCandidate[],
+  options: SemanticRankerOptions,
+): Promise<SemanticRankedCandidate[]> {
+  if (process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS !== "true" || candidates.length <= 1) {
+    return candidates;
+  }
+
+  const analyzer = options.analyzer || analyzeVideoSemanticSimilarity;
+  const downloadCandidate = options.downloadCandidate || downloadCandidateForSemanticRanking;
+  const maxCandidates = Math.max(1, Math.min(options.maxCandidates || 4, candidates.length));
+  const shortlist = candidates.slice(0, maxCandidates);
+  const untouched = candidates.slice(maxCandidates);
+  const videoCacheDir = path.join(options.cacheRoot, "semantic-candidate-videos");
+  const analysisCacheDir = path.join(options.cacheRoot, "semantic-analysis");
+
+  const ranked = await Promise.all(shortlist.map(async (candidate) => {
+    const localPath = path.join(videoCacheDir, semanticCandidateFileName(candidate));
+    try {
+      await downloadCandidate(candidate, localPath);
+      const analysis = await analyzer({
+        videoPath: localPath,
+        intentText: options.intentText,
+        provider: candidate.provider,
+        assetId: `${candidate.provider}:${candidate.id}`,
+        cacheDir: analysisCacheDir,
+        timeoutMs: options.timeoutMs ?? 45000,
+      });
+      if (analysis.semanticAvailable && Number.isFinite(analysis.visualSemanticScore)) {
+        return rebuildCandidateScore(candidate, Number(analysis.visualSemanticScore));
+      }
+      return {
+        ...candidate,
+        semanticAvailable: analysis.semanticAvailable,
+        semanticRuntime: analysis.runtime,
+        semanticError: analysis.error,
+      };
+    } catch (error) {
+      logger.debug(
+        {
+          provider: candidate.provider,
+          assetId: candidate.id,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "OpenCLIP stock candidate ranking skipped for one candidate",
+      );
+      return {
+        ...candidate,
+        semanticAvailable: false,
+        semanticRuntime: "unavailable" as const,
+        semanticError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }));
+
+  return [...ranked.sort((a, b) => b.totalScore - a.totalScore), ...untouched];
+}
 
 export class AutoVisualRouter {
   constructor(
@@ -97,7 +228,7 @@ export class AutoVisualRouter {
     const orientation =
       options.orientation === OrientationEnum.landscape ? "landscape" : "portrait";
 
-    const candidates = await this.stockRegistry.searchQueries(
+    const lexicalCandidates = await this.stockRegistry.searchQueries(
       searchTerms.slice(0, 6).map((query) => ({
         query,
         orientation,
@@ -107,6 +238,18 @@ export class AutoVisualRouter {
         excludeIds: (options.excludeIds || []).map((id) => String(id)),
       })),
     );
+    const intentText = [
+      (scene as any).visualPrompt,
+      scene.narration,
+      (scene as any).onScreenText,
+      ...searchTerms,
+    ].filter(Boolean).join(". ");
+    const candidates = await rankStockCandidatesWithVisualSemantics(lexicalCandidates, {
+      cacheRoot: options.tempDirPath,
+      intentText,
+      maxCandidates: 4,
+      timeoutMs: 45000,
+    });
 
     const winner = this.pickBestCandidate(candidates);
     if (winner) {
@@ -119,6 +262,9 @@ export class AutoVisualRouter {
         height: candidate.height,
         durationSeconds: candidate.durationSeconds,
         semanticScore: candidate.semanticScore,
+        visualSemanticScore: candidate.visualSemanticScore,
+        semanticRuntime: candidate.semanticRuntime,
+        semanticAvailable: candidate.semanticAvailable,
         qualityScore: candidate.qualityScore,
         decisionScore: candidate.totalScore,
         decisionBreakdown: candidate.decisionBreakdown,
@@ -154,6 +300,10 @@ export class AutoVisualRouter {
             })),
           selectedScore: winner.totalScore,
           semanticScore: winner.semanticScore,
+          visualSemanticScore: winner.visualSemanticScore,
+          semanticRuntime: winner.semanticRuntime,
+          semanticAvailable: winner.semanticAvailable,
+          semanticError: winner.semanticError,
           qualityScore: winner.qualityScore,
           decisionBreakdown: winner.decisionBreakdown,
           attribution,
@@ -191,7 +341,7 @@ export class AutoVisualRouter {
     );
   }
 
-  private pickBestCandidate(candidates: ScoredCandidate[]): ScoredCandidate | null {
+  private pickBestCandidate(candidates: SemanticRankedCandidate[]): SemanticRankedCandidate | null {
     const usable = candidates.filter((candidate) => {
       if (candidate.kind !== "video") return false;
       if (!candidate.downloadUrl || !candidate.width || !candidate.height) return false;
