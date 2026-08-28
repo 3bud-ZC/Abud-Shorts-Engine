@@ -5443,3 +5443,401 @@ altered.
 image (`:2.3.0` and `:stable`), and published manifest all describe
 `sha256:0ed76823…` / package `0d420dae…`, built from `829bb7e…`. **PASS /
 RECONCILED.**
+
+## V2.3.1 Hotfix — Production Render Failure
+
+Branch `hotfix/v2.3.1-render-failure` off `main` (`2021c74…`). Not released:
+v2.3.0 tag, GitHub Release, GHCR `:2.3.0` / `:stable` and v2.2.0 are all
+untouched. Schema stays `2.13.0` — no migration.
+
+### Incident
+
+| Field | Value |
+| --- | --- |
+| Reported | 2026-08-28, real running product |
+| Failed job | `cmtc850gc000107qde3ay2o88` (no video row created) |
+| Customer reference (UI) | `ASE-TLZ09P` (support code is `supportCode(jobId:stage:msg)`) |
+| Started / failed | 2026-08-28 00:39:22Z → 00:40:09Z (~46s), progress 100% then `failed` |
+| Contract | Prompt Studio, `productionMode: auto_hybrid`, `visualMode: auto`, EN, 9:16, 30s target, standard/1080p, Kokoro, visual provider "auto", Free ($0.00) |
+| Last successful stage | captions (checkpoint `captions: completed`); planning + voice + captions all completed; failed the instant the `media` stage started (`media.status: running` → job `failed` 13 ms later) |
+| Customer error (stored) | "Video render failed." |
+| Technical error (stored) | "Pexels search exhausted 8 terms (timeouts=0, noResults=0, rejected=0); attempted: cinematic hero shot, modern lifestyle, …" |
+
+### Root cause — deterministic product defect
+
+The host has **no `PEXELS_API_KEY`** (and no `PIXABAY_API_KEY`). The creative
+plan correctly handled that: `buildCreativePlan` saw `isTreatmentAvailable(stock)`
+false and fell **every scene** back to a motion treatment
+(`runtimeCounts: {motion: 3}`, `fallbackScenes: 2`, worker log "Creative plan
+resolved").
+
+`ShortCreator.renderProductionSpec` then **ignored that plan for a non-graphic
+production**. The per-scene branch decided "is this a motion scene?" only from
+`spec.productionMode === "motion_graphics" | "animated_explainer"`,
+`spec.visualMode === "motion_graphics"` and
+`scene.visualSource === "motion_graphics"`. For an Auto (`auto_hybrid`)
+production all three are false, so every scene walked the stock path
+(`ShortCreator.ts` multi-segment branch and the single-segment `else`), calling
+`AutoVisualRouter.resolveSceneVisual` → `PexelsVisualProvider.fetchOrGenerateScene`
+→ `PexelsAPI.findVideo`. With no key, `_findVideo` throws `"API key not set"` for
+every one of the 8 search terms; that error matches none of the loop's counted
+reasons (timeout / no-result / rejected), so the loop "exhausts all terms" and
+throws (`src/short-creator/libraries/Pexels.ts:347-351`). `AutoVisualRouter` and
+`PexelsVisualProvider` have no fallback, so the exception propagated and failed
+the whole job.
+
+- **Category:** deterministic product defect (renderer ignores the creative
+  plan). Not transient, not environmental beyond "no stock key", not resource
+  exhaustion.
+- **Exact source:** `src/short-creator/ShortCreator.ts` — scene-routing
+  decision (multi-segment branch guard and the `isMotionGraphics` local);
+  `src/server/v2/visual-providers/router.ts` and `pexelsVisualProvider.ts` (no
+  fallback); `src/short-creator/libraries/Pexels.ts:298-351` (the "exhausted"
+  throw).
+- **Why V2.3 QA missed it:** `graphicProductionNoStock.test.ts` covers stock
+  removed only for **explicit** `motion_graphics` / `animated_explainer`. No test
+  covered `productionMode: auto_hybrid` (or any non-graphic mode) with no stock
+  provider. Every earlier "auto" success in this database was actually
+  `productionMode: motion_graphics` — the broken `auto_hybrid` + no-stock
+  combination had never run to completion before.
+
+### Runtime evidence
+
+| Check | Result |
+| --- | --- |
+| `abud-shorts-app` / `render-worker` / `n8n` / `postgres` | all healthy; `RestartCount` 0; clean compose restart at 00:37Z, ~2 min before the job |
+| OOM / kernel kill | none (`State.OOMKilled` false on every container) |
+| Disk | 305 GB free (`availableDiskBytes` 3.27e11), well above the 512 MB floor |
+| Chromium / FFmpeg SIGKILL | none — the job never reached render; it threw at stock search |
+| Container restart during job | none |
+| Worker log | "Creative plan resolved" (`runtimeCounts {motion:3}`) → 8× "Error finding acceptable video for term; continuing" → "Pexels search exhausted all terms" (`timeoutCount 0, noResultCount 0, rejectedCount 0`) |
+
+Artifacts from the failed job (preserved): narration checkpoint `completed`
+(Kokoro, 3.24 s, `voice_d39f97cd…`), captions `completed` (Whisper, 8 captions),
+planning `completed` (3 scenes, `mediaPlanId cmtc850oj…`); media `running`, never
+completed; no timeline/render/FFmpeg/Remotion output (never reached).
+
+### Fix — smallest change that honours the plan
+
+`src/server/v2/creative/visualTreatment.ts` — new pure helper
+`sceneRendersAsMotion({ productionMode, visualMode, sceneVisualSource,
+plannedTreatmentRuntime })`: the old three conditions **plus**
+`plannedTreatmentRuntime === "motion"`.
+
+`src/short-creator/ShortCreator.ts` — compute `sceneResolvedToMotion` once per
+scene from `creativePlan.sceneTreatments[sceneIndex].runtime` via that helper,
+then:
+- the multi-segment stock branch is skipped when `sceneResolvedToMotion`;
+- `isMotionGraphics` (which selects the `motionEngine.renderMotionScene` path)
+  is now exactly `sceneResolvedToMotion`;
+- the visual-bed `assignSource` and the per-shot motion-failure guard treat a
+  plan-resolved motion scene like an explicit graphic production, so it never
+  silently acquires a stock dependency.
+
+Behaviour change: an Auto production whose plan resolved a scene to motion now
+renders that scene through the offline motion runtime instead of failing. When a
+stock provider **is** configured, stock-preferred scenes still resolve to stock
+and are unchanged (locked by the regression test).
+
+`src/server/v2/routes.ts` + `src/server/v2/customerView.ts` — new
+`classifyRenderFailure(rawTechnicalMessage)` maps a raw render error to one of
+five customer-safe categories (`resources`, `asset_unreadable`, `composition`,
+`visuals_unavailable`, `unknown`), each a fixed sentence — it never echoes the
+raw message, so no path / env var / command line / stack can leak. The render
+`/fail` callback now stores that sentence as the customer message; the raw text
+still goes to `technical_error` for support. The support code is unchanged.
+
+- **Files changed:** `src/server/v2/creative/visualTreatment.ts`,
+  `src/short-creator/ShortCreator.ts`, `src/server/v2/customerView.ts`,
+  `src/server/v2/routes.ts`, `src/ui/pages/JobDetails.tsx`,
+  `src/ui/i18n/locales/en.ts`, `src/ui/i18n/locales/ar.ts`, `src/version.ts`,
+  `package.json`, `src/server/v2/v2_05.test.ts`, and the new
+  `src/test/v231RenderFailureHotfix.test.ts`.
+- **Schema changed:** no. `DATABASE_SCHEMA_VERSION` stays `2.13.0`, no migration
+  added.
+
+### Customer error quality
+
+| | |
+| --- | --- |
+| Previous | "Video render failed." for every failure |
+| New | one of five recoverable categories — for this incident: "The production could not be matched with stock footage. Try again, or configure a stock provider under Providers." |
+| Internal details exposed | none — the classifier only ever returns fixed phrases; `technical_error` keeps the raw text for support and is not shown on the customer surface |
+
+### Arabic UI defect (same surface)
+
+The Job Details surface (`src/ui/pages/JobDetails.tsx`) had hard-coded English
+labels that never entered the RTL catalogue: **Execution Progress**, **Started /
+Completed / Duration / Last update**, **Job execution error**, **Production
+Specs**, **Creation Mode**, **Language / Dialect**, **Aspect Ratio**, **Target
+Duration**, **Quality Profile**, **Visual Provider**, **Voice Synthesizer**,
+**Estimated Cost**, and the `Free ($0.00)` chip.
+
+- **Fixed:** all of the above now resolve through new `productions.detail.*`
+  keys in the one i18n catalogue (`en.ts` + `ar.ts`, key-for-key, real MSA, no
+  page-local ternary). `productions.typePrompt` / `productions.typeTemplate` are
+  reused for the mode value.
+- **Remaining English on this surface:** the collapsed **Advanced details**
+  accordion still holds diagnostic/technical sub-labels (deliberately
+  developer-facing, mirrors the existing V2.3-AR convention of leaving Advanced
+  panels as diagnostic text). Not part of this hotfix.
+
+### Reproduction / live verification
+
+Against the real running stack (worker + app restarted onto the built hotfix
+`dist`, Postgres/n8n untouched):
+
+- **Customer Retry path** on the failed job `cmtc850gc…` → new job
+  `cmtc9marj000007qdbrww8h2o` (`__retryOf` lineage preserved, original job
+  untouched).
+- Result: **`ready`**, progress 100, `error`/`technical_error` empty. Media
+  checkpoint `completed`, `provider: motion_canvas`, `source: motion_graphics`,
+  `sourceTypeCounts {motion: 7}`, `visualProvidersUsed: [motion_canvas]` — **no
+  Pexels call, no stock, $0.00**.
+- MP4 present (`cmtc9marj….mp4`, 2,036,780 bytes, h264 **1080×1920**, AAC).
+  Preview (`/api/short-video/…` → 200 `video/mp4`), download
+  (`/api/videos/…/download` → 200 `video/mp4`) and thumbnail
+  (`/api/videos/…/thumbnail` → 200 `image/jpeg`, 27 KB) all serve. Job JSON
+  carries no `NaN`/`undefined`. Creative score 99 (grade A), audio QA pass, no
+  dead air.
+- **First retry (render-routing fix only)** produced a `ready` video that was
+  only **15.77 s vs the 30 s request** (47% variance, `valid: false`,
+  `technicalScore` 30). That was **not acceptable** and is closed below in
+  **Duration Contract Closure**.
+
+### Automated verification (render-routing fix)
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS**, **57 files / 919 tests** (was 56 / 909;
+  `src/test/v231RenderFailureHotfix.test.ts` adds 10)
+- `pnpm build` — **PASS**
+
+### Data safety
+
+Original failed job `cmtc850gc…` preserved unchanged (still `failed` /
+"Video render failed."). No other job, video or media row mutated. No DB reset,
+no migration, no volume removed, no `docker … prune`, no `compose down`. The
+temporary admin session created for the Retry API call was deleted afterwards.
+**Zero paid provider calls** (the whole pipeline is Kokoro + Whisper + Motion
+Canvas + FFmpeg, all local). GHCR and the v2.3.0 release were not touched.
+
+### Version
+
+`PRODUCT_VERSION` `2.3.0` → **`2.3.1`**, `PRODUCT_BUILD` `2026.08.27.1` →
+`2026.08.28.1`, `package.json` `2.3.1`. `DATABASE_SCHEMA_VERSION` **unchanged at
+`2.13.0`**. Not merged, not tagged, not published.
+
+## Duration Contract Closure
+
+The first retry after the render-routing fix reached `ready` but produced a
+**15.77 s video for a 30 s request** (`valid: false`, `technicalScore` 30). Not
+acceptable for release. Root-caused and fixed on the same branch.
+
+### Why 30 s became 15.77 s
+
+The timeline was correct. `resolveProductionTimeline` gave each of the 3 scenes
+a **10 s budget** (`durationFrames` 250, `visualDurationSeconds` 10,
+`finalExpectedDurationSeconds` 30). The collapse happened one step later, in
+`planSceneVisualDurationSeconds` (`src/types/productionSpec.ts`):
+
+```
+value = max(0.5, speechFloor, min(budget, speechFloor + maxHold))   // maxHold = 3.0
+```
+
+With ~1.2–3.2 s of Kokoro speech per scene, `speechFloor + 3.0` (≈ 4–6.4 s) is
+**less than the 10 s budget**, so `min(...)` capped every scene at ~4–6 s:
+6.4 + 4.76 + 4.59 = **15.75 s**. That value flows straight through:
+`ShortCreator` sets `targetSceneDuration = calculatedVisualDuration`, writes it
+to each `scene.audio.duration`, and hands
+`durationMs = Σ scene.audio.duration` to Remotion — so the MP4 is exactly the
+sum of the capped scene durations.
+
+- **First incorrect stage:** `planSceneVisualDurationSeconds` — the `maxHold`
+  cap. Everything upstream (timeline, budgets) was right; everything downstream
+  faithfully rendered the wrong number.
+- **Why V2.3-07 did not cover this route:** V2.3-07 fixed the *opposite*
+  collapse (scenes wrapping to `speech + breath`) and added the hold, but only
+  exercised **12 s / 3-scene** requests — ~4 s per scene, which is *below* the
+  3 s cap, so the cap never bound and the bug was invisible. It is not
+  path-specific: an explicit `motion_graphics` 30 s request with terse
+  narration collapses identically. The Auto→motion route only *surfaced* it
+  because the incident used a 30 s request with a locally-generated (very
+  short) script.
+
+### Fix
+
+`planSceneVisualDurationSeconds` now holds a scene to its **full resolved
+budget** by default:
+
+```
+hold  = maxVisualHoldSeconds != null ? min(budget, speechFloor + maxVisualHoldSeconds) : budget
+value = max(0.5, speechFloor, hold)
+```
+
+- The hold is legitimate: the scene's own animation and the music bed keep
+  playing, and `analyzeDeadAir` already subtracts `intentionalHoldMs`
+  (computed from this returned duration) from every inter-scene gap, so a
+  full-budget hold nets a ~0 ms silent gap — verified live (`maxSilenceMs` 160,
+  `hasDeadAir false`).
+- Speech stays the hard floor (`max(..., speechFloor, ...)`) — long narration
+  still gets `speech + breath`, nothing is clipped.
+- The budget is one scene's fair share of the timeline, so a scene can never
+  exceed its share.
+- `maxVisualHoldSeconds` is kept as an explicit opt-in cap for any future
+  caller; there is no default cap below the budget.
+
+- **Behaviour:** short-narration productions now hold their motion to the
+  requested length instead of collapsing.
+- **Explicit motion (`motion_graphics` / `animated_explainer`):** same code
+  path, same result — 12 s and 30 s both land within ±0.5 s.
+- **Auto→motion (`auto_hybrid` + plan-resolved motion):** identical, because
+  `planSceneVisualDurationSeconds` runs for every scene *before* the
+  stock/motion branch.
+- **Mixed plan:** total duration is treatment-independent for the same reason
+  (locked by a regression test asserting a stock scene and a motion scene of
+  the same budget yield the same length).
+- **Schema:** unchanged, `2.13.0`, no migration.
+- **Files:** `src/types/productionSpec.ts` (the cap), `src/types/productionSpec.test.ts`
+  (strengthened + incident/scaling cases), `src/test/v231RenderFailureHotfix.test.ts`
+  (timeline→duration integration cases + dead-air hold check).
+
+### Live verification (real running hotfix stack)
+
+| | 30 s acceptance | 12 s regression |
+| --- | --- | --- |
+| Job | `cmtcalfs2000007qd363642r1` (Retry of `cmtc850gc…`) | `cmtcphpgz000407qddaye666j` (new create) |
+| Flow | customer Retry | customer Create (Prompt Studio) |
+| Contract | Prompt Studio · Auto (`auto_hybrid`/`auto`) · EN · 9:16 · standard 1080p · Kokoro · no stock key | Motion Graphics · EN · 9:16 · standard 1080p · Kokoro |
+| Status | `ready` | `ready` |
+| Requested / actual (ffprobe) | 30 s / **30.06 s** | 12 s / **12.05 s** |
+| Variance | **0.2 %** (0.06 s) | **0.4 %** (0.05 s) |
+| `validationResult.valid` | **true**, `issues: []` | **true**, `issues: []` |
+| technicalScore | **100** | **100** |
+| creativeScore | 99 (grade A) | 99 (grade A) |
+| Media | `motion_canvas`, `sourceTypeCounts {motion:10}` | `motion_canvas`, `{motion:5}` |
+| Pexels / stock calls | **0** | **0** |
+| Preview / download / thumbnail | 200 `video/mp4` / 200 `video/mp4` / 200 `image/jpeg` | all present |
+| Audio QA | **pass** (mix -18.79 LUFS, no clip, not silent) | pass |
+| Dead-air defect | **0** (`maxNarrationSilenceMs` 160 — breath only) | 0 |
+
+### Render-failure hotfix — still intact
+
+The no-stock Auto→motion route still: does not call Pexels, does not require
+`PIXABAY_API_KEY`, uses `motion_canvas`, completes the media checkpoint, and
+renders successfully (both live jobs above). `classifyRenderFailure` and the
+Arabic Job Details localisation are unchanged. Existing render-routing
+regression tests kept.
+
+### Automated verification (full hotfix branch)
+
+- `pnpm typecheck` — **PASS**
+- `pnpm exec vitest run` — **PASS**, **57 files / 927 tests** (was 57 / 919;
+  +5 in `v231RenderFailureHotfix.test.ts`, +3 in `productionSpec.test.ts`)
+- `pnpm build` — **PASS**
+
+### Data safety (duration closure)
+
+Original failed job `cmtc850gc…` and the first successful retry
+`cmtc9marj000007qdbrww8h2o` both preserved unchanged. New QA jobs
+`cmtcalfs2000007qd363642r1` and `cmtcphpgz000407qddaye666j` retained as hotfix
+evidence. No DB reset, no migration, no Provider Vault change, no media
+deletion. No `docker … prune`, no `compose down`. Temporary admin sessions for
+the Retry/Create API calls were deleted afterward. **Zero paid provider calls.**
+Schema remains `2.13.0`.
+
+**Status: V2.3.1 HOTFIX FULLY VERIFIED on `hotfix/v2.3.1-render-failure` (render
+routing + duration contract) — awaiting release review.**
+
+## V2.3.1 Release Candidate Preparation
+
+Prepared 2026-08-28 on `hotfix/v2.3.1-render-failure`. This is candidate
+preparation only — **not GA**. `main`, the `v2.3.0` tag, the v2.3.0 GitHub
+Release, GHCR `:2.3.0` / `:stable` / `:sha-1a9dba6` and `:2.2.0` are all
+untouched. No `:2.3.1` tag, no `:latest`, no `:stable` move, no Git tag, no
+GitHub Release.
+
+| Field | Value |
+| --- | --- |
+| Candidate source SHA | `47d27979a0b77ff93d9c74d65653fcd0890d09c2` (branch `hotfix/v2.3.1-render-failure`) |
+| Product / schema | `2.3.1` / `2.13.0` (schema unchanged, no migration) |
+| Hotfix scope vs `main` | Auto→Motion routing, customer-safe render-error classification, Arabic Job Details localisation, duration-budget closure, `2.3.0`→`2.3.1` bump, regression tests, status + release notes. Runtime `v2.Dockerfile` and `scripts/release/` **unchanged**. No unrelated feature work. |
+| Release notes | `RELEASE_NOTES.md` rewritten as concise v2.3.1 patch notes (What's Fixed: Auto rendering, duration accuracy, error messages, Arabic UI; Upgrade: normal updater, schema 2.13.0, no migration). Verified free of `PEXELS_API_KEY`/`PIXABAY_API_KEY`, internal class/function names, milestone IDs, and any "already public" claim. |
+| Automated preflight (frozen SHA) | `pnpm typecheck` PASS · `pnpm exec vitest run` PASS **57 files / 927 tests** · `pnpm build` PASS |
+
+### GHCR candidate
+
+`ghcr-candidate.yml` dispatched in **candidate** mode
+(`source_ref` / `expected_sha` = the frozen SHA above), run
+[`33159765235`](https://github.com/3bud-ZC/Abud-Shorts-Engine/actions/runs/33159765235)
+— **success**. Every step passed: checkout of the exact SHA, identity check
+(SHA + `package.json`==`PRODUCT_VERSION`==`2.3.1` + schema grep), `pnpm install
+--frozen-lockfile`, quality runtime, `pnpm typecheck` + `vitest` + `pnpm build`,
+`docker buildx build --file v2.Dockerfile --push`, GHCR login with the workflow
+`GITHUB_TOKEN`, candidate push, and remote digest capture. Promote and
+retag-stable steps were **skipped** (candidate mode).
+
+| | |
+| --- | --- |
+| Candidate tag | `ghcr.io/3bud-zc/abud-shorts-engine:sha-47d2797` (the only tag pushed) |
+| **Remote digest** | `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
+| Independent verification | anonymous GHCR query: `sha-47d2797` → that exact digest; `GET …/manifests/sha256:5076022e…` → HTTP 200 (addressable by digest). OCI image index: `linux/amd64` child `sha256:b703a9da…` + a build-provenance attestation manifest `sha256:72ca8de9…`. |
+| Image content audit | amd64 config `sha256:c3ae612e…`, 18 layers / 2 516 705 454 bytes. OCI labels: `revision 47d27979…` (the frozen SHA), `version 2.3.1`, `source …/Abud-Shorts-Engine`, `licenses MIT`. Env carries only runtime config (`PATH`, `NODE_VERSION`, `PYTHON_BIN`, `DATA_DIR_PATH`, `WHISPER_MODEL`, …) — **no `*_API_KEY`, token, or password**. Build history: every `COPY` is `package.json` / `static` / `assets` / `scripts` / `node_modules` / `dist` / the whisper build — **no `src/`, `.env`, `.git`, `data/`, `backups/`, media, credentials or vault export**. `v2.Dockerfile` is byte-identical to the audited v2.3.0 build. |
+| GHCR side effects | none — `:2.3.0` still `sha256:0ed76823…`, `:stable` still `sha256:0ed76823…`, `:sha-1a9dba6` still `sha256:c448a8ca…`, `:2.2.0` still `sha256:a767d1c9…`, `:2.3.1` and `:latest` absent (HTTP 404). |
+
+### Final V2.3.1 client package
+
+Built with the canonical `scripts/release/package-client.mjs` against the **real
+candidate digest** (no dummy):
+
+| Artifact | Size | SHA-256 |
+| --- | --- | --- |
+| `ABUD-Shorts-Engine-2.3.1.tar.gz` | 56 010 bytes | `3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570` |
+| `ABUD-Shorts-Engine-2.3.1.tar.gz.sha256` | 98 bytes | (checksum file — content matches the tarball SHA) |
+| `update-manifest.json` | 788 bytes | — |
+
+`update-manifest.json`: `version 2.3.1`, `schemaVersion 2.13.0`, `channel stable`,
+`imageDigest sha256:5076022e…`, `packageSha256 3647ef32…`,
+`minimumUpdaterVersion 2.2.0`, `schemaBackwardsCompatible true`,
+`requiresRestart true`. No `localhost`, no temporary registry, no v2.3.0 package
+hash, no dummy digest. (Package smaller than v2.3.0's 65 337 bytes only because
+`RELEASE_NOTES.md` was rewritten from the 382-line v2.3.0 document to the
+49-line patch note.)
+
+### verify-package + package safety
+
+`node scripts/release/verify-package.mjs` on the generated set — **every check
+PASS**: sha256 `3647ef32…`; "no secrets, source, dependencies or developer
+data"; "installer, updater, compose and documentation present"; "manifest
+matches the package for 2.3.1". Independent tarball scan: **37 entries,
+allow-list only** — installers (`install.sh`/`.ps1` + `.bat` wrappers),
+updaters (`abud-update.sh`, `abud-shorts.sh`/`.ps1`), `docker-compose.prod.yml`,
+the three n8n workflow JSONs, `docs/UPDATING.md` + `docs/SERVER_INSTALL.md`,
+`CLIENT_QUICK_START.md`, `CLIENT_HANDOFF.md`, `RELEASE_NOTES.md`, `release.json`,
+`LICENSE`, `THIRD_PARTY_NOTICES.md`, `nginx.conf.reference`. No `src/`, `dist/`,
+`node_modules/`, `.git/`, `.env`, tests, `data/`, `backups/`, `logs/`, status
+file, media or credentials. Secret-pattern scan across every packaged text file
+→ nothing. `release.json` carries `version 2.3.1` / `imageDigest sha256:5076022e…`
+/ schema `2.13.0`.
+
+### Safety
+
+No new product QA render (the hotfix already has real live verification —
+30 s → 30.06 s and 12 s → 12.05 s, both `valid: true` / technicalScore 100).
+**Zero paid provider calls.** No `docker … prune`, no `compose down -v`. No DB
+reset, no migration, no Provider Vault change, no media deletion. v2.3.0 and
+v2.2.0 artifacts untouched. `:stable` not moved.
+
+### Result
+
+**V2.3.1 = RELEASE CANDIDATE — READY FOR RELEASE APPROVAL. NOT GA.**
+
+Explicit user approval is still required before any of: merge to `main`, the
+`v2.3.1` Git tag, GHCR `:2.3.1` promotion, moving `:stable`, or publishing the
+GitHub Release.
+
+| Frozen candidate identity | Value |
+| --- | --- |
+| Source SHA | `47d27979a0b77ff93d9c74d65653fcd0890d09c2` |
+| Candidate image | `ghcr.io/3bud-zc/abud-shorts-engine:sha-47d2797` @ `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
+| Package | `ABUD-Shorts-Engine-2.3.1.tar.gz` — `3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570` |
+| Manifest | `update-manifest.json` — version `2.3.1`, schema `2.13.0`, channel `stable` |

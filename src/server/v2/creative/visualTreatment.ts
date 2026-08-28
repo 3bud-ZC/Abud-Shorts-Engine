@@ -130,6 +130,35 @@ export function isMotionTreatment(treatment: VisualTreatment): boolean {
 }
 
 /**
+ * Whether a scene must be rendered through the motion runtime instead of a
+ * stock clip.
+ *
+ * True when the production is an explicitly graphic mode, when the scene itself
+ * asked for motion graphics, or - the case that shipped broken in v2.3.0 - when
+ * the creative plan resolved the scene to a motion treatment. The plan does that
+ * whenever the preferred stock treatment is unavailable (no Pexels/Pixabay key),
+ * falling every scene down to offline motion graphics. The renderer used to
+ * check only the first two conditions, so an Auto production on a host with no
+ * stock provider still walked the stock path and failed the whole job at
+ * "Pexels search exhausted all terms" even though the plan had already chosen a
+ * motion treatment that needs no network.
+ */
+export function sceneRendersAsMotion(input: {
+  productionMode?: string | null;
+  visualMode?: string | null;
+  sceneVisualSource?: string | null;
+  plannedTreatmentRuntime?: TreatmentRuntime | null;
+}): boolean {
+  return (
+    input.productionMode === "motion_graphics" ||
+    input.productionMode === "animated_explainer" ||
+    input.visualMode === "motion_graphics" ||
+    input.sceneVisualSource === "motion_graphics" ||
+    input.plannedTreatmentRuntime === "motion"
+  );
+}
+
+/**
  * Walks the fallback chain until it finds a treatment the runtime can serve.
  * Depth-capped so a cycle in the table cannot hang the planner.
  */

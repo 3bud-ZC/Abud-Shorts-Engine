@@ -163,6 +163,57 @@ export type CustomerFailure = {
 const READINESS_ACTION_RE = /provider|configure|connect|api key|credential|not configured|not runnable/i;
 
 /**
+ * Turn a raw internal render error into one customer-safe sentence.
+ *
+ * The renderer used to store a single generic "Video render failed." for every
+ * failure even when the backend knew a more useful, recoverable category. This
+ * picks from a fixed set of phrases only - it never echoes the raw message - so
+ * no path, command line, environment variable or stack can leak through it. A
+ * support code is still attached separately for correlation.
+ */
+export function classifyRenderFailure(rawTechnicalMessage: string): {
+  message: string;
+  category:
+    | "resources"
+    | "asset_unreadable"
+    | "composition"
+    | "visuals_unavailable"
+    | "unknown";
+} {
+  const raw = (rawTechnicalMessage || "").toLowerCase();
+
+  if (/enospc|enomem|out of memory|\boom\b|killed|sigkill|no space left|cannot allocate|resource temporarily unavailable/.test(raw)) {
+    return {
+      category: "resources",
+      message: "Rendering stopped because the system was low on resources. Please try again in a few minutes.",
+    };
+  }
+  if (/enoent|no such file|cannot read|unreadable|corrupt|moov atom not found|invalid data found|unexpected end of file/.test(raw)) {
+    return {
+      category: "asset_unreadable",
+      message: "A generated asset could not be read while assembling the video. Please try again.",
+    };
+  }
+  if (/pexels|pixabay|stock|exhausted \d+ terms|no acceptable videos|no videos found|api key not set|invalid pexels/.test(raw)) {
+    return {
+      category: "visuals_unavailable",
+      message:
+        "The production could not be matched with stock footage. Try again, or configure a stock provider under Providers.",
+    };
+  }
+  if (/ffmpeg|remotion|chromium|compose|composition|mux|concat|encoder|render pipeline/.test(raw)) {
+    return {
+      category: "composition",
+      message: "The generated media could not be composed into a finished video. Please try again.",
+    };
+  }
+  return {
+    category: "unknown",
+    message: "The video render did not finish. Please try again.",
+  };
+}
+
+/**
  * A short, stable support code derived from the failure signal. Deterministic so
  * the same failure always yields the same code, and carries nothing sensitive.
  */

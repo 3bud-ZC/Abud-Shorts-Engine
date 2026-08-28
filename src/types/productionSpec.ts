@@ -340,10 +340,24 @@ export function compactNarrationToBudget(
  * The V2.3-03 continuous-narration rule sizes a scene to `speech + a small
  * breath` so there is no dead air between scenes. On its own that collapses the
  * whole video when the generated narration lands far short of the requested
- * duration (a 12s request rendering ~5s). This keeps the no-dead-air floor but
- * lets a scene hold toward its resolved budget, capped so any residual silent
- * gap stays below the dead-air defect threshold and the scene's own motion
- * keeps playing - never black or silent padding.
+ * duration (a 12s request rendering ~5s).
+ *
+ * A scene therefore holds its own motion/visual to its **full resolved budget**
+ * so the finished video keeps the requested duration. The hold is not dead air:
+ * the scene's animation and the music bed keep playing, and `analyzeDeadAir`
+ * subtracts `intentionalHoldMs` (computed from this returned duration) from
+ * every gap, so a full-budget hold nets a ~0ms silent gap. The budget is
+ * already one scene's fair share of the timeline, so holding to it cannot push
+ * a scene past its share. Speech stays the hard floor - a scene never renders
+ * shorter than its narration plus one breath, so nothing is clipped.
+ *
+ * V2.3-07 originally capped the hold at `speech + 3s`. That was fine while every
+ * per-scene budget was small (a 12s / 3-scene request is ~4s per scene, below
+ * the cap) but silently collapsed longer requests: a 30s / 3-scene request is
+ * ~10s per scene, so terse narration produced ~6s scenes and a ~16s video
+ * (V2.3.1 incident ASE-TLZ09P). An explicit `maxVisualHoldSeconds` still caps
+ * the hold where a caller has a specific reason; by default there is no cap
+ * below the budget.
  */
 export function planSceneVisualDurationSeconds(params: {
   speechSeconds: number;
@@ -358,13 +372,11 @@ export function planSceneVisualDurationSeconds(params: {
     : params.interSceneGapSeconds ?? 0.16;
   const speechFloor = Math.max(0, params.speechSeconds) + gap;
   const budget = Math.max(1.5, params.resolvedSceneBudgetSeconds || speechFloor);
-  // A scene may hold its own motion/visual past the speech, up to its resolved
-  // budget, to keep the video on the requested duration. The hold is discounted
-  // from dead-air analysis (music + animation keep playing), so it is bounded
-  // only by the budget itself - a genuinely tiny narration still cannot push a
-  // single scene past its share of the timeline.
-  const maxHold = params.maxVisualHoldSeconds ?? 3.0;
-  const value = Math.max(0.5, speechFloor, Math.min(budget, speechFloor + maxHold));
+  const hold =
+    params.maxVisualHoldSeconds != null
+      ? Math.min(budget, speechFloor + params.maxVisualHoldSeconds)
+      : budget;
+  const value = Math.max(0.5, speechFloor, hold);
   return Math.round(value * 100) / 100;
 }
 
