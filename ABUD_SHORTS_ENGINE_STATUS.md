@@ -5997,3 +5997,78 @@ built v2.3.1 hotfix `dist`) was not disturbed.
 **Result:** ABUD Shorts Engine **v2.3.1 is GENERALLY AVAILABLE**. The `v2.3.1`
 tag is attached to the release commit `15caa083…` and must not be moved.
 `v2.3.0` remains an immutable historical release. **V2.3.1-GA: PASS / RELEASED.**
+
+## V2.3.1 Local Runtime Alignment
+
+Post-release operational task, 2026-08-28. The local development stack
+(`docker-compose.v2.yml`, project `short`) had been running the manually-injected
+V2.3.1 hotfix `dist` used for live QA. `abud-shorts-app` and
+`abud-shorts-render-worker` were switched to run the **official immutable public
+GHCR release image**, pinned by digest. This is an operations change only — no
+product code, no schema change, no migration.
+
+| | |
+| --- | --- |
+| Released image (by digest) | `ghcr.io/3bud-zc/abud-shorts-engine@sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
+| Image labels | `version 2.3.1`, `revision 47d27979a0b77ff93d9c74d65653fcd0890d09c2`, `source …/Abud-Shorts-Engine` |
+| Mechanism | temporary, untracked, local-only compose override (in the session scratchpad, never committed) setting `image:` + `pull_policy: never` for the two services; `docker compose … up -d --no-build --no-deps abud-shorts-app abud-shorts-render-worker` |
+| App container | `bc30ba7393ac` → `fc5483edd540` (recreated), image RepoDigest = the canonical digest, restarts 0, **healthy** |
+| Worker container | `def235e4bf06` → `27eb5a96ba01` (recreated), image RepoDigest = the canonical digest, restarts 0, **healthy** |
+| PostgreSQL | `1b84317c709a` — **same container**, `postgres:16-alpine`, up 10h, healthy, **not recreated**; `abud-shorts-postgres-data` volume untouched |
+| n8n | `75cc666bd188` — **same container**, `n8nio/n8n:latest`, up 10h, healthy, **not recreated**; `abud-shorts-n8n-data` volume untouched |
+
+### Verification
+
+- `docker inspect` on both application containers → `Image` resolves to
+  RepoDigest `…@sha256:5076022e…` (not just a tag string); both containers share
+  the same image id; `RestartCount` 0.
+- `/health/live` → 200, `/health/ready` → 200 (`ready: true`, storage +
+  videosDir + postgres all `true`). Only `abud-shorts-app` publishes a host port
+  (`0.0.0.0:3130 -> 3123`); worker has no published ports; postgres/n8n stay on
+  the internal network.
+- Running app `/api/v2/system/info`: `version 2.3.1`, `stage General
+  Availability`, `build 2026.08.28.1`, `schemaVersion 2.13.0`, `releaseChannel
+  stable`.
+- **No migration ran.** `schema_migrations` unchanged: 12 rows,
+  `last applied 2026-08-27 08:32:46Z` (identical before and after). App/worker
+  startup logs show only "MCP and API server is running" / "UI server is
+  running" — no migration, no error.
+- **Data preserved.** DB counts identical before/after — jobs 9, videos
+  (`video_revisions`) 8, `generated_assets` 8, `scene_artifacts` 64, brands 0,
+  `video_templates` 0, publications 0, `social_accounts` 0. The V2.3.1 incident
+  job `cmtc850gc000107qde3ay2o88` (`failed`) and the three hotfix QA jobs
+  (`cmtc9marj…`, `cmtcalfs2…`, `cmtcphpgz…`, all `ready`) are readable. 7 video
+  MP4s on the `/app/data` bind mount, 554 MB, intact.
+- **Smoke (API + runtime).** SPA root `GET /` → 200 (React shell). No 500 on any
+  surface: `system/health` 200 (Application / Database / n8n / Render Worker /
+  Remotion / FFmpeg / Kokoro / Whisper / Disk all `healthy`; Pexels
+  `unhealthy` — unconfigured, unchanged), `jobs` 200, `media/assets` 200,
+  `providers` 200, `templates` 200, `brands` 200, `publishing/publications` 200,
+  `settings` 200. An existing ready video (`cmtcalfs2…`) preview → 200
+  `video/mp4` (2 945 529 B), thumbnail → 200 `image/jpeg` (34 223 B), download →
+  200 `video/mp4`. No render performed.
+- **Update discovery.** In-product check → `status: UP_TO_DATE`,
+  `currentVersion 2.3.1`, `latestVersion 2.3.1`, `currentSchemaVersion 2.13.0`,
+  `message "You are running the latest version."`, `updateInProgress: false`.
+  No update/reinstall loop. (The check initially returned `CHECK_FAILED` on a
+  15 s HTTP timeout against `releases/latest/download/update-manifest.json` —
+  the same intermittent-connectivity limitation of this environment that
+  delayed the image pull; a retry completed with `UP_TO_DATE`.)
+
+### Safety
+
+No DB migration. Zero provider / paid calls. Zero render. Zero
+`docker … prune` / `builder prune` / `system prune` / `image prune` /
+`volume prune`. No `docker compose down` (`-v` or otherwise). The previous
+development image `abud-shorts-engine:v2` (`sha256:7628b3cc…`) was **not**
+deleted. No secrets, tokens, `.env` values or Provider Vault values were
+exposed. The compose override was never committed and lives only in the session
+scratchpad; `git status` is clean and no product source, `package.json`,
+`v2.Dockerfile`, compose file, release workflow or release note was changed.
+The `v2.3.1` Git tag was not moved.
+
+**Result:** the local `abud-shorts-app` and `abud-shorts-render-worker` now run
+the official public GHCR release image
+`sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9`;
+PostgreSQL and n8n are untouched; version `2.3.1`, schema `2.13.0`, health
+`live`/`ready` 200. **PASS.**
