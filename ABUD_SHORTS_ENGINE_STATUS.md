@@ -15,51 +15,49 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.3.0**
+Version: **2.3.1**
 
 Release: **GENERAL AVAILABILITY / RELEASED**
 
-Schema: **2.13.0**
+Schema: **2.13.0** (unchanged from v2.3.0 — no migration)
 
 **Owner release approval:** APPROVED — explicit "RELEASE ABUD SHORTS ENGINE
-V2.3.0" instruction from the user.
+V2.3.1" instruction from the user.
 
-Release commit (merge to `main`): `829bb7e740cf6f5c2f0290c3bd4ad67ac81a245f`
-Tag: `v2.3.0` (annotated, on `829bb7e…`, never moved) ·
-Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.0
+Candidate source SHA: `47d27979a0b77ff93d9c74d65653fcd0890d09c2` (branch
+`hotfix/v2.3.1-render-failure`)
+Release commit (merge to `main`): `15caa083e514d7cd1722593731f25c6520a5395c`
+Tag: `v2.3.1` (annotated, tag object `aac26824…`, on `15caa083…`, never moved) ·
+Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.1
 
-**Canonical GA identity.** The public v2.3.0 GitHub Release was produced by the
-`Release` workflow (run `33123403928`) building the GA merge commit `829bb7e…`
-after the tag push. That output is the canonical release. Its identity:
+**Canonical GA identity.** Unlike v2.3.0, the v2.3.1 image was **not** rebuilt at
+release time: the accepted candidate built by `ghcr-candidate.yml` run
+`33159765235` from `47d27979…` was promoted digest-for-digest.
 
-Image: `ghcr.io/3bud-zc/abud-shorts-engine` — tags `2.3.0` and `stable` both
-resolve to
-`sha256:0ed76823c2c87cd84a001b6164fb9b1283cd748f6f81b680740ae4551d3fd11e`
-(`application/vnd.docker.distribution.manifest.v2+json`, `linux/amd64`).
-The image is public, so a client installation needs no registry credentials, and
-both installers and the updater pull it by digest.
+Image: `ghcr.io/3bud-zc/abud-shorts-engine` — tags `2.3.1`, `stable` and
+`sha-47d2797` all resolve to
+`sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9`
+(OCI image index → `linux/amd64` child `sha256:b703a9da…` + a build-provenance
+attestation manifest). The image is public; both installers and the updater pull
+it by digest.
 
-Client package: `ABUD-Shorts-Engine-2.3.0.tar.gz`
-(`0d420daec12f4be1aff2c3af4c9afe4411b3a530ce62f8985b3f0d07f6203368`, 65337 bytes),
-with `ABUD-Shorts-Engine-2.3.0.tar.gz.sha256` and `update-manifest.json`,
+Client package: `ABUD-Shorts-Engine-2.3.1.tar.gz`
+(`3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570`, 56010
+bytes), with `ABUD-Shorts-Engine-2.3.1.tar.gz.sha256` and `update-manifest.json`,
 published as release assets and independently re-verified after publication. The
-published `update-manifest.json` carries version `2.3.0`, schema `2.13.0`,
-channel `stable`, `imageDigest sha256:0ed76823…`, `packageSha256 0d420dae…`.
+published `update-manifest.json` carries version `2.3.1`, schema `2.13.0`,
+channel `stable`, `imageDigest sha256:5076022e…`, `packageSha256 3647ef32…`,
+`minimumUpdaterVersion 2.2.0`, `schemaBackwardsCompatible true`.
+`releases/latest/download/update-manifest.json` serves it.
 
-Pre-release candidate (historical evidence, retained): source SHA
-`1a9dba634a3d8c3142cefcd32faacc3ca0e64368`, GHCR tag `sha-1a9dba6` →
-`sha256:c448a8ca2579bdfca7a5671cab314b09e6c5ea369aaebec4563e02f1aca61e12`,
-package SHA-256
-`e6c7ab23ebbdea01f377299785f8c7213370a17b9f091452d8a09b1b71097bed`. This
-candidate was verified and accepted before GA; the automatic `release.yml`
-rebuild then produced the canonical identity above. `sha-1a9dba6` is left in
-place as the candidate audit trail and is not a release channel. See the
-**V2.3-GA-R** section for the full reconciliation.
-
-Previous stable: **v2.2.0 — immutable historical release.** Its `v2.2.0` tag,
-GitHub Release and GHCR `2.2.0` image
-(`sha256:a767d1c96e9bd0c6fd2786afd4b66c475e2ec718b3f703575c444b2af7231196`) were
-not moved, rewritten or patched during the v2.3.0 ceremony or its reconciliation.
+Previous stable: **v2.3.0 — immutable historical release.** Its `v2.3.0` tag
+(`b92df8eb…` → `829bb7e…`), GitHub Release and GHCR `2.3.0` image
+(`sha256:0ed76823…`) were not moved, rewritten or patched during the v2.3.1
+ceremony. The v2.3.0 pre-release candidate tag `sha-1a9dba6`
+(`sha256:c448a8ca…`) and **v2.2.0** (`v2.2.0` tag, Release, GHCR `2.2.0`
+`sha256:a767d1c96e9bd0c6fd2786afd4b66c475e2ec718b3f703575c444b2af7231196`) are
+likewise untouched. See **V2.3-GA-R** for the v2.3.0 reconciliation and
+**V2.3.1-GA** for this release.
 
 Human visual review of the final Golden video: not separately recorded.
 
@@ -97,6 +95,29 @@ Finalization track:
 | V2.3-RP | Production candidate image on GHCR + final verified package/manifest | **PASS / COMPLETE** |
 | V2.3-GA | v2.3.0 general-availability release ceremony | **PASS / RELEASED** |
 | V2.3-GA-R | v2.3.0 release-identity reconciliation after the release.yml rebuild | **PASS / RECONCILED** |
+| V2.3.1 | Hotfix: Auto→Motion render-routing + short-narration duration collapse | **PASS / COMPLETE** |
+| V2.3.1-RC | v2.3.1 release candidate preparation (notes, candidate image, package, manifest) | **PASS / COMPLETE** |
+| V2.3.1-GA | v2.3.1 hotfix general-availability release ceremony | **PASS / RELEASED** |
+
+**V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
+`main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
+GitHub Release is published (not draft, `make_latest`), and GHCR `2.3.1` /
+`stable` / `sha-47d2797` all resolve to the canonical digest
+`sha256:5076022e…` — **promoted digest-for-digest from the accepted candidate,
+no release-time rebuild**. `v2.3.0`, its `sha-1a9dba6` candidate tag and v2.2.0
+are untouched. See **V2.3.1-GA** for the ceremony.
+
+Post-publication verification: the published package SHA-256 matches
+`3647ef32…`; the published manifest carries version `2.3.1`, schema `2.13.0`,
+channel `stable` and digest `sha256:5076022e…`;
+`scripts/release/verify-package.mjs` passes every check against the downloaded
+public assets; `releases/latest/download/update-manifest.json` serves the v2.3.1
+manifest and its `packageUrl` resolves with a matching checksum; the shipped
+v2.2.0 updater's `Compare-SemVer` reports `2.3.1` as an available update from
+both `2.2.0` and `2.3.0` with no false positive on `2.2.0 → 2.2.0`. Zero paid
+provider calls, no customer data mutation, no Docker prune, no rebuild.
+
+---
 
 **V2.3.0 is GENERALLY AVAILABLE.** `v2.3-product-overhaul` is merged into `main`
 (`829bb7e…`), the annotated `v2.3.0` tag is pushed (and never moved), the GitHub
@@ -5841,3 +5862,138 @@ GitHub Release.
 | Candidate image | `ghcr.io/3bud-zc/abud-shorts-engine:sha-47d2797` @ `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
 | Package | `ABUD-Shorts-Engine-2.3.1.tar.gz` — `3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570` |
 | Manifest | `update-manifest.json` — version `2.3.1`, schema `2.13.0`, channel `stable` |
+
+## V2.3.1-GA — v2.3.1 Hotfix General-Availability Release Ceremony
+
+Executed 2026-08-28 on explicit user approval ("RELEASE ABUD SHORTS ENGINE
+V2.3.1"). No features added, no application bytes rebuilt at release time, the
+accepted candidate digest was not changed, and v2.3.0 / v2.2.0 were not touched.
+
+| Field | Value |
+| --- | --- |
+| Owner approval | APPROVED (explicit) |
+| Accepted candidate source SHA | `47d27979a0b77ff93d9c74d65653fcd0890d09c2` |
+| Previous `main` | `2021c743799b874523333a9ac83fc0677292540f` |
+| **Release merge commit (`main`)** | `15caa083e514d7cd1722593731f25c6520a5395c` |
+| Annotated tag | `v2.3.1` → `15caa083…` (tag object `aac26824cea0e1d37bc72bec7720933e5a3c270b`) |
+| GitHub Release | https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.1 — id `378409561`, published, not draft, not prerelease, `make_latest` |
+| GHCR `sha-47d2797` / `2.3.1` / `stable` | all `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` |
+| Client package | `ABUD-Shorts-Engine-2.3.1.tar.gz` — `3647ef32782c77592281bd2502d9f2538d8f71ea33f7889ba2bcd25abdac1570` (56010 bytes) |
+| Other assets | `ABUD-Shorts-Engine-2.3.1.tar.gz.sha256`, `update-manifest.json` |
+
+### Two closed defects
+
+1. **Auto→Motion render-routing failure** — an Auto (`auto_hybrid`) production on
+   a host with no Pexels/Pixabay key reached 100% then failed at "Pexels search
+   exhausted all terms" because `ShortCreator` ignored the creative plan's
+   fallback to a motion treatment. Fixed by `sceneRendersAsMotion()` +
+   plan-aware scene routing. Incident job `cmtc850gc000107qde3ay2o88`, ref
+   `ASE-TLZ09P`.
+2. **Short-narration duration collapse** — `planSceneVisualDurationSeconds`
+   capped a scene's visual hold at `speech + 3s`; a 30s / 3-scene request with
+   terse narration collapsed to ~15.8s (`valid: false`, technicalScore 30).
+   Fixed by holding each scene to its full resolved budget (the hold is already
+   discounted from dead-air analysis; speech stays the hard floor).
+
+Also in v2.3.1: customer-safe render-error classification (`classifyRenderFailure`
+— five fixed categories, no raw message leak) and Arabic localisation of the
+Production/Job Details surface.
+
+### Live hotfix evidence (real running stack, before the ceremony)
+
+| Contract | Result |
+| --- | --- |
+| 30s Auto / no stock key / Kokoro / 9:16 (customer Retry of the failed job) | `ready`, **30.06s** (0.2% variance), `valid: true`, **technicalScore 100**, media `motion_canvas`, **0 Pexels calls**, preview/download/thumbnail 200, audio QA pass, 0 dead air |
+| 12s Motion Graphics / Kokoro / 9:16 (customer Create) | `ready`, **12.05s** (0.4% variance), `valid: true`, **technicalScore 100** |
+
+### Ceremony
+
+- **Pre-release freeze.** Working tree clean. Branch product tree identical to
+  the accepted SHA `47d27979…` — `git diff --name-only 47d2797 HEAD` returned
+  only `ABUD_SHORTS_ENGINE_STATUS.md` (documentation, excluded from image +
+  package); `src/` tree hash `efade36c…` identical on both; `package.json`,
+  `pnpm-lock.yaml`, `v2.Dockerfile`, `docker-compose.prod.yml`,
+  `scripts/release/`, installers, updaters, n8n workflows, `RELEASE_NOTES.md`
+  and both release workflows byte-identical. `main` (`2021c74`) was an ancestor
+  of the accepted SHA and had not advanced.
+- **Image re-verify.** `sha-47d2797` → `sha256:5076022e…` exact; GET by digest
+  → HTTP 200. No rebuild.
+- **Package re-verify.** `ABUD-Shorts-Engine-2.3.1.tar.gz` SHA-256 `3647ef32…`
+  exact; `verify-package.mjs` → every check PASS; manifest version `2.3.1` /
+  schema `2.13.0` / channel `stable` / `imageDigest sha256:5076022e…` /
+  `packageSha256 3647ef32…`.
+- **release.yml safety.** `on:` is `workflow_dispatch` only — no `push:` / `tags:`
+  trigger (V2.3-GA-R fix intact).
+- **Merge.** `git merge --no-ff origin/hotfix/v2.3.1-render-failure` on `main` —
+  **no conflicts**, `ort` strategy, `git diff --check` clean. 15 files changed,
+  all in the hotfix scope.
+- **Main pushed.** `2021c74..15caa08 main -> main` (no force). local == origin.
+- **Tag.** `git tag -a v2.3.1 -m "ABUD Shorts Engine v2.3.1"` on `15caa083…`,
+  pushed as a new ref. **The tag push triggered NO workflow run** — verified
+  against the Actions API (`release.yml` did not fire). `refs/tags/v2.3.0`
+  unchanged (`b92df8eb…` → `829bb7e…`).
+- **GHCR promotion.** `ghcr-candidate.yml` dispatched in `promote` mode
+  (`digest=sha256:5076022e…`, run `33163084060`, success). Only "Promote
+  accepted digest without rebuild" ran; build/test/push steps **skipped**. The
+  accepted digest is an OCI image index, so `docker buildx imagetools create`
+  copied it byte-for-byte — `:2.3.1` and `:stable` both resolve to
+  `sha256:5076022e…` (index media type preserved, **not** wrapped in a new
+  digest). `:2.3.0` still `sha256:0ed76823…`; `:sha-1a9dba6` still
+  `sha256:c448a8ca…`; `:2.2.0` still `sha256:a767d1c9…`; `:latest` absent.
+- **GitHub Release.** Created via the API for tag `v2.3.1`, body =
+  `RELEASE_NOTES.md`, `draft: false`, `prerelease: false`, `make_latest: true`.
+  All three assets uploaded (`state: uploaded`).
+
+### Post-publication verification
+
+- Downloaded `ABUD-Shorts-Engine-2.3.1.tar.gz` from the Release → SHA-256
+  `3647ef32…` (matches). `.sha256` asset content correct. Downloaded
+  `update-manifest.json` → version `2.3.1`, schema `2.13.0`, channel `stable`,
+  `imageDigest sha256:5076022e…`, `packageSha256 3647ef32…` (all match).
+- `scripts/release/verify-package.mjs` on the **downloaded public** artifact set
+  → **every check PASS** (sha256; no secrets/source/deps/dev data; installer +
+  updater + compose + docs present; manifest matches the package for `2.3.1`).
+  Tarball: **37 entries, allow-list only** — no `src/`, `dist/`, `node_modules/`,
+  `.git/`, `.env`, tests, `data/`, `backups/`, `logs/`, status file, media or
+  credentials. Content secret-scan: the only `API_KEY` / `PASSWORD` hits are
+  empty env-var references (`${PEXELS_API_KEY:-}`) and per-install generators
+  (`$(secret 32)`) — no literal secret, identical to the v2.3.0 package.
+- Update discovery: `releases/latest` now points to `v2.3.1`;
+  `releases/latest/download/update-manifest.json` serves the v2.3.1 manifest;
+  its `packageUrl` downloads with a matching checksum; the image digest is
+  registry-addressable (HTTP 200).
+- The **shipped v2.2.0** updater's `Compare-SemVer`:
+  `Compare-SemVer("2.3.1","2.2.0") = 1`, `Compare-SemVer("2.3.1","2.3.0") = 1`,
+  `Compare-SemVer("2.2.0","2.2.0") = 0`. No updater was executed and no
+  installation was touched.
+
+### Note on the released commit vs the frozen candidate SHA
+
+The accepted candidate was built from `47d27979…`. The branch tip at merge time
+was `ee479b2` = `47d27979…` **plus two documentation-only commits** on
+`ABUD_SHORTS_ENGINE_STATUS.md` (the candidate-preparation and image-audit
+records, made per the previous task's own step 19). `ABUD_SHORTS_ENGINE_STATUS.md`
+is excluded from both the image and the client package, and the merged `main`
+product tree (`src/`, `package.json`, `pnpm-lock.yaml`, `v2.Dockerfile`,
+`docker-compose.prod.yml`, `scripts/release/`, installers, updaters, n8n
+workflows, `RELEASE_NOTES.md`, workflows) is byte-identical to `47d27979…`. The
+released image and package therefore carry exactly the accepted candidate
+identity; the merge commit `15caa083…` differs from the candidate SHA only in
+status prose. The image `revision` label is `47d27979…`.
+
+### Safety
+
+**No product data mutation.** No database reset, no migration (schema stays
+`2.13.0`), no jobs/videos/media deleted, no admin change, no Provider Vault
+change, no social publication. The failed incident job
+`cmtc850gc000107qde3ay2o88` and the three hotfix QA jobs
+(`cmtc9marj000007qdbrww8h2o`, `cmtcalfs2000007qd363642r1`,
+`cmtcphpgz000407qddaye666j`) are preserved. **Zero paid provider calls. Zero
+Docker prune / build / pull / `down -v` / rebuild** — the image build and
+promotion ran in GitHub Actions; local work was git, the GitHub API and
+anonymous registry queries only. The primary `localhost:3130` stack (running the
+built v2.3.1 hotfix `dist`) was not disturbed.
+
+**Result:** ABUD Shorts Engine **v2.3.1 is GENERALLY AVAILABLE**. The `v2.3.1`
+tag is attached to the release commit `15caa083…` and must not be moved.
+`v2.3.0` remains an immutable historical release. **V2.3.1-GA: PASS / RELEASED.**
