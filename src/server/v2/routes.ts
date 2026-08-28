@@ -46,6 +46,12 @@ import {
 import { convertTemplateToProductionSpec } from "./templateToSpec";
 import { VeoVisualProvider } from "./visual-providers/veoVisualProvider";
 import { FalVisualProvider } from "./visual-providers/falVisualProvider";
+import { RunwayVisualProvider } from "./visual-providers/runwayVisualProvider";
+import { ReplicateVisualProvider } from "./visual-providers/replicateVisualProvider";
+import { ComfyUIProvider } from "./visual-providers/comfyUIProvider";
+import { LumaVisualProvider } from "./visual-providers/lumaVisualProvider";
+import { PixabayProvider } from "./stock-providers/pixabayProvider";
+import { PexelsStockProvider } from "./stock-providers/pexelsProvider";
 import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvider";
 import { GoogleCloudTtsProvider } from "./voice-providers/googleCloudTtsProvider";
 import { EdgeTtsProvider } from "./voice-providers/edgeTtsProvider";
@@ -681,7 +687,7 @@ export type ProductionSpecDefaults = {
   arabicVoice?: PersistedArabicVoiceDefault | null;
 };
 
-type CreateVisualSource = "auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
+type CreateVisualSource = "auto_free" | "auto_best" | "auto_budget" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
 type StockProviderChoice = "auto_stock" | "pexels" | "pixabay";
 type MediaPolicyChoice = "auto_use_selected" | "only_selected";
 
@@ -715,6 +721,8 @@ function visualModeForSource(source?: string): string | undefined {
       return "ai";
     case "mixed":
       return "hybrid";
+    case "auto_free":
+    case "auto_budget":
     case "auto_best":
     default:
       return undefined;
@@ -1335,6 +1343,10 @@ export function createV2PublicRouter(
     if (process.env.PIXABAY_API_KEY) ids.add("pixabay");
     if (process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("veo");
     if (process.env.FAL_KEY) ids.add("fal");
+    if (process.env.RUNWAY_API_KEY) ids.add("runway");
+    if (process.env.REPLICATE_API_TOKEN) ids.add("replicate");
+    if (process.env.LUMA_API_KEY) ids.add("luma");
+    if (process.env.COMFYUI_BASE_URL) ids.add("comfyui");
     if (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("gemini");
     if (new ElevenLabsVoiceProvider().isConfigured()) ids.add("elevenlabs");
     if (providerVault.isAvailable()) {
@@ -1387,6 +1399,35 @@ export function createV2PublicRouter(
     };
 
     const anyStock = providerIds.has("pexels") || providerIds.has("pixabay");
+    const anyPaidGenerated =
+      providerIds.has("veo") ||
+      providerIds.has("fal") ||
+      providerIds.has("runway") ||
+      providerIds.has("replicate") ||
+      providerIds.has("luma");
+    const anyLocalGenerated = providerIds.has("comfyui");
+    const hasSelectedUploadedMedia = selectedMediaIds.length > 0;
+    const hasAnyProfessionalVisualSource =
+      anyStock || anyPaidGenerated || anyLocalGenerated || hasSelectedUploadedMedia;
+    const explicitVisualSourceControl = Boolean(controls.visualSource || controls.visualMode);
+    const requiresProfessionalAuto =
+      explicitVisualSourceControl &&
+      (
+        visualSource === "auto_best" ||
+        visualSource === "auto_free" ||
+        visualSource === "auto_budget" ||
+        visualSource === "mixed"
+      );
+    if (requiresProfessionalAuto) {
+      add(
+        "professional_visual_source",
+        "Professional visual source",
+        hasAnyProfessionalVisualSource,
+        true,
+        "Professional automatic video needs at least one visual source. Configure a free stock provider, connect an AI video provider, or upload media.",
+        { label: "Configure Visual Source", href: "/providers" },
+      );
+    }
     if (visualSource === "stock") {
       if (stockProvider === "pexels") {
         add("pexels", "Pexels", providerIds.has("pexels"), true, "Stock provider required: configure Pexels.", { label: "Configure Stock Provider", href: "/providers" });
@@ -1525,6 +1566,11 @@ export function createV2PublicRouter(
     const usage: string[] = [];
     if (input.voiceProvider === "elevenlabs") usage.push("ElevenLabs · Usage Based");
     if (input.contentAIProvider === "gemini") usage.push("Gemini · Usage Based");
+    if (input.visualSource === "auto_free") {
+      if (input.providerIds.has("pexels") || input.providerIds.has("pixabay")) usage.push("Pexels/Pixabay · Free Stock API");
+      if (input.providerIds.has("comfyui")) usage.push("ComfyUI · Local Compute");
+      return usage.length ? usage : ["No professional visual source configured"];
+    }
     if (input.visualSource === "ai_generated") {
       const ai = input.aiVisualProvider !== "auto"
         ? input.aiVisualProvider
@@ -1532,8 +1578,16 @@ export function createV2PublicRouter(
           ? "Google Veo"
           : input.providerIds.has("fal")
             ? "fal.ai"
-            : "AI Video Provider";
-      usage.push(`${ai} · Usage Based`);
+            : input.providerIds.has("runway")
+              ? "Runway"
+              : input.providerIds.has("replicate")
+                ? "Replicate"
+                : input.providerIds.has("luma")
+                  ? "Luma"
+                  : input.providerIds.has("comfyui")
+                    ? "ComfyUI"
+                    : "AI Video Provider";
+      usage.push(ai === "ComfyUI" ? "ComfyUI · Local Compute" : `${ai} · Usage Based`);
     }
     if (input.visualSource === "stock") {
       usage.push(input.stockProvider === "pixabay" ? "Pixabay · Stock API" : input.stockProvider === "pexels" ? "Pexels · Stock API" : "Stock provider · API");
@@ -2861,6 +2915,10 @@ export function createV2PublicRouter(
     const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasVeoKey = Boolean(process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasFalKey = Boolean(process.env.FAL_KEY);
+    const hasRunwayKey = Boolean(process.env.RUNWAY_API_KEY);
+    const hasReplicateKey = Boolean(process.env.REPLICATE_API_TOKEN);
+    const hasLumaKey = Boolean(process.env.LUMA_API_KEY);
+    const hasComfyUiUrl = Boolean(process.env.COMFYUI_BASE_URL);
     const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
     await providerSecrets.refreshElevenLabsApiKey();
     const elevenLabsProvider = new ElevenLabsVoiceProvider();
@@ -2932,12 +2990,17 @@ export function createV2PublicRouter(
         checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
         details: {
           visualCapabilities: {
+            providerClass: "STOCK_VIDEO",
+            freeOrPaid: "free",
+            billingModel: "free_api_key",
             textToImage: false,
             imageToImage: false,
             textToVideo: false,
             imageToVideo: false,
             referenceImage: false,
             multipleReferenceImages: false,
+            portrait: true,
+            landscape: true,
             seed: false,
             nativeCharacterIdentity: false,
           },
@@ -2956,17 +3019,34 @@ export function createV2PublicRouter(
         message:
           "Optional second free stock library. Adding it gives the shot planner more footage to choose between.",
         checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: {
+            providerClass: "STOCK_VIDEO",
+            freeOrPaid: "free",
+            billingModel: "free_api_key",
+            textToImage: false,
+            imageToImage: false,
+            textToVideo: false,
+            imageToVideo: false,
+            referenceImage: false,
+            multipleReferenceImages: false,
+            portrait: true,
+            landscape: true,
+            seed: false,
+            nativeCharacterIdentity: false,
+          },
+        },
       },
       {
         id: "veo",
         name: "Google Veo",
         category: "Visuals",
         tier: "ai_video",
-        status: hasVeoKey ? "healthy" : "not_configured",
-        configured: hasVeoKey,
+        status: hasVeoKey || vaultByProvider.has("veo") ? "configured" : "not_configured",
+        configured: hasVeoKey || vaultByProvider.has("veo"),
         isDefault: false,
-        message: hasVeoKey
-          ? "Google Veo AI video generation configured."
+        message: hasVeoKey || vaultByProvider.has("veo")
+          ? "Google Veo AI video generation configured. Paid generation requires explicit product authorization."
           : "VEO_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
         details: {
@@ -2978,15 +3058,85 @@ export function createV2PublicRouter(
         name: "fal.ai (Kling / Wan / Seedance)",
         category: "Visuals",
         tier: "ai_video",
-        status: hasFalKey ? "healthy" : "not_configured",
-        configured: hasFalKey,
+        status: hasFalKey || vaultByProvider.has("fal") ? "configured" : "not_configured",
+        configured: hasFalKey || vaultByProvider.has("fal"),
         isDefault: false,
-        message: hasFalKey
-          ? "fal.ai multi-model video generation configured."
+        message: hasFalKey || vaultByProvider.has("fal")
+          ? "fal.ai multi-model video generation configured. Paid generation requires explicit product authorization."
           : "FAL_KEY is not configured.",
         checkedAt: new Date().toISOString(),
         details: {
           visualCapabilities: new FalVisualProvider().getCapabilities(),
+        },
+      },
+      {
+        id: "runway",
+        name: "Runway",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasRunwayKey || vaultByProvider.has("runway") ? "configured" : "not_configured",
+        configured: hasRunwayKey || vaultByProvider.has("runway"),
+        isDefault: false,
+        message: hasRunwayKey || vaultByProvider.has("runway")
+          ? "Runway key stored. Paid generation requires explicit product authorization."
+          : "RUNWAY_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new RunwayVisualProvider().getCapabilities(),
+          liveVerified: false,
+        },
+      },
+      {
+        id: "replicate",
+        name: "Replicate",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasReplicateKey || vaultByProvider.has("replicate") ? "configured" : "not_configured",
+        configured: hasReplicateKey || vaultByProvider.has("replicate"),
+        isDefault: false,
+        message: hasReplicateKey || vaultByProvider.has("replicate")
+          ? "Replicate token stored. Paid generation requires explicit product authorization."
+          : "REPLICATE_API_TOKEN is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new ReplicateVisualProvider().getCapabilities(),
+          liveVerified: false,
+        },
+      },
+      {
+        id: "comfyui",
+        name: "Local ComfyUI",
+        category: "Visuals",
+        tier: "local",
+        status: hasComfyUiUrl ? "configured" : "not_configured",
+        configured: hasComfyUiUrl,
+        isDefault: false,
+        message: hasComfyUiUrl
+          ? "ComfyUI sidecar URL configured. Video workflow/model installation still requires local verification."
+          : "COMFYUI_BASE_URL is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new ComfyUIProvider().getCapabilities(),
+          installed: false,
+          model: process.env.COMFYUI_VIDEO_WORKFLOW_PROFILE || "REQUIRES MODEL INSTALLATION",
+          liveVerified: false,
+        },
+      },
+      {
+        id: "luma",
+        name: "Luma Dream Machine",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasLumaKey || vaultByProvider.has("luma") ? "configured" : "not_configured",
+        configured: hasLumaKey || vaultByProvider.has("luma"),
+        isDefault: false,
+        message: hasLumaKey || vaultByProvider.has("luma")
+          ? "Luma key stored. Paid generation requires explicit product authorization."
+          : "LUMA_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new LumaVisualProvider().getCapabilities(),
+          liveVerified: false,
         },
       },
       // Voice
@@ -3366,6 +3516,32 @@ export function createV2PublicRouter(
   });
 
   router.post("/providers/pexels/validate", async (req, res) => {
+    if (providerVault.isAvailable()) {
+      await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
+    }
+    if (!config.pexelsApiKey && providerSecrets.peek("pexels", "api_key")) {
+      const pexels = new PexelsStockProvider();
+      const results = await pexels.search({
+        query: "business",
+        orientation: "portrait",
+        kind: "video",
+        perPage: 3,
+      });
+      const healthy = results.length > 0;
+      if (providerVault.isAvailable()) {
+        await providerVault.markTested("pexels", healthy ? "healthy" : "provider_unavailable").catch(() => undefined);
+      }
+      res.status(200).json({
+        provider: "Pexels",
+        category: "Visuals",
+        configured: true,
+        healthy,
+        status: healthy ? "healthy" : "provider_unavailable",
+        message: healthy ? "Pexels responded with an authorized video search result." : "Pexels did not return a usable video result for validation.",
+        checkedAt: new Date().toISOString(),
+      });
+      return;
+    }
     const result = await validatePexelsProvider(config, {
       bypassCache: true,
     });
@@ -3374,9 +3550,47 @@ export function createV2PublicRouter(
 
   router.post("/providers/:provider/validate", async (req, res) => {
     const target = req.params.provider.toLowerCase();
+    if (providerVault.isAvailable()) {
+      await providerSecrets.refresh(target, "api_key").catch(() => undefined);
+    }
     if (target === "pexels") {
       const result = await validatePexelsProvider(config, { bypassCache: true });
       res.status(200).json(result);
+      return;
+    }
+    if (target === "pixabay") {
+      const pixabay = new PixabayProvider();
+      if (!pixabay.isConfigured()) {
+        res.status(200).json({
+          provider: "Pixabay",
+          category: "Visuals",
+          configured: false,
+          healthy: false,
+          status: "not_configured",
+          message: "PIXABAY_API_KEY is not configured.",
+          checkedAt: new Date().toISOString(),
+        });
+        return;
+      }
+      const results = await pixabay.search({
+        query: "business",
+        orientation: "portrait",
+        kind: "video",
+        perPage: 3,
+      });
+      const healthy = results.length > 0;
+      if (providerVault.isAvailable()) {
+        await providerVault.markTested("pixabay", healthy ? "healthy" : "provider_unavailable").catch(() => undefined);
+      }
+      res.status(200).json({
+        provider: "Pixabay",
+        category: "Visuals",
+        configured: true,
+        healthy,
+        status: healthy ? "healthy" : "provider_unavailable",
+        message: healthy ? "Pixabay responded with video search results." : "Pixabay did not return a usable video result for validation.",
+        checkedAt: new Date().toISOString(),
+      });
       return;
     }
     if (target === "gemini") {
@@ -3394,6 +3608,30 @@ export function createV2PublicRouter(
     if (target === "fal") {
       const fal = new FalVisualProvider();
       const val = await fal.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "runway") {
+      const runway = new RunwayVisualProvider();
+      const val = await runway.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "replicate") {
+      const replicate = new ReplicateVisualProvider();
+      const val = await replicate.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "comfyui") {
+      const comfyui = new ComfyUIProvider();
+      const val = await comfyui.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "luma") {
+      const luma = new LumaVisualProvider();
+      const val = await luma.validate();
       res.status(200).json(val);
       return;
     }

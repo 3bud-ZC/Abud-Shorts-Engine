@@ -6072,3 +6072,162 @@ the official public GHCR release image
 `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9`;
 PostgreSQL and n8n are untouched; version `2.3.1`, schema `2.13.0`, health
 `live`/`ready` 200. **PASS.**
+
+## V2.4 — Professional Video Production Engine
+
+Implementation pass started 2026-08-28 on branch
+`v2.4-professional-video-engine`. This section is the canonical running status
+for the V2.4 professional video overhaul.
+
+### Root Cause Of Old Output
+
+- Auto visual routing was Pexels-centric: `AutoVisualRouter` accepted one
+  Pexels provider plus AI fallbacks, while `PixabayProvider` lived in a separate
+  `StockProviderRegistry` that normal Auto rendering did not use.
+- Provider selection had two disconnected abstractions: visual providers
+  (`Pexels`, `Veo`, `fal.ai`) and stock providers (`Pixabay` plus ranking).
+  They could report different readiness and choose different sources.
+- Generated-video adapters treated long-running providers like synchronous HTTP
+  calls. Veo and fal could submit a task and then incorrectly expect an MP4 URL
+  in the first response.
+- The local prompt compiler invented WhatsApp CTAs, discounts/offers, and a
+  hard-coded statistic in deterministic scripts. That created truth-safety risk
+  and explains why generic CTA text could appear without user-supplied facts.
+- Quality scoring focused on technical validity, diversity, audio continuity
+  and caption availability. It did not separately block motion-card dominated
+  output, raw prompt leakage, weak real-visual coverage, or invented-claim risk.
+
+### Architecture Changes Implemented
+
+- Added a canonical V2.4 visual provider contract in
+  `src/server/v2/visual-providers/types.ts` covering:
+  `STOCK_VIDEO`, `GENERATED_VIDEO`, `IMAGE_TO_VIDEO`, `GENERATED_IMAGE`,
+  `UPLOADED_VIDEO`, `UPLOADED_IMAGE`, `LOCAL_GENERATIVE_VIDEO`,
+  `MOTION_OVERLAY`.
+- Added normalized provider capabilities: billing class, configured/enabled/
+  healthy/liveVerified flags, quality/latency tiers, supported orientations,
+  duration/resolution support, reference-image support, seed/audio/negative
+  prompt/camera-control support, concurrency and rate-limit state.
+- Added async generation job lifecycle fields:
+  `SUBMITTED`, `QUEUED`, `PROCESSING`, `COMPLETE`, `DOWNLOAD_READY`,
+  `FAILED`, `CANCELLED`, `TIMED_OUT`, with provider request id, poll URL,
+  response URL, cancel URL, output URL and metadata.
+- Added `PexelsStockProvider` and made `StockProviderRegistry` default to both
+  Pexels and Pixabay. The registry can search multiple query families and
+  dedupe/rank the union.
+- Replaced the Pexels-only stock path in `AutoVisualRouter` with unified stock
+  mesh search. Provider failures are isolated; the best scored candidate wins
+  across configured sources.
+- Added first-class adapter files for Runway, Replicate, ComfyUI and Luma. Paid
+  generation calls are gated by `ABUD_ALLOW_PAID_VIDEO_CALLS=true`; connection
+  metadata can exist without spending credits.
+- Updated Provider Vault allow-list for `veo`, `fal`, `runway`, `replicate` and
+  `luma`; Pexels/Pixabay remain free API-key providers. Saved credentials are
+  masked and never returned as plaintext.
+- Extended `/api/v2/providers` with V2.4 visual provider matrix entries and
+  normalized capabilities for Pexels, Pixabay, Veo, fal.ai, Runway, Replicate,
+  Local ComfyUI and Luma.
+- Added `auto_free` and `auto_budget` as recognized creator visual-source
+  choices in the UI/backend. Stock provider controls now show for Auto Free,
+  Auto Best and Auto Budget.
+- Added readiness block for professional Auto/Mixed modes when no real visual
+  source is available:
+  “Professional automatic video needs at least one visual source. Configure a
+  free stock provider, connect an AI video provider, or upload media.”
+- Added `professionalVisualQuality` report persisted with video metadata:
+  real visual coverage, provider mix, unique/repeated assets, semantic score
+  summary, text-only timeline percentage, source timeline mix, raw-prompt leak
+  count, invented-claim risk count and professional-auto readiness.
+
+### Prompt Compiler V3
+
+- Local deterministic compiler now records `prompt_compiler.v3`.
+- Raw customer prompts/meta-instructions are not used as on-screen text.
+- Unsupported WhatsApp CTAs, offers/discounts and statistics are stripped unless
+  the customer prompt explicitly supplies them.
+- Default CTA is truth-safe (`Follow for more details` / Arabic equivalent)
+  unless the prompt explicitly asks for contact/WhatsApp.
+- Gemini prompt instructions now explicitly forbid raw prompt rendering and
+  invented prices, discounts, phone numbers, WhatsApp CTAs, claims, statistics,
+  testimonials, addresses, URLs or product features.
+
+### Provider Verification Matrix
+
+| Provider | Implemented | Configured | Healthy | Live Verified | Blocked Reason |
+| --- | --- | --- | --- | --- | --- |
+| Pexels | Yes, first-class stock provider | No usable `.env` key detected | Not live-tested in this pass | No | `.env` contains blank/placeholder Pexels value |
+| Pixabay | Yes, first-class stock provider | No usable `.env` key detected | Not live-tested in this pass | No | `PIXABAY_API_KEY` missing from `.env` |
+| Local ComfyUI | Yes, optional sidecar adapter | No endpoint configured | Not live-tested in this pass | No | `COMFYUI_BASE_URL` blank/placeholder and `127.0.0.1:8188` did not respond |
+| Google Veo | Yes, async operation adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Google/Veo key detected |
+| Runway | Yes, async task adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Runway key detected |
+| fal.ai | Yes, async queue adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no fal.ai key detected |
+| Replicate | Yes, async prediction adapter | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Replicate token detected |
+| Luma | Yes, adapter point implemented | No usable `.env` key detected | Not live-tested in this pass | No | Paid generation disabled and no Luma key detected |
+| ABUD Motion | Existing local motion runtime | Local runtime dependent | Existing tests cover motion rendering | Not human creative verified | Now treated as overlay/explicit motion mode, not silent Auto fallback |
+
+### Local Hardware / Runtime Detection
+
+- GPU: NVIDIA GeForce RTX 3050 6GB Laptop GPU, 6144 MiB VRAM, driver 610.74.
+- Integrated GPU: Intel UHD Graphics.
+- System memory: 15.71 GB RAM.
+- Disk: C: has 302.66 GB free.
+- Local ComfyUI: no reachable response from `http://127.0.0.1:8188/system_stats`
+  during this pass, so local video-generation benchmarking is blocked until a
+  workflow endpoint and model stack are installed/running.
+
+### Verification
+
+- `pnpm typecheck` initially triggered pnpm dependency rehydration in
+  non-interactive mode; rerun with `CI=true` completed server and UI typecheck:
+  **PASS**.
+- Added `src/server/v2/v24ProfessionalVideoEngine.test.ts`.
+- Focused test run:
+  `.\\node_modules\\.bin\\vitest.CMD run src/server/v2/v24ProfessionalVideoEngine.test.ts`
+  → 7 tests passed.
+- Tests cover unified stock search, provider failure isolation, Auto routing
+  through Pixabay via the unified mesh, professional Auto blocking when no real
+  source exists, fal/Replicate async lifecycle normalization, prompt leak/truth
+  guards, and separation of technical validity from professional visual
+  coverage.
+- Generated provider downloads are now ffprobe-validated before acceptance.
+  Corrupt, HTML, audio-only, zero-duration or dimensionless downloads are
+  rejected and removed instead of entering the edit/render pipeline.
+- Updated focused test run:
+  `.\\node_modules\\.bin\\vitest.CMD run src/server/v2/v24ProfessionalVideoEngine.test.ts`
+  → 9 tests passed.
+- Full test suite:
+  `.\\node_modules\\.bin\\vitest.CMD run` → 58 test files passed, 936 tests
+  passed.
+- Production build:
+  `CI=true pnpm -s build` → **PASS**. Vite emitted only non-blocking warnings
+  about Browserslist data age and chunk size.
+
+### Safety
+
+- No schema migration.
+- No Docker prune command.
+- No Docker compose down / volume removal.
+- No model weights downloaded.
+- No paid provider generation call executed.
+- No secrets printed.
+- No live stock provider calls succeeded because no usable free stock API key
+  was configured in `.env`.
+- No end-to-end benchmark render was executed; current local configuration has
+  no live professional visual source to satisfy the V2.4 acceptance gate.
+- `main`, `v2.3.1` tag/release/GHCR image and historical releases untouched.
+
+### Current Completion State
+
+V2.4 is partially implemented. The unified provider mesh, async contracts,
+provider UI/vault metadata, professional Auto blocking, prompt truth guards and
+visual quality reporting are in code and have focused deterministic tests.
+
+Still pending before final V2.4 acceptance:
+
+- Live Pexels/Pixabay credential verification and real stock downloads through
+  the actual product API/UI pipeline.
+- End-to-end benchmark productions 1-4 with video IDs, previews, thumbnails,
+  duration metrics and contact sheets.
+- Local ComfyUI model/workflow installation and benchmark, or explicit use of a
+  hosted paid provider after enabling `ABUD_ALLOW_PAID_VIDEO_CALLS=true`.
+- Human creative review remains pending.

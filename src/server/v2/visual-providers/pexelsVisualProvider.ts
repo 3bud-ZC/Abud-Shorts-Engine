@@ -1,6 +1,7 @@
 import { PexelsAPI } from "../../../short-creator/libraries/Pexels";
 import { OrientationEnum } from "../../../types/shorts";
 import type { ProductionSceneSpec } from "../../../types/productionSpec";
+import { providerSecrets } from "../provider-vault/providerSecrets";
 import type {
   SceneCostEstimate,
   VisualAssetResult,
@@ -16,8 +17,12 @@ export class PexelsVisualProvider implements VisualProvider {
 
   constructor(private pexelsApi: PexelsAPI, private apiKey?: string) {}
 
+  private getApiKey(): string | undefined {
+    return this.apiKey || process.env.PEXELS_API_KEY || providerSecrets.peek("pexels", "api_key");
+  }
+
   public isConfigured(): boolean {
-    const key = this.apiKey || process.env.PEXELS_API_KEY;
+    const key = this.getApiKey();
     return Boolean(key && key !== "dummy-key" && !key.includes("your_pexels"));
   }
 

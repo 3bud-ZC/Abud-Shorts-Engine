@@ -93,6 +93,7 @@ import { mediaCache } from "../server/v2/media-cache/mediaCache";
 import { AudioMasteringService } from "./audioMasteringService";
 import { postProductionPipeline } from "../server/v2/post-production/postProductionPipeline";
 import { qualityEngine } from "../server/v2/quality/qualityEngine";
+import { calculateProfessionalVisualQualityReport } from "../server/v2/quality/professionalVisualQuality";
 import { motionEngine, type MotionTemplateType } from "../server/v2/motion/motionEngine";
 import { mediaUploadService } from "../server/v2/media/mediaUploadService";
 import { capabilityManager } from "../server/v2/capabilities/capabilityManager";
@@ -1084,7 +1085,12 @@ export class ShortCreator {
               },
             );
             if (!reusedSeg && segAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
-            const cacheId = segAsset.metadata?.pexelsVideoId || segAsset.url;
+            const cacheId =
+              segAsset.metadata?.providerAssetId ||
+              segAsset.metadata?.stockAssetId ||
+              segAsset.metadata?.pexelsVideoId ||
+              segAsset.metadata?.pixabayVideoId ||
+              segAsset.url;
             const cached = cacheId ? mediaCache.getCachedAsset(segAsset.provider, cacheId as any) : null;
             if (cached) {
               fs.copySync(cached.filePath, segVideoPath);
@@ -1094,7 +1100,7 @@ export class ShortCreator {
             }
             const mediaInputHash = createMediaInputHash({
               provider: segAsset.provider,
-              sourceId: segAsset.metadata?.pexelsVideoId,
+              sourceId: segAsset.metadata?.providerAssetId || segAsset.metadata?.stockAssetId || segAsset.metadata?.pexelsVideoId || segAsset.metadata?.pixabayVideoId,
               url: segAsset.url,
               selectedClip: segAsset.metadata?.smartClip,
               crop: segAsset.metadata?.smartCrop,
@@ -1122,16 +1128,18 @@ export class ShortCreator {
 
           visualProvidersUsed.add(segAsset.provider || mediaArtifact?.provider || "reused");
 
-          if (segAsset.metadata?.pexelsVideoId) {
-            excludeVideoIds.push(segAsset.metadata.pexelsVideoId as string | number);
+          const segAssetId = segAsset.metadata?.providerAssetId || segAsset.metadata?.stockAssetId || segAsset.metadata?.pexelsVideoId || segAsset.metadata?.pixabayVideoId;
+          if (segAssetId) {
+            excludeVideoIds.push(segAssetId as string | number);
           }
           previousVisualCandidates.push({
-            id: segAsset.metadata?.pexelsVideoId || segAsset.url,
+            id: segAssetId || segAsset.url,
             url: segAsset.url,
             width: segAsset.metadata?.width || 0,
             height: segAsset.metadata?.height || 0,
             duration: segAsset.durationSeconds,
             tags: segAsset.metadata?.searchTermsUsed,
+            provider: segAsset.provider,
           });
           selectedVisuals.push({
             sceneIndex: index,
@@ -1402,13 +1410,23 @@ export class ShortCreator {
             sceneQueryRecord.provider = visualAsset.provider;
             sceneQueryRecord.queryUsed = visualAsset.metadata?.searchTerm;
             sceneQueryRecord.candidateCount = visualAsset.metadata?.candidateCount;
-            sceneQueryRecord.winner = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+            sceneQueryRecord.winner =
+              visualAsset.metadata?.providerAssetId ||
+              visualAsset.metadata?.stockAssetId ||
+              visualAsset.metadata?.pexelsVideoId ||
+              visualAsset.metadata?.pixabayVideoId ||
+              visualAsset.url;
             sceneQueryRecord.fallbackReason = visualAsset.metadata?.fallback
               ? "provider_scoring_found_no_passing_candidate"
               : undefined;
           }
 
-          const cacheId = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+          const cacheId =
+            visualAsset.metadata?.providerAssetId ||
+            visualAsset.metadata?.stockAssetId ||
+            visualAsset.metadata?.pexelsVideoId ||
+            visualAsset.metadata?.pixabayVideoId ||
+            visualAsset.url;
           const cached = cacheId ? mediaCache.getCachedAsset(visualAsset.provider, cacheId as any) : null;
           if (cached) {
             fs.copySync(cached.filePath, tempVideoPath);
@@ -1436,7 +1454,7 @@ export class ShortCreator {
           const mediaDurationForArtifact = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => undefined);
           const mediaInputHash = createMediaInputHash({
             provider: visualAsset.provider,
-            sourceId: visualAsset.metadata?.pexelsVideoId || visualAsset.source || visualAsset.url,
+            sourceId: visualAsset.metadata?.providerAssetId || visualAsset.metadata?.stockAssetId || visualAsset.metadata?.pexelsVideoId || visualAsset.metadata?.pixabayVideoId || visualAsset.source || visualAsset.url,
             url: visualAsset.url,
             selectedClip: visualAsset.metadata?.selectedClip,
             crop: visualAsset.metadata?.smartCrop,
@@ -1458,7 +1476,7 @@ export class ShortCreator {
               visualAsset,
               reuseKey: {
                 provider: visualAsset.provider,
-                sourceId: visualAsset.metadata?.pexelsVideoId || visualAsset.source || visualAsset.url,
+                sourceId: visualAsset.metadata?.providerAssetId || visualAsset.metadata?.stockAssetId || visualAsset.metadata?.pexelsVideoId || visualAsset.metadata?.pixabayVideoId || visualAsset.source || visualAsset.url,
                 selectedClip: visualAsset.metadata?.selectedClip,
                 crop: visualAsset.metadata?.smartCrop,
                 visualIntent: originalSceneSpec.visualIntent,
@@ -1470,16 +1488,18 @@ export class ShortCreator {
         }
 
         visualProvidersUsed.add(visualAsset.provider);
-        if (visualAsset.metadata?.pexelsVideoId) {
-          excludeVideoIds.push(visualAsset.metadata.pexelsVideoId as string | number);
+        const visualAssetId = visualAsset.metadata?.providerAssetId || visualAsset.metadata?.stockAssetId || visualAsset.metadata?.pexelsVideoId || visualAsset.metadata?.pixabayVideoId;
+        if (visualAssetId) {
+          excludeVideoIds.push(visualAssetId as string | number);
         }
         previousVisualCandidates.push({
-          id: visualAsset.metadata?.pexelsVideoId || visualAsset.url,
+          id: visualAssetId || visualAsset.url,
           url: visualAsset.url,
           width: visualAsset.width || 0,
           height: visualAsset.height || 0,
           duration: visualAsset.durationSeconds,
           tags: visualAsset.metadata?.searchTermsUsed,
+          provider: visualAsset.provider,
         });
         selectedVisuals.push({
           sceneIndex: index,
@@ -2042,6 +2062,12 @@ export class ShortCreator {
         hasCaptions: spec.captionStyle !== "none",
         mediaRelevanceScores: sceneQa.map((item) => Number(item.visualRelevanceScore) || 90),
       });
+      const professionalVisualQuality = calculateProfessionalVisualQualityReport({
+        spec,
+        shots: plannedShots,
+        selectedVisuals,
+        totalDurationSeconds: validationResult.durationSeconds || totalDurationSeconds,
+      });
 
       const metadata: VideoMetadata = {
         videoId,
@@ -2126,6 +2152,22 @@ export class ShortCreator {
         sceneSourceDecisions,
         postProductionProcessors,
         selectedVisuals,
+        professionalVisualQuality,
+        realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+        providerMix: professionalVisualQuality.providerMix,
+        uniqueShotCount: professionalVisualQuality.uniqueShotCount,
+        uniqueAssetCount: professionalVisualQuality.uniqueAssetCount,
+        repeatedAssetCount: professionalVisualQuality.repeatedAssetCount,
+        averageSemanticScore: professionalVisualQuality.averageSemanticScore,
+        minimumSemanticScore: professionalVisualQuality.minimumSemanticScore,
+        blackFramePercent: professionalVisualQuality.blackFramePercent,
+        textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
+        generatedTimelinePercent: professionalVisualQuality.generatedTimelinePercent,
+        stockTimelinePercent: professionalVisualQuality.stockTimelinePercent,
+        uploadedTimelinePercent: professionalVisualQuality.uploadedTimelinePercent,
+        motionOverlayPercent: professionalVisualQuality.motionOverlayPercent,
+        rawPromptLeakCount: professionalVisualQuality.rawPromptLeakCount,
+        inventedClaimRiskCount: professionalVisualQuality.inventedClaimRiskCount,
         sceneQa,
         beatMap: beatMap || undefined,
         durableArtifacts,
@@ -2159,6 +2201,7 @@ export class ShortCreator {
           mediaTechnicalQuality: Math.round(sceneQa.reduce((sum, item) => sum + (item.assetReadable ? 90 : 30), 0) / Math.max(1, sceneQa.length)),
           mediaRelevance: Math.round(sceneQa.reduce((sum, item) => sum + (Number(item.visualRelevanceScore) || 70), 0) / Math.max(1, sceneQa.length)),
           mediaDiversity: selectedVisuals.length === new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size ? 95 : 65,
+          visualProfessionalReadiness: professionalVisualQuality.readyForProfessionalAuto ? 100 : 55,
           subjectiveQuality: "Human Review Required",
         },
         overallProductionScore: undefined,

@@ -42,6 +42,97 @@ function detectArabicDialect(text: string): ArabicDialect {
   return "none";
 }
 
+function hasExplicitWhatsApp(prompt: string): boolean {
+  return /whats\s*app|واتساب|واتس|wa\.me/i.test(prompt);
+}
+
+function hasExplicitOffer(prompt: string): boolean {
+  return /discount|offer|sale|coupon|promo|خصم|عرض|تخفيض|كوبون/i.test(prompt);
+}
+
+function hasExplicitStatistic(prompt: string): boolean {
+  return /\d+\s*%|\d+\s*(?:percent|per cent)|\d+\s*(?:في المية|بالمية|٪)/i.test(prompt);
+}
+
+function hasExplicitContact(prompt: string): boolean {
+  return hasExplicitWhatsApp(prompt) || /call|phone|email|dm|message|contact|تواصل|اتصل|راسل|رسالة/i.test(prompt);
+}
+
+function safeCtaText(prompt: string, isAr: boolean, dialect: ArabicDialect): string {
+  if (hasExplicitWhatsApp(prompt)) {
+    return isAr ? "تواصل معنا عبر واتساب" : "Message us on WhatsApp";
+  }
+  if (hasExplicitContact(prompt)) {
+    return isAr ? "تواصل معنا لمعرفة التفاصيل" : "Contact us to learn more";
+  }
+  return isAr
+    ? dialect === "egyptian"
+      ? "تابعنا وشوف التفاصيل"
+      : "تابعنا لمعرفة التفاصيل"
+    : "Follow for more details";
+}
+
+function stripInventedClaims(text: string, prompt: string, isAr: boolean): string {
+  let result = text;
+  if (!hasExplicitWhatsApp(prompt)) {
+    result = result
+      .replace(/\s*(?:on|via|through)\s+WhatsApp/gi, "")
+      .replace(/WhatsApp/gi, isAr ? "التواصل" : "message")
+      .replace(/واتساب|واتس/gi, isAr ? "التواصل" : "message");
+  }
+  if (!hasExplicitOffer(prompt)) {
+    result = result
+      .replace(/(?:limited|special|exclusive)\s+(?:discount|offer|deal)/gi, isAr ? "التفاصيل" : "details")
+      .replace(/\b(?:discount|offer|sale|coupon|promo)\b/gi, isAr ? "التفاصيل" : "details")
+      .replace(/خصم|عرض|تخفيض|كوبون/gi, isAr ? "التفاصيل" : "details");
+  }
+  if (!hasExplicitStatistic(prompt)) {
+    result = result
+      .replace(/\b\d+\s*%\s*(?:of\s+)?/gi, "")
+      .replace(/\d+\s*(?:في المية|بالمية|٪)/gi, "");
+  }
+  return result.replace(/\s{2,}/g, " ").trim();
+}
+
+function looksLikeRawInstruction(text: string, prompt: string): boolean {
+  const normalizedText = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizedPrompt = prompt.toLowerCase().replace(/\s+/g, " ").trim();
+  return Boolean(
+    normalizedText &&
+    (normalizedPrompt.startsWith(normalizedText) ||
+      normalizedText.startsWith("create a") ||
+      normalizedText.startsWith("make a video") ||
+      normalizedText.startsWith("اعمل فيديو")),
+  );
+}
+
+function enforcePromptTruthSafety(
+  scenes: ProductionSceneSpec[],
+  prompt: string,
+  isAr: boolean,
+  dialect: ArabicDialect,
+): ProductionSceneSpec[] {
+  const cta = safeCtaText(prompt, isAr, dialect);
+  return scenes.map((scene, index) => {
+    const safeNarration = stripInventedClaims(scene.narration, prompt, isAr);
+    const safeOnScreen =
+      scene.onScreenText && !looksLikeRawInstruction(scene.onScreenText, prompt)
+        ? stripInventedClaims(scene.onScreenText, prompt, isAr)
+        : undefined;
+    return {
+      ...scene,
+      narration: safeNarration || scene.narration,
+      onScreenText: safeOnScreen || (scene.purpose === "cta" ? cta : undefined),
+      visualProvider: scene.visualProvider === "pexels" ? undefined : scene.visualProvider,
+      notes: [
+        scene.notes,
+        index === 0 ? "raw_prompt_leak_guard_enabled" : undefined,
+        scene.purpose === "cta" ? "truth_safe_cta" : undefined,
+      ].filter(Boolean).join("; ") || scene.notes,
+    };
+  });
+}
+
 export function extractDurationFromPrompt(prompt: string): number | null {
   const matchSec = prompt.match(/(\d+)\s*[-_]?\s*(?:ثانية|ثواني|ثوان|ثوانى|seconds|second|secs|sec|s\b)/i);
   if (matchSec) {
@@ -87,20 +178,16 @@ export class LocalContentAIProvider implements ContentAIProvider {
     const voiceProvider = params.voiceProvider || "auto";
     const voiceId = params.voiceId || "";
 
-    const scenes = this.buildCreativeScenes({
+    const scenes = enforcePromptTruthSafety(this.buildCreativeScenes({
       prompt,
       isArabic: isAr,
       dialect,
       durationSeconds,
       contentStyle,
       brandName: params.brandName || params.brandKit?.brandName,
-    });
+    }), prompt, isAr, dialect);
 
-    const ctaText = isAr
-      ? dialect === "egyptian"
-        ? "اطلب دلوقتي على واتساب واستفاد بالعرض"
-        : "تواصل معنا عبر واتساب للمزيد"
-      : "Message us on WhatsApp to get started today";
+    const ctaText = safeCtaText(prompt, isAr, dialect);
 
     const rawSpec: ProductionSpec = {
       id: cuid(),
@@ -124,15 +211,22 @@ export class LocalContentAIProvider implements ContentAIProvider {
       brandId: params.brandId,
       cta: {
         text: ctaText,
-        action: "WhatsApp CTA",
-        contact: "WhatsApp",
+        action: hasExplicitContact(prompt) ? "Contact CTA" : "Follow CTA",
+        contact: hasExplicitWhatsApp(prompt) ? "WhatsApp" : undefined,
       },
-      contact: "WhatsApp",
+      contact: hasExplicitWhatsApp(prompt) ? "WhatsApp" : undefined,
       scenes,
       brandKit: params.brandKit,
       metadata: {
         planner: "LocalContentAIProvider",
-        plannerVersion: "2.2.0",
+        plannerVersion: "3.0.0",
+        promptCompiler: {
+          version: "prompt_compiler.v3",
+          rawPromptLeakGuard: true,
+          truthGuard: true,
+          ctaProvenance: hasExplicitContact(prompt) ? "USER_EXPLICIT" : "DEFAULT",
+          prohibitedInventedClaims: ["prices", "discounts", "phone_numbers", "whatsapp_cta", "statistics", "testimonials", "urls"],
+        },
         scriptPipeline: isAr
           ? {
               stages: [

@@ -316,7 +316,7 @@ const VideoCreator: React.FC = () => {
     if (entry.suggestedCaptionStyle) setCaptionStyle(entry.suggestedCaptionStyle as any);
   }
   const [visualMode, setVisualMode] = useState("auto");
-  const [visualSource, setVisualSource] = useState<"auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
+  const [visualSource, setVisualSource] = useState<"auto_free" | "auto_best" | "auto_budget" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
   const [stockProvider, setStockProvider] = useState<"auto_stock" | "pexels" | "pixabay">("auto_stock");
   const [mediaPolicy, setMediaPolicy] = useState<"auto_use_selected" | "only_selected">("auto_use_selected");
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
@@ -673,7 +673,7 @@ const VideoCreator: React.FC = () => {
     [providers],
   );
   const aiVideoProviders = useMemo(
-    () => providers.filter((provider) => provider.category === "Visuals" && provider.tier === "ai_video"),
+    () => providers.filter((provider) => provider.category === "Visuals" && (provider.tier === "ai_video" || provider.id === "comfyui")),
     [providers],
   );
   const configuredAiVideoProviders = useMemo(
@@ -1359,6 +1359,8 @@ const VideoCreator: React.FC = () => {
                       }}
                     >
                       <MenuItem value="auto_best">Auto Best</MenuItem>
+                      <MenuItem value="auto_free">Auto Free</MenuItem>
+                      <MenuItem value="auto_budget">Auto Budget</MenuItem>
                       <MenuItem value="stock">Stock</MenuItem>
                       <MenuItem value="uploaded_media">Uploaded Media</MenuItem>
                       <MenuItem value="ai_generated" disabled={configuredAiVideoProviders.length === 0}>
@@ -1505,7 +1507,7 @@ const VideoCreator: React.FC = () => {
                 </Grid>
                 )}
 
-                {uiMode === "advanced" && (visualSource === "stock" || visualSource === "auto_best") && (
+                {uiMode === "advanced" && ["stock", "auto_best", "auto_free", "auto_budget"].includes(visualSource) && (
                   <Grid item xs={12} sm={6} md={3}>
                     <FormControl fullWidth>
                       <InputLabel id="stock-provider-select-label">Stock Provider</InputLabel>

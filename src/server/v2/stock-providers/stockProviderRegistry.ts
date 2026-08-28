@@ -1,4 +1,5 @@
 import { logger } from "../../../logger";
+import { PexelsStockProvider } from "./pexelsProvider";
 import { PixabayProvider } from "./pixabayProvider";
 import type {
   StockAttribution,
@@ -131,7 +132,7 @@ export function dedupeCandidates(
 export class StockProviderRegistry {
   private providers = new Map<StockProviderId, StockProvider>();
 
-  constructor(providers: StockProvider[] = [new PixabayProvider()]) {
+  constructor(providers: StockProvider[] = [new PexelsStockProvider(), new PixabayProvider()]) {
     providers.forEach((provider) => this.providers.set(provider.id, provider));
   }
 
@@ -188,6 +189,22 @@ export class StockProviderRegistry {
     });
 
     return dedupeCandidates(all);
+  }
+
+  public async searchQueries(requests: StockSearchRequest[]): Promise<ScoredCandidate[]> {
+    const settled = await Promise.allSettled(requests.map((request) => this.searchAll(request)));
+    const combined: ScoredCandidate[] = [];
+    settled.forEach((result, index) => {
+      if (result.status === "rejected") {
+        logger.warn(
+          { query: requests[index]?.query, reason: String(result.reason) },
+          "Stock query failed; continuing with remaining query families",
+        );
+        return;
+      }
+      combined.push(...result.value);
+    });
+    return dedupeCandidates(combined);
   }
 
   public attributionFor(candidate: StockCandidate): StockAttribution | null {
