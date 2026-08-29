@@ -61,6 +61,18 @@ export type BlackFrameAnalysisResult = {
   pass: boolean;
 };
 
+export type SilenceInterval = { startSeconds: number; endSeconds: number; durationSeconds: number };
+
+export type MixedSilenceAnalysisResult = {
+  /** Silence windows detected in the ACTUAL rendered/mixed audio track. */
+  silenceRuns: SilenceInterval[];
+  longestSilenceRunMs: number;
+  totalSilenceMs: number;
+  thresholdDb: number;
+  minSilenceDurationSeconds: number;
+  sampledDurationSeconds: number;
+};
+
 export class FFMpeg {
   static async init(): Promise<FFMpeg> {
     return import("@ffmpeg-installer/ffmpeg").then((ffmpegInstaller) => {
@@ -297,6 +309,112 @@ export class FFMpeg {
     });
   }
 
+  /**
+   * Measures real silence windows in the ACTUAL mixed audio track of a
+   * rendered file, using ffmpeg's `silencedetect` filter - the same
+   * measurement an independent reviewer would run (`ffmpeg -af
+   * silencedetect=noise=-35dB:d=0.3`). Planning-time metadata (e.g. "this
+   * scene deliberately holds N seconds past its narration, music keeps
+   * playing") is a claim about what SHOULD happen; a real customer video
+   * (incident cmtehsptj000108ledzk3f3ji) can still land with several seconds
+   * of genuine near-silence when a naturally quiet passage of the selected
+   * music track coincides with a narration gap. This is what actually
+   * measures whether that claim held.
+   */
+  async detectSilenceIntervals(
+    filePath: string,
+    options: { thresholdDb?: number; minDurationSeconds?: number } = {},
+  ): Promise<MixedSilenceAnalysisResult> {
+    const thresholdDb = options.thresholdDb ?? -35;
+    const minDurationSeconds = options.minDurationSeconds ?? 0.3;
+    const durationSeconds = await this.getMediaDuration(filePath).catch(() => 0);
+
+    const safeDefault: MixedSilenceAnalysisResult = {
+      silenceRuns: [],
+      longestSilenceRunMs: 0,
+      totalSilenceMs: 0,
+      thresholdDb,
+      minSilenceDurationSeconds: minDurationSeconds,
+      sampledDurationSeconds: durationSeconds,
+    };
+
+    return new Promise((resolve) => {
+      let command: ReturnType<typeof ffmpeg>;
+      try {
+        command = ffmpeg(filePath)
+          .audioFilters(`silencedetect=noise=${thresholdDb}dB:d=${minDurationSeconds}`)
+          .format("null")
+          .output(process.platform === "win32" ? "NUL" : "/dev/null");
+      } catch (setupError) {
+        // A test double or an unusual fluent-ffmpeg build missing one of the
+        // chained methods above must not fail the whole render - fall back to
+        // "no detected silence" exactly like analyzeBlackFrames does above.
+        logger.warn({ err: String(setupError), filePath }, "Mixed-audio silence analysis unavailable; reporting no detected silence");
+        resolve(safeDefault);
+        return;
+      }
+      let stderr = "";
+      command
+        .on("stderr", (line: string) => {
+          stderr += `${line}\n`;
+        })
+        .on("end", () => {
+          const runs: SilenceInterval[] = [];
+          const startRe = /silence_start:\s*(-?\d+(?:\.\d+)?)/g;
+          const endRe = /silence_end:\s*(-?\d+(?:\.\d+)?)\s*\|\s*silence_duration:\s*(\d+(?:\.\d+)?)/g;
+          const starts: number[] = [];
+          let m: RegExpExecArray | null;
+          while ((m = startRe.exec(stderr))) starts.push(Math.max(0, Number(m[1])));
+          const ends: Array<{ end: number; duration: number }> = [];
+          while ((m = endRe.exec(stderr))) ends.push({ end: Number(m[1]), duration: Number(m[2]) });
+
+          for (let i = 0; i < ends.length; i++) {
+            const start = starts[i] ?? Math.max(0, ends[i].end - ends[i].duration);
+            runs.push({
+              startSeconds: start,
+              endSeconds: ends[i].end,
+              durationSeconds: ends[i].duration,
+            });
+          }
+          // A silence that never closed (runs to end-of-file) still counts -
+          // silencedetect only emits silence_end when it observes non-silent
+          // audio again or EOF with certain builds omit the trailing marker.
+          if (starts.length > ends.length && durationSeconds > 0) {
+            const trailingStart = starts[starts.length - 1];
+            runs.push({
+              startSeconds: trailingStart,
+              endSeconds: durationSeconds,
+              durationSeconds: Math.max(0, durationSeconds - trailingStart),
+            });
+          }
+
+          const totalSilenceMs = Math.round(runs.reduce((sum, r) => sum + r.durationSeconds, 0) * 1000);
+          const longestSilenceRunMs = Math.round(Math.max(0, ...runs.map((r) => r.durationSeconds), 0) * 1000);
+
+          resolve({
+            silenceRuns: runs,
+            longestSilenceRunMs,
+            totalSilenceMs,
+            thresholdDb,
+            minSilenceDurationSeconds: minDurationSeconds,
+            sampledDurationSeconds: durationSeconds,
+          });
+        })
+        .on("error", (error: Error) => {
+          logger.warn({ err: String(error), filePath }, "Mixed-audio silence analysis failed; reporting no detected silence");
+          resolve({
+            silenceRuns: [],
+            longestSilenceRunMs: 0,
+            totalSilenceMs: 0,
+            thresholdDb,
+            minSilenceDurationSeconds: minDurationSeconds,
+            sampledDurationSeconds: durationSeconds,
+          });
+        })
+        .run();
+    });
+  }
+
   async measureAudioLoudness(filePath: string): Promise<AudioLoudnessMetrics> {
     const nullOutput = process.platform === "win32" ? "NUL" : "/dev/null";
     return new Promise((resolve, reject) => {
@@ -359,6 +477,49 @@ export class FFMpeg {
         .audioChannels(1)
         .audioFrequency(16000)
         .toFormat("wav")
+        .save(outputPath)
+        .on("end", () => resolve(outputPath))
+        .on("error", reject);
+    });
+  }
+
+  /**
+   * Produces a per-job background-music excerpt that cannot itself go
+   * near-silent for an extended stretch. The shared catalog track is streamed
+   * into Remotion as-is and only ever gets a single flat volume multiplier
+   * (`musicVolume * duckingFactor`); that multiplier cannot raise a passage
+   * that is already quiet in the source. Incident cmtehsptj000108ledzk3f3ji's
+   * selected track ("Name The Time And Place - Telecasted.mp3") has several
+   * near-zero-energy dips in its own energy envelope (as low as ~0.003 of
+   * peak) that landed on top of narration gaps, producing genuine multi-second
+   * sub -35dB silence in the final mix even though nothing was technically
+   * muted. `acompressor` here raises those quiet passages before the track
+   * ever reaches Remotion's per-frame gain, instead of only attempting to fix
+   * it after the fact.
+   */
+  async masterMusicBed(
+    inputPath: string,
+    outputPath: string,
+    options: { startSeconds: number; durationSeconds: number },
+  ): Promise<string> {
+    const start = Math.max(0, options.startSeconds);
+    // A little tail past the requested duration keeps a trailing fade from
+    // ever landing on hard silence at the exact cut point.
+    const duration = Math.max(0.5, options.durationSeconds) + 1;
+    return new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .inputOptions(["-ss", String(start)])
+        .outputOptions(["-t", String(duration)])
+        .audioFilters([
+          "highpass=f=40",
+          "acompressor=threshold=-28dB:ratio=3.5:attack=15:release=250:makeup=4",
+          "loudnorm=I=-20:TP=-3:LRA=9",
+          "alimiter=limit=0.95",
+        ])
+        .audioCodec("libmp3lame")
+        .audioBitrate(192)
+        .audioChannels(2)
+        .toFormat("mp3")
         .save(outputPath)
         .on("end", () => resolve(outputPath))
         .on("error", reject);

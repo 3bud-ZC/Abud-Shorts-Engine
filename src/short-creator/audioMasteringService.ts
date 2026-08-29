@@ -1,4 +1,4 @@
-import { FFMpeg, type AudioLoudnessMetrics } from "./libraries/FFmpeg";
+import { FFMpeg, type AudioLoudnessMetrics, type SilenceInterval } from "./libraries/FFmpeg";
 
 export type VoiceMasteringResult = {
   inputPath: string;
@@ -41,6 +41,20 @@ export type DeadAirReport = {
   gaps: DeadAirInterval[];
   issues: string[];
   warnings: string[];
+};
+
+export type MixedSilenceGateResult = {
+  silenceRuns: SilenceInterval[];
+  longestSilenceRunMs: number;
+  totalSilenceMs: number;
+  thresholdDb: number;
+  /** >= this is a defect: professionalReady must be false (section 59). */
+  criticalThresholdMs: number;
+  /** >= this (but below critical) is a hard QA fail, not just a warning. */
+  warningThresholdMs: number;
+  pass: boolean;
+  criticalFailure: boolean;
+  issues: string[];
 };
 
 export class AudioMasteringService {
@@ -118,6 +132,46 @@ export class AudioMasteringService {
       gaps,
       issues,
       warnings,
+    };
+  }
+
+  /**
+   * Measures real silence in the ACTUAL rendered/mixed audio track and gates
+   * on it. `analyzeDeadAir` above only ever compares PLANNED speech windows
+   * against a PLANNED hold budget - it cannot see that a naturally quiet
+   * passage of the selected music bed landed on top of a narration gap in the
+   * real render. This is the check that would have caught incident
+   * cmtehsptj000108ledzk3f3ji's ~4.5s / ~5.3s / ~4.8s near-silent runs, which
+   * `validateFinalMix`'s whole-track LUFS check could not see.
+   */
+  public async analyzeMixedSilence(
+    videoOrAudioPath: string,
+    options: { thresholdDb?: number; minDurationSeconds?: number; warningThresholdMs?: number; criticalThresholdMs?: number } = {},
+  ): Promise<MixedSilenceGateResult> {
+    const warningThresholdMs = options.warningThresholdMs ?? 1500;
+    const criticalThresholdMs = options.criticalThresholdMs ?? 3000;
+    const detected = await this.ffmpeg.detectSilenceIntervals(videoOrAudioPath, {
+      thresholdDb: options.thresholdDb,
+      minDurationSeconds: options.minDurationSeconds,
+    });
+
+    const issues: string[] = [];
+    if (detected.longestSilenceRunMs >= criticalThresholdMs) {
+      issues.push(`Unexplained mixed-audio silence of ${detected.longestSilenceRunMs}ms exceeds the ${criticalThresholdMs}ms critical threshold.`);
+    } else if (detected.longestSilenceRunMs >= warningThresholdMs) {
+      issues.push(`Unexplained mixed-audio silence of ${detected.longestSilenceRunMs}ms exceeds the ${warningThresholdMs}ms professional target.`);
+    }
+
+    return {
+      silenceRuns: detected.silenceRuns,
+      longestSilenceRunMs: detected.longestSilenceRunMs,
+      totalSilenceMs: detected.totalSilenceMs,
+      thresholdDb: detected.thresholdDb,
+      criticalThresholdMs,
+      warningThresholdMs,
+      pass: detected.longestSilenceRunMs < warningThresholdMs,
+      criticalFailure: detected.longestSilenceRunMs >= criticalThresholdMs,
+      issues,
     };
   }
 
