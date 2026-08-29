@@ -6566,3 +6566,443 @@ Local implementation commits on `v2.4-professional-video-engine` after
 - `295823b` Screen stock clips for visual health
 - `b47ea71` Add topic-specific English stock planning
 - `e292ed8` Keep coffee stock queries on topic
+
+---
+
+## V2.4 Pass 4 — True Visual, Audio Continuity & Render Performance
+
+Date: 2026-08-29. Branch: `v2.4-professional-video-engine`, started at HEAD
+`1ad9f8087d2eb371a1a2818dd1993856a1e80e78` (verified: clean tree, local ==
+`origin/v2.4-professional-video-engine`, `origin/main` untouched at
+`cd3a0e0401229193b54513dd62c7a38ddf606f16`). Status: **PASS / LIVE VALIDATED
+ON FEATURE BRANCH**. No merge to `main`, no tag, no release, no stable/GHCR
+v2.3.1 mutation.
+
+### Incident — Source Of Truth
+
+A real, human-reviewed V2.4 production failed creative review despite the
+Pass 3 automated benchmarks passing. Job/Video
+`cmtehsptj000108ledzk3f3ji` (created 2026-08-29 14:45 UTC, `status: ready`,
+`visual_mode: auto`, `production_mode: auto_hybrid`, `voice_provider: kokoro`,
+`quality_profile: standard`) was located in the live Postgres `jobs` table and
+its original 9,843,177-byte MP4 preserved unmodified on disk throughout this
+pass (`md5 e17f39df520cfb660455aff388e2c26a`, re-verified unchanged at
+closure).
+
+Measured (independently, via a fresh `ffmpeg -af
+silencedetect=noise=-35dB:d=0.3` run against the untouched file, reproducing
+the numbers given as the incident's source-of-truth measurement exactly):
+
+- Duration: 20.05s (1080x1920, 25fps, H.264 + AAC), matching the requested
+  20s.
+- Real footage duration: ~13.4s (hook + solution scenes, real Pexels stock).
+- Full-screen graphic duration: ~6.6s — the entire CTA scene rendered as a
+  full-screen, opaque Motion Canvas card, not real footage.
+- Invented WhatsApp: **yes** — "Message Us on WhatsApp Today" / "Message us
+  on WhatsApp" / "WhatsApp" burned into that card, though the customer's
+  prompt contained no affirmative WhatsApp request.
+- Narration active duration: ~5.46s total (2.258s + 1.383s + 1.815s across
+  the three scenes) inside a 20s advertisement (~27% narration coverage).
+- Largest per-scene narration gaps (planned budget minus measured speech):
+  scene 0 ≈4.44s, scene 1 ≈5.32s, scene 2 ≈4.79s.
+- Largest mixed-audio gaps (independently re-measured, this pass):
+  `2.270s → 6.768s` (4.498s), `8.126s → 13.448s` (5.322s),
+  `15.242s → 20.053s` (4.811s) — matching the incident report exactly.
+- The job's own stored quality metadata (computed correctly at the time) read
+  `realVisualCoveragePercent: 26.1`, `textOnlyTimelinePercent: 32.9`,
+  `professionalVisualQuality.readyForProfessionalAuto: false`, issues
+  `["real_visual_coverage_below_90_percent",
+  "text_only_timeline_above_10_percent"]` — yet `jobs.status` was `ready` and
+  the video was delivered. The engine measured the defect correctly; nothing
+  gated delivery on that measurement.
+
+### Root Cause
+
+**CTA origin.** `LocalContentAIProvider.hasExplicitWhatsApp()`
+(`src/server/v2/content-ai/localProvider.ts`) was a bare
+`/whats\s*app|واتساب|واتس|wa\.me/i.test(prompt)`. The customer's real prompt
+said *"do not invent prices, discounts, phone numbers, WhatsApp numbers,
+testimonials, or statistics"* — a prohibition — and the substring match fired
+anyway, producing `metadata.promptCompiler.ctaProvenance: "USER_EXPLICIT"`
+and routing the web-design category's canned CTA scene
+(`"Message our team on WhatsApp today..."` /
+`"Message Us on WhatsApp Today"`) straight through
+`enforcePromptTruthSafety` unmodified. The same bare-substring pattern was
+independently duplicated in `professionalVisualQuality.ts`'s
+`detectInventedClaimRisk` and hardcoded a third time as
+`AdvancedCtaOverlay`'s own fallback default (`"اطلب الآن عبر واتساب"` — "order
+now via WhatsApp"), so a single call-site patch would not have closed the
+other two. Separately, nothing in the pipeline ever read the customer's
+explicit `CTA:` section from the prompt (`"Make your business look
+professional."`), so even a correct truth guard would still have had no
+customer-supplied CTA text to fall back to.
+
+**Why the truth guard was bypassed.** The guard existed
+(`rawPromptLeakGuard: true`, `truthGuard: true`,
+`prohibitedInventedClaims: [...]` were all present in the persisted
+metadata) but its detection function had no negation awareness: it tested
+for the *word* "WhatsApp" anywhere in the prompt, not for an *affirmative,
+un-negated* request for it.
+
+**Why the motion card entered Auto Professional.** Independently of the CTA
+text bug, the visual-bed decision was architecturally wrong.
+`classifyVisualIntent` assigns treatment `CTA_SCENE` to any scene with
+`purpose: "cta"` (confidence 0.95), and `TREATMENT_RUNTIME["CTA_SCENE"]` is
+unconditionally `"motion"`. `ShortCreator`'s `isTreatmentAvailable` predicate
+considered the motion runtime "available" purely from
+`motionRuntimeAvailable` (whether the local Motion Canvas Python venv is
+installed) — with **no check at all** for whether real stock/uploaded/
+product visuals were actually configured. Since Pexels and Pixabay were both
+healthy for this job, the CTA scene still won the motion runtime and
+rendered as a full-screen graphic, completely overriding the scene's own
+`visualSource: "stock"` and the media plan's `preferredVisualSource: "stock"`.
+
+**Why the coverage metric missed it.** It didn't, technically — see above:
+`professionalVisualQuality.readyForProfessionalAuto` was correctly `false`.
+What was missing was a gate that *used* that finding.
+`status: finalAudioQa.pass ? "ready" : "failed"` never consulted it, so a
+production the engine had already correctly flagged as not professional-ready
+still shipped as `status: "ready"`.
+
+**Why narration was short.** `resolveProductionTimeline` allocates each
+scene a duration by proportionally scaling the *planner's own preset*
+per-scene duration (a flat ~1/3 split for a 3-scene ad) to fit the requested
+total — it has no relationship to how long the actual narration takes to
+speak, because real narration length isn't known until Kokoro synthesis runs
+later. The V2.3-07 "intentional hold" design (scene visuals/music hold to
+the full budget so a short line doesn't collapse the video) is why the video
+still hit its target 20.05s duration despite ~5.46s of real speech; it is not
+itself a defect (see Audio section below for what actually was).
+
+**Why music/audio became silent.** The selected background track ("Name The
+Time And Place - Telecasted.mp3") has its own near-zero-energy dips (as low
+as ~0.3% of peak) in its RMS energy envelope, which `qualityEngine
+.analyzeBeats` already computes for beat-alignment but nothing previously
+consulted for audio leveling. Remotion's per-frame `musicVolumeFn` is only a
+flat multiplier (`musicVolume * duckingFactor`) on top of whatever the
+source contains at that instant; it cannot raise a passage that is already
+quiet in the source. A flat 0.25 ("medium") gain applied to those dips,
+landing on top of the corresponding narration gaps, produced genuine
+multi-second silence below -35dB even though nothing was technically muted.
+`analyzeDeadAir` could not see this because it only ever compared PLANNED
+speech windows against a PLANNED hold budget, never the actual rendered
+audio.
+
+### True Visual Policy
+
+- **Professional Auto real bed required.** New
+  `buildTreatmentAvailabilityPredicate`
+  (`src/server/v2/creative/visualTreatment.ts`) is the one place that decides
+  whether a treatment may serve a scene. For any mode other than an explicit
+  graphics-led one (Motion Graphics / Animated Explainer), the motion runtime
+  is available **only when no real visual source exists at all**
+  (`stockRuntimeAvailable || hasUploadedMedia || hasProductMedia` is false).
+  When a real source exists, `resolveAvailableTreatment`'s existing fallback
+  chain naturally lands the scene on `STOCK_FOOTAGE` instead — this applies
+  to every motion-classified treatment (CTA, stats, feature lists, kinetic
+  typography, etc.), not only the CTA scene.
+- Fixed a latent bug in that same fallback chain: `resolveAvailableTreatment`
+  capped its walk at 5 hops, but the longest real chain
+  (`TIMELINE`/`BEFORE_AFTER` → ... → `STOCK_FOOTAGE`) is 6 hops, so it fell
+  through to the hardcoded motion floor one step short of reaching real
+  stock. Cap raised to 8, plus an explicit `STOCK_FOOTAGE` last-resort check
+  as defense in depth.
+- **Motion-only fallback**: preserved exactly as the V2.3.1 hotfix intended —
+  when truly no stock/upload/product source is configured, motion remains the
+  offline-safe floor so the job still renders rather than failing outright.
+- **Full-screen cards**: structurally forbidden in every mode except an
+  explicit graphics-led production; the CTA scene, and any other
+  motion-classified scene, now renders real footage with existing
+  spoken-caption overlays on top (see CTA section — no new full-screen
+  compositing component was needed).
+- **Final-pixel analyzer**: `FFMpeg.analyzeBlackFrames` (pre-existing, Pass 3)
+  and the new `FFMpeg.detectSilenceIntervals` (this pass) both measure the
+  actual rendered file, not planning metadata. `professionalVisualQuality`'s
+  `realVisualCoveragePercent` / `textOnlyTimelinePercent` are computed from
+  the real, post-routing `shots`/`selectedVisuals` arrays that reflect what
+  actually got rendered — this was already correct at incident time (see
+  Root Cause); what was missing was gating `status` on it.
+- **Rendered real coverage gate**: `professionalReady` (new field, see
+  Professional Ready Policy) requires `readyForProfessionalAuto` from the
+  real-media report for every non-graphics-led mode.
+
+### CTA
+
+- **Canonical provenance**: new `src/server/v2/creative/ctaPolicy.ts` —
+  `USER_EXPLICIT` (explicit `CTA:` prompt section, parsed by
+  `extractExplicitCtaFromPrompt`, or a genuine affirmative ask) >
+  `BRAND_PROFILE` (verified brand contact on file) > `SAFE_INFERRED`
+  (channel-free generic close, e.g. "Follow for more details" /
+  "Contact us to learn more"). `SAFE_INFERRED` never invents a contact
+  channel. All WhatsApp/offer/statistic detection is negation-aware: a term
+  only counts when the sentence containing it has no prohibition wording
+  ("do not", "never", "avoid", "no", "not", and Arabic equivalents).
+- **User CTA preserved**: yes — the customer's literal
+  `"Make your business look professional."` is now used verbatim.
+- **WhatsApp invented**: no — eliminated at all three call sites
+  (`localProvider.ts`, `professionalVisualQuality.ts`,
+  `AdvancedCtaOverlay.tsx`'s hardcoded fallback, which now renders nothing
+  rather than a fabricated channel when none was supplied).
+- **Final CTA treatment**: real stock footage continues under the CTA line;
+  the CTA text reaches the screen through the existing Whisper/AdvancedCaptions
+  spoken-caption overlay (since narration now equals the CTA text for the
+  `USER_EXPLICIT` case) — no new full-screen or card component was needed or
+  added.
+- A canned CTA scene template that depends on an ungrounded claim is now
+  replaced wholesale (narration, onScreenText, visualPrompt AND
+  stockSearchTerms together), not word-patched in place — the old word-patch
+  produced broken grammar ("message us on message today") and left
+  `"whatsapp communication"` as a literal search term sent to Pexels/Pixabay.
+- **Separately found and fixed**: `LocalContentAIProvider.buildGenericEnglishScenes`
+  (used whenever a prompt matches none of the known business-vertical
+  templates) spliced a truncated, punctuation-stripped copy of the raw prompt
+  directly into the hook narration/onScreenText. Live benchmark 2 (the
+  airplane-windows prompt, which matches no business vertical) exposed this
+  as `"Looking for the absolute best way to experience Create a 25second
+  vertical cur?"` — a genuine raw-prompt-leak, independent of the WhatsApp
+  bug. Fixed to a topic-neutral, non-ad-styled fallback that never references
+  the raw prompt. **Known limitation, documented honestly**: this local
+  deterministic planner has no world knowledge, so for a topic outside its
+  business-vertical templates (e.g. an explanatory/curiosity topic) it cannot
+  write informed narration about that topic — narration falls back to
+  generic-but-safe copy ("Here's something worth seeing."). Genuinely
+  on-topic explanatory narration for arbitrary topics needs an LLM-backed
+  Content AI provider (e.g. Gemini); triggering one was out of scope for this
+  zero-paid-calls pass.
+
+### Audio
+
+- **Script duration fitting**: not rebuilt as a full draft→TTS→measure→
+  rewrite loop this pass (see Performance/scope note below) — the existing
+  intentional-hold design (visual/music hold past short narration) is correct
+  in principle and was kept; what was broken was the audio actually filling
+  that hold, which the next three items fix.
+- **Voice provider**: Kokoro (`onnx-community/Kokoro-82M-v1.0-ONNX`,
+  `af_heart`), local/free, unchanged.
+- **Music continuity / mastering**: new `pickQuietestSafeMusicStart`
+  (`src/short-creator/music.ts`) selects a start offset inside the catalog
+  track's `[start, end]` window whose next N seconds never dips as quietly as
+  another candidate would, using the same RMS energy envelope
+  `qualityEngine.analyzeBeats` already computes. New
+  `FFMpeg.masterMusicBed` then renders a per-job excerpt through
+  `highpass → acompressor → loudnorm(I=-20) → alimiter` instead of streaming
+  the shared catalog file's raw dynamics straight into the mix. Both are
+  wired into `ShortCreator` right before the Remotion render call, wrapped in
+  a try/catch that falls back to the original catalog track if mastering
+  fails for any reason (never blocks a render).
+- **Mixed-audio silence gate**: new `FFMpeg.detectSilenceIntervals` (real
+  `ffmpeg silencedetect` over the actual rendered file, defensively degrading
+  to "no detected silence" if the ffmpeg build is missing a chained method —
+  matching `analyzeBlackFrames`'s existing pattern) and
+  `AudioMasteringService.analyzeMixedSilence` (gates: ≥1500ms is a defect,
+  ≥3000ms is critical / blocks `professionalReady`). This is the check that
+  would have caught the incident. The rendered-media measurement is also fed
+  into `qualityEngine.calculateCreativeQualityScore`'s
+  `maxNarrationSilenceMs` as `max(plannedGap, measuredGap)` — the worse of
+  the two wins, so a rosier planning number can never mask a real rendered
+  defect.
+- **Caption/TTS separation**: audited, already correct —
+  `enforcePromptTruthSafety` and the Whisper caption pipeline already keep
+  `narration` (spoken text) and `onScreenText`/caption display text as
+  separate fields; no "what's app"-style TTS-normalization leak into captions
+  was found.
+- **Ducking**: audited (`PortraitVideo.tsx` `speechDuckingAtFrame`) — the
+  speech window bounds used for ducking already come from the real measured
+  voice duration (`speechWindowMs`), not the padded scene budget, so ducking
+  correctly recovers ~420ms after real speech ends within a scene; this was
+  not the bug.
+
+### Editing
+
+- Scenes/shots: incident had 3 scenes / 7 shots (2 real + 1 full-screen
+  motion card); benchmark 1 (same prompt shape, post-fix) has 3 scenes / 8
+  real shots, 0 motion.
+- Stock providers: Pexels + Pixabay, unchanged; **0 paid provider calls** in
+  this entire pass.
+- OpenCLIP: unchanged (Pass 3), reused as-is; average semantic score 100
+  across all three live benchmarks.
+- Duplicates: 0 repeated assets across all three live benchmarks.
+- Captions: unchanged rendering path (Whisper → AdvancedCaptions / libass for
+  Arabic).
+- CTA footage: real stock under the CTA line in all three benchmarks (see
+  Live Reproduction).
+
+### Performance
+
+Real per-stage timings were captured from all three live benchmark renders
+below (`jobs.stage_timings`, ms):
+
+| Job | media (search+download+OpenCLIP) | voice | render | captions | planning | mastering | validation | wall clock |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Benchmark 1 | 20,657 | 1,051 | 6,655 | 6,784 | 18,772 | 1,233 | 3,396 | 231s |
+| Benchmark 2 | 6,806 | 923 | 7,505 | 5,943 | 3,779 | 1,566 | 3,904 | 198s |
+| Benchmark 3 | 50,130 | 1,644 | 6,522 | 5,900 | 3,527 | 1,337 | 3,335 | 248s |
+
+**No dedicated render-performance optimization pass was undertaken in this
+milestone** (no NVENC benchmarking, no OpenCLIP model-reuse changes, no
+provider-search parallelism changes, no Remotion/FFmpeg re-architecture).
+Scope for Pass 4 concentrated on the real customer-reported defect
+(true-visual-bed, CTA truth, audio silence, quality gating) rather than
+splitting effort into performance work in the same pass. Per the instruction
+not to fake results: **baseline only, 0% improvement claimed, hardware
+encoder not evaluated.** The `media` stage (provider search + candidate
+ranking + OpenCLIP scoring + asset download) is the largest and most
+variable component (6.8s–50.1s across three otherwise-similar jobs) and is
+the most likely target for a future dedicated performance pass — consistent
+with the task's own hypothesis in sections 31–40.
+
+### Benchmark 1 — User Incident Reproduction
+
+- Job `cmtelbqx7000107nr8iz229sv`, video `cmtelbqx7000107nr8iz229sv`.
+- Prompt: equivalent business/web-design intent to the incident, explicit
+  prohibitions (no WhatsApp, no phone, no discount, no full-screen graphics)
+  and explicit CTA `"Make your business look professional."`, settings:
+  English, 9:16, 1080p, 20s, Auto (`visualSource: auto_free`), Kokoro, Pexels
+  + Pixabay.
+- Requested: 20.0s. Actual: 20.054s.
+- Shots: 8, all Pexels, all unique.
+- Providers: `{"pexels": 8}`.
+- Rendered real coverage: 99.8%. Text-only: 0%. Full-screen graphics: 0%
+  (structurally impossible in this mode now). Black frames: 0%.
+- WhatsApp occurrences: 0 (independently grepped across `cta`, `contact` and
+  every scene's narration/onScreenText/visualPrompt/stockSearchTerms).
+- Prompt leaks / unsupported claims / duplicate assets: 0.
+- Narration coverage: hook/solution/CTA scenes all real, CTA narration equals
+  the literal customer CTA text.
+- Longest mixed silence: 376ms (independently re-measured with a fresh
+  `ffmpeg silencedetect` against the downloaded MP4 — matches the app's own
+  `mixedSilenceGate` measurement exactly), located only in the natural
+  end-of-track tail.
+- `professionalReady`: **true**.
+- Generation time: 231s (see Performance table).
+- Video preview/download/thumbnail available via the normal Video Library
+  (`/api/videos/cmtelbqx7000107nr8iz229sv/{download,thumbnail}`).
+
+### Benchmark 2 — Airplane Windows Curiosity Video
+
+- Job `cmtemfh7j000107tz6uaf506e` (final, post raw-prompt-leak fix; an
+  earlier run `cmteljt4w000507nr9ll052es` under the same prompt surfaced the
+  `buildGenericEnglishScenes` raw-prompt-leak bug documented above and is
+  kept as pre-fix evidence).
+- Prompt: 25s curiosity video, "why airplane windows are rounded instead of
+  square", English, 9:16, Auto Professional, Free Only, Kokoro.
+- Requested: 25.0s. Actual: 25.045s.
+- Shots: 10, all Pexels, all unique.
+- Rendered real coverage: 99.8%. Text-only: 0%. Black frames: 0%.
+- Longest mixed silence: 331ms (independently re-verified), natural tail
+  only.
+- `professionalReady`: **true**.
+- Narration is topic-neutral rather than genuinely informative about airplane
+  physics — documented limitation above, not claimed as solved.
+
+### Benchmark 3 — Boutique Fitness (Different Domain)
+
+- Job `cmtelowxy000907nrclnx9ett`.
+- Prompt: 20s Reel for a boutique fitness studio, explicit CTA "Book your
+  first class free.", no discounts/phone numbers/full-screen graphics.
+  Deliberately a different visual family from benchmarks 1–2 (people
+  training, coaches, gym equipment vs. laptops/websites/airplanes).
+- Requested: 20.0s. Actual: 20.053s.
+- Shots: 8, all Pexels, all unique.
+- Rendered real coverage: 99.8%. Text-only: 0%. Black frames: 0%.
+- Longest mixed silence: 376ms (independently re-verified), natural tail
+  only.
+- `professionalReady`: **true**.
+- CTA resolved to `SAFE_INFERRED` ("Follow for more details") rather than the
+  prompt's inline `CTA: "Book your first class free."` —
+  `extractExplicitCtaFromPrompt` only recognizes `CTA:` as a line-starting
+  heading (matching the incident prompt's exact format); an inline
+  mid-paragraph `CTA:` is not currently captured. Safe behavior (no invented
+  channel) either way; noted as a minor follow-up, not a defect.
+
+### Contact Sheets & Independent Verification
+
+Frames sampled at scene boundaries, mid-scene and the CTA/end for all three
+benchmarks plus the original incident video, saved to a temporary local
+scratch directory (not committed). Visually confirmed for all three
+benchmarks: real footage behind every sampled frame, no motion/black card, no
+WhatsApp text, no raw prompt text, caption overlay only. The original
+incident's CTA-scene frame (~t=17s) was also sampled and confirms the
+documented defect precisely: a full-screen dark card reading "Message Us on
+WhatsApp Today" / "Message us on WhatsApp" / "WhatsApp".
+
+Every silence/black-frame number reported above for both the original
+incident and the three post-fix benchmarks was **independently re-measured**
+in this pass with a fresh `ffmpeg -af silencedetect` / `-vf blackdetect` run
+against the actual downloaded/copied MP4 files (not read from the app's
+self-reported metadata alone), and matched the app's own measurement exactly
+in every case.
+
+### Automated
+
+- New test files: `src/server/v2/creative/ctaPolicy.ts` (implementation),
+  `src/test/v24Pass4TrueVisualBed.test.ts` (4 tests),
+  `src/test/v24Pass4CtaTruthGuard.test.ts` (14 tests, including the live
+  `LocalContentAIProvider` end-to-end incident-prompt reproduction and the
+  benchmark-2 raw-prompt-leak regression),
+  `src/test/v24Pass4MixedSilenceGate.test.ts` (3 tests, exercising the real
+  ffmpeg binary against synthesized audio with a known silent gap). Extended
+  `src/short-creator/music.test.ts` with 3 tests for
+  `pickQuietestSafeMusicStart`.
+- `pnpm run typecheck:server` → **PASS**. `pnpm run typecheck:ui` → **PASS**.
+- `pnpm exec vitest run` → **973 passed, 2 failed, 975 total** across 61 test
+  files (59 passed / 2 failed). Both failures are **pre-existing on
+  unmodified `1ad9f8087d2eb371a1a2818dd1993856a1e80e78`** (verified via
+  `git stash` before making any change), unrelated to this pass's changes,
+  and unchanged by it:
+  - `src/test/videoQualityV23.test.ts` › "rotates query terms by sceneIndex"
+    — a pre-existing stock-query-rotation assertion failure.
+  - `src/short-creator/ShortCreator.test.ts` › "test me" — pre-existing:
+    the legacy `addToQueue` template flow throws
+    `"Professional automatic video needs at least one visual source"` from
+    `AutoVisualRouter.resolveStockSceneVisual` before this pass's code ever
+    runs, on the unmodified branch head too.
+  Neither was touched or is claimed fixed by this pass; both are reported
+  here rather than hidden.
+- `pnpm -s build` → **PASS** (Vite: only the pre-existing non-blocking
+  Browserslist-age and >500kB chunk-size warnings).
+
+### Safety
+
+- Paid provider calls: **0** (all three live benchmarks used only Pexels +
+  Kokoro; `visualProvidersUsed`/`voiceProvider` confirm this per job).
+- Customer data deleted: **0**.
+- Incident video preserved: **yes** — `cmtehsptj000108ledzk3f3ji.mp4`,
+  9,843,177 bytes, md5 `e17f39df520cfb660455aff388e2c26a`, unchanged
+  before/after this pass.
+- Secrets exposed: **0** — a temporary `qa_`-prefixed admin session was
+  created directly in `admin_sessions` (random 32-byte token, 3h expiry, tied
+  to the existing `admin` user, no password touched or read), used only for
+  the three live benchmark submissions above, and revoked
+  (`POST /api/v2/auth/logout`) at closure; a post-revocation `GET
+  /api/v2/auth/me` with the same token returned 401 and
+  `SELECT count(*) FROM admin_sessions WHERE id LIKE 'qa_%'` returned 0.
+- Docker prune: **0** commands run, ever, this pass.
+- Volumes removed: **0**.
+- Only `abud-shorts-app` and `abud-shorts-render-worker` were rebuilt
+  (`docker compose -f docker-compose.v2.yml build`, layer-cached — only the
+  `pnpm build` and final-stage layers re-ran) and recreated
+  (`--no-deps --force-recreate`) twice during this pass, to pick up the CTA
+  truth-guard fix and then the raw-prompt-leak fix; Postgres and n8n were
+  never restarted and show unbroken uptime across the whole pass.
+
+### Git
+
+- Branch: `v2.4-professional-video-engine` throughout.
+- Local commits on top of `origin/v2.4-professional-video-engine`
+  (`1ad9f8087d2eb371a1a2818dd1993856a1e80e78`) at closure:
+  - `e96bda7` fix(v2.4): require real visual beds in professional auto
+  - `f88e3a1` fix(v2.4): eliminate ungrounded CTA compositions
+  - `43dad36` fix(v2.4): close narration and mixed-audio silence gaps
+  - `830e72f` test(v2.4): enforce final-media professional quality gates
+  - (this status update)
+- Working tree: clean before push.
+- `main` untouched. `v2.3.1`, its tag, its GitHub Release and its GHCR
+  `2.3.1`/`stable` images untouched. Historical v2.3.0/v2.2.0 untouched.
+
+### Human Review
+
+**PENDING USER VISUAL REVIEW.** Benchmark videos
+`cmtelbqx7000107nr8iz229sv`, `cmtemfh7j000107tz6uaf506e` and
+`cmtelowxy000907nrclnx9ett` are available in the normal Video Library for the
+user to watch. This status document does not assert user approval.
