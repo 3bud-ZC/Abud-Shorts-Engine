@@ -370,6 +370,12 @@ export class LocalContentAIProvider implements ContentAIProvider {
     if (lower.includes("website") || lower.includes("web") || lower.includes("design") || lower.includes("landing page") || lower.includes("site")) {
       return this.buildWebDesignScenesEnglish(durPerScene, brandName, durationSeconds);
     }
+    if (lower.includes("coffee") || lower.includes("cafe") || lower.includes("barista") || lower.includes("espresso")) {
+      return this.buildCafeScenesEnglish(durPerScene, brandName);
+    }
+    if (lower.includes("fitness") || lower.includes("gym") || lower.includes("workout") || lower.includes("training") || lower.includes("studio")) {
+      return this.buildFitnessScenesEnglish(durPerScene, brandName);
+    }
     if (lower.includes("backup") || lower.includes("cloud") || lower.includes("software") || lower.includes("tech")) {
       return this.buildTechEducationalScenesEnglish(durPerScene, brandName);
     }
@@ -908,6 +914,96 @@ export class LocalContentAIProvider implements ContentAIProvider {
         onScreenText: "Follow For Daily Tech Tips",
         stockSearchTerms: ["technology team success", "smiling engineer", "software development"],
         visualPrompt: "Confident IT professional giving thumbs up with clean modern office background",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+    ];
+  }
+
+  private buildCafeScenesEnglish(
+    dur: number,
+    brand?: string,
+  ): ProductionSceneSpec[] {
+    const bName = brand || "this coffee subscription";
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: "Make every morning feel like your favorite cafe, without waiting in line.",
+        onScreenText: "Cafe Quality At Home",
+        stockSearchTerms: ["barista espresso close up", "coffee beans grinding", "coffee bag packaging"],
+        visualPrompt: "Close-up of fresh espresso extraction, roasted beans, and premium coffee packaging",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: `${bName} brings freshly roasted coffee to your routine with a simple, polished experience.`,
+        onScreenText: "Fresh Coffee, Delivered",
+        stockSearchTerms: ["coffee subscription box", "fresh roasted coffee beans", "barista pouring latte"],
+        visualPrompt: "Premium coffee box preparation with warm cafe lighting and latte craft detail",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: "Follow for better coffee moments and discover your next favorite roast.",
+        onScreenText: "Discover Your Next Roast",
+        stockSearchTerms: ["morning coffee at home", "coffee delivery package", "cafe lifestyle"],
+        visualPrompt: "Lifestyle shot of a person enjoying fresh coffee at home beside a delivered package",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+    ];
+  }
+
+  private buildFitnessScenesEnglish(
+    dur: number,
+    brand?: string,
+  ): ProductionSceneSpec[] {
+    const bName = brand || "this boutique fitness studio";
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: "Ready for workouts that feel focused, energetic, and built around real progress?",
+        onScreenText: "Train With Purpose",
+        stockSearchTerms: ["boutique fitness studio", "people gym training", "fitness class workout"],
+        visualPrompt: "Energetic boutique fitness class with focused members training under premium studio lighting",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: `${bName} pairs expert coaching with a motivating space that keeps every session moving.`,
+        onScreenText: "Coaching, Energy, Momentum",
+        stockSearchTerms: ["personal trainer coaching", "strength training gym", "athletic workout"],
+        visualPrompt: "Personal trainer guiding a strength session with crisp movement and confident pacing",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: "Follow for training ideas and find a studio routine that fits your week.",
+        onScreenText: "Find Your Routine",
+        stockSearchTerms: ["fitness studio members", "gym community workout", "healthy lifestyle training"],
+        visualPrompt: "Friendly fitness studio community finishing a workout with upbeat energy",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "cut",

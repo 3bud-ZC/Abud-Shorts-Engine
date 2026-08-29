@@ -34,6 +34,36 @@ describe("Content AI Providers & Creative Director", () => {
     expect(spec.scenes[0].stockSearchTerms).toContain("server room blinking");
   });
 
+  it("Local AI creates topic-specific English coffee subscription scenes", async () => {
+    const provider = new LocalContentAIProvider();
+    const spec = await provider.generateProductionSpec({
+      prompt: "Create a 20-second vertical Short for a modern coffee subscription with real cafe preparation footage",
+      language: "en",
+      durationSeconds: 20,
+    });
+
+    expect(spec.language).toBe("en");
+    expect(spec.scenes).toHaveLength(3);
+    expect(spec.scenes[0].stockSearchTerms.join(" ")).toContain("coffee");
+    expect(spec.scenes[1].stockSearchTerms.join(" ")).toContain("coffee");
+    expect(spec.scenes[0].onScreenText).toBe("Cafe Quality At Home");
+  });
+
+  it("Local AI creates topic-specific English boutique fitness scenes", async () => {
+    const provider = new LocalContentAIProvider();
+    const spec = await provider.generateProductionSpec({
+      prompt: "Create a 20-second vertical Short for a boutique fitness studio with real people training",
+      language: "en",
+      durationSeconds: 20,
+    });
+
+    expect(spec.language).toBe("en");
+    expect(spec.scenes).toHaveLength(3);
+    expect(spec.scenes[0].stockSearchTerms.join(" ")).toContain("fitness");
+    expect(spec.scenes[1].stockSearchTerms.join(" ")).toContain("trainer");
+    expect(spec.scenes[0].onScreenText).toBe("Train With Purpose");
+  });
+
   it("Local AI enhances prompts with structured guidance without replacing original", async () => {
     const provider = new LocalContentAIProvider();
     const result = await provider.rewritePrompt("اعمل اعلان لكافيه");
