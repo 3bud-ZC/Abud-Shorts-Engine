@@ -161,6 +161,54 @@ export function sceneRendersAsMotion(input: {
   );
 }
 
+export type VisualBedAvailabilityInput = {
+  /** Motion Graphics / Animated Explainer: the customer explicitly asked for a graphics-led production. */
+  graphicOnlyMode: boolean;
+  /** The customer explicitly asked for stock-only sourcing. */
+  forceStockFootage: boolean;
+  /** Local Motion Canvas / Python quality runtime is installed. */
+  motionRuntimeAvailable: boolean;
+  stockRuntimeAvailable: boolean;
+  hasUploadedMedia: boolean;
+  hasProductMedia: boolean;
+};
+
+/**
+ * The one place that decides whether a treatment may actually be used for a
+ * scene, given what visual sources this production really has.
+ *
+ * The true-visual-bed invariant lives here: a professional Auto production
+ * (anything other than an explicit graphics-led mode) may only use the motion
+ * runtime as a genuine full-screen bed when no real visual source exists at
+ * all. Before V2.4 Pass 4 this predicate considered the motion runtime
+ * "available" purely from `motionRuntimeAvailable` (whether the local Motion
+ * Canvas venv is installed), with no regard for whether real stock/uploaded/
+ * product visuals were configured. Because `CTA_SCENE` (assigned to any scene
+ * with `purpose: "cta"`, confidence 0.95) maps unconditionally onto the
+ * motion runtime, every Auto Professional CTA scene always won that runtime
+ * and rendered as a full-screen graphic card - the "Message Us on WhatsApp
+ * Today" card that shipped in incident cmtehsptj000108ledzk3f3ji (26.1% real
+ * visual coverage, 32.9% text-only, on a 20s Auto Professional advertisement).
+ */
+export function buildTreatmentAvailabilityPredicate(
+  input: VisualBedAvailabilityInput,
+): (treatment: VisualTreatment) => boolean {
+  const realVisualSourceConfigured =
+    input.stockRuntimeAvailable || input.hasUploadedMedia || input.hasProductMedia;
+
+  return (treatment: VisualTreatment): boolean => {
+    const runtime = TREATMENT_RUNTIME[treatment];
+    if (input.graphicOnlyMode) return runtime === "motion";
+    if (input.forceStockFootage && runtime !== "stock") return false;
+    if (runtime === "motion") return input.motionRuntimeAvailable && !realVisualSourceConfigured;
+    if (runtime === "stock") return input.stockRuntimeAvailable;
+    if (runtime === "upload") return input.hasUploadedMedia;
+    if (runtime === "product") return input.hasProductMedia;
+    // Mockups are rendered locally and always available.
+    return true;
+  };
+}
+
 /**
  * Walks the fallback chain until it finds a treatment the runtime can serve.
  * Depth-capped so a cycle in the table cannot hang the planner.
@@ -168,7 +216,12 @@ export function sceneRendersAsMotion(input: {
 export function resolveAvailableTreatment(
   preferred: VisualTreatment,
   isAvailable: (treatment: VisualTreatment) => boolean,
-  maxDepth = 5,
+  // The longest real chain (TIMELINE / BEFORE_AFTER -> ... -> STOCK_FOOTAGE)
+  // is 6 hops. A cap of 5 silently stopped one short of STOCK_FOOTAGE and fell
+  // through to the hardcoded motion floor below even when real stock was
+  // available - exactly the full-screen-graphic leak this resolver exists to
+  // prevent.
+  maxDepth = 8,
 ): { treatment: VisualTreatment; fellBackFrom?: VisualTreatment; reason?: string } {
   let current: VisualTreatment | null = preferred;
   const seen = new Set<VisualTreatment>();
@@ -188,7 +241,21 @@ export function resolveAvailableTreatment(
     current = TREATMENT_FALLBACK[current];
   }
 
-  // Motion templates need no provider, so this is the guaranteed floor.
+  // Last-resort check before giving up on a real visual bed: STOCK_FOOTAGE is
+  // not always reachable by walking TREATMENT_FALLBACK within maxDepth (some
+  // chains are longer than others), so it is tried directly here rather than
+  // only through the chain above.
+  if (preferred !== "STOCK_FOOTAGE" && isAvailable("STOCK_FOOTAGE")) {
+    return {
+      treatment: "STOCK_FOOTAGE",
+      fellBackFrom: preferred,
+      reason: `${preferred} and its fallbacks unavailable; used real stock footage`,
+    };
+  }
+
+  // Motion templates need no provider, so this is the guaranteed floor when
+  // no real visual bed is available at all (e.g. no stock provider configured
+  // and no uploaded/product media).
   return {
     treatment: "MOTION_GRAPHICS",
     fellBackFrom: preferred,
