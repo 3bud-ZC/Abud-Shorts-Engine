@@ -13,6 +13,12 @@ import type {
   ProviderValidationResult,
   SpecReviewResult,
 } from "./types";
+import {
+  inventsUngroundedClaim,
+  resolveCtaProvenance,
+  stripInventedClaims,
+  type ResolvedCta,
+} from "../creative/ctaPolicy";
 
 function isArabic(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text);
@@ -42,58 +48,6 @@ function detectArabicDialect(text: string): ArabicDialect {
   return "none";
 }
 
-function hasExplicitWhatsApp(prompt: string): boolean {
-  return /whats\s*app|واتساب|واتس|wa\.me/i.test(prompt);
-}
-
-function hasExplicitOffer(prompt: string): boolean {
-  return /discount|offer|sale|coupon|promo|خصم|عرض|تخفيض|كوبون/i.test(prompt);
-}
-
-function hasExplicitStatistic(prompt: string): boolean {
-  return /\d+\s*%|\d+\s*(?:percent|per cent)|\d+\s*(?:في المية|بالمية|٪)/i.test(prompt);
-}
-
-function hasExplicitContact(prompt: string): boolean {
-  return hasExplicitWhatsApp(prompt) || /call|phone|email|dm|message|contact|تواصل|اتصل|راسل|رسالة/i.test(prompt);
-}
-
-function safeCtaText(prompt: string, isAr: boolean, dialect: ArabicDialect): string {
-  if (hasExplicitWhatsApp(prompt)) {
-    return isAr ? "تواصل معنا عبر واتساب" : "Message us on WhatsApp";
-  }
-  if (hasExplicitContact(prompt)) {
-    return isAr ? "تواصل معنا لمعرفة التفاصيل" : "Contact us to learn more";
-  }
-  return isAr
-    ? dialect === "egyptian"
-      ? "تابعنا وشوف التفاصيل"
-      : "تابعنا لمعرفة التفاصيل"
-    : "Follow for more details";
-}
-
-function stripInventedClaims(text: string, prompt: string, isAr: boolean): string {
-  let result = text;
-  if (!hasExplicitWhatsApp(prompt)) {
-    result = result
-      .replace(/\s*(?:on|via|through)\s+WhatsApp/gi, "")
-      .replace(/WhatsApp/gi, isAr ? "التواصل" : "message")
-      .replace(/واتساب|واتس/gi, isAr ? "التواصل" : "message");
-  }
-  if (!hasExplicitOffer(prompt)) {
-    result = result
-      .replace(/(?:limited|special|exclusive)\s+(?:discount|offer|deal)/gi, isAr ? "التفاصيل" : "details")
-      .replace(/\b(?:discount|offer|sale|coupon|promo)\b/gi, isAr ? "التفاصيل" : "details")
-      .replace(/خصم|عرض|تخفيض|كوبون/gi, isAr ? "التفاصيل" : "details");
-  }
-  if (!hasExplicitStatistic(prompt)) {
-    result = result
-      .replace(/\b\d+\s*%\s*(?:of\s+)?/gi, "")
-      .replace(/\d+\s*(?:في المية|بالمية|٪)/gi, "");
-  }
-  return result.replace(/\s{2,}/g, " ").trim();
-}
-
 function looksLikeRawInstruction(text: string, prompt: string): boolean {
   const normalizedText = text.toLowerCase().replace(/\s+/g, " ").trim();
   const normalizedPrompt = prompt.toLowerCase().replace(/\s+/g, " ").trim();
@@ -106,14 +60,64 @@ function looksLikeRawInstruction(text: string, prompt: string): boolean {
   );
 }
 
+/** Generic, claim-free search terms for a CTA shot once the canned ones (which
+ * often bake in an invented channel, e.g. "whatsapp communication") have been
+ * discarded. Still on-topic for a satisfied-customer/result closing shot. */
+const SAFE_CTA_SEARCH_TERMS = ["happy business owner", "professional service result", "satisfied customer smiling"];
+
+function safeStockSearchTerms(terms: string[] | undefined, prompt: string): string[] {
+  if (!terms || terms.length === 0) return terms || [];
+  const kept = terms.filter((term) => !inventsUngroundedClaim(term, prompt));
+  if (kept.length === terms.length) return terms;
+  const padded = [...kept];
+  for (const fallback of SAFE_CTA_SEARCH_TERMS) {
+    if (padded.length >= terms.length) break;
+    if (!padded.includes(fallback)) padded.push(fallback);
+  }
+  return padded;
+}
+
 function enforcePromptTruthSafety(
   scenes: ProductionSceneSpec[],
   prompt: string,
   isAr: boolean,
   dialect: ArabicDialect,
+  resolvedCta: ResolvedCta,
 ): ProductionSceneSpec[] {
-  const cta = safeCtaText(prompt, isAr, dialect);
   return scenes.map((scene, index) => {
+    const isCtaScene = scene.purpose === "cta";
+    // A canned CTA line can hinge entirely on an invented channel or offer
+    // ("Message our team on WhatsApp today... claim your limited discount").
+    // Patching that word-by-word produces broken grammar ("message us on
+    // message today"), so when the line depends on a claim the prompt never
+    // authorized, the whole line - and the visual search terms that were
+    // built around the same invented claim, e.g. `visualPrompt: "...with
+    // WhatsApp message ready"` or `stockSearchTerms: ["whatsapp
+    // communication", ...]` - is replaced with the canonically resolved,
+    // truth-safe CTA instead.
+    if (
+      isCtaScene &&
+      (inventsUngroundedClaim(scene.narration, prompt) ||
+        inventsUngroundedClaim(scene.onScreenText || "", prompt) ||
+        inventsUngroundedClaim(scene.visualPrompt || "", prompt) ||
+        (scene.stockSearchTerms || []).some((term) => inventsUngroundedClaim(term, prompt)))
+    ) {
+      return {
+        ...scene,
+        narration: resolvedCta.text,
+        onScreenText: resolvedCta.text,
+        visualPrompt: inventsUngroundedClaim(scene.visualPrompt || "", prompt)
+          ? "Happy business owner reviewing their professional new website"
+          : scene.visualPrompt,
+        stockSearchTerms: safeStockSearchTerms(scene.stockSearchTerms, prompt),
+        notes: [
+          scene.notes,
+          index === 0 ? "raw_prompt_leak_guard_enabled" : undefined,
+          "truth_safe_cta_replaced",
+        ].filter(Boolean).join("; ") || scene.notes,
+      };
+    }
+
     const safeNarration = stripInventedClaims(scene.narration, prompt, isAr);
     const safeOnScreen =
       scene.onScreenText && !looksLikeRawInstruction(scene.onScreenText, prompt)
@@ -122,12 +126,14 @@ function enforcePromptTruthSafety(
     return {
       ...scene,
       narration: safeNarration || scene.narration,
-      onScreenText: safeOnScreen || (scene.purpose === "cta" ? cta : undefined),
+      onScreenText: safeOnScreen || (isCtaScene ? resolvedCta.text : undefined),
+      visualPrompt: scene.visualPrompt ? stripInventedClaims(scene.visualPrompt, prompt, isAr) : scene.visualPrompt,
+      stockSearchTerms: safeStockSearchTerms(scene.stockSearchTerms, prompt),
       visualProvider: scene.visualProvider === "pexels" ? undefined : scene.visualProvider,
       notes: [
         scene.notes,
         index === 0 ? "raw_prompt_leak_guard_enabled" : undefined,
-        scene.purpose === "cta" ? "truth_safe_cta" : undefined,
+        isCtaScene ? "truth_safe_cta" : undefined,
       ].filter(Boolean).join("; ") || scene.notes,
     };
   });
@@ -178,6 +184,13 @@ export class LocalContentAIProvider implements ContentAIProvider {
     const voiceProvider = params.voiceProvider || "auto";
     const voiceId = params.voiceId || "";
 
+    const resolvedCta = resolveCtaProvenance({
+      prompt,
+      isArabic: isAr,
+      dialect,
+      brandContactText: params.brandKit?.contactText || undefined,
+    });
+
     const scenes = enforcePromptTruthSafety(this.buildCreativeScenes({
       prompt,
       isArabic: isAr,
@@ -185,9 +198,9 @@ export class LocalContentAIProvider implements ContentAIProvider {
       durationSeconds,
       contentStyle,
       brandName: params.brandName || params.brandKit?.brandName,
-    }), prompt, isAr, dialect);
+    }), prompt, isAr, dialect, resolvedCta);
 
-    const ctaText = safeCtaText(prompt, isAr, dialect);
+    const ctaText = resolvedCta.text;
 
     const rawSpec: ProductionSpec = {
       id: cuid(),
@@ -211,10 +224,10 @@ export class LocalContentAIProvider implements ContentAIProvider {
       brandId: params.brandId,
       cta: {
         text: ctaText,
-        action: hasExplicitContact(prompt) ? "Contact CTA" : "Follow CTA",
-        contact: hasExplicitWhatsApp(prompt) ? "WhatsApp" : undefined,
+        action: resolvedCta.action,
+        contact: resolvedCta.contact,
       },
-      contact: hasExplicitWhatsApp(prompt) ? "WhatsApp" : undefined,
+      contact: resolvedCta.contact,
       scenes,
       brandKit: params.brandKit,
       metadata: {
@@ -224,7 +237,7 @@ export class LocalContentAIProvider implements ContentAIProvider {
           version: "prompt_compiler.v3",
           rawPromptLeakGuard: true,
           truthGuard: true,
-          ctaProvenance: hasExplicitContact(prompt) ? "USER_EXPLICIT" : "DEFAULT",
+          ctaProvenance: resolvedCta.provenance,
           prohibitedInventedClaims: ["prices", "discounts", "phone_numbers", "whatsapp_cta", "statistics", "testimonials", "urls"],
         },
         scriptPipeline: isAr
@@ -1011,21 +1024,35 @@ export class LocalContentAIProvider implements ContentAIProvider {
     ];
   }
 
+  /**
+   * Used only when the prompt matches none of the business-vertical
+   * templates above (web design, coffee, fitness, tech). This local
+   * deterministic planner has no world knowledge, so it cannot write an
+   * informed explanation of an arbitrary topic (e.g. "why airplane windows
+   * are rounded") - that requires an LLM-backed Content AI provider. What it
+   * must never do is splice the customer's own raw prompt text into the
+   * narration: the previous version built `onScreenText` and the hook line
+   * directly from a truncated, punctuation-stripped copy of the prompt
+   * (`"Looking for the absolute best way to experience Create a 25second
+   * vertical cur?"` for a real benchmark run), which is both nonsensical and
+   * a raw-prompt-leak. This fallback stays topic-neutral instead, and does
+   * not assume the production is an advertisement (no "limited offer",
+   * no invented CTA channel - CTA text still comes from `resolveCtaProvenance`
+   * upstream in `enforcePromptTruthSafety`).
+   */
   private buildGenericEnglishScenes(
     prompt: string,
     dur: number,
     brand?: string,
   ): ProductionSceneSpec[] {
-    const cleanPrompt = prompt.replace(/[^\w\s]/gi, "").slice(0, 30);
     return [
       {
         sceneIndex: 0,
         purpose: "hook",
         durationSeconds: dur,
-        narration: `Looking for the absolute best way to experience ${cleanPrompt}?`,
-        onScreenText: cleanPrompt,
-        stockSearchTerms: ["cinematic hero shot", "modern lifestyle", "trending product"],
-        visualPrompt: "High energy cinematic shot introducing the core subject",
+        narration: "Here's something worth seeing.",
+        stockSearchTerms: ["cinematic hero shot", "modern lifestyle", "close up detail"],
+        visualPrompt: "High energy cinematic establishing shot introducing the subject",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "cut",
@@ -1034,10 +1061,9 @@ export class LocalContentAIProvider implements ContentAIProvider {
         sceneIndex: 1,
         purpose: "solution",
         durationSeconds: dur,
-        narration: "Built with premium quality and tailored to deliver exactly what you need.",
-        onScreenText: "Premium Quality & Speed",
-        stockSearchTerms: ["quality craftsmanship", "customer satisfaction", "modern technology"],
-        visualPrompt: "Close up detail showcasing quality and reliability",
+        narration: "Here is what makes it worth your attention.",
+        stockSearchTerms: ["quality craftsmanship", "detail shot", "modern technology"],
+        visualPrompt: "Close up detail showcasing quality and craft",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "fade",
@@ -1046,10 +1072,9 @@ export class LocalContentAIProvider implements ContentAIProvider {
         sceneIndex: 2,
         purpose: "cta",
         durationSeconds: dur,
-        narration: "Get in touch today to grab this limited offer before it's gone.",
-        onScreenText: "Message Us Today",
-        stockSearchTerms: ["call to action mobile", "happy customer smartphone", "shopping"],
-        visualPrompt: "Smartphone screen with friendly message prompt and glowing CTA",
+        narration: "Follow for more.",
+        stockSearchTerms: ["happy person reaction", "satisfied customer", "positive moment"],
+        visualPrompt: "Genuine positive reaction shot to close the video",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "cut",

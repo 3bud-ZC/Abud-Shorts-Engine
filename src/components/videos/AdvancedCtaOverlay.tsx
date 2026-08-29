@@ -35,8 +35,13 @@ export const AdvancedCtaOverlay: React.FC<AdvancedCtaOverlayProps> = ({
     extrapolateRight: "clamp",
   });
 
-  const finalCta = ctaText || brandKit?.outroText || "اطلب الآن عبر واتساب";
-  const finalContact = contactText || brandKit?.contactText || brandKit?.brandName || "ABUD Shorts";
+  // No contact channel is invented here: a caller that has nothing to show
+  // should render nothing rather than default to a fabricated WhatsApp CTA
+  // (this default previously leaked into a real customer render as "اطلب الآن
+  // عبر واتساب" - order now via WhatsApp - a channel the customer never
+  // provided). See ctaPolicy.ts for the canonical provenance rule.
+  const finalCta = ctaText || brandKit?.outroText || "";
+  const finalContact = contactText || brandKit?.contactText || "";
 
   return (
     <AbsoluteFill
@@ -71,41 +76,45 @@ export const AdvancedCtaOverlay: React.FC<AdvancedCtaOverlayProps> = ({
       )}
 
       {/* Main CTA Offer */}
-      <div
-        style={{
-          fontFamily,
-          color: "#ffffff",
-          fontSize: "3.6em",
-          fontWeight: 800,
-          marginBottom: "32px",
-          textAlign: "center",
-          maxWidth: "88%",
-          lineHeight: 1.3,
-          backgroundColor: "rgba(255, 255, 255, 0.1)",
-          padding: "16px 36px",
-          borderRadius: "20px",
-          border: `2px solid ${brandAccent}`,
-        }}
-      >
-        {finalCta}
-      </div>
+      {finalCta && (
+        <div
+          style={{
+            fontFamily,
+            color: "#ffffff",
+            fontSize: "3.6em",
+            fontWeight: 800,
+            marginBottom: "32px",
+            textAlign: "center",
+            maxWidth: "88%",
+            lineHeight: 1.3,
+            backgroundColor: "rgba(255, 255, 255, 0.1)",
+            padding: "16px 36px",
+            borderRadius: "20px",
+            border: `2px solid ${brandAccent}`,
+          }}
+        >
+          {finalCta}
+        </div>
+      )}
 
-      {/* Contact Badge */}
-      <div
-        style={{
-          fontFamily,
-          fontSize: "2.8em",
-          fontWeight: 700,
-          textAlign: "center",
-          backgroundColor: brandAccent,
-          color: "#0f172a",
-          padding: "12px 32px",
-          borderRadius: "14px",
-          boxShadow: "0px 8px 24px rgba(56, 189, 248, 0.4)",
-        }}
-      >
-        {finalContact}
-      </div>
+      {/* Contact Badge - only rendered when a real contact channel was supplied */}
+      {finalContact && (
+        <div
+          style={{
+            fontFamily,
+            fontSize: "2.8em",
+            fontWeight: 700,
+            textAlign: "center",
+            backgroundColor: brandAccent,
+            color: "#0f172a",
+            padding: "12px 32px",
+            borderRadius: "14px",
+            boxShadow: "0px 8px 24px rgba(56, 189, 248, 0.4)",
+          }}
+        >
+          {finalContact}
+        </div>
+      )}
     </AbsoluteFill>
   );
 };

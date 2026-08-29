@@ -1,5 +1,6 @@
 import type { ProductionSpec } from "../../../types/productionSpec";
 import type { VisualShot } from "../editing/editDecisionList";
+import { hasExplicitOffer, hasExplicitStatistic, hasExplicitWhatsApp } from "../creative/ctaPolicy";
 
 export type ProfessionalVisualQualityReport = {
   realVisualCoveragePercent: number;
@@ -33,10 +34,13 @@ export function containsRawPromptLeak(prompt: string | undefined, text: string |
 }
 
 export function detectInventedClaimRisk(spec: ProductionSpec): number {
-  const prompt = norm(spec.userPrompt);
-  const allowsWhatsapp = /whats\s*app|واتساب|واتس|wa\.me/.test(prompt);
-  const allowsOffer = /discount|offer|sale|coupon|promo|خصم|عرض|تخفيض|كوبون/.test(prompt);
-  const allowsStats = /\d+\s*%|\d+\s*(percent|في المية|بالمية|٪)/.test(prompt);
+  const prompt = spec.userPrompt || "";
+  // Negation-aware: a prompt that says "do not invent... WhatsApp numbers" must
+  // not be read as authorizing WhatsApp. See ctaPolicy.ts for why a bare
+  // substring test on the raw prompt is unsafe (incident cmtehsptj000108ledzk3f3ji).
+  const allowsWhatsapp = hasExplicitWhatsApp(prompt);
+  const allowsOffer = hasExplicitOffer(prompt);
+  const allowsStats = hasExplicitStatistic(prompt);
   let risk = 0;
   const text = norm([
     spec.cta?.text,
