@@ -97,6 +97,13 @@ services:
               count: 1
               capabilities: [gpu]
     environment:
+      # The base image is a plain node:22-bookworm-slim, not an
+      # nvidia/cuda-branded one, so the NVIDIA Container Toolkit does not
+      # mount libnvidia-encode.so.1 (the NVENC user-mode library) unless the
+      # "video" capability is explicitly requested here - "compute,utility"
+      # alone (the toolkit's default) is enough for nvidia-smi/CUDA but not
+      # for hardware video encoding.
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
       SERVICE_ROLE: render-worker
       V2_ENABLED: "true"
       ABUD_HARDWARE_ACCELERATION: ${ABUD_HARDWARE_ACCELERATION:-disable}

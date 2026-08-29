@@ -7006,3 +7006,408 @@ in every case.
 `cmtelbqx7000107nr8iz229sv`, `cmtemfh7j000107tz6uaf506e` and
 `cmtelowxy000907nrclnx9ett` are available in the normal Video Library for the
 user to watch. This status document does not assert user approval.
+
+---
+
+## V2.4 Pass 5 — Content Intelligence & Performance Closure
+
+Date: 2026-08-30. Branch: `v2.4-professional-video-engine`, started at remote
+HEAD `0f6dd618fc9e6fad7a05544ddd8ea445627bddf8`. Status: **PASS / LIVE
+VALIDATED ON FEATURE BRANCH**. No merge to `main`, no tag, no release, no
+stable/GHCR v2.3.1 mutation.
+
+### Content Intelligence
+
+**Provider router.** Audited `ContentAIRegistry` (`src/server/v2/content-ai/registry.ts`):
+it already implements the precedence Pass 5 asked for — a configured, live
+Ollama endpoint first, then a configured Gemini key, then the deterministic
+local planner — so no new mesh/router was built; the gap was elsewhere.
+- **Local deterministic**: strengthened, not replaced (see Fact packs below).
+- **Ollama**: this environment has no reachable endpoint
+  (`OLLAMA_BASE_URL` empty in `.env`), so the live LLM path was never
+  exercised by any benchmark. It was still hardened and unit-tested against
+  a mocked endpoint: `generateProductionSpec` had **no try/catch at all**
+  around the live call — a configured-but-unreachable endpoint threw and
+  failed the whole job, contradicting "an optional local LLM must never
+  block the product." Fixed to fall back to the deterministic baseline on
+  any failure, to only take the specific fields the system prompt asks it
+  to improve (previously required a full, exact `ProductionSpec` round-trip
+  and silently discarded a good improvement on any missing/mistyped
+  structural field), and to re-run `inventsUngroundedClaim` /
+  `containsRawPromptLeak` per scene/field on its output, reverting to the
+  (already safe) baseline value when the LLM's version fails — an LLM that
+  ignores its own system prompt can no longer reintroduce an invented
+  WhatsApp CTA the deterministic baseline had already stripped.
+- **Gemini**: audited only (no key configured; `geminiProvider.ts`
+  unchanged this pass).
+- **Generic fallback**: `LocalContentAIProvider.buildGenericEnglishScenes`
+  rewritten — it previously spliced a truncated, punctuation-stripped copy
+  of the raw prompt into the hook narration (a genuine raw-prompt-leak,
+  found live via the Pass 4 airplane benchmark: *"Looking for the absolute
+  best way to experience Create a 25second vertical cur?"*). Now topic-
+  neutral and never references the raw prompt.
+- **Factual safety / claim provenance**: `contentProvenance` persisted on
+  every generated spec — `DETERMINISTIC` (a hand-written template, business-
+  vertical or fact-pack), `SAFE_GENERIC` (no fact pack matched a curiosity
+  prompt; narration is honestly generic rather than fabricated, with
+  `contentConfidence: "low"`), or `MODEL_GENERATED` (Ollama's output
+  passed truth-safety re-validation). `USER_FACT` / `BRAND_DATA` are
+  reserved for a future input source that actually supplies grounded
+  customer facts; nothing claims them today.
+
+**Fact packs** (`src/server/v2/content-ai/factPacks.ts`, new): a small,
+curated knowledge base of well-established, uncontested facts — airplane-
+window stress concentration, lithium-ion two-phase charging, Rayleigh
+scattering (why the sky is blue), ice's lower density than liquid water,
+trigeminal-nerve brain freeze, microwave standing-wave hot spots — written
+once as data, not generated per request. Matched via bag-of-words phrase
+scoring with light English plural folding and sentence-scoped negation (see
+`ctaPolicy.ts`'s equivalent design), not exact-string equality, so
+reasonable paraphrases of a covered topic still match. A prompt matching no
+pack is honestly marked low-confidence rather than dressed up as a real
+answer; genuinely open-domain factual generation for arbitrary topics still
+needs an LLM-backed provider, which this environment does not have
+configured.
+
+**Content style auto-detection** (`contentStyleDetector.ts`, new):
+`/api/v2/production/jobs` (`productionJobSchema`) has no `contentStyle`
+field a prompt-only customer can set at all — every prompt defaulted to
+`"advertisement"` regardless of what it actually asked for, which is why the
+Pass 4 airplane benchmark never even reached curiosity-appropriate
+structure. Wording alone ("why do phone batteries...", "explain how...")
+now resolves `viral_curiosity` when the signal is unambiguous, otherwise the
+caller's own default is kept.
+
+### Airplane (re-run of the Pass 4 benchmark 2 prompt)
+
+- Job / video `cmtezjekg000107p8hr7u77zu`.
+- Hook: *"Ever notice every airplane window is round, never square?"*
+- Core explanation (verbatim): *"It comes down to physics, not style. A
+  pressurized cabin constantly pushes outward on the fuselage, and sharp
+  corners concentrate that stress into a single point where metal fatigues
+  fastest. A rounded shape spreads the same stress evenly around the frame,
+  so cracks have nowhere to start."* — genuinely answers the question (hard
+  content gate met: mentions stress, corners, rounding causally, not
+  generic filler).
+- Generic filler: **none** — `contentProvenance: DETERMINISTIC`,
+  `factPackId: airplane_windows_rounded`.
+- Shots: 6, all Pexels stock, all unique. Providers: `{"pexels": 6}`.
+- `professionalReady`: **true**. Coverage 99.8%, text-only 0%, black 0%.
+- Independently re-verified: real airplane exterior and cabin-interior
+  footage sampled at t=1/9/17/23s (fresh ffmpeg contact-sheet frames against
+  the downloaded MP4, not the app's own report); silencedetect matches the
+  app's own `mixedSilenceGate` exactly (331ms trailing tail only).
+- Wall clock: 132.6s.
+
+### New Factual Topic (not the airplane example — proves this generalizes)
+
+Prompt: *"Why do phone batteries charge much slower after about 80%?"*
+(section 41's own suggested example, used as given; the matcher itself is
+generic — see the fact-pack test suite for a topic this pack does **not**
+cover, confirmed to fall back honestly rather than fabricate).
+
+- Job / video `cmtezn158000507p8h39i4ptc`.
+- Core explanation (verbatim): *"Lithium-ion batteries charge in two
+  phases. Early on, the charger pushes a steady, fast current straight into
+  the battery. Past around eighty percent, it switches to a slow, careful
+  trickle that tops off each cell without overheating it."* — correct,
+  real electrochemistry, no invented statistics.
+- `contentProvenance: DETERMINISTIC`, `factPackId: phone_battery_slow_after_80`
+  — resolved through the exact same `matchFactPack` mechanism as the
+  airplane topic, not a second hardcoded branch (see
+  `v25ContentIntelligence.test.ts` for a test asserting this explicitly).
+- Shots: 6, all Pexels stock, all unique.
+- `professionalReady`: **true**. Coverage 99.7%, text-only 0%, black 0%.
+  Silence 486ms (trailing tail only), independently re-verified.
+- Wall clock: 105.3s.
+- **Known minor imprecision, not a safety issue**: the CTA resolved to
+  `"Contact us to learn more"` (`USER_EXPLICIT`) rather than the intended
+  channel-free `SAFE_GENERIC` close, because `ctaPolicy.ts`'s contact
+  pattern matches the bare word "phone" — present here only as part of the
+  topic ("phone batteries"), not a request for a phone channel. No contact
+  channel or phone number was invented (`cta.contact` stays undefined); the
+  wording is just more business-ad-flavored than ideal for a curiosity
+  video (section 10). Flagged for a future pass rather than patched under
+  time pressure with an untested heuristic.
+
+### Business Ad (re-run)
+
+- Job / video `cmteyb57l000l07n1bjwacbg9` (the warm half of the performance
+  benchmark below — same real-people/web-design prompt used throughout V2.4).
+- CTA provenance: `USER_EXPLICIT`, text `"Make your business look
+  professional."` verbatim from the prompt.
+- Invented claims: **0** (`inventedClaimRiskCount: 0`, `rawPromptLeakCount: 0`,
+  no WhatsApp anywhere in the generated spec).
+- Real footage: 99.8% coverage, 0% text-only, 0% black frames.
+- `professionalReady`: **true**.
+
+### Performance — Baseline (this pass's first true wall-clock-accounted run)
+
+Job `cmtexllpa000107n19wk0adbw`, `CONCURRENCY=1` (the shipped default before
+this pass), OpenCLIP off, cold container:
+
+| Stage | ms |
+| --- | --- |
+| media (search+select, no ranking downloads with OpenCLIP off) | 53,829 |
+| voice | 6,399 |
+| **render** | **92,212** |
+| captions | 20,374 |
+| planning | 19,237 |
+| mastering | 1,297 |
+| validation | 3,386 |
+| **sum / wall clock** | **196,734 / 196,392** (0.2% apart) |
+
+Sum-vs-wall-clock now genuinely agree — see the wall-clock accounting fix
+below. `render` (Remotion's Chromium frame-rendering + encode) is the single
+largest stage at 47% of total time, previously invisible at this resolution
+because the same bug hid the true `media`/`captions`/`voice` totals too.
+
+**Unclassified time**: **0** (matches within measurement noise). Section 12's
+"no unexplained 100+ second hole" requirement is met by the fix below, not
+merely asserted.
+
+### Wall-Clock Accounting Fix
+
+`JobService.updateStageCheckpoint` (`src/server/v2/jobs.ts`) spread each new
+`timingMs` **over** the stored `stage_timings[stage + "Ms"]` value instead of
+accumulating it. `"media"`/`"voice"`/`"captions"` all fire once **per scene**
+in the main render loop, so only the last scene's individual duration ever
+survived — every earlier scene's time was silently discarded. Live-measured
+before the fix: job `cmtewtb4p000107l29fxzfggb` (OpenCLIP genuinely
+active — see below) had 491s of real wall clock against only 147s of
+"accounted" stage time, a 344s hole with zero record of where it went.
+Fixed to sum repeated `timingMs` calls for the same stage; verified on the
+next job that `sum(stageTimings) ≈ wall clock` to within ~0.2%.
+
+### OpenCLIP: Enabled, Measured Live, Reverted — a Deliberate Trade-off
+
+The Pass 3 closure notes documented `ABUD_ENABLE_OPENCLIP_SEMANTICS` and its
+three companion variables as deployed, but **none of the four were actually
+present in `.env`** — the flag silently defaulted to `false`, and every Pass
+3/4 "OpenCLIP-scored" candidate was in fact the neutral 100-point fallback
+(`semanticRuntime: "unavailable"`). This pass found that gap, built a
+persistent worker pool to make real OpenCLIP scoring cheap
+(`src/server/v2/media-intelligence/openClipWorkerPool.ts` — a small pool of
+long-lived Python workers, each loading the CLIP checkpoint once via
+newline-delimited JSON over stdin/stdout instead of a fresh `python -c`
+process per candidate; self-healing on timeout/crash; unit-tested against a
+mocked `child_process` since this dev host has no quality Python runtime to
+exercise the real path), turned the flag on, and live-benchmarked it:
+
+Job `cmtewtb4p000107l29fxzfggb` (OpenCLIP **on**): 491s wall clock.
+`detailedStageTimings`: `providerSearchMs: 20,971` (8 calls),
+`providerDownloadMs: 102,977` (32 candidate downloads — only needed to rank
+multiple candidates per shot, not to render the one finalist),
+`openClipInferenceMs: 113,446` (9 calls served warm by the pool — ~12.6s
+average per candidate, genuine CPU-bound torch inference, not spawn
+overhead), `openClipFreshProcessMs: 90,174` (1 call that fell back to a
+fresh process), `openClipCacheHitCount: 22` (the result cache did its job -
+most repeat candidates were free). The pool and cache both worked exactly as
+designed and still left OpenCLIP ~3-4x slower than the whole rest of the
+pipeline combined, because this OpenCLIP venv's torch build is CPU-only (no
+CUDA) — the pool eliminates repeated *model loads*, not the per-candidate
+*inference* cost itself.
+
+Decision: **kept off by default** (`ABUD_ENABLE_OPENCLIP_SEMANTICS=false` in
+`.env`, restored). This directly conflicts with this pass's explicit ≤120s
+target, and Pass 4's own live benchmarks already reached
+`realVisualCoveragePercent: 99.8` / `professionalReady: true` without it. The
+pool/cache infrastructure remains available behind one env var for an
+operator who wants finer semantic relevance at that speed cost, or once a
+CUDA-accelerated torch build is installed in that venv (this host's Docker
+GPU passthrough was confirmed working this pass — `docker run --gpus all
+nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` succeeded — the OpenCLIP venv
+itself is simply not built against it).
+
+### NVENC: Benchmarked, Not Adopted
+
+`h264_nvenc` is available in this project's ffmpeg build once
+`NVIDIA_DRIVER_CAPABILITIES` includes `video` (the base image is a plain
+`node:22-bookworm-slim`, not an nvidia/cuda-branded one, so the NVIDIA
+Container Toolkit does not mount `libnvidia-encode.so.1` on `compute,utility`
+alone — confirmed by first reproducing `Cannot load libnvidia-encode.so.1`,
+then fixing it). Isolated ffmpeg benchmark inside the render-worker container
+(20s 1080x1920 25fps synthetic source, not a full pipeline render):
+
+| Encoder | Settings | Time | Size | SSIM vs the other |
+| --- | --- | --- | --- | --- |
+| libx264 | preset medium, CRF 20 | 3,002ms | 20.09 MB | — |
+| h264_nvenc | preset p4, CQ 20 | 2,046ms | 30.44 MB | 0.9979 |
+
+NVENC encoded ~32% faster but produced a ~51% larger file at the matched
+quality parameter. More importantly, `renderMs` (the stage NVENC could
+possibly speed up) is dominated by Remotion's Chromium frame-by-frame
+rendering, not the final encode pass — the isolated encode benchmark above
+takes 2-3s, a small fraction of the measured 50-92s `renderMs`. Wired behind
+`Config.hardwareAcceleration` / `ABUD_HARDWARE_ACCELERATION` (Remotion's own
+native `"disable" | "if-possible"` option, not a hand-rolled encode pass) and
+left `"disable"` by default: a real, meaningfully-larger-file regression for
+a small, indirect speed gain does not clear the "materially speeds the
+pipeline without unacceptable quality/file-size regression" bar. GPU device
+reservation added to `docker-compose.v2.yml` for the render-worker (inert on
+a host without the NVIDIA Container Toolkit) so the capability is ready if a
+future pass finds a better use for it (e.g. an NVENC-accelerated OpenCLIP-
+adjacent step, or a CUDA torch build).
+
+### Render Concurrency — the Actual Lever
+
+Remotion's own frame-rendering concurrency (`Config.concurrency`, env
+`CONCURRENCY`) was pinned to 1 in the Dockerfile with a comment citing past
+Docker memory issues, on a render-worker with 16 CPU cores and 7.6GB memory
+available and only ~1GB in use at idle. Live-tested 1→4 on the identical
+business-ad prompt, monitoring container memory throughout:
+
+| CONCURRENCY | wall clock | renderMs | peak container memory |
+| --- | --- | --- | --- |
+| 1 (baseline) | 196.4s | 92,212ms | not measured (baseline run) |
+| 2 | 145.3s | 59,972ms | 4.64 GB / 7.61 GB |
+| 3 | 137.0s | 51,238ms | 4.90 GB / 7.61 GB |
+| 4 | 143.1s | 49,449ms | 4.90 GB / 7.61 GB (worse: captionsMs rose 18.5s→23.6s, CPU contention with Whisper) |
+
+`professionalReady`, `realVisualCoveragePercent` (99.8%), `textOnlyTimelinePercent`
+(0%), `blackFramePercent` (0%), `mixedSilenceGate.longestSilenceRunMs`
+(376ms), and duration variance (0.05s) were **identical across every run** -
+zero quality regression at any concurrency level tested. Diminishing (then
+negative) returns set in after 3, so **`CONCURRENCY=3`** was kept as the new
+default in `.env`, with the reasoning and full data recorded inline in the
+file.
+
+### Cold / Warm Result (`CONCURRENCY=3`, OpenCLIP off — the shipped configuration)
+
+Same business-ad prompt, cold = fresh container (all caches empty), warm =
+second submission to the same still-running container immediately after:
+
+| | Job | Wall clock | media | voice | render | captions | planning |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Cold | `cmtey7jch000h07n1fx604j19` | **149.0s** | 51,669ms | 6,054ms | 51,539ms | 18,037ms | 17,967ms |
+| Warm | `cmteyb57l000l07n1bjwacbg9` | **113.2s** | 30,737ms | 7,312ms | 49,759ms | 17,881ms | 3,675ms |
+
+Warm is 24% faster than cold on this pair alone (provider-result-cache hits
+on `media`, and `planning` dropping 18.0s→3.7s); both figures below already
+reflect `CONCURRENCY=3`.
+
+**Improvement vs. the Pass 4 baseline (231s, job `cmtelbqx7000107nr8iz229sv`,
+same prompt, `CONCURRENCY=1`, OpenCLIP off — the actual live-tested Pass 4
+configuration):**
+
+- Cold: 149.0s → **35.5% faster** (clears the "≥35% faster" minimum).
+- Warm: 113.2s → **51.0% faster**, under the primary ≤120s target and close
+  to the ≤90s stretch target.
+
+`professionalReady: true` on both, with the same zero-regression quality
+profile as the concurrency sweep above.
+
+**Primary remaining bottleneck** (now precisely measured, not guessed):
+Remotion's Chromium-based frame rendering (`renderMs`, ~50-92s depending on
+concurrency) is the largest single stage even after the concurrency fix, and
+does not benefit from provider-result caching the way `media`/`planning` do.
+A future pass could investigate rendering fewer, larger composited segments
+via FFmpeg directly for stock-heavy scenes (section 28's Remotion-vs-FFmpeg
+question) rather than one Chromium frame-by-frame pass per scene; this was
+identified but not attempted this pass given the time already spent on the
+concurrency win, the OpenCLIP investigation, and the plannedShots bug below.
+
+### A Third Bug Found Live: the Segment-Based Multi-Shot Path Never Reported Its Shots
+
+The first airplane/battery benchmark runs (before this fix) both rendered
+correctly — independently verified as real, on-topic footage throughout —
+but reported `realVisualCoveragePercent: 0%` and `professionalReady: false`.
+Root cause: `ShortCreator.ts` has **two** multi-shot mechanisms. The EDL/
+`composeVisualBed` path (used when a scene has no pre-planned segments)
+correctly records each shot into `plannedShots`, the sole source of truth
+`professionalVisualQuality`'s coverage calculation reads from. The other,
+older path — triggered whenever `mediaIntelligenceService`'s media plan
+gives a scene more than one `segments` entry, which "fast"-paced content
+(both `advertisement` and `viral_curiosity` get "fast" pacing) hits
+routinely — correctly resolved and downloaded real visual assets
+(`selectedVisuals` had 2 real Pexels entries per scene) but never recorded
+anything into `plannedShots` at all, so coverage always measured 0%
+regardless of what actually rendered. This is a false-negative-only bug
+(never let bad content look good; it wrongly rejected good content), fixed
+by recording one shot per segment the same way the EDL path does. Re-running
+both benchmarks after the fix (same jobs, new IDs `cmtezjekg000107p8hr7u77zu`
+/ `cmtezn158000507p8h39i4ptc`) now correctly reports `professionalReady:
+true` / ~99.8% coverage / `shots: 6` for both.
+
+### Tests
+
+- **Before**: 975 total, 973 passed, 2 failed (both pre-existing, confirmed
+  via `git stash` against the unmodified Pass 4 HEAD — unrelated to any Pass
+  4 or Pass 5 change).
+- **Fixed failures**:
+  - `src/test/videoQualityV23.test.ts` › "rotates query terms by sceneIndex":
+    the rotation offset incremented by `sceneIndex * 3`; most rotation lists
+    in `stockQueryFamilies.ts` (e.g. the "coffee" concept's `subject` array)
+    have exactly 3 entries, and a step of 3 is congruent to 0 mod 3 — the
+    rotation silently did nothing for the single most common list length.
+    Fixed to increment by 1 per scene.
+  - `src/short-creator/ShortCreator.test.ts` › "test me": the legacy
+    `pexelsAPI.findVideo` mock only fed `AutoVisualRouter`'s old fallback
+    path, which the V2.4 unified `StockProviderRegistry` mesh only reaches
+    after finding zero candidates - and did, correctly, per the
+    already-passing "blocks professional Auto when no real visual provider
+    exists" test. Fixed by giving the test a real HTTP-layer fixture (`nock`
+    intercepting the actual Pexels search endpoint with several distinct
+    candidates, matching this project's existing nock-based provider-mesh
+    test pattern) instead of weakening the real guard.
+- **New test files this pass**: `src/test/v25ContentIntelligence.test.ts`
+  (12 tests), `src/server/v2/content-ai/ollamaProvider.test.ts` (5 tests),
+  `src/server/v2/media-intelligence/openClipWorkerPool.test.ts` (5 tests,
+  against a mocked `child_process`), `src/server/v2/jobsStageTimings.test.ts`
+  (3 tests).
+- **Final**: `pnpm exec vitest run` → **1000 passed, 0 failed**, 65 test
+  files.
+- `pnpm typecheck` (server + ui) → **PASS**. `pnpm build` → **PASS** (only
+  the pre-existing non-blocking Browserslist-age / >500kB chunk-size
+  warnings).
+
+### Safety
+
+- Paid provider calls: **0** across every one of this pass's 8 live
+  benchmark/performance jobs (`visualProvidersUsed: ["pexels"]`,
+  `voiceProvider: "kokoro"` on every one, verified by direct inspection of
+  each job record).
+- Customer data deleted: **0**.
+- Incident video preserved: **yes** — `cmtehsptj000108ledzk3f3ji.mp4`,
+  md5 `e17f39df520cfb660455aff388e2c26a`, unchanged (re-verified at closure,
+  identical to the Pass 4 closure checksum).
+- Secrets exposed: **0** — two temporary `qa_`-prefixed admin sessions were
+  used across this pass's live testing (random 32-byte tokens, tied to the
+  existing `admin` user, no password touched); both revoked at closure
+  (`POST /api/v2/auth/logout` plus a direct `DELETE ... WHERE id LIKE
+  'qa_%'` sweep as a second check) — `SELECT count(*) FROM admin_sessions
+  WHERE id LIKE 'qa_%'` returned 0 at final verification.
+- Docker prune: **0** commands run, ever, this pass.
+- Volumes removed: **0**.
+- `abud-shorts-app` and `abud-shorts-render-worker` were rebuilt and
+  recreated multiple times this pass to iterate on `.env`/compose changes
+  (OpenCLIP on then off, `CONCURRENCY` sweep, NVENC capability plumbing, the
+  plannedShots fix); Postgres and n8n were never restarted (uninterrupted
+  36h+ uptime throughout).
+- GPU passthrough: a throwaway `docker run --gpus all nvidia/cuda:...
+  nvidia-smi` container was used to confirm host capability, and is
+  unrelated to and did not touch the actual app/render-worker/postgres/n8n
+  containers.
+
+### Git
+
+- Branch: `v2.4-professional-video-engine` throughout.
+- Local commits on top of `0f6dd618fc9e6fad7a05544ddd8ea445627bddf8`:
+  - `fc0eeb0` fix(v2.4): reach a fully green test suite
+  - `624138f` perf(v2.4): persistent OpenCLIP worker pool and wall-clock accounting
+  - `c79be0b` feat(v2.4): topic-relevant content for curiosity prompts, robust Ollama routing
+  - `5e83d20` perf(v2.4): optional NVENC hardware encoding, off by default
+  - `4b8a1f7` fix(v2.4): accumulate per-scene stage timings instead of overwriting them
+  - `0cb04c9` fix(v2.4): record shots from the segment-based multi-shot path too
+  - (this status update, plus the `.env` / `docker-compose.v2.yml`
+    concurrency and NVIDIA-capability edits made live during this pass)
+- `main` untouched. `v2.3.1`, its tag, its GitHub Release and its GHCR
+  `2.3.1`/`stable` images untouched. Historical v2.3.0/v2.2.0 untouched.
+
+### Human Review
+
+**PENDING USER VISUAL REVIEW.** New/re-run benchmark videos this pass:
+`cmtezjekg000107p8hr7u77zu` (airplane), `cmtezn158000507p8h39i4ptc` (phone
+battery), `cmteyb57l000l07n1bjwacbg9` (business ad, warm performance run).
+All available in the normal Video Library. This status document does not
+assert user approval.
