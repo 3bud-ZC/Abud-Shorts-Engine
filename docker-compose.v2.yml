@@ -82,9 +82,24 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    # V2.4 Pass 5: optional NVIDIA GPU passthrough for h264_nvenc hardware
+    # encoding (Remotion's `hardwareAcceleration: "if-possible"`, gated by
+    # ABUD_HARDWARE_ACCELERATION below - off by default). Compose only
+    # attempts this reservation when the driver is actually present; on a
+    # host with no NVIDIA Container Toolkit installed this section is simply
+    # never satisfied and the container still starts CPU-only, because
+    # nothing in the app or render path requires the GPU to exist.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       SERVICE_ROLE: render-worker
       V2_ENABLED: "true"
+      ABUD_HARDWARE_ACCELERATION: ${ABUD_HARDWARE_ACCELERATION:-disable}
       PORT: 3125
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}

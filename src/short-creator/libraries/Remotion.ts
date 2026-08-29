@@ -69,6 +69,12 @@ export class Remotion {
       jpegQuality: isDraft ? 70 : (isHigh ? 92 : 85),
       scale: isDraft ? 0.75 : 1.0,
       timeoutInMilliseconds,
+      // "if-possible" tries h264_nvenc when ffmpeg + a GPU are actually
+      // available and falls back to libx264 automatically otherwise - never
+      // a hard requirement on any particular host. Off by default; see
+      // ABUD_SHORTS_ENGINE_STATUS.md V2.4 Pass 5 for the controlled
+      // before/after benchmark this default was decided from.
+      hardwareAcceleration: this.config.hardwareAcceleration,
       chromiumOptions: {
         enableMultiProcessOnLinux: true,
         disableWebSecurity: true,

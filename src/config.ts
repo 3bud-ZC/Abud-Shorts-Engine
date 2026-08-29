@@ -92,6 +92,17 @@ export class Config {
   // docker-specific, performance-related settings to prevent memory issues
   public concurrency?: number;
   public videoCacheSizeInBytes: number | null = null;
+  /**
+   * "if-possible" asks Remotion's renderMedia to use hardware H.264 encoding
+   * (h264_nvenc on this project's target hardware) when the ffmpeg binary
+   * and a GPU are actually available, and to silently fall back to libx264
+   * otherwise - never a hard requirement, so a host/container with no GPU
+   * (any Linux CI box, a Mac, a Windows dev machine without Docker GPU
+   * passthrough) renders exactly as before. See ABUD_SHORTS_ENGINE_STATUS.md
+   * V2.4 Pass 5 for the controlled before/after benchmark this default was
+   * decided from.
+   */
+  public hardwareAcceleration: "disable" | "if-possible" = "disable";
 
   constructor() {
     this.dataDirPath =
@@ -184,6 +195,7 @@ export class Config {
       defaultRemotionRenderTimeoutMs,
     );
     this.enableTestProviders = process.env.ENABLE_TEST_PROVIDERS === "true";
+    this.hardwareAcceleration = process.env.ABUD_HARDWARE_ACCELERATION === "if-possible" ? "if-possible" : "disable";
 
     if (process.env.WHISPER_MODEL) {
       this.whisperModel = process.env.WHISPER_MODEL as whisperModels;
