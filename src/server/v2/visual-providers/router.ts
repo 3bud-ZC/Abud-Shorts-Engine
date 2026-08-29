@@ -40,6 +40,9 @@ type SemanticRankedCandidate = ScoredCandidate & {
   semanticRuntime?: VideoSemanticAnalysis["runtime"];
   semanticAvailable?: boolean;
   semanticError?: string;
+  visualHealthPass?: boolean;
+  blackFramePercent?: number;
+  longestBlackRunMs?: number;
 };
 
 type SemanticRankerOptions = {
@@ -78,6 +81,7 @@ async function downloadCandidateForSemanticRanking(
 function rebuildCandidateScore(
   candidate: ScoredCandidate,
   visualSemanticScore: number,
+  health: Pick<SemanticRankedCandidate, "visualHealthPass" | "blackFramePercent" | "longestBlackRunMs"> = {},
 ): SemanticRankedCandidate {
   const semanticScore = Math.round(candidate.semanticScore * 0.25 + visualSemanticScore * 0.75);
   const totalScore = Math.round(
@@ -93,6 +97,7 @@ function rebuildCandidateScore(
     visualSemanticScore,
     semanticAvailable: true,
     semanticRuntime: "open_clip",
+    ...health,
     decisionBreakdown: {
       ...candidate.decisionBreakdown,
       semantic: semanticScore,
@@ -128,14 +133,24 @@ export async function rankStockCandidatesWithVisualSemantics(
         cacheDir: analysisCacheDir,
         timeoutMs: options.timeoutMs ?? 45000,
       });
+      const blackFramePercent = Number(analysis.blackFramePercent ?? 0);
+      const longestBlackRunMs = Number(analysis.longestBlackRunMs ?? 0);
+      const visualHealthPass = longestBlackRunMs <= 450 && blackFramePercent <= 2;
       if (analysis.semanticAvailable && Number.isFinite(analysis.visualSemanticScore)) {
-        return rebuildCandidateScore(candidate, Number(analysis.visualSemanticScore));
+        return rebuildCandidateScore(candidate, Number(analysis.visualSemanticScore), {
+          visualHealthPass,
+          blackFramePercent,
+          longestBlackRunMs,
+        });
       }
       return {
         ...candidate,
         semanticAvailable: analysis.semanticAvailable,
         semanticRuntime: analysis.runtime,
         semanticError: analysis.error,
+        visualHealthPass,
+        blackFramePercent,
+        longestBlackRunMs,
       };
     } catch (error) {
       logger.debug(
@@ -155,7 +170,15 @@ export async function rankStockCandidatesWithVisualSemantics(
     }
   }));
 
-  return [...ranked.sort((a, b) => b.totalScore - a.totalScore), ...untouched];
+  return [
+    ...ranked.sort((a, b) => {
+      const aHealthy = a.visualHealthPass !== false ? 1 : 0;
+      const bHealthy = b.visualHealthPass !== false ? 1 : 0;
+      if (aHealthy !== bHealthy) return bHealthy - aHealthy;
+      return b.totalScore - a.totalScore;
+    }),
+    ...untouched,
+  ];
 }
 
 export class AutoVisualRouter {
@@ -265,6 +288,9 @@ export class AutoVisualRouter {
         visualSemanticScore: candidate.visualSemanticScore,
         semanticRuntime: candidate.semanticRuntime,
         semanticAvailable: candidate.semanticAvailable,
+        visualHealthPass: candidate.visualHealthPass,
+        blackFramePercent: candidate.blackFramePercent,
+        longestBlackRunMs: candidate.longestBlackRunMs,
         qualityScore: candidate.qualityScore,
         decisionScore: candidate.totalScore,
         decisionBreakdown: candidate.decisionBreakdown,
@@ -304,6 +330,9 @@ export class AutoVisualRouter {
           semanticRuntime: winner.semanticRuntime,
           semanticAvailable: winner.semanticAvailable,
           semanticError: winner.semanticError,
+          visualHealthPass: winner.visualHealthPass,
+          blackFramePercent: winner.blackFramePercent,
+          longestBlackRunMs: winner.longestBlackRunMs,
           qualityScore: winner.qualityScore,
           decisionBreakdown: winner.decisionBreakdown,
           attribution,
@@ -317,6 +346,12 @@ export class AutoVisualRouter {
           },
         },
       };
+    }
+
+    if (lexicalCandidates.length > 0) {
+      throw new Error(
+        "Professional automatic video found stock candidates, but none passed visual health checks. Try again with different stock terms or another stock provider.",
+      );
     }
 
     if (this.pexelsProvider.isConfigured()) {
@@ -346,9 +381,10 @@ export class AutoVisualRouter {
       if (candidate.kind !== "video") return false;
       if (!candidate.downloadUrl || !candidate.width || !candidate.height) return false;
       if (Math.min(candidate.width, candidate.height) < 480) return false;
+      if (candidate.visualHealthPass === false) return false;
       return candidate.semanticScore >= 45 && candidate.qualityScore >= 45;
     });
-    return usable[0] || candidates[0] || null;
+    return usable[0] || null;
   }
 
   private determineSceneSource(

@@ -31,6 +31,8 @@ export type VideoSemanticAnalysis = {
   perceptualHash?: string;
   semanticAvailable: boolean;
   visualSemanticScore?: number;
+  blackFramePercent?: number;
+  longestBlackRunMs?: number;
   runtime: "open_clip" | "perceptual_hash_only" | "unavailable";
   error?: string;
 };
@@ -47,7 +49,7 @@ export type VideoSemanticAnalysisInput = {
 
 const FRAME_SAMPLE_PERCENTS = [20, 50, 80];
 const DEFAULT_MODEL_ID = "openclip:ViT-B-32/laion2b_s34b_b79k";
-const MODEL_VERSION = "v24-openclip-optional-phash-1";
+const MODEL_VERSION = "v24-openclip-optional-phash-black-2";
 
 export const OPENCLIP_MODEL_AUDIT: SemanticModelAudit = {
   modelId: DEFAULT_MODEL_ID,
@@ -105,13 +107,16 @@ model_id = sys.argv[3]
 
 sample_percents = [20, 50, 80]
 
-def fail(error, hashes=None):
+def fail(error, hashes=None, black_metrics=None):
+    black_metrics = black_metrics or {"blackFramePercent": 0.0, "longestBlackRunMs": 0}
     print(json.dumps({
         "frameSamplePercents": sample_percents,
         "frameSampleCount": len(hashes or []),
         "perceptualAvailable": bool(hashes),
         "perceptualHashes": hashes or [],
         "semanticAvailable": False,
+        "blackFramePercent": black_metrics["blackFramePercent"],
+        "longestBlackRunMs": black_metrics["longestBlackRunMs"],
         "runtime": "perceptual_hash_only" if hashes else "unavailable",
         "error": error,
     }))
@@ -160,24 +165,63 @@ for percent in sample_percents:
     frames.append(frame)
     hashes.append(phash(frame))
 
+def measure_black_frames(cap):
+    if duration <= 0 or fps <= 0:
+        return {"blackFramePercent": 0.0, "longestBlackRunMs": 0}
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    step = max(1, int(round(fps / 10.0)))
+    frame_index = 0
+    current_start = None
+    current_end = None
+    runs = []
+    while True:
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            break
+        if frame_index % step == 0:
+            t = frame_index / fps
+            small = cv2.resize(frame, (64, 64), interpolation=cv2.INTER_AREA)
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            dark_ratio = float((gray < 16).mean())
+            is_black = dark_ratio >= 0.98 and float(gray.mean()) < 10.0
+            window_end = min(duration, t + (step / fps))
+            if is_black:
+                if current_start is None:
+                    current_start = t
+                current_end = window_end
+            elif current_start is not None:
+                runs.append((current_start, current_end or t))
+                current_start = None
+                current_end = None
+        frame_index += 1
+    if current_start is not None:
+        runs.append((current_start, current_end or duration))
+    total = sum(max(0.0, end - start) for start, end in runs)
+    longest = max([0.0] + [max(0.0, end - start) for start, end in runs])
+    return {
+        "blackFramePercent": round((total / max(0.01, duration)) * 100.0, 1),
+        "longestBlackRunMs": int(round(longest * 1000.0)),
+    }
+
+black_metrics = measure_black_frames(capture)
 capture.release()
 
 if not hashes:
-    fail("no_sampled_frames")
+    fail("no_sampled_frames", black_metrics=black_metrics)
 
 if os.environ.get("ABUD_ENABLE_OPENCLIP_SEMANTICS") != "true":
-    fail("openclip_disabled", hashes)
+    fail("openclip_disabled", hashes, black_metrics)
 
 checkpoint = os.environ.get("ABUD_OPENCLIP_LOCAL_WEIGHTS") or ""
 if not checkpoint or not os.path.exists(checkpoint):
-    fail("openclip_checkpoint_not_configured", hashes)
+    fail("openclip_checkpoint_not_configured", hashes, black_metrics)
 
 try:
     import torch
     import open_clip
     from PIL import Image
 except Exception as exc:
-    fail("openclip_runtime_unavailable:" + str(exc), hashes)
+    fail("openclip_runtime_unavailable:" + str(exc), hashes, black_metrics)
 
 try:
     model_name = os.environ.get("ABUD_OPENCLIP_MODEL_NAME") or "ViT-B-32"
@@ -206,10 +250,12 @@ try:
         "perceptualHashes": hashes,
         "semanticAvailable": True,
         "visualSemanticScore": round(max(0.0, min(100.0, (score + 1.0) * 50.0)), 2),
+        "blackFramePercent": black_metrics["blackFramePercent"],
+        "longestBlackRunMs": black_metrics["longestBlackRunMs"],
         "runtime": "open_clip",
     }))
 except Exception as exc:
-    fail("openclip_failed:" + str(exc), hashes)
+    fail("openclip_failed:" + str(exc), hashes, black_metrics)
 `;
 
 export async function analyzeVideoSemanticSimilarity(
@@ -290,6 +336,12 @@ export async function analyzeVideoSemanticSimilarity(
             semanticAvailable: Boolean(parsed.semanticAvailable),
             visualSemanticScore: Number.isFinite(Number(parsed.visualSemanticScore))
               ? Number(parsed.visualSemanticScore)
+              : undefined,
+            blackFramePercent: Number.isFinite(Number(parsed.blackFramePercent))
+              ? Number(parsed.blackFramePercent)
+              : undefined,
+            longestBlackRunMs: Number.isFinite(Number(parsed.longestBlackRunMs))
+              ? Number(parsed.longestBlackRunMs)
               : undefined,
             runtime: parsed.runtime === "open_clip"
               ? "open_clip"

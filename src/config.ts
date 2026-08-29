@@ -19,6 +19,7 @@ const defaultDatabaseMaxConnections = 10;
 const defaultDatabaseIdleTimeoutMs = 30_000;
 const defaultDatabaseConnectionTimeoutMs = 5_000;
 const defaultDatabaseStatementTimeoutMs = 60_000;
+const defaultRemotionRenderTimeoutMs = 420_000;
 
 export type RuntimeEnvironment = "development" | "test" | "production";
 
@@ -85,6 +86,7 @@ export class Config {
   public databaseIdleTimeoutMs: number;
   public databaseConnectionTimeoutMs: number;
   public databaseStatementTimeoutMs: number;
+  public remotionRenderTimeoutMs: number;
   public enableTestProviders: boolean;
 
   // docker-specific, performance-related settings to prevent memory issues
@@ -176,6 +178,10 @@ export class Config {
     this.databaseStatementTimeoutMs = parsePositiveInt(
       process.env.DATABASE_STATEMENT_TIMEOUT_MS,
       defaultDatabaseStatementTimeoutMs,
+    );
+    this.remotionRenderTimeoutMs = parsePositiveInt(
+      process.env.REMOTION_RENDER_TIMEOUT_MS,
+      defaultRemotionRenderTimeoutMs,
     );
     this.enableTestProviders = process.env.ENABLE_TEST_PROVIDERS === "true";
 

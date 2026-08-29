@@ -212,6 +212,80 @@ describe("V2.4 Professional Video Production Engine", () => {
     }
   });
 
+  it("keeps stock clips with long black runs from winning semantic ranking", async () => {
+    const previous = process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS;
+    process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS = "true";
+    const candidates: ScoredCandidate[] = [
+      {
+        provider: "pexels",
+        id: "semantically-strong-black-run",
+        kind: "video",
+        downloadUrl: "https://cdn.example/semantically-strong-black-run.mp4",
+        width: 1080,
+        height: 1920,
+        durationSeconds: 9,
+        tags: ["workspace", "founder"],
+        qualityScore: 95,
+        semanticScore: 90,
+        totalScore: 92,
+        decisionBreakdown: { semantic: 90, technical: 95, durationFit: 100, orientationFit: 100 },
+      },
+      {
+        provider: "pixabay",
+        id: "clean-stock-clip",
+        kind: "video",
+        downloadUrl: "https://cdn.example/clean-stock-clip.mp4",
+        width: 1080,
+        height: 1920,
+        durationSeconds: 9,
+        tags: ["business", "laptop"],
+        qualityScore: 88,
+        semanticScore: 70,
+        totalScore: 78,
+        decisionBreakdown: { semantic: 70, technical: 88, durationFit: 100, orientationFit: 100 },
+      },
+    ];
+
+    try {
+      const ranked = await rankStockCandidatesWithVisualSemantics(candidates, {
+        cacheRoot: "/tmp",
+        intentText: "founder reviewing website analytics in a modern workspace",
+        downloadCandidate: vi.fn(async (_candidate, destinationPath) => {
+          await fs.ensureFile(destinationPath);
+        }),
+        analyzer: vi.fn(async (input) => {
+          const hasBlackRun = input.assetId.includes("semantically-strong-black-run");
+          return {
+            provider: input.provider,
+            assetId: input.assetId,
+            modelId: "openclip:ViT-B-32/laion2b_s34b_b79k",
+            modelVersion: "test",
+            license: "MIT",
+            cacheKey: input.assetId,
+            cacheHit: false,
+            frameSampleCount: 3,
+            frameSamplePercents: [20, 50, 80],
+            perceptualAvailable: true,
+            perceptualHashes: ["a", "b", "c"],
+            semanticAvailable: true,
+            visualSemanticScore: hasBlackRun ? 99 : 82,
+            blackFramePercent: hasBlackRun ? 3 : 0,
+            longestBlackRunMs: hasBlackRun ? 600 : 0,
+            runtime: "open_clip",
+          };
+        }),
+      });
+
+      expect(ranked[0].id).toBe("clean-stock-clip");
+      expect(ranked[0].visualHealthPass).toBe(true);
+      expect(ranked[1].visualHealthPass).toBe(false);
+      expect(ranked[1].longestBlackRunMs).toBe(600);
+    } finally {
+      if (previous === undefined) delete process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS;
+      else process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS = previous;
+    }
+  });
+
   it("uses the current Pexels v1 video search contract", async () => {
     const originalFetch = global.fetch;
     const fetchMock = vi.fn(async (url: any, init: any) => {

@@ -39,12 +39,13 @@ export class Remotion {
     quality: "draft" | "standard" | "high" | "premium" = "standard",
   ) {
     const { component } = getOrientationConfig(orientation);
+    const timeoutInMilliseconds = this.config.remotionRenderTimeoutMs;
 
     const composition = await selectComposition({
       serveUrl: this.bundled,
       id: component,
       inputProps: data,
-      timeoutInMilliseconds: 120000,
+      timeoutInMilliseconds: Math.max(120000, Math.min(timeoutInMilliseconds, 240000)),
       chromiumOptions: {
         enableMultiProcessOnLinux: true,
         disableWebSecurity: true,
@@ -54,7 +55,7 @@ export class Remotion {
     const isDraft = quality === "draft";
     const isHigh = quality === "high";
 
-    logger.debug({ component, videoID: id, quality, isDraft, isHigh }, "Rendering video with Remotion");
+    logger.debug({ component, videoID: id, quality, isDraft, isHigh, timeoutInMilliseconds }, "Rendering video with Remotion");
 
     const outputLocation = path.join(this.config.videosDirPath, `${id}.mp4`);
 
@@ -67,7 +68,7 @@ export class Remotion {
       imageFormat: "jpeg",
       jpegQuality: isDraft ? 70 : (isHigh ? 92 : 85),
       scale: isDraft ? 0.75 : 1.0,
-      timeoutInMilliseconds: 180000,
+      timeoutInMilliseconds,
       chromiumOptions: {
         enableMultiProcessOnLinux: true,
         disableWebSecurity: true,
