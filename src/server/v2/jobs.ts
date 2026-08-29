@@ -392,9 +392,21 @@ export class JobService {
     } else {
       checkpoint = failStage(current.checkpoint, stage, options.error || "Stage failed.");
     }
+    // V2.4 Pass 5 wall-clock accounting fix: a stage like "media"/"voice"/
+    // "captions" fires once PER SCENE in the main render loop, and this used
+    // to overwrite stage_timings[`${stage}Ms`] on every call - so only the
+    // LAST scene's individual duration survived, silently discarding every
+    // earlier scene's time. A real production (job cmtewtb4p000107l29fxzfggb)
+    // measured 491s wall clock against only 147s of "accounted" stage time -
+    // the other 344s was earlier scenes' media/caption time this overwrite
+    // had already thrown away. Summing instead of replacing makes the stored
+    // total genuinely cumulative across the whole production.
+    const previousStageTimings = (current.stageTimings || {}) as Record<string, number>;
     const stageTimings = {
-      ...(current.stageTimings || {}),
-      ...(typeof options.timingMs === "number" ? { [`${stage}Ms`]: Math.round(options.timingMs) } : {}),
+      ...previousStageTimings,
+      ...(typeof options.timingMs === "number"
+        ? { [`${stage}Ms`]: Math.round((previousStageTimings[`${stage}Ms`] || 0) + options.timingMs) }
+        : {}),
     };
     const rows = await this.db.query<DbJobRow>(
       `UPDATE jobs
