@@ -210,6 +210,21 @@ describe("Stock query families", () => {
     expect(queryFamilyTerms(result).filter((term) => generics.includes(term))).toHaveLength(0);
   });
 
+  it("keeps coffee prompts in cafe footage instead of restaurant food footage", () => {
+    const result = buildStockQueryFamilies({
+      narration: "fresh coffee subscription with cafe preparation and packaging",
+      providedTerms: ["coffee subscription box"],
+    });
+    const terms = queryFamilyTerms(result).join(" ");
+
+    expect(result.matchedConcepts).toContain("coffee");
+    expect(result.matchedConcepts).not.toContain("restaurant");
+    expect(terms).toContain("coffee");
+    expect(terms).toContain("cafe");
+    expect(terms).not.toContain("signature dish");
+    expect(terms).not.toContain("chef cooking");
+  });
+
   it("labels broad terms as a fallback when nothing specific was recognised", () => {
     const result = buildStockQueryFamilies({ narration: "zzz qqq wwww" });
     expect(result.queries.every((entry) => entry.generic)).toBe(true);
