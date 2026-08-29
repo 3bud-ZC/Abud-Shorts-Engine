@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { matchFactPack } from "../server/v2/content-ai/factPacks";
 import { detectContentStyle } from "../server/v2/content-ai/contentStyleDetector";
 import { LocalContentAIProvider } from "../server/v2/content-ai/localProvider";
+import { mediaIntelligenceService } from "../server/v2/media-intelligence/mediaIntelligenceService";
 
 /**
  * V2.4 PASS 5 - CONTENT INTELLIGENCE
@@ -133,5 +134,32 @@ describe("V2.4 Pass 5: LocalContentAIProvider produces real explanatory narratio
     // fact-pack match for this content-style-detected-as-curiosity prompt.
     expect((spec.metadata as any)?.contentProvenance).toBe("DETERMINISTIC");
     expect((spec.metadata as any)?.factPackId).toBeUndefined();
+  });
+});
+
+describe("V2.4 Pass 5: fact-pack productions can legitimately take the multi-segment media-plan path", () => {
+  it("confirms sceneMediaPlan.segments.length > 1 is reachable for curiosity content (pins the precondition of a real coverage-reporting bug)", async () => {
+    // Live benchmark cmteyemae000p07n19o5egdlw (this exact prompt) rendered
+    // real airplane/cabin footage throughout (independently verified against
+    // the downloaded MP4) but reported realVisualCoveragePercent: 0% and
+    // professionalReady: false. Root cause: ShortCreator's OTHER, older
+    // multi-shot mechanism (triggered whenever a scene's media plan produces
+    // more than one segment - this is genuinely common for "fast"-paced
+    // content, confirmed here) never recorded anything into `plannedShots`,
+    // the sole source of truth `professionalVisualQuality` reads from - see
+    // the fix and full explanation at the `plannedShots.push` call inside
+    // ShortCreator.ts's sceneMediaPlan.segments branch. This test pins the
+    // precondition (segments.length > 1 really happens); the fix itself is
+    // exercised by ShortCreator's live render pipeline, not unit-testable in
+    // isolation without a very heavy integration harness.
+    const provider = new LocalContentAIProvider();
+    const spec = await provider.generateProductionSpec({
+      prompt: "Create a 25-second vertical curiosity video explaining why airplane windows are rounded instead of square.",
+      language: "en",
+      requestedDurationSeconds: 25,
+    });
+    const mediaPlan = mediaIntelligenceService.generateMediaPlan(spec);
+    const multiSegmentScene = mediaPlan.scenes.find((scene) => (scene.segments?.length || 0) > 1);
+    expect(multiSegmentScene, "at least one scene of a real curiosity production plans multiple segments").toBeDefined();
   });
 });

@@ -1085,6 +1085,7 @@ export class ShortCreator {
           targetSceneDuration,
         );
         const renderedSegments: { video: string; duration: number; motion?: string }[] = [];
+        let segmentCursorSeconds = 0;
 
         for (const seg of normalizedSegments) {
           const segTempId = cuid();
@@ -1189,6 +1190,48 @@ export class ShortCreator {
             durationSeconds: segAsset.durationSeconds,
             metadata: segAsset.metadata,
           });
+
+          // This segment-based multi-shot path (sceneMediaPlan.segments) is a
+          // second, older shot mechanism alongside the EDL/composeVisualBed
+          // path used below for scenes without pre-planned segments. It
+          // never recorded anything into `plannedShots` - the sole source of
+          // truth for `professionalVisualQuality`'s real-visual-coverage
+          // calculation - so any production that took this path (curiosity/
+          // "fast"-pacing content routes here more often) always measured
+          // realVisualCoveragePercent: 0% regardless of what actually
+          // rendered, and was wrongly rejected by the professionalReady gate
+          // even when built entirely from real stock footage (found via live
+          // benchmark cmteyemae000p07n19o5egdlw - real airplane/cabin footage
+          // throughout, independently verified, reported professionalReady:
+          // false). Recorded the same way the EDL path records its shots.
+          const segSourceType: "stock" | "mockup" | "motion" | "upload" | "image" =
+            segAsset.source === "motion"
+              ? "motion"
+              : segAsset.source === "uploaded"
+                ? "upload"
+                : segAsset.source === "ai" || segAsset.source === "local_ai"
+                  ? "image"
+                  : "stock";
+          const segIntent =
+            originalSceneSpec.purpose === "hook" ? "hook"
+              : originalSceneSpec.purpose === "cta" ? "cta"
+              : originalSceneSpec.purpose === "solution" ? "solution"
+              : "detail";
+          plannedShots.push({
+            shotId: `${index}-${seg.segmentIndex}`,
+            narrationSceneId: `scene${index}`,
+            narrationSceneIndex: index,
+            sceneIndex: index,
+            purpose: String(originalSceneSpec.purpose || ""),
+            intent: segIntent,
+            sourceType: segSourceType,
+            sourceId: segAssetId ? String(segAssetId) : undefined,
+            provider: segAsset.provider,
+            start: (sceneTimeline.startSeconds || 0) + segmentCursorSeconds,
+            duration: seg.durationSeconds,
+          });
+          shotSourceCounts[segSourceType] = (shotSourceCounts[segSourceType] || 0) + 1;
+          segmentCursorSeconds += seg.durationSeconds;
 
           renderedSegments.push({
             video: `http://localhost:${this.config.port}/api/tmp/${segVideoFileName}`,
