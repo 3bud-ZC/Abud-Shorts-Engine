@@ -34,6 +34,7 @@ import {
   TREATMENT_MOTION_TEMPLATE,
   TREATMENT_RUNTIME,
   sceneRendersAsMotion,
+  buildTreatmentAvailabilityPredicate,
   type VisualTreatment,
 } from "../server/v2/creative/visualTreatment";
 import { splitNarrationBeats } from "../server/v2/creative/visualIntentClassifier";
@@ -58,7 +59,7 @@ import { FFMpeg } from "./libraries/FFmpeg";
 import { PexelsAPI } from "./libraries/Pexels";
 import { Config } from "../config";
 import { logger } from "../logger";
-import { MusicManager } from "./music";
+import { MusicManager, pickQuietestSafeMusicStart } from "./music";
 import {
   readMetadata,
   writeMetadata,
@@ -398,17 +399,16 @@ export class ShortCreator {
       requestedVisualSource === "stock" ||
       requestedVisualSource === "auto_free";
 
-    const isTreatmentAvailable = (treatment: VisualTreatment): boolean => {
-      const runtime = TREATMENT_RUNTIME[treatment];
-      if (graphicOnlyMode) return runtime === "motion";
-      if (forceStockFootage && runtime !== "stock") return false;
-      if (runtime === "motion") return motionRuntimeAvailable;
-      if (runtime === "stock") return stockRuntimeAvailable;
-      if (runtime === "upload") return hasUploadedMediaForProduction;
-      if (runtime === "product") return hasProductMediaForProduction;
-      // Mockups are rendered locally and always available.
-      return true;
-    };
+    // V2.4 Pass 4 true-visual-bed invariant - see buildTreatmentAvailabilityPredicate
+    // for why this must not simply key off `motionRuntimeAvailable`.
+    const isTreatmentAvailable = buildTreatmentAvailabilityPredicate({
+      graphicOnlyMode,
+      forceStockFootage,
+      motionRuntimeAvailable,
+      stockRuntimeAvailable,
+      hasUploadedMedia: hasUploadedMediaForProduction,
+      hasProductMedia: hasProductMediaForProduction,
+    });
 
     const creativePlan: CreativePlan = buildCreativePlan({
       productionMode: spec.productionMode,
@@ -2078,9 +2078,48 @@ export class ShortCreator {
     });
     const renderStartedAt = Date.now();
 
+    // Master a per-job excerpt of the selected music bed instead of streaming
+    // the shared catalog file as-is. The catalog file's own energy envelope
+    // can dip near-silent for a second or more (measured via `beatMap` above),
+    // and Remotion's per-frame volume is only ever a flat multiplier on top of
+    // whatever the source already contains - it cannot raise a passage that is
+    // already quiet. When a start offset can be chosen so the needed window
+    // avoids the quietest dips, and/or a real compressor can raise what
+    // remains, the final mixed track stops going near-silent during narration
+    // gaps (incident cmtehsptj000108ledzk3f3ji: ~4.5s/~5.3s/~4.8s runs below
+    // -35dB in exactly this situation).
+    let musicForRender: MusicForVideo = selectedMusic;
+    if (selectedMusic?.file && capabilityManager.isPythonQualityVenvInstalled()) {
+      try {
+        const sourceMusicPath = path.join(this.config.musicDirPath, selectedMusic.file);
+        const windowSeconds = totalDurationSeconds;
+        const bestStart = pickQuietestSafeMusicStart(
+          beatMap?.energyEnvelope as number[] | undefined,
+          selectedMusic.start,
+          selectedMusic.end,
+          windowSeconds,
+        );
+        const masteredFileName = `${cuid()}.music.mp3`;
+        const masteredMusicPath = path.join(this.config.tempDirPath, masteredFileName);
+        tempFiles.push(masteredMusicPath);
+        await this.ffmpeg.masterMusicBed(sourceMusicPath, masteredMusicPath, {
+          startSeconds: bestStart,
+          durationSeconds: windowSeconds,
+        });
+        musicForRender = {
+          ...selectedMusic,
+          url: `http://localhost:${this.config.port}/api/tmp/${masteredFileName}`,
+          start: 0,
+          end: windowSeconds + 1,
+        };
+      } catch (musicMasterErr) {
+        logger.warn(musicMasterErr, "Music-bed mastering failed; falling back to the raw catalog track");
+      }
+    }
+
     await this.remotion.render(
       {
-        music: selectedMusic,
+        music: musicForRender,
         scenes,
         config: {
           durationMs: Math.round(totalDurationSeconds * 1000),
@@ -2244,6 +2283,14 @@ export class ShortCreator {
         timingMs: Date.now() - masteringStartedAt,
       });
 
+      // Real final-mix silence gate (V2.4 Pass 4). `analyzeDeadAir` below only
+      // ever compares PLANNED speech windows against a PLANNED hold budget -
+      // a claim about what should happen. This measures the ACTUAL mixed
+      // track with ffmpeg's silencedetect, the same way an independent
+      // reviewer caught incident cmtehsptj000108ledzk3f3ji's ~4.5s/~5.3s/~4.8s
+      // near-silent runs that the planning-only check could not see.
+      const mixedSilenceGate = await this.audioMastering.analyzeMixedSilence(videoPath);
+
       const stats = fs.statSync(videoPath);
       const totalVoiceDuration = timeline.scenes.reduce(
         (sum, s) => sum + (s.actualSpeechDurationSeconds || s.durationSeconds),
@@ -2286,6 +2333,10 @@ export class ShortCreator {
         };
       });
       const deadAirReport = this.audioMastering.analyzeDeadAir(speechWindowsForDeadAir);
+      // The rendered-media measurement wins over planning metadata (same
+      // principle as the visual coverage gate below): whichever check found
+      // the worse gap is the one that gates the production.
+      const effectiveMaxSilenceMs = Math.max(deadAirReport.maxNarrationSilenceMs, mixedSilenceGate.longestSilenceRunMs);
 
       const professionalVisualQuality = calculateProfessionalVisualQualityReport({
         spec,
@@ -2297,7 +2348,7 @@ export class ShortCreator {
 
       const creativeQualityResult = qualityEngine.calculateCreativeQualityScore({
         deadAirDurationMs: deadAirReport.totalNarrationSilenceMs,
-        maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
+        maxNarrationSilenceMs: effectiveMaxSilenceMs,
         totalDurationSeconds: validationResult.durationSeconds,
         sceneCount: scenes.length,
         distinctAssetCount: new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size,
@@ -2313,7 +2364,7 @@ export class ShortCreator {
         promptLeakCount: professionalVisualQuality.rawPromptLeakCount,
         inventedClaimRiskCount: professionalVisualQuality.inventedClaimRiskCount,
       });
-      const mediaPlanScoreV24 = Math.max(
+      let mediaPlanScoreV24 = Math.max(
         0,
         Math.min(
           100,
@@ -2328,12 +2379,47 @@ export class ShortCreator {
           ),
         ),
       );
+      // An explicit graphics-led production (Motion Graphics / Animated
+      // Explainer) is not held to the real-visual-bed gate below, matching
+      // `professionalVisualQuality.ts`'s own exemption.
+      const isExplicitGraphicsMode =
+        spec.productionMode === "motion_graphics" ||
+        spec.productionMode === "animated_explainer" ||
+        spec.visualMode === "motion_graphics" ||
+        spec.visualMode === "animated_explainer";
+
+      // Hard cap (V2.4 Pass 4, section 58): a professional Auto production
+      // with ANY full-screen text/motion timeline in the rendered media
+      // cannot score as a passing Professional Visual Score, no matter how
+      // strong its other components are.
+      if (!isExplicitGraphicsMode && professionalVisualQuality.textOnlyTimelinePercent > 0) {
+        mediaPlanScoreV24 = Math.min(mediaPlanScoreV24, 59);
+      }
+
+      // V2.4 Pass 4 professional-ready gate (section 11): "ready" used to mean
+      // only "an audio stream exists and isn't clipping/silent" - a video
+      // could carry a full-screen CTA card and multi-second audio silence and
+      // still ship as `status: "ready"` (incident cmtehsptj000108ledzk3f3ji:
+      // `realVisualCoveragePercent: 26.1`, `readyForProfessionalAuto: false`,
+      // yet the job completed as "ready" because nothing consulted that
+      // report).
+      const visualQualityPass = isExplicitGraphicsMode || professionalVisualQuality.readyForProfessionalAuto;
+      const audioSilencePass = !mixedSilenceGate.criticalFailure;
+      const professionalReady = finalAudioQa.pass && audioSilencePass && visualQualityPass;
+      const readinessFailureReasons: string[] = [
+        ...(finalAudioQa.pass ? [] : ["Audio mastering did not pass quality checks."]),
+        ...(audioSilencePass ? [] : ["Audio timing needs another pass; a section of the video was unexpectedly quiet."]),
+        ...(visualQualityPass ? [] : ["One or more sections need better footage; a scene fell back to a graphic instead of real video."]),
+      ];
 
       const metadata: VideoMetadata = {
         videoId,
         filename: `${videoId}.mp4`,
         thumbnailUrl: `/api/videos/${videoId}/thumbnail`,
-        status: finalAudioQa.pass ? "ready" : "failed",
+        status: professionalReady ? "ready" : "failed",
+        error: professionalReady ? undefined : readinessFailureReasons.join(" "),
+        professionalReady,
+        mixedSilenceGate: mixedSilenceGate as unknown as Record<string, unknown>,
         creationMode: spec.creationMode,
         originalPrompt: spec.userPrompt,
         templateId: spec.templateId,

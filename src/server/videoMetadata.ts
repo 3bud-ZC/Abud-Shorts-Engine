@@ -122,6 +122,16 @@ export interface VideoMetadata {
   hostPathHint?: string;
   beatMap?: Record<string, unknown>;
   error?: string;
+  /**
+   * V2.4 Pass 4: true only when BOTH the final rendered media's real-visual
+   * coverage gate AND its mixed-audio silence gate passed - not merely
+   * whether an audio stream exists. A production that fails either gate for
+   * a professional Auto mode is never marked `status: "ready"`; see
+   * `professionalVisualQuality.readyForProfessionalAuto` and
+   * `mixedSilenceGate` for which check failed.
+   */
+  professionalReady?: boolean;
+  mixedSilenceGate?: Record<string, unknown>;
 }
 
 export function getMetadataPath(videosDir: string, videoId: string): string {

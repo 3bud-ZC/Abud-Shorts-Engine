@@ -147,9 +147,19 @@ export class QualityEngine {
     }
 
     const textOnlyPercent = input.textOnlyTimelinePercent ?? 0;
-    const textOnlyScore = Math.max(0, Math.min(100, Math.round(100 - Math.max(0, textOnlyPercent - 10) * 4)));
+    // Hard cap (V2.4 Pass 4, section 58): any full-screen text/motion timeline
+    // at all means this cannot score as a perfect professional visual bed,
+    // even a single percent - incident cmtehsptj000108ledzk3f3ji's 32.9%
+    // text-only timeline previously coexisted with a 0% textOnlyTimelinePercent
+    // *plan* claim, so the rendered-media measurement must never be allowed to
+    // read as flawless once it is nonzero.
+    const textOnlyScore = textOnlyPercent > 0
+      ? Math.max(0, Math.min(99, Math.round(99 - Math.max(0, textOnlyPercent - 10) * 4)))
+      : 100;
     if (textOnlyPercent > 10) {
       issues.push(`Text-only timeline exceeds professional target: ${textOnlyPercent}%`);
+    } else if (textOnlyPercent > 0) {
+      warnings.push(`Text-only timeline is nonzero: ${textOnlyPercent}%`);
     }
 
     const blackFramePercent = input.blackFramePercent ?? 0;
@@ -205,6 +215,14 @@ export class QualityEngine {
     else if (creativeScore < 70) creativeGrade = "D";
     else if (creativeScore < 80) creativeGrade = "C";
     else if (creativeScore < 90) creativeGrade = "B";
+
+    // Hard cap (V2.4 Pass 4, section 58): a raw prompt leak or an unsupported/
+    // invented claim (WhatsApp, a discount, a statistic) is a trust failure,
+    // not a quality deduction a high production-value score can outweigh. No
+    // numeric blend is allowed to grade this "passing".
+    if ((input.promptLeakCount || 0) > 0 || (input.inventedClaimRiskCount || 0) > 0) {
+      creativeGrade = "F";
+    }
 
     return {
       creativeScore,
