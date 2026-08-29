@@ -52,6 +52,7 @@ type SemanticRankerOptions = {
   timeoutMs?: number;
   downloadCandidate?: (candidate: ScoredCandidate, destinationPath: string) => Promise<void>;
   analyzer?: typeof analyzeVideoSemanticSimilarity;
+  onPerf?: (event: import("./types").PerfEvent) => void;
 };
 
 function semanticCandidateFileName(candidate: ScoredCandidate): string {
@@ -124,7 +125,9 @@ export async function rankStockCandidatesWithVisualSemantics(
   const ranked = await Promise.all(shortlist.map(async (candidate) => {
     const localPath = path.join(videoCacheDir, semanticCandidateFileName(candidate));
     try {
+      const downloadStartedAt = Date.now();
       await downloadCandidate(candidate, localPath);
+      options.onPerf?.({ stage: "providerDownloadMs", ms: Date.now() - downloadStartedAt, meta: { provider: candidate.provider } });
       const analysis = await analyzer({
         videoPath: localPath,
         intentText: options.intentText,
@@ -133,6 +136,14 @@ export async function rankStockCandidatesWithVisualSemantics(
         cacheDir: analysisCacheDir,
         timeoutMs: options.timeoutMs ?? 45000,
       });
+      if (analysis.cacheHit) {
+        options.onPerf?.({ stage: "openClipCacheHitCount", ms: 0 });
+      } else if (typeof analysis.analysisMs === "number") {
+        options.onPerf?.({
+          stage: analysis.servedByWorkerPool ? "openClipInferenceMs" : "openClipFreshProcessMs",
+          ms: analysis.analysisMs,
+        });
+      }
       const blackFramePercent = Number(analysis.blackFramePercent ?? 0);
       const longestBlackRunMs = Number(analysis.longestBlackRunMs ?? 0);
       const visualHealthPass = longestBlackRunMs <= 450 && blackFramePercent <= 2;
@@ -251,6 +262,7 @@ export class AutoVisualRouter {
     const orientation =
       options.orientation === OrientationEnum.landscape ? "landscape" : "portrait";
 
+    const searchStartedAt = Date.now();
     const lexicalCandidates = await this.stockRegistry.searchQueries(
       searchTerms.slice(0, 6).map((query) => ({
         query,
@@ -261,6 +273,7 @@ export class AutoVisualRouter {
         excludeIds: (options.excludeIds || []).map((id) => String(id)),
       })),
     );
+    options.onPerf?.({ stage: "providerSearchMs", ms: Date.now() - searchStartedAt, meta: { sceneIndex: scene.sceneIndex } });
     const intentText = [
       (scene as any).visualPrompt,
       scene.narration,
@@ -272,6 +285,7 @@ export class AutoVisualRouter {
       intentText,
       maxCandidates: 4,
       timeoutMs: 45000,
+      onPerf: options.onPerf,
     });
 
     const winner = this.pickBestCandidate(candidates);

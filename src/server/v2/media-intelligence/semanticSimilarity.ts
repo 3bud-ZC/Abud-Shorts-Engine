@@ -4,6 +4,7 @@ import fs from "fs-extra";
 import path from "path";
 import { logger } from "../../../config";
 import { capabilityManager } from "../capabilities/capabilityManager";
+import { getSharedOpenClipWorkerPool } from "./openClipWorkerPool";
 
 export type SemanticModelAudit = {
   modelId: string;
@@ -35,6 +36,10 @@ export type VideoSemanticAnalysis = {
   longestBlackRunMs?: number;
   runtime: "open_clip" | "perceptual_hash_only" | "unavailable";
   error?: string;
+  /** Wall-clock time of this specific analysis call (excludes cache hits). */
+  analysisMs?: number;
+  /** Whether the persistent worker pool served this request (vs a fresh process). */
+  servedByWorkerPool?: boolean;
 };
 
 export type VideoSemanticAnalysisInput = {
@@ -296,6 +301,50 @@ export async function analyzeVideoSemanticSimilarity(
     };
   }
 
+  const analysisStartedAt = Date.now();
+  const pool = getSharedOpenClipWorkerPool();
+  if (pool) {
+    try {
+      const response = await pool.analyze(
+        { videoPath: input.videoPath, intentText: input.intentText, modelId },
+        input.timeoutMs ?? 45000,
+      );
+      const result: VideoSemanticAnalysis = {
+        ...base,
+        cacheHit: false,
+        analysisMs: Date.now() - analysisStartedAt,
+        servedByWorkerPool: true,
+        frameSampleCount: Number(response.frameSampleCount || response.perceptualHashes?.length || 0),
+        frameSamplePercents: Array.isArray(response.frameSamplePercents) ? response.frameSamplePercents : FRAME_SAMPLE_PERCENTS,
+        perceptualAvailable: Boolean(response.perceptualAvailable),
+        perceptualHashes: response.perceptualHashes || [],
+        perceptualHash: response.perceptualHashes?.length
+          ? crypto.createHash("sha256").update(response.perceptualHashes.join("|")).digest("hex").slice(0, 16)
+          : undefined,
+        semanticAvailable: Boolean(response.semanticAvailable),
+        visualSemanticScore: Number.isFinite(Number(response.visualSemanticScore))
+          ? Number(response.visualSemanticScore)
+          : undefined,
+        blackFramePercent: Number.isFinite(Number(response.blackFramePercent)) ? Number(response.blackFramePercent) : undefined,
+        longestBlackRunMs: Number.isFinite(Number(response.longestBlackRunMs)) ? Number(response.longestBlackRunMs) : undefined,
+        runtime: response.runtime === "open_clip" ? "open_clip" : response.runtime === "perceptual_hash_only" ? "perceptual_hash_only" : "unavailable",
+        error: response.error,
+      };
+      await fs.writeJson(cachePath, result, { spaces: 2 }).catch((cacheError) => {
+        logger.debug({ err: String(cacheError), cacheKey }, "Semantic cache write skipped");
+      });
+      return result;
+    } catch (poolError) {
+      // The pool is a pure acceleration layer: any failure (spawn error,
+      // timeout, protocol desync) falls back to the original one-process-
+      // per-call path below rather than failing this candidate's ranking.
+      logger.debug(
+        { err: poolError instanceof Error ? poolError.message : String(poolError) },
+        "OpenCLIP worker pool unavailable for this request; falling back to a fresh process",
+      );
+    }
+  }
+
   const openClipPython = process.env.ABUD_OPENCLIP_PYTHON_BIN?.trim();
   const pythonBin = openClipPython || capabilityManager.getQualityPythonPath();
   return new Promise<VideoSemanticAnalysis>((resolve) => {
@@ -308,6 +357,8 @@ export async function analyzeVideoSemanticSimilarity(
           const result: VideoSemanticAnalysis = {
             ...base,
             cacheHit: false,
+            analysisMs: Date.now() - analysisStartedAt,
+            servedByWorkerPool: false,
             frameSampleCount: 0,
             perceptualAvailable: false,
             perceptualHashes: [],
@@ -326,6 +377,8 @@ export async function analyzeVideoSemanticSimilarity(
           const result: VideoSemanticAnalysis = {
             ...base,
             cacheHit: false,
+            analysisMs: Date.now() - analysisStartedAt,
+            servedByWorkerPool: false,
             frameSampleCount: Number(parsed.frameSampleCount || hashes.length || 0),
             frameSamplePercents: Array.isArray(parsed.frameSamplePercents) ? parsed.frameSamplePercents : FRAME_SAMPLE_PERCENTS,
             perceptualAvailable: Boolean(parsed.perceptualAvailable),

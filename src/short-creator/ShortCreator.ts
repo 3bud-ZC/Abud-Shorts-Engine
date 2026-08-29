@@ -54,6 +54,7 @@ import {
   arePerceptuallyNearDuplicate,
 } from "../server/v2/media-intelligence/semanticSimilarity";
 import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
+import { getSharedOpenClipWorkerPool } from "../server/v2/media-intelligence/openClipWorkerPool";
 import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
 import { PexelsAPI } from "./libraries/Pexels";
@@ -499,6 +500,17 @@ export class ShortCreator {
     const excludeVideoIds: (string | number)[] = [];
     const previousVisualCandidates: any[] = [];
     const tempFiles: string[] = [];
+    // V2.4 Pass 5 wall-clock accounting (section 12): fine-grained timings
+    // the coarse per-stage `emitProgress` buckets could not see, e.g. the
+    // "media" stage swinging 6.8s-50.1s across otherwise-similar benchmarks
+    // in Pass 4 with no visibility into why. Populated by AutoVisualRouter's
+    // optional `onPerf` callback; purely additive instrumentation.
+    const perfAccumulatorMs: Record<string, number> = {};
+    const perfCounts: Record<string, number> = {};
+    const onVisualPerf = (event: { stage: string; ms: number }) => {
+      perfAccumulatorMs[event.stage] = (perfAccumulatorMs[event.stage] || 0) + event.ms;
+      perfCounts[event.stage] = (perfCounts[event.stage] || 0) + 1;
+    };
     const visualProvidersUsed = new Set<string>();
     const voiceProvidersUsed = new Set<string>();
     const captionTimingSources = new Set<string>();
@@ -1106,6 +1118,7 @@ export class ShortCreator {
                 tempDirPath: this.config.tempDirPath,
                 targetDurationSeconds: seg.durationSeconds,
                 previousCandidates: previousVisualCandidates,
+                onPerf: onVisualPerf,
               },
             );
             if (!reusedSeg && segAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
@@ -1426,6 +1439,7 @@ export class ShortCreator {
               tempDirPath: this.config.tempDirPath,
               targetDurationSeconds: targetSceneDuration,
               previousCandidates: previousVisualCandidates,
+              onPerf: onVisualPerf,
             },
           );
           if (!reusedAsset && visualAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
@@ -1777,6 +1791,7 @@ export class ShortCreator {
                       tempDirPath: this.config.tempDirPath,
                       targetDurationSeconds: shot.duration,
                       previousCandidates: previousVisualCandidates,
+                      onPerf: onVisualPerf,
                     },
                   );
                   selectedShotVisualAsset = shotAsset;
@@ -2412,6 +2427,14 @@ export class ShortCreator {
         ...(visualQualityPass ? [] : ["One or more sections need better footage; a scene fell back to a graphic instead of real video."]),
       ];
 
+      // V2.4 Pass 5 wall-clock accounting: the OpenCLIP pool's init cost is
+      // only paid once per render-worker process lifetime (it stays warm
+      // across renders), so it is read here rather than measured per-render.
+      const openClipPool = getSharedOpenClipWorkerPool();
+      if (openClipPool?.getInitMs() != null) {
+        perfAccumulatorMs.openClipPoolInitMs = openClipPool!.getInitMs()!;
+      }
+
       const metadata: VideoMetadata = {
         videoId,
         filename: `${videoId}.mp4`,
@@ -2420,6 +2443,8 @@ export class ShortCreator {
         error: professionalReady ? undefined : readinessFailureReasons.join(" "),
         professionalReady,
         mixedSilenceGate: mixedSilenceGate as unknown as Record<string, unknown>,
+        detailedStageTimings: perfAccumulatorMs,
+        detailedStageCounts: perfCounts,
         creationMode: spec.creationMode,
         originalPrompt: spec.userPrompt,
         templateId: spec.templateId,

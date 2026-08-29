@@ -132,6 +132,14 @@ export interface VideoMetadata {
    */
   professionalReady?: boolean;
   mixedSilenceGate?: Record<string, unknown>;
+  /**
+   * V2.4 Pass 5 wall-clock accounting: fine-grained timings the coarse
+   * per-stage progress buckets (see `stageTimings` in the jobs table) could
+   * not see - providerSearchMs, providerDownloadMs, openClipInferenceMs,
+   * openClipFreshProcessMs, openClipPoolInitMs, openClipCacheHitCount.
+   */
+  detailedStageTimings?: Record<string, number>;
+  detailedStageCounts?: Record<string, number>;
 }
 
 export function getMetadataPath(videosDir: string, videoId: string): string {

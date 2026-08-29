@@ -14,12 +14,21 @@ export type VisualAssetResult = {
   metadata?: Record<string, unknown>;
 };
 
+export type PerfEvent = { stage: string; ms: number; meta?: Record<string, unknown> };
+
 export type VisualRenderOptions = {
   orientation?: OrientationEnum;
   excludeIds?: (string | number)[];
   tempDirPath: string;
   targetDurationSeconds?: number;
   previousCandidates?: Record<string, unknown>[];
+  /**
+   * Fine-grained wall-clock accounting (V2.4 Pass 5, section 12). Optional
+   * and additive only - omitting it changes no behavior. Callers accumulate
+   * these into a per-production report (`providerSearchMs`,
+   * `providerDownloadMs`, `openClipInitMs`, `openClipInferenceMs`, ...).
+   */
+  onPerf?: (event: PerfEvent) => void;
 };
 
 export type SceneCostEstimate = {
