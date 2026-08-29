@@ -7,14 +7,57 @@ import type {
   ProviderValidationResult,
   SpecReviewResult,
 } from "./types";
-import type { ProductionSpec } from "../../../types/productionSpec";
+import type { ProductionSceneSpec, ProductionSpec } from "../../../types/productionSpec";
 import { validateProductionSpec } from "../../../types/productionSpec";
+import { inventsUngroundedClaim } from "../creative/ctaPolicy";
+import { containsRawPromptLeak } from "../quality/professionalVisualQuality";
+import { logger } from "../../../logger";
 
 function extractJsonObject(text: string): unknown {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("Local LLM response did not include a JSON object.");
   return JSON.parse(text.slice(start, end + 1));
+}
+
+/**
+ * The deterministic baseline already ran the full truth-safety pipeline
+ * (resolveCtaProvenance, enforcePromptTruthSafety, raw-prompt-leak guard) on
+ * its own scenes. Nothing re-checks the LLM's "improved" hook/narration/CTA/
+ * scene intent after that, and the system prompt above only ASKS it not to
+ * invent claims - it does not enforce that. This re-applies the same checks
+ * per scene and per-field reverts to the (already safe) baseline value
+ * whenever the LLM's version fails them, rather than discarding the whole
+ * LLM response for one bad field.
+ */
+function enforceTruthSafetyOnLlmScenes(
+  llmScenes: unknown,
+  baselineScenes: ProductionSceneSpec[],
+  prompt: string,
+): ProductionSceneSpec[] {
+  if (!Array.isArray(llmScenes)) return baselineScenes;
+  return baselineScenes.map((baselineScene, index) => {
+    const candidate = llmScenes[index];
+    if (!candidate || typeof candidate !== "object") return baselineScene;
+    const merged: ProductionSceneSpec = { ...baselineScene, ...(candidate as Partial<ProductionSceneSpec>) };
+    const narration = String(merged.narration || "");
+    const onScreenText = merged.onScreenText ? String(merged.onScreenText) : undefined;
+    const narrationUnsafe = inventsUngroundedClaim(narration, prompt) || containsRawPromptLeak(prompt, narration);
+    const onScreenUnsafe = onScreenText
+      ? inventsUngroundedClaim(onScreenText, prompt) || containsRawPromptLeak(prompt, onScreenText)
+      : false;
+    return {
+      ...merged,
+      narration: narrationUnsafe ? baselineScene.narration : merged.narration,
+      onScreenText: onScreenUnsafe ? baselineScene.onScreenText : merged.onScreenText,
+      // Duration and visual routing stay under the deterministic planner's
+      // control regardless of what the LLM proposed - those are timeline/
+      // provider-routing decisions, not creative copy.
+      durationSeconds: baselineScene.durationSeconds,
+      purpose: baselineScene.purpose,
+      sceneIndex: baselineScene.sceneIndex,
+    };
+  });
 }
 
 export class OllamaContentAIProvider implements ContentAIProvider {
@@ -34,46 +77,89 @@ export class OllamaContentAIProvider implements ContentAIProvider {
 
   public async generateProductionSpec(params: GenerateSpecParams): Promise<ProductionSpec> {
     if (!this.isConfigured) return this.fallback.generateProductionSpec(params);
+    // The baseline always runs first and is returned as-is on any failure
+    // below (section 4: "do not block the product" - a configured-but-
+    // unreachable Ollama endpoint, a malformed response, or a schema
+    // mismatch must degrade to the deterministic planner's output, not fail
+    // the job outright, which the previous version - no try/catch around
+    // the live call - would have done).
     const baseline = await this.fallback.generateProductionSpec(params);
-    const system = [
-      "You are ABUD Shorts Engine Creative Director.",
-      "Return only valid JSON matching the provided ProductionSpec object shape.",
-      "Preserve durationSeconds, language, dialect, aspectRatio, quality, productionMode, visualMode, voiceProvider, and voiceId exactly.",
-      "Improve hook, spoken narration, CTA, scene intent, Pexels search terms, motion intent, and editing rhythm.",
-      "For Egyptian Arabic, use conversational spoken Egyptian Arabic, not translated MSA.",
-      "Do not include subjective quality scores.",
-    ].join(" ");
-    const response = await axios.post(
-      `${this.baseUrl.replace(/\/$/, "")}/api/generate`,
-      {
-        model: this.model,
-        stream: false,
-        system,
-        prompt: JSON.stringify({ params, baseline }),
-        format: "json",
-      },
-      { timeout: Number(process.env.OLLAMA_TIMEOUT_MS || 45000) },
-    );
-    const raw = typeof response.data?.response === "string" ? response.data.response : JSON.stringify(response.data);
-    const spec = validateProductionSpec({
-      ...(extractJsonObject(raw) as Record<string, unknown>),
-      durationSeconds: baseline.durationSeconds,
-      language: baseline.language,
-      dialect: baseline.dialect,
-      aspectRatio: baseline.aspectRatio,
-      quality: baseline.quality,
-      productionMode: baseline.productionMode,
-      visualMode: baseline.visualMode,
-      voiceProvider: baseline.voiceProvider,
-      voiceId: baseline.voiceId,
-      metadata: {
-        ...(baseline.metadata || {}),
-        planner: "OllamaContentAIProvider",
-        plannerModel: this.model,
-        fallbackPlanner: "LocalContentAIProvider",
-      },
-    });
-    return spec;
+    try {
+      const system = [
+        "You are ABUD Shorts Engine Creative Director.",
+        "Return only valid JSON matching the provided ProductionSpec object shape.",
+        "Preserve durationSeconds, language, dialect, aspectRatio, quality, productionMode, visualMode, voiceProvider, and voiceId exactly.",
+        "Improve hook, spoken narration, CTA, scene intent, Pexels search terms, motion intent, and editing rhythm.",
+        "Never invent a price, discount, phone number, WhatsApp number, testimonial, statistic, or claim that is not grounded in the customer's own prompt.",
+        "For Egyptian Arabic, use conversational spoken Egyptian Arabic, not translated MSA.",
+        "Do not include subjective quality scores.",
+      ].join(" ");
+      const response = await axios.post(
+        `${this.baseUrl.replace(/\/$/, "")}/api/generate`,
+        {
+          model: this.model,
+          stream: false,
+          system,
+          prompt: JSON.stringify({ params, baseline }),
+          format: "json",
+        },
+        { timeout: Number(process.env.OLLAMA_TIMEOUT_MS || 45000) },
+      );
+      const raw = typeof response.data?.response === "string" ? response.data.response : JSON.stringify(response.data);
+      const parsed = extractJsonObject(raw) as Record<string, unknown>;
+      // Truth safety is re-applied per scene/field below rather than trusted
+      // from the LLM - see enforceTruthSafetyOnLlmScenes.
+      const safeScenes = enforceTruthSafetyOnLlmScenes(parsed.scenes, baseline.scenes, params.prompt);
+      const llmCtaText = (parsed.cta as any)?.text;
+      const ctaSafe = typeof llmCtaText === "string" &&
+        !inventsUngroundedClaim(llmCtaText, params.prompt) &&
+        !containsRawPromptLeak(params.prompt, llmCtaText);
+      // Only the fields the system prompt actually asks the LLM to improve
+      // are taken from its response; every structural field (id, userPrompt,
+      // brandKit, captionStyle, ...) comes from the baseline regardless of
+      // what the LLM echoed back. Requiring an LLM to faithfully round-trip
+      // an entire ProductionSpec object just to change a few lines of copy
+      // is unnecessary and fragile - a response missing or mistyping any of
+      // those structural fields used to fail `validateProductionSpec`
+      // entirely and silently discard an otherwise-good improvement.
+      const spec = validateProductionSpec({
+        ...baseline,
+        title: typeof parsed.title === "string" && !containsRawPromptLeak(params.prompt, parsed.title) ? parsed.title : baseline.title,
+        scenes: safeScenes,
+        // The CTA channel/contact is a provenance decision baked into
+        // `baseline.cta` by resolveCtaProvenance - never let the LLM invent
+        // a different contact channel, only allow it to reword the safe text.
+        cta: {
+          ...baseline.cta,
+          text: ctaSafe ? llmCtaText : baseline.cta?.text,
+        },
+        contact: baseline.contact,
+        durationSeconds: baseline.durationSeconds,
+        language: baseline.language,
+        dialect: baseline.dialect,
+        aspectRatio: baseline.aspectRatio,
+        quality: baseline.quality,
+        productionMode: baseline.productionMode,
+        visualMode: baseline.visualMode,
+        voiceProvider: baseline.voiceProvider,
+        voiceId: baseline.voiceId,
+        metadata: {
+          ...(baseline.metadata || {}),
+          planner: "OllamaContentAIProvider",
+          plannerModel: this.model,
+          fallbackPlanner: "LocalContentAIProvider",
+          contentProvenance: "MODEL_GENERATED",
+          contentConfidence: "high",
+        },
+      });
+      return spec;
+    } catch (error) {
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error), model: this.model },
+        "Ollama content generation failed; using the deterministic baseline instead",
+      );
+      return baseline;
+    }
   }
 
   public async rewritePrompt(

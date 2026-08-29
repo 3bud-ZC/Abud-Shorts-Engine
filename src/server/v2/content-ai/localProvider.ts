@@ -19,6 +19,8 @@ import {
   stripInventedClaims,
   type ResolvedCta,
 } from "../creative/ctaPolicy";
+import { matchFactPack, type FactPackEntry } from "./factPacks";
+import { detectContentStyle } from "./contentStyleDetector";
 
 function isArabic(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text);
@@ -175,7 +177,7 @@ export class LocalContentAIProvider implements ContentAIProvider {
       params.duration;
     const extractedDuration = extractDurationFromPrompt(prompt);
     const durationSeconds = explicitDuration || extractedDuration || 30;
-    const contentStyle = params.contentStyle || "advertisement";
+    const contentStyle = params.contentStyle || detectContentStyle(prompt) || "advertisement";
     const aspectRatio = params.aspectRatio || "9:16";
     const resolution = params.resolution || "1080p";
     const quality = params.quality || "standard";
@@ -201,6 +203,21 @@ export class LocalContentAIProvider implements ContentAIProvider {
     }), prompt, isAr, dialect, resolvedCta);
 
     const ctaText = resolvedCta.text;
+
+    // Content provenance (V2.4 Pass 5, section 5): DETERMINISTIC covers every
+    // hand-written template this planner can produce, including the
+    // business-vertical ad templates - they are real, curated content, just
+    // not curated for THIS specific customer's facts. SAFE_GENERIC marks the
+    // one case where this planner is honestly guessing: a curiosity/
+    // explainer prompt that matched no curated fact pack, where it has no
+    // basis to write a real explanation and falls back to topic-neutral
+    // copy (see buildGenericEnglishScenes). USER_FACT / BRAND_DATA /
+    // MODEL_GENERATED are reserved for providers that actually have those
+    // inputs (a configured brand profile, a live LLM) - see
+    // ollamaProvider.ts / geminiProvider.ts.
+    const curiosityStyle = contentStyle === "viral_curiosity" || contentStyle === "educational" || contentStyle === "explainer";
+    const factPackMatch = !isAr && curiosityStyle ? matchFactPack(prompt, false) : null;
+    const contentProvenance = factPackMatch ? "DETERMINISTIC" : curiosityStyle ? "SAFE_GENERIC" : "DETERMINISTIC";
 
     const rawSpec: ProductionSpec = {
       id: cuid(),
@@ -240,6 +257,9 @@ export class LocalContentAIProvider implements ContentAIProvider {
           ctaProvenance: resolvedCta.provenance,
           prohibitedInventedClaims: ["prices", "discounts", "phone_numbers", "whatsapp_cta", "statistics", "testimonials", "urls"],
         },
+        contentProvenance,
+        contentConfidence: contentProvenance === "SAFE_GENERIC" ? "low" : "high",
+        factPackId: factPackMatch?.pack.id,
         scriptPipeline: isAr
           ? {
               stages: [
@@ -349,12 +369,28 @@ export class LocalContentAIProvider implements ContentAIProvider {
     contentStyle: string;
     brandName?: string;
   }): ProductionSceneSpec[] {
-    const { prompt, isArabic: isAr, dialect, durationSeconds, brandName } = context;
+    const { prompt, isArabic: isAr, dialect, durationSeconds, contentStyle, brandName } = context;
     const lower = prompt.toLowerCase();
 
     // Outro budget deduction
     const outroTime = Math.min(2.5, Math.max(1.5, Math.round(durationSeconds * 0.1 * 10) / 10));
     const contentBudget = Math.max(durationSeconds - outroTime, 6);
+
+    // Curated fact packs answer a curiosity/explainer prompt for real
+    // instead of falling straight to the generic ad-flavored template - see
+    // factPacks.ts. English only for now (no Arabic explanation content
+    // written yet); an Arabic curiosity prompt still falls through to the
+    // existing Arabic dispatch below. Only consulted for curiosity-leaning
+    // content styles so a genuine business prompt ("why our web design
+    // service is the best") still gets the business-vertical template it
+    // needs, not a fact pack.
+    const curiosityStyle = contentStyle === "viral_curiosity" || contentStyle === "educational" || contentStyle === "explainer";
+    if (!isAr && curiosityStyle) {
+      const match = matchFactPack(prompt, false);
+      if (match) {
+        return this.buildFactPackScenes(match.pack, contentBudget);
+      }
+    }
 
     // Scene count: 3 scenes for <=22s, 4 scenes for >22s
     const sceneCount = durationSeconds <= 22 ? 3 : 4;
@@ -393,6 +429,58 @@ export class LocalContentAIProvider implements ContentAIProvider {
       return this.buildTechEducationalScenesEnglish(durPerScene, brandName);
     }
     return this.buildGenericEnglishScenes(prompt, durPerScene, brandName);
+  }
+
+  /**
+   * Renders a matched fact pack into exactly 3 scenes (hook / explanation /
+   * closing), regardless of the normal 3-vs-4 scene-count tiering - a
+   * curated explanation is written to read naturally in three beats, and
+   * splitting it further would mean inventing filler between real sentences.
+   */
+  private buildFactPackScenes(pack: FactPackEntry, contentBudget: number): ProductionSceneSpec[] {
+    const dur = Math.round((contentBudget / 3) * 10) / 10;
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: pack.hook.narration,
+        onScreenText: pack.hook.onScreenText,
+        stockSearchTerms: pack.hook.searchTerms,
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: pack.explanation.narration,
+        onScreenText: pack.explanation.onScreenText,
+        stockSearchTerms: pack.explanation.searchTerms,
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: pack.closing.narration,
+        onScreenText: pack.closing.onScreenText,
+        stockSearchTerms: pack.closing.searchTerms,
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+        // Curiosity content does not close on an ad-style CTA (section 10);
+        // enforcePromptTruthSafety only overwrites onScreenText/narration
+        // with the resolved CTA for a scene it recognizes as inventing an
+        // ungrounded claim, and this closing line invents nothing, so it
+        // passes through unchanged unless the customer's own prompt supplied
+        // an explicit CTA (handled the same way as every other production).
+        notes: "fact_pack_closing",
+      },
+    ];
   }
 
   private buildWebDesignScenesEnglish(
