@@ -317,8 +317,16 @@ export function buildStockQueryFamilies(input: QueryFamilyInput): QueryFamilyRes
 
   // The rotation offset makes each scene of a production ask a different member
   // of the same family, rather than every scene asking for the first entry.
+  //
+  // This must increment by exactly 1 per scene, not a fixed step like 3: most
+  // rotation lists in this lexicon (see `subject`/`support` above) have
+  // exactly 3 entries, and `pick()` selects via `rotation % list.length`. A
+  // step of 3 is congruent to 0 mod 3, so scene 0 and scene 1 landed on the
+  // identical index for any 3-entry list (e.g. "coffee".subject) - the
+  // rotation silently did nothing for the most common list length. A step of
+  // 1 guarantees adjacent scenes differ for every list length greater than 1.
   const sceneIdx = input.sceneIndex ?? 0;
-  const offset = concepts.length + text.length + sceneIdx * 3;
+  const offset = concepts.length + text.length + sceneIdx;
 
   const queries: StockQuery[] = [];
   const addQuery = (
