@@ -6403,3 +6403,166 @@ pipeline.
 - No Docker prune command was run.
 - No Docker compose down or volume-removal command was run.
 - `main`, release tags and historical release state remain untouched.
+
+## V2.4 Pass 3 Closure - Real Provider Execution And Live Professional Benchmarks
+
+Date: 2026-08-29. Branch: `v2.4-professional-video-engine`.
+Status: **PASS / LIVE VALIDATED ON FEATURE BRANCH**. No merge to `main`, no tag,
+no release and no stable/GHCR v2.3.1 mutation.
+
+### Implementation Closure
+
+- Accepted `auto_free` and `auto_budget` production controls through the
+  `/api/v2/production/jobs` API contract and UI-facing type surface.
+- Deployed isolated OpenCLIP runtime controls to app and render-worker:
+  `ABUD_ENABLE_OPENCLIP_SEMANTICS`,
+  `ABUD_OPENCLIP_LOCAL_WEIGHTS`, `ABUD_OPENCLIP_MODEL_NAME`,
+  `ABUD_OPENCLIP_PYTHON_BIN`.
+- Installed the optional local OpenCLIP CPU runtime outside the repository at
+  `/app/data/models/openclip/venv`, with weights mounted from
+  `/app/data/models/openclip/open_clip_model.safetensors`.
+- Ranked free-stock candidates using real sampled video frames through
+  OpenCLIP before selecting final footage. Selected candidate metadata now
+  carries `visualSemanticScore`, `semanticRuntime`, `semanticAvailable`,
+  candidate counts and rejection context.
+- Extended semantic analysis to report black-frame health (`blackFramePercent`,
+  `longestBlackRunMs`) while reading candidate frames, and made the stock router
+  reject candidates with long black runs before they can win selection.
+- Increased Remotion render timeout via `REMOTION_RENDER_TIMEOUT_MS`, defaulting
+  to `420000`, to stop real stock-heavy renders from failing at the previous
+  fixed 180-second render timeout.
+- Fixed explicit stock/free routing so motion creative treatments cannot
+  override user-selected `stock` / `auto_free` visual mode.
+- Fixed render-worker Provider Vault resolution so Pexels/Pixabay keys saved in
+  the product UI are usable by background rendering, not only by the app.
+- Added topic-specific English local-planner paths for coffee subscription and
+  boutique fitness prompts.
+- Split coffee/cafe from the broader restaurant query family so coffee prompts
+  produce coffee/cafe stock query families instead of generic food/chef footage.
+
+### Model / Source Audit
+
+- OpenCLIP checkpoint reviewed: `laion/CLIP-ViT-B-32-laion2B-s34B-b79K`
+  `open_clip_model.safetensors`, MIT license, optional local runtime only.
+- Correct OpenCLIP-format weight file was verified and cached outside the repo;
+  no model weights were committed and no automatic checkpoint download was
+  added to the product.
+- Runtime load check passed inside the isolated venv: Torch CPU runtime,
+  OpenCLIP model load, tokenizer and preprocessing all initialized without CUDA.
+
+### Live Provider Validation
+
+Authenticated product API validation was executed with a temporary `qa_` admin
+session. The token was randomly generated, kept in memory only, never printed,
+never written to disk and revoked at the end.
+
+| Provider | Live Result |
+| --- | --- |
+| Pexels | `healthy`, configured, authorized video search succeeded |
+| Pixabay | `healthy`, configured, video search results returned |
+| ElevenLabs | `healthy`, authenticated; no paid Arabic production TTS was triggered |
+| Google Cloud TTS | `not_configured`, expected |
+| Kokoro | available for English benchmark narration |
+| Remotion / FFmpeg / n8n / Postgres | healthy |
+
+Arabic safety validation: Arabic production-spec preview returned 200 and 3
+scenes. No paid ElevenLabs synthesis was run during this closure pass; Arabic
+audio remains governed by the explicit paid-voice policy.
+
+### Live Professional Benchmarks
+
+Earlier post-fix smoke:
+
+- Job `cmtdld54s000107qsej658kr1`: `ready`, 20.05s, 13.8 MB,
+  `visualProvidersUsed=["pexels"]`, `voiceProvidersUsed=["kokoro"]`,
+  `stockTimelinePercent=99.8`, `realVisualCoveragePercent=99.8`,
+  `textOnlyTimelinePercent=0`, `motionOverlayPercent=0`,
+  `blackFramePercent=0`, `professionalReady=true`.
+
+Final benchmark batch after worker-vault, OpenCLIP ranking, visual health and
+render-timeout fixes:
+
+- Fitness benchmark C, job `cmte2m1xb000307pf82qq6xbu`: `ready`, 20.054s,
+  1080x1920, 25fps, H.264 + AAC, 14.8 MB,
+  `visualProvidersUsed=["pexels","pixabay"]`,
+  `voiceProvidersUsed=["kokoro"]`, 8 stock shots,
+  `stockTimelinePercent=99.8`, `realVisualCoveragePercent=99.8`,
+  `textOnlyTimelinePercent=0`, `motionOverlayPercent=0`,
+  `blackFramePercent=0`, `longestBlackRunMs=0`,
+  `professionalReady=true`, no professional issues. Selected footage metadata
+  showed OpenCLIP scoring and visual-health pass on all selected shots.
+- Coffee benchmark D, job `cmte36cda000707pf1jq9hulv`: `ready`, 20.054s,
+  1080x1920, 25fps, H.264 + AAC, 13.8 MB,
+  `visualProvidersUsed=["pixabay","pexels"]`,
+  `voiceProvidersUsed=["kokoro"]`, 8 stock shots,
+  `stockTimelinePercent=99.8`, `realVisualCoveragePercent=99.8`,
+  `textOnlyTimelinePercent=0`, `motionOverlayPercent=0`,
+  `blackFramePercent=0`, `longestBlackRunMs=0`,
+  `professionalReady=true`, no professional issues.
+- Coffee planner/runtime verification after final query-family deploy confirmed
+  `matchedConcepts=["coffee"]` and coffee/cafe query terms only, with no
+  restaurant concept match.
+- Additional coffee benchmark after planner deploy, job
+  `cmte3qthj000307t8hnjk2s3g`: `ready`, 16.9 MB,
+  `stockTimelinePercent=99.8`, `realVisualCoveragePercent=99.8`,
+  `textOnlyTimelinePercent=0`, `motionOverlayPercent=0`,
+  `blackFramePercent=0`, `longestBlackRunMs=0`,
+  `professionalReady=true`. This run happened before the final coffee-query
+  family split; the follow-up runtime verification above confirms the deployed
+  query family no longer maps coffee to restaurant.
+
+Contact sheets were generated under `/app/data/temp/qa-contact-sheets/` for
+the final ready C/D videos and visually checked for real stock footage, captions
+and absence of black-frame output.
+
+### Verification
+
+- `pnpm typecheck` -> **PASS**.
+- `pnpm vitest run src/server/v2/v24ProfessionalVideoEngine.test.ts
+  src/test/v231RenderFailureHotfix.test.ts --silent --reporter=dot`
+  -> **PASS**, 35 tests.
+- `pnpm vitest run src/server/v2/v2.test.ts
+  src/server/v2/v24ProfessionalVideoEngine.test.ts
+  src/test/v231RenderFailureHotfix.test.ts --silent --reporter=dot`
+  -> **PASS**, 68 tests.
+- `pnpm vitest run src/server/v2/contentAI.test.ts src/server/v2/v2.test.ts
+  src/server/v2/v24ProfessionalVideoEngine.test.ts
+  src/test/v231RenderFailureHotfix.test.ts --silent --reporter=dot`
+  -> **PASS**, 74 tests.
+- `pnpm vitest run src/server/v2/creativeClosureF21.test.ts
+  src/server/v2/contentAI.test.ts --silent --reporter=dot`
+  -> **PASS**, 86 tests.
+- `pnpm -s build` -> **PASS** after each implementation closure batch. Vite
+  emitted only existing non-blocking Browserslist-age and chunk-size warnings.
+- Docker app and render-worker were rebuilt/recreated with `--no-deps`; final
+  `docker ps` shows app, render-worker, Postgres and n8n all healthy.
+- Final QA session cleanup verified `/api/v2/auth/me` returned 401 after
+  revocation and `qa_` admin session count was 0.
+
+### Safety
+
+- No Docker prune command.
+- No `docker compose down` and no volume removal.
+- Only `abud-shorts-app` and `abud-shorts-render-worker` were recreated;
+  Postgres and n8n stayed up and healthy.
+- No secrets, Provider Vault plaintext values or QA tokens were printed.
+- No paid video-generation calls.
+- No unapproved Arabic paid ElevenLabs TTS call.
+- No model weights or generated videos committed to git.
+- `main`, `v2.3.1`, `stable`, tags, releases and historical GHCR identities
+  remain untouched.
+
+### Git State
+
+Local implementation commits on `v2.4-professional-video-engine` after
+`origin/v2.4-professional-video-engine`:
+
+- `065500d` Accept free-only production routing controls
+- `ffa6a0c` Enable isolated OpenCLIP semantic runtime
+- `d748b2e` Skip unused CUDA runtime download in v2 image
+- `30d3d5e` Rank stock candidates with OpenCLIP semantics
+- `b8a3ac2` Honor explicit stock footage mode
+- `87a5475` Load stock provider vault secrets in worker
+- `295823b` Screen stock clips for visual health
+- `b47ea71` Add topic-specific English stock planning
+- `e292ed8` Keep coffee stock queries on topic
