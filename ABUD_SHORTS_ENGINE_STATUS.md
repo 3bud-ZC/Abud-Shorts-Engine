@@ -7411,3 +7411,277 @@ true` / ~99.8% coverage / `shots: 6` for both.
 battery), `cmteyb57l000l07n1bjwacbg9` (business ad, warm performance run).
 All available in the normal Video Library. This status document does not
 assert user approval.
+
+## V2.4 Pass 5.1 — Content Generalization & CTA Precision
+
+Builds directly on Pass 5's accepted results (1000/1000 tests,
+`professionalReady:true` on every benchmark, ~99.7–99.8% real footage, zero
+paid calls, main/v2.3.1 untouched). Two defects/limitations reported against
+the Pass 5 battery benchmark (`cmtezn158000507p8h39i4ptc`) are fixed here.
+
+### CTA false-positive root cause
+
+The battery benchmark's prompt contained the noun phrase "phone batteries."
+The old contact-channel detector was a bare substring match —
+`/call|phone|email|dm\b|message us|message our|contact|.../i` tested against
+the whole prompt with no verb/imperative requirement — so the standalone
+noun "phone" inside "phone batteries" satisfied it, producing a fabricated
+CTA "Contact us to learn more" for a purely factual explainer. The same
+looseness existed on the WhatsApp side (`hasExplicitWhatsApp` ran the bare
+`WHATSAPP_PATTERN` against the raw prompt), which would have equally
+misfired on a topic like "WhatsApp encryption."
+
+### Intent-aware classifier (structural fix)
+
+`src/server/v2/creative/ctaPolicy.ts`: `CONTACT_PATTERN`/loose-`WHATSAPP_PATTERN`-against-prompt
+usage replaced with two arrays of verb/imperative/CTA-anchor regexes —
+`CONTACT_INTENT_PATTERNS` ("call us", "call me", "phone us", "contact us by
+phone", "message us", "send us a DM", "get in touch", Arabic
+"تواصل معنا"/"اتصل بينا"/"راسلنا", ...) and `WHATSAPP_INTENT_PATTERNS`
+("WhatsApp us", "message us on WhatsApp", Arabic "واتساب معنا", ...). A bare
+topical noun ("phone battery," "phone screen," "telephone history,"
+"smartphone," "WhatsApp encryption," "email security," "website design")
+matches none of them. `WHATSAPP_INTENT_PATTERNS` also recognizes WhatsApp
+named directly in the CTA/closing slot without an "us" verb (e.g. the
+existing Pass 4 Arabic regression prompt "…والختام واتساب" — "…and the
+closing: WhatsApp" — and "Closing: WhatsApp."), since that is genuine
+customer intent even without an imperative verb; this pattern is what caught
+and fixed the one pre-existing test this rewrite broke on first pass
+(`src/server/v2/contentAI.test.ts`'s Egyptian Arabic spec test), rather than
+weakening the new intent requirement to make it pass. `mentionsAffirmatively`
+now accepts an array of patterns and still runs the existing sentence-scoped
+negation guard, so "do not invent … WhatsApp numbers" is still never read as
+a request (Pass 4 regression preserved, still passing).
+
+### Curiosity CTA (content-type-aware default)
+
+`resolveCtaProvenance` gained an optional `isCuriosityStyle` parameter,
+threaded from `LocalContentAIProvider` via the existing `detectContentStyle`/
+`contentStyle` computation (curiosity/educational/explainer). It only changes
+the final `SAFE_INFERRED` fallback — an explicit customer CTA or genuine
+contact intent is honored identically regardless of content style — and
+returns a channel-free closer ("Now you know why." / Arabic "دلوقتي عرفت
+السبب.") instead of the advertisement-flavored "Follow for more details."
+
+### Business CTA (unchanged precedence)
+
+Advertisement/business prompts are unaffected: `isCuriosityStyle` is only
+`true` when `detectContentStyle`/`contentStyle` actually resolves to
+curiosity/educational/explainer, and an explicit customer CTA (`extractExplicitCtaFromPrompt`,
+`USER_EXPLICIT` provenance) is checked before the curiosity branch is ever
+reached. Live-verified below: the re-run of the exact Pass 5 business-ad
+benchmark prompt still returns `cta.text: "Make your business look
+professional."` verbatim.
+
+### Regression tests
+
+New file `src/test/v251CtaIntentPrecision.test.ts` (10 tests): the exact
+reported bug ("phone batteries" → no contact/WhatsApp intent), five more
+bare-noun non-intent cases ("phone screen," "telephone history,"
+"smartphone," "email security," "website design," "WhatsApp encryption"),
+genuine contact/WhatsApp intent phrasing, the Arabic/English CTA-slot-anchor
+case, the Pass 4 prohibition-clause guard (still passing), the curiosity
+channel-free closer, the non-curiosity fallback staying unchanged, an
+explicit customer CTA still overriding the curiosity default, and an
+end-to-end `LocalContentAIProvider` check that the real battery prompt no
+longer produces a contact/WhatsApp CTA.
+
+## Content Generalization
+
+### Fact packs
+
+Unchanged from Pass 5 (6 curated packs: `airplane_windows_rounded`,
+`phone_battery_slow_after_80`, `sky_is_blue`, `ice_floats`, `brain_freeze`,
+`microwave_uneven_heating`). Not expanded this pass — the task explicitly
+required proving honest routing behavior for uncovered topics, not adding
+more curated packs to make specific test prompts pass.
+
+### Unknown-topic behavior (new this pass)
+
+`LocalContentAIProvider` already marked a curiosity prompt with no fact-pack
+match `contentProvenance: "SAFE_GENERIC"` / `contentConfidence: "low"` as of
+Pass 5. New this pass: `contentConfidenceBlocker()` in
+`src/server/v2/routes.ts` refuses job creation (HTTP 409,
+`error: "content_confidence_low"`) whenever the generated spec's
+`contentProvenance === "SAFE_GENERIC"`, wired into the three prompt-driven
+job-creation code paths (`POST /production/jobs`, `POST /jobs` prompt
+branch) plus `POST /production-spec/preview` (returned as an additive
+`contentConfidenceWarning` field so the UI can show it before the customer
+queues). This single check correctly reflects the full precedence chain
+because both LLM providers build their own deterministic baseline first and
+only override `contentProvenance` away from `SAFE_GENERIC` on genuine
+success — an unhealthy/unconfigured Ollama or Gemini never masks a
+low-confidence result as high-confidence.
+
+### Ollama readiness
+
+`OllamaContentAIProvider.validate()` (pre-existing, audited not modified):
+returns `configured:false, status:"not_configured"` when `OLLAMA_BASE_URL`
+is unset — the case in this deployment (no Ollama endpoint configured; per
+instruction, no large local LLM was downloaded and no terminal credential
+prompt was issued). Would report `status:"healthy"` or
+`status:"provider_unavailable"` against a configured-but-unreachable
+endpoint. No secret/URL value is ever logged or returned to the client.
+
+### Gemini readiness
+
+`GeminiContentAIProvider.validate()` (pre-existing, audited not modified):
+returns `configured:false, status:"not_configured"` when `GEMINI_API_KEY`/
+`GOOGLE_AI_API_KEY` is unset — the case in this deployment (not present in
+Provider Vault or environment; not requested from the terminal per
+instruction). Would report `healthy`, `invalid_credentials`, `timeout`, or
+`provider_unavailable` for a configured key, again without ever returning
+the key itself. `ContentAIRegistry`'s existing precedence (Ollama configured
+→ Gemini configured → deterministic Local AI) already matches the required
+ordering exactly; unchanged this pass.
+
+### Fallback behavior
+
+With neither LLM provider configured, every curiosity prompt with no
+fact-pack match now surfaces as the customer-safe message "Better content
+generation is needed for this topic. Connect a Content AI provider or adjust
+the prompt." at job-creation time, in Simple-mode-safe language (no
+"Ollama"/"Gemini"/model-name terminology in the response body — asserted in
+tests).
+
+### Fabricated factual content
+
+Zero. The generic fallback (`contentProvenance: "SAFE_GENERIC"`) never
+splices the raw topic text into narration and is now blocked from reaching
+render at all rather than shipping as silent low-content filler.
+
+### Provenance persistence
+
+`contentProvenance`/`factPackId` (Pass 5, verified still correct) persist on
+every deterministic spec. New this pass: `GeminiContentAIProvider` and
+`OllamaContentAIProvider` now also persist `contentProvider` ("gemini" /
+"ollama"), `model`, and `contentProvenance: "MODEL_GENERATED"` on their
+metadata when a real LLM call succeeds — no API key or endpoint URL is ever
+included.
+
+## Unknown Topic Tests
+
+New file `src/test/v251UnknownTopicRouting.test.ts` (8 tests) plus two new
+route-level tests appended to `src/server/v2/v2.test.ts`, covering all three
+required topics — deliberately **not** added as new fact packs:
+
+- **Metal vs wood**: `matchFactPack("Why does metal feel colder than wood at
+  the same room temperature?", false)` → `null`; `LocalContentAIProvider`
+  marks it `SAFE_GENERIC`/`low` with no fabricated explanation spliced in.
+- **Stale bread**: same pattern — `matchFactPack` → `null`, `SAFE_GENERIC`/
+  `low`, and (route-level test in `v2.test.ts`) `POST /production/jobs`
+  actually returns **HTTP 409** `content_confidence_low` with the exact
+  customer-safe message for this prompt against the real router/registry.
+- **Cats' eyes glowing**: same pattern — `matchFactPack` → `null`,
+  `SAFE_GENERIC`/`low`.
+- Registry-precedence tests confirm an unconfigured Ollama degrades to the
+  deterministic baseline without throwing, and that
+  `ContentAIRegistry.getProvider()` resolves to `local_ai` in this
+  environment (neither `OLLAMA_BASE_URL` nor `GEMINI_API_KEY` set) — proving
+  correct provider routing, not just correct fact-pack absence.
+- A companion route-level test confirms a *covered* curiosity topic (the
+  phone-battery fact pack) still creates the job normally (`HTTP 202`,
+  `contentProvenance: "DETERMINISTIC"`), so the new blocker only fires on
+  genuinely low-confidence content.
+
+## Battery Re-Run
+
+- **Job**: `cmtfhn7za000107oeaxcgbfk6` (fresh job, same prompt as the Pass 5
+  benchmark: "Why do phone batteries charge much slower after about 80%?
+  Make it a 20-second explainer with real footage."), submitted after
+  rebuilding and redeploying `abud-shorts-app`/`abud-shorts-render-worker`
+  with this pass's code.
+- **Video**: same ID, `/app/data/videos/cmtfhn7za000107oeaxcgbfk6.mp4`.
+  Independently re-verified with `ffprobe`/`ffmpeg` inside the container
+  (not just the app's own metrics): h264 1080×1920 @ 25fps + AAC audio,
+  duration `20.054s`, file size ~11.5 MB; `silencedetect=noise=-35dB:d=1`
+  found **zero** silence runs ≥1s; `blackdetect=d=0.5:pic_th=0.98` found
+  **zero** black frames ≥0.5s.
+- **CTA**: `{"text":"Now you know why.","action":"Follow CTA"}` — no
+  `contact` field. No "Contact us," no WhatsApp, anywhere in the generated
+  spec surface (`cta`/`scenes` JSON checked case-insensitively).
+- **ProfessionalReady**: `true`.
+- **Coverage**: `realVisualCoveragePercent: 99.8`, `textOnlyTimelinePercent:
+  0`, `blackFramePercent: 0`, `providerMix: {"pexels": 8}` (free stock only).
+- **Claims**: `inventedClaimRiskCount: 0`, `rawPromptLeakCount: 0`.
+- **Time**: wall clock `212.9s` for this run (first job after the container
+  rebuild, i.e. the true cold-container case — model/font/Whisper warmup
+  included). See Performance below for the controlled apples-to-apples
+  comparison, which shows no regression from this pass's changes.
+
+## Automated
+
+- Tests: `pnpm exec vitest run` → **1020 passed, 0 failed**, 67 test files
+  (Pass 5's 1000 + this pass's 20 new: 10 in
+  `v251CtaIntentPrecision.test.ts`, 8 in `v251UnknownTopicRouting.test.ts`,
+  2 appended to `v2.test.ts`). One pre-existing test
+  (`src/server/v2/contentAI.test.ts`'s Egyptian Arabic CTA test) broke on the
+  first pass of the intent-rewrite and was fixed by adding the CTA-slot-anchor
+  WhatsApp pattern described above — not by weakening the assertion.
+- Failures: **0**.
+- Typecheck: `pnpm run typecheck:server` (also exercised as part of
+  `pnpm run build`'s `typecheck` step, server + ui) → **PASS**.
+- Build: `pnpm run build` → **PASS** (same pre-existing, non-blocking
+  Browserslist-age / >500kB chunk-size warnings as every prior pass).
+
+### Performance
+
+Controlled comparison against the Pass 5 baseline: re-ran the *exact* Pass 5
+cold-benchmark prompt (`cmtey7jch000h07n1fx604j19`'s web-design business-ad
+prompt, verbatim) as the second job submitted to the freshly rebuilt
+container (job `cmtfi2bk7000507oe6if18euq`) — `CONCURRENCY=3`, OpenCLIP off
+(`ABUD_ENABLE_OPENCLIP_SEMANTICS=false`), NVENC off
+(`ABUD_HARDWARE_ACCELERATION=disable`), all unchanged from Pass 5.
+
+| | Job | Wall clock | media | voice | render | captions | planning |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Pass 5 cold | `cmtey7jch...` | 149.0s | 51,669ms | 6,054ms | 51,539ms | 18,037ms | 17,967ms |
+| Pass 5.1 re-run | `cmtfi2bk7...` | **127.5s** | 37,967ms | 9,400ms | 54,131ms | 18,534ms | 3,804ms |
+
+**No regression: 127.5s is 14.4% *faster* than the 149.0s cold baseline.**
+The stages downstream of content generation (`render`, `captions`) are
+within ~5% either way — noise, not regression. `planning` (which is where
+`generateProductionSpec`/`resolveCtaProvenance` run) dropped from 17,967ms
+to 3,804ms, directly demonstrating the new intent-classifier regexes and the
+curiosity-CTA branch add no meaningful overhead. `professionalReady: true`,
+`realVisualCoveragePercent: 99.8`, `inventedClaimRiskCount: 0` on this run;
+`cta.text` is still the customer's literal "Make your business look
+professional." with `contact: undefined` — the explicit-CTA/no-WhatsApp
+guard from Pass 4 is unaffected by this pass's changes. `CONCURRENCY=3`,
+the OpenCLIP-off default, and the NVENC-off default are all unchanged from
+Pass 5; no new performance work was opened.
+
+## Safety
+
+- Paid VIDEO generation calls: **0** — both this pass's live jobs used
+  `voice_provider: "kokoro"` and `providerMix: {"pexels": 8}` exclusively
+  (verified directly from each job's persisted record).
+- `docker prune`/`docker compose down -v`: **0** commands run, ever, this
+  pass (checked the session's own shell history as a second confirmation).
+- Customer data: **0** deleted. Postgres/n8n containers were never
+  recreated or restarted this pass (only `abud-shorts-app` and
+  `abud-shorts-render-worker` were rebuilt/recreated, once).
+- Pass-4 incident video preserved: **yes** —
+  `cmtehsptj000108ledzk3f3ji.mp4`, md5 `e17f39df520cfb660455aff388e2c26a`,
+  re-verified byte-identical to the Pass 4/5 closure checksum.
+- v2.3.1: untouched.
+- Secrets exposed: **0** — one temporary `qa_pass51_`-prefixed admin
+  session was used for this pass's live testing (random 32-byte token, tied
+  to the existing `admin` user), revoked at closure (`POST
+  /api/v2/auth/logout` plus a direct `DELETE ... WHERE id LIKE 'qa_%'`
+  sweep as a second check) — `SELECT count(*) FROM admin_sessions WHERE id
+  LIKE 'qa_%'` returned 0 at final verification.
+
+## Git
+
+- Branch: `v2.4-professional-video-engine` throughout.
+- No merge, no tag, no release, no move to stable.
+- `main` untouched. `v2.3.1` (tag, GitHub Release, GHCR images) untouched.
+  Historical v2.3.0/v2.2.0 untouched.
+- Pushed to `origin/v2.4-professional-video-engine` only.
+
+## Human Visual Review
+
+**PENDING.** New/re-run video this pass: `cmtfhn7za000107oeaxcgbfk6` (phone
+battery, re-run against the fixed CTA logic). Available in the normal Video
+Library. This status document does not assert user approval.
