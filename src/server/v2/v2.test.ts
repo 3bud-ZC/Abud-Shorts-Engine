@@ -712,6 +712,59 @@ describe("V2 routes", () => {
     expect(job?.production_spec?.metadata?.uiContract?.stockProvider).toBe("auto_stock");
   });
 
+  it("V2.4 Pass 5.1: refuses an unknown factual topic with a customer-safe block instead of low-content filler", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/production/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Why does bread become stale?",
+        language: "en",
+        durationSeconds: 20,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("content_confidence_low");
+    expect(res.body.message).toBe(
+      "Better content generation is needed for this topic. Connect a Content AI provider or adjust the prompt.",
+    );
+    // Customer-safe: no internal provider/model terminology leaked to Simple mode.
+    const surface = JSON.stringify(res.body).toLowerCase();
+    expect(surface).not.toContain("ollama");
+    expect(surface).not.toContain("gemini");
+    expect(surface).not.toContain("local_ai");
+  });
+
+  it("V2.4 Pass 5.1: still creates the job normally for a curated-fact-pack curiosity topic", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/production/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Why do phone batteries charge much slower after about 80%?",
+        language: "en",
+        durationSeconds: 20,
+      });
+
+    expect(res.status).toBe(202);
+    const job = await db.jobs.get(res.body.jobId);
+    expect(job?.production_spec?.metadata?.contentProvenance).toBe("DETERMINISTIC");
+    expect(job?.production_spec?.metadata?.factPackId).toBe("phone_battery_slow_after_80");
+    expect(job?.production_spec?.cta?.contact).toBeUndefined();
+  });
+
   it("supports captions off without requiring caption artifacts", async () => {
     nock("http://127.0.0.1:1")
       .post("/webhook/abud-v2/jobs/start")

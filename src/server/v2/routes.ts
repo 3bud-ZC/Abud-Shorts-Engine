@@ -1008,6 +1008,34 @@ async function arabicProductionBlocker(spec: {
   return null;
 }
 
+/**
+ * Unknown-factual-topic gate (V2.4 Pass 5.1).
+ *
+ * `LocalContentAIProvider` marks a generated spec `contentProvenance:
+ * "SAFE_GENERIC"` exactly when a curiosity/educational prompt matched no
+ * curated fact pack AND no configured Content AI provider (Ollama/Gemini)
+ * was available to actually explain the topic - i.e. the only options were
+ * "invent a plausible-sounding explanation" (forbidden) or "render safe but
+ * content-free filler" (not useful). Rather than ship that filler, refuse at
+ * creation time with a customer-safe, provider-agnostic message so the
+ * customer can add a Content AI provider or adjust the prompt instead of
+ * receiving a video with no real informational content. This single check
+ * correctly reflects the whole Ollama -> Gemini -> deterministic fact-pack
+ * precedence chain: both LLM providers build their own deterministic
+ * baseline first and only override `contentProvenance` away from
+ * "SAFE_GENERIC" when they actually succeeded.
+ */
+function contentConfidenceBlocker(spec: {
+  metadata?: { contentProvenance?: string } | null;
+}): { error: string; message: string; action: { label: string; href: string } } | null {
+  if (spec.metadata?.contentProvenance !== "SAFE_GENERIC") return null;
+  return {
+    error: "content_confidence_low",
+    message: "Better content generation is needed for this topic. Connect a Content AI provider or adjust the prompt.",
+    action: { label: "Connect a Content AI Provider", href: "/providers" },
+  };
+}
+
 function hasCommandHint(envKey: string): boolean {
   return Boolean(process.env[envKey]?.trim());
 }
@@ -1909,6 +1937,7 @@ export function createV2PublicRouter(
         captionPreset: (resolvedSpec.captionStyle as any) || "bold",
       });
       const readiness = await checkCreateReadiness(parsed.data, resolvedSpec);
+      const confidenceBlock = contentConfidenceBlocker(resolvedSpec);
 
       res.status(200).json({
         spec: resolvedSpec,
@@ -1916,6 +1945,7 @@ export function createV2PublicRouter(
         quality,
         mediaPlan,
         readiness,
+        contentConfidenceWarning: confidenceBlock?.message,
       });
     } catch (error) {
       res.status(500).json({
@@ -2053,6 +2083,11 @@ export function createV2PublicRouter(
         res.status(409).json(arabicBlock);
         return;
       }
+      const confidenceBlock = contentConfidenceBlocker(canonicalSpec);
+      if (confidenceBlock) {
+        res.status(409).json(confidenceBlock);
+        return;
+      }
       const readiness = await checkCreateReadiness(parsed.data, canonicalSpec);
       if (!readiness.ready) {
         res.status(409).json({
@@ -2179,6 +2214,11 @@ export function createV2PublicRouter(
         const arabicBlock = await arabicProductionBlocker(canonicalSpec);
         if (arabicBlock) {
           res.status(409).json(arabicBlock);
+          return;
+        }
+        const confidenceBlock = contentConfidenceBlocker(canonicalSpec);
+        if (confidenceBlock) {
+          res.status(409).json(confidenceBlock);
           return;
         }
         const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);

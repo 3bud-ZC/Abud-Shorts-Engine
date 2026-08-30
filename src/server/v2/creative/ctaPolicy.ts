@@ -35,10 +35,77 @@ export type ResolvedCta = {
   action: string;
 };
 
+// Loose bare-word matcher. Deliberately still used against GENERATED text
+// (inventsUngroundedClaim's `t` argument below) - a canned template line
+// that says "Message Us on WhatsApp Today" needs to be caught regardless of
+// its exact grammar. It must NEVER be used against the customer's PROMPT to
+// decide intent - see WHATSAPP_INTENT_PATTERNS for that.
 const WHATSAPP_PATTERN = /whats\s*app|واتساب|واتس|wa\.me/i;
 const OFFER_PATTERN = /discount|offer|sale|coupon|promo|limited\s+(?:time|deal)|خصم|عرض|تخفيض|كوبون/i;
 const STATISTIC_PATTERN = /\d+\s*%|\d+\s*(?:percent|per cent)|\d+\s*(?:في المية|بالمية|٪)/i;
-const CONTACT_PATTERN = /call|phone|email|dm\b|message us|message our|contact|تواصل|اتصل|راسل|رسالة/i;
+
+/**
+ * CONTACT INTENT, not keyword presence (V2.4 Pass 5.1).
+ *
+ * The previous CONTACT_PATTERN (`/call|phone|email|dm\b|message us|...`)
+ * matched a bare topic noun anywhere in the prompt - "Why do PHONE
+ * batteries charge slower?" matched "phone" and was read as a request for a
+ * phone-contact CTA (live benchmark cmtezn158000507p8h39i4ptc: resolved CTA
+ * "Contact us to learn more" on a pure curiosity video that never asked to
+ * be contacted at all). "phone" describing the PRODUCT/TOPIC and "phone"
+ * as a request to BE CALLED are grammatically distinct, and only the verb-
+ * object / imperative form ("call us", "phone us", "email us", "reach out")
+ * is genuine contact intent. Each pattern below requires an actual
+ * addressee ("us"/"me"/"our") or an unambiguous imperative idiom - never a
+ * bare noun.
+ */
+const CONTACT_INTENT_PATTERNS: RegExp[] = [
+  /\bcall\s+us\b/i,
+  /\bcall\s+me\b/i,
+  /\bgive\s+us\s+a\s+call\b/i,
+  /\bphone\s+us\b/i,
+  /\bemail\s+us\b/i,
+  /\bmail\s+us\b/i,
+  /\bmessage\s+us\b/i,
+  /\bmessage\s+our\b/i,
+  /\bmessage\s+me\b/i,
+  /\bcontact\s+us\b/i,
+  /\bcontact\s+me\b/i,
+  /\bcontact\s+our\b/i,
+  /\breach\s+us\b/i,
+  /\breach\s+out\s+to\s+us\b/i,
+  /\breach\s+out\b/i,
+  /\btext\s+us\b/i,
+  /\bdm\s+us\b/i,
+  /\bdm\s+me\b/i,
+  /\bsend\s+us\s+a\s+(?:dm|message|text|email)\b/i,
+  /\bsend\s+(?:a\s+)?(?:dm|message|text)\s+to\s+us\b/i,
+  /\bdrop\s+us\s+a\s+(?:message|line|dm|text)\b/i,
+  /\bget\s+in\s+touch\b/i,
+  /\bcontact\s+us\s+(?:by|via|through|over)\s+(?:phone|telephone|email)\b/i,
+  // Arabic: phrase-level, not the bare infinitive/noun ("تواصل" alone is not
+  // intent - "تواصل معنا"/"تواصلوا معنا", "contact us", is).
+  /تواصل(?:وا)?\s+معنا/,
+  /اتصل(?:وا)?\s+بينا|اتصل(?:وا)?\s+بنا/,
+  /راسل(?:نا|وا)?/,
+  /كلمنا|كلمونا/,
+  /ابعتلنا|ابعتوا?لنا/,
+];
+
+const WHATSAPP_INTENT_PATTERNS: RegExp[] = [
+  /\bwhats\s*app\s+us\b/i,
+  /\bwhats\s*app\s+me\b/i,
+  /\b(?:message|contact|reach|text|dm|call)\s+us\s+(?:on|via|through)\s+whats\s*app\b/i,
+  /\bwhats\s*app\s+(?:us|me)\s+(?:on|at)\b/i,
+  /واتساب\s+معانا|واتساب\s+معنا/,
+  /(?:كلمنا|راسلنا|تواصل(?:وا)?\s+معنا)\s+(?:على|عبر)\s+واتساب/,
+  // Customer directly names WhatsApp as the CTA/closing channel, e.g.
+  // "والختام واتساب" ("and the closing: WhatsApp") - genuine explicit
+  // intent even without an accompanying "us"/"معنا" verb, because the
+  // word is anchored to the CTA slot itself, not just mentioned in passing.
+  /(?:^|\s)(?:و)?(?:ال)?(?:ختام|خاتمة|نهاي\w*)\S{0,3}\s+واتساب/,
+  /\b(?:end|ending|close|closing|cta)\b\s*[:\-]?\s*(?:is\s+)?whats\s*app\b/i,
+];
 
 /**
  * Words that flip an otherwise-affirmative mention into a prohibition. "do not
@@ -56,19 +123,22 @@ function splitSentences(text: string): string[] {
 }
 
 /**
- * True only when `pattern` matches inside a sentence that contains no
- * prohibition wording. A prompt that lists a term purely to forbid it (any
- * order - "no WhatsApp" and "WhatsApp is not allowed" both count) never
- * counts as the customer asking for it.
+ * True only when `pattern` (or, given an array, at least one pattern in it)
+ * matches inside a sentence that contains no prohibition wording. A prompt
+ * that lists a term purely to forbid it (any order - "no WhatsApp" and
+ * "WhatsApp is not allowed" both count) never counts as the customer asking
+ * for it.
  */
-function mentionsAffirmatively(prompt: string, pattern: RegExp): boolean {
+function mentionsAffirmatively(prompt: string, pattern: RegExp | RegExp[]): boolean {
+  const patterns = Array.isArray(pattern) ? pattern : [pattern];
   return splitSentences(prompt).some(
-    (sentence) => pattern.test(sentence) && !NEGATION_PATTERN.test(sentence),
+    (sentence) => !NEGATION_PATTERN.test(sentence) && patterns.some((p) => p.test(sentence)),
   );
 }
 
+/** Genuine WhatsApp-contact INTENT ("WhatsApp us", "message us on WhatsApp") - not a bare mention of the word (see WHATSAPP_PATTERN's own doc comment). */
 export function hasExplicitWhatsApp(prompt: string): boolean {
-  return mentionsAffirmatively(prompt, WHATSAPP_PATTERN);
+  return mentionsAffirmatively(prompt, WHATSAPP_INTENT_PATTERNS);
 }
 
 export function hasExplicitOffer(prompt: string): boolean {
@@ -79,8 +149,9 @@ export function hasExplicitStatistic(prompt: string): boolean {
   return mentionsAffirmatively(prompt, STATISTIC_PATTERN);
 }
 
+/** Genuine contact-channel INTENT ("call us", "email us") - not a bare topic noun ("phone battery", "email security"). */
 export function hasExplicitContact(prompt: string): boolean {
-  return hasExplicitWhatsApp(prompt) || mentionsAffirmatively(prompt, CONTACT_PATTERN);
+  return hasExplicitWhatsApp(prompt) || mentionsAffirmatively(prompt, CONTACT_INTENT_PATTERNS);
 }
 
 /**
@@ -147,8 +218,18 @@ export function resolveCtaProvenance(params: {
   isArabic: boolean;
   dialect: ArabicDialect;
   brandContactText?: string;
+  /**
+   * V2.4 Pass 5.1: curiosity/educational/explainer content should not close
+   * on business-ad CTA language ("Follow for more details", "Contact us to
+   * learn more") when nothing in the prompt actually asked for a channel -
+   * a factual explainer earns a channel-free, topic-appropriate closer
+   * instead. Only affects the final SAFE_INFERRED fallback below; genuine
+   * expressed intent (explicit "CTA:" section, or real contact-intent
+   * wording) is honored identically regardless of content style.
+   */
+  isCuriosityStyle?: boolean;
 }): ResolvedCta {
-  const { prompt, isArabic, dialect, brandContactText } = params;
+  const { prompt, isArabic, dialect, brandContactText, isCuriosityStyle } = params;
 
   const explicit = extractExplicitCtaFromPrompt(prompt);
   if (explicit) {
@@ -183,6 +264,14 @@ export function resolveCtaProvenance(params: {
       provenance: "BRAND_PROFILE",
       contact: brandContactText,
       action: "Contact CTA",
+    };
+  }
+
+  if (isCuriosityStyle) {
+    return {
+      text: isArabic ? "دلوقتي عرفت السبب." : "Now you know why.",
+      provenance: "SAFE_INFERRED",
+      action: "Follow CTA",
     };
   }
 

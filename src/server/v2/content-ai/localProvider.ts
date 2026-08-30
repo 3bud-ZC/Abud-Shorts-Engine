@@ -186,24 +186,6 @@ export class LocalContentAIProvider implements ContentAIProvider {
     const voiceProvider = params.voiceProvider || "auto";
     const voiceId = params.voiceId || "";
 
-    const resolvedCta = resolveCtaProvenance({
-      prompt,
-      isArabic: isAr,
-      dialect,
-      brandContactText: params.brandKit?.contactText || undefined,
-    });
-
-    const scenes = enforcePromptTruthSafety(this.buildCreativeScenes({
-      prompt,
-      isArabic: isAr,
-      dialect,
-      durationSeconds,
-      contentStyle,
-      brandName: params.brandName || params.brandKit?.brandName,
-    }), prompt, isAr, dialect, resolvedCta);
-
-    const ctaText = resolvedCta.text;
-
     // Content provenance (V2.4 Pass 5, section 5): DETERMINISTIC covers every
     // hand-written template this planner can produce, including the
     // business-vertical ad templates - they are real, curated content, just
@@ -217,6 +199,25 @@ export class LocalContentAIProvider implements ContentAIProvider {
     // ollamaProvider.ts / geminiProvider.ts.
     const curiosityStyle = contentStyle === "viral_curiosity" || contentStyle === "educational" || contentStyle === "explainer";
     const factPackMatch = !isAr && curiosityStyle ? matchFactPack(prompt, false) : null;
+
+    const resolvedCta = resolveCtaProvenance({
+      prompt,
+      isArabic: isAr,
+      dialect,
+      brandContactText: params.brandKit?.contactText || undefined,
+      isCuriosityStyle: curiosityStyle,
+    });
+
+    const scenes = enforcePromptTruthSafety(this.buildCreativeScenes({
+      prompt,
+      isArabic: isAr,
+      dialect,
+      durationSeconds,
+      contentStyle,
+      brandName: params.brandName || params.brandKit?.brandName,
+    }), prompt, isAr, dialect, resolvedCta);
+
+    const ctaText = resolvedCta.text;
     const contentProvenance = factPackMatch ? "DETERMINISTIC" : curiosityStyle ? "SAFE_GENERIC" : "DETERMINISTIC";
 
     const rawSpec: ProductionSpec = {

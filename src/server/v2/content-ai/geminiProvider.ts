@@ -138,7 +138,10 @@ RULES:
         brandKit: params.brandKit,
         metadata: {
           planner: "GeminiContentAIProvider",
+          contentProvider: "gemini",
           model: this.model,
+          contentProvenance: "MODEL_GENERATED",
+          contentConfidence: "high",
           promptCompiler: {
             version: "prompt_compiler.v3",
             rawPromptLeakGuard: true,

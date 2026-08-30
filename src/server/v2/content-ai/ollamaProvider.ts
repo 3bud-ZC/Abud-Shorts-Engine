@@ -146,7 +146,9 @@ export class OllamaContentAIProvider implements ContentAIProvider {
         metadata: {
           ...(baseline.metadata || {}),
           planner: "OllamaContentAIProvider",
+          contentProvider: "ollama",
           plannerModel: this.model,
+          model: this.model,
           fallbackPlanner: "LocalContentAIProvider",
           contentProvenance: "MODEL_GENERATED",
           contentConfidence: "high",
