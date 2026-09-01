@@ -272,14 +272,14 @@ describe("Arabic production API gate", () => {
     expect(health.body.status).not.toBe("unhealthy");
   });
 
-  it("exposes a Voice Lab config with the Egyptian reference script and real presets", async () => {
+  it("exposes a Voice Lab config with the Arabic preview script and real presets", async () => {
     const { app } = makeArabicRouterApp();
 
     const config = await request(app).get("/api/v2/voice-lab/config").set(AUTH_HEADER).expect(200);
     expect(config.body.provider).toBe("elevenlabs");
     expect(config.body.model).toBe("eleven_multilingual_v2");
-    expect(config.body.referenceScript).toContain("دلوقتي");
-    expect(config.body.referenceScript).toContain("مش");
+    expect(config.body.referenceScript).toContain("اختبار للصوت العربي");
+    expect(config.body.previewSynthesisAllowed).toBe(false);
     expect(config.body.presets.map((preset: any) => preset.id)).toEqual([
       "natural",
       "energetic_ad",

@@ -20,6 +20,7 @@ export type PersistedArabicVoiceDefault = {
   voiceId: string;
   voiceName?: string;
   preset?: VoicePreset;
+  settings?: Record<string, unknown>;
   modelId?: string;
   selectedAt?: string;
   selectedBy: "human";
@@ -49,6 +50,10 @@ export function parseArabicVoiceDefault(
     voiceId,
     voiceName: typeof value.voiceName === "string" && value.voiceName.trim() ? value.voiceName.trim() : undefined,
     preset: coercePreset(value.preset),
+    settings:
+      value.settings && typeof value.settings === "object" && !Array.isArray(value.settings)
+        ? value.settings as Record<string, unknown>
+        : undefined,
     modelId: typeof value.modelId === "string" && value.modelId.trim() ? value.modelId.trim() : undefined,
     selectedAt: typeof value.selectedAt === "string" ? value.selectedAt : undefined,
     selectedBy: "human",
@@ -72,7 +77,13 @@ export async function readArabicVoiceDefault(
 
 export async function writeArabicVoiceDefault(
   db: V2Database,
-  value: { voiceId: string; voiceName?: string; preset?: VoicePreset; modelId?: string },
+  value: {
+    voiceId: string;
+    voiceName?: string;
+    preset?: VoicePreset;
+    settings?: Record<string, unknown>;
+    modelId?: string;
+  },
   now: () => Date = () => new Date(),
 ): Promise<PersistedArabicVoiceDefault> {
   const payload: PersistedArabicVoiceDefault = {
@@ -80,6 +91,7 @@ export async function writeArabicVoiceDefault(
     voiceId: value.voiceId.trim(),
     voiceName: value.voiceName,
     preset: value.preset,
+    settings: value.settings,
     modelId: value.modelId,
     selectedAt: now().toISOString(),
     selectedBy: "human",
@@ -95,14 +107,15 @@ export async function writeArabicVoiceDefault(
 
 export type ArabicVoiceResolutionSource =
   | "explicit_request"
+  | "brand_profile_default"
   | "persisted_human_default"
-  | "legacy_env_default"
   | "unresolved";
 
 export type ResolvedArabicVoice = {
   voiceId: string;
   voiceName?: string;
   preset?: VoicePreset;
+  settings?: Record<string, unknown>;
   modelId?: string;
   source: ArabicVoiceResolutionSource;
 };
@@ -111,8 +124,8 @@ export type ResolvedArabicVoice = {
  * Canonical Arabic voice precedence:
  *
  *   1. an explicit voice ID (and explicit preset) on the request
- *   2. the human-selected default persisted in app_settings
- *   3. the legacy ELEVENLABS_DEFAULT_VOICE_ID environment value
+ *   2. a valid Brand Profile voice
+ *   3. the human-selected default persisted in app_settings
  *   4. unresolved - the caller turns this into a controlled configuration error
  *
  * A legacy Piper model name is never treated as an explicit ElevenLabs voice.
@@ -124,34 +137,56 @@ export type ResolvedArabicVoice = {
 export function resolveArabicVoiceSelection(input: {
   requestedVoiceId?: string;
   requestedPreset?: VoicePreset;
+  brandVoice?: {
+    voiceId?: string;
+    voiceName?: string;
+    preset?: VoicePreset;
+    settings?: Record<string, unknown>;
+    modelId?: string;
+  } | null;
   persisted?: PersistedArabicVoiceDefault | null;
-  envVoiceId?: string;
   defaultModelId: string;
 }): ResolvedArabicVoice {
   const requestedVoiceId = (input.requestedVoiceId || "").trim();
   const explicitVoiceId = requestedVoiceId && !isLegacyPiperVoiceId(requestedVoiceId) ? requestedVoiceId : "";
+  const brandVoiceId = input.brandVoice?.voiceId && !isLegacyPiperVoiceId(input.brandVoice.voiceId)
+    ? input.brandVoice.voiceId.trim()
+    : "";
   const persisted = input.persisted?.voiceId ? input.persisted : null;
-  const envVoiceId = (input.envVoiceId || "").trim();
 
-  const voiceId = explicitVoiceId || persisted?.voiceId || envVoiceId;
+  const voiceId = explicitVoiceId || brandVoiceId || persisted?.voiceId || "";
   const source: ArabicVoiceResolutionSource = explicitVoiceId
     ? "explicit_request"
-    : persisted?.voiceId
-      ? "persisted_human_default"
-      : envVoiceId
-        ? "legacy_env_default"
+    : brandVoiceId
+      ? "brand_profile_default"
+      : persisted?.voiceId
+        ? "persisted_human_default"
         : "unresolved";
 
+  const brandSelectionIsInEffect = Boolean(brandVoiceId && voiceId === brandVoiceId);
   const persistedSelectionIsInEffect = Boolean(persisted && voiceId === persisted.voiceId);
   const preset =
     input.requestedPreset ||
+    (brandSelectionIsInEffect ? input.brandVoice?.preset : undefined) ||
     (persistedSelectionIsInEffect ? persisted?.preset : undefined);
 
   return {
     voiceId,
-    voiceName: persistedSelectionIsInEffect ? persisted?.voiceName : undefined,
+    voiceName: brandSelectionIsInEffect
+      ? input.brandVoice?.voiceName
+      : persistedSelectionIsInEffect
+        ? persisted?.voiceName
+        : undefined,
     preset,
-    modelId: (persistedSelectionIsInEffect ? persisted?.modelId : undefined) || input.defaultModelId,
+    settings: brandSelectionIsInEffect
+      ? input.brandVoice?.settings
+      : persistedSelectionIsInEffect
+        ? persisted?.settings
+        : undefined,
+    modelId:
+      (brandSelectionIsInEffect ? input.brandVoice?.modelId : undefined) ||
+      (persistedSelectionIsInEffect ? persisted?.modelId : undefined) ||
+      input.defaultModelId,
     source,
   };
 }

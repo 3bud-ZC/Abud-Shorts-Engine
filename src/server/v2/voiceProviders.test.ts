@@ -73,6 +73,15 @@ describe("Voice Providers & Registry", () => {
     expect(val.status).toBe("not_configured");
   });
 
+  it("ElevenLabs refuses synthesis without a human-chosen account voice", async () => {
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+
+    await expect(provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "", { languageCode: "ar" })).rejects.toThrow(
+      "No default Arabic voice has been selected",
+    );
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
   it("VoiceRegistry keeps English on Kokoro if ElevenLabs is not configured", async () => {
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
@@ -146,7 +155,6 @@ describe("Voice Providers & Registry", () => {
     // Old jobs persisted ar_JO-kareem-medium. Metadata must stay parseable, but
     // a Piper model name must never be forwarded as an ElevenLabs voice.
     expect(isLegacyPiperVoiceId("ar_JO-kareem-medium")).toBe(true);
-    vi.stubEnv("ELEVENLABS_DEFAULT_VOICE_ID", "acct_voice_1");
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
 
     const decision = registry.route({
@@ -157,7 +165,7 @@ describe("Voice Providers & Registry", () => {
       voiceId: "ar_JO-kareem-medium",
     });
     expect(decision.providerId).toBe("elevenlabs");
-    expect(decision.voiceId).toBe("acct_voice_1");
+    expect(decision.voiceId).toBe("");
   });
 
   it("never sends language_code for eleven_multilingual_v2 and infers Arabic from the text instead", async () => {

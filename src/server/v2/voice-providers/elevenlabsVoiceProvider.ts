@@ -341,23 +341,16 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
   }
 
   /**
-   * Resolves the voice to narrate with. No voice ID is ever invented: when the
-   * caller did not choose one we take the first voice the account actually owns.
+   * Resolves the voice to narrate with. The caller must provide a human-chosen
+   * account voice; discovery order is never treated as consent.
    */
   public async resolveVoiceId(requestedVoiceId?: string): Promise<string> {
     const requested = (requestedVoiceId || "").trim();
     if (requested) return requested;
 
-    const configuredDefault = (process.env.ELEVENLABS_DEFAULT_VOICE_ID || "").trim();
-    if (configuredDefault) return configuredDefault;
-
-    const voices = await this.listVoices();
-    if (!voices.length) {
-      throw new Error(
-        "No ElevenLabs voice is available for this account. Open Providers → ElevenLabs → Browse Voices and select a voice.",
-      );
-    }
-    return voices[0].id;
+    throw new Error(
+      "No default Arabic voice has been selected. Open Providers -> ElevenLabs -> Voice Lab and set a default voice.",
+    );
   }
 
   private buildRequestBody(

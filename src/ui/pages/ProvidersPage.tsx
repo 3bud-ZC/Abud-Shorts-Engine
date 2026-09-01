@@ -46,6 +46,12 @@ type VoiceLabConfig = {
   presets: Array<{ id: string; settings: Record<string, unknown> }>;
   note: string;
   defaultArabicVoice?: { voiceId: string; voiceName?: string; preset?: string; selectedAt?: string } | null;
+  defaultArabicVoiceConfigured?: boolean;
+  defaultArabicVoiceAvailable?: boolean;
+  defaultArabicVoiceName?: string;
+  arabicProductionReady?: boolean;
+  setupRequiredReason?: string;
+  previewSynthesisAllowed?: boolean;
 };
 
 /** Backend provider category → i18n key stems (heading + description). */
@@ -90,6 +96,7 @@ const ProvidersPage: React.FC = () => {
   const [voiceLabGenerating, setVoiceLabGenerating] = useState(false);
   const [defaultArabicVoiceId, setDefaultArabicVoiceId] = useState("");
   const [browseOnly, setBrowseOnly] = useState(false);
+  const [voiceLabSearch, setVoiceLabSearch] = useState("");
 
   const categoryLabel = (category: string) =>
     CATEGORY_KEY[category] ? tr(CATEGORY_KEY[category].label) : category;
@@ -227,16 +234,16 @@ const ProvidersPage: React.FC = () => {
       ]);
       const config: VoiceLabConfig = configResponse.data;
       setVoiceLabConfig(config);
-      if (config.defaultArabicVoice?.voiceId) {
-        setDefaultArabicVoiceId(config.defaultArabicVoice.voiceId);
-        setVoiceLabVoiceId((current) => current || config.defaultArabicVoice!.voiceId);
-      }
+      setDefaultArabicVoiceId(config.defaultArabicVoice?.voiceId || "");
+      setVoiceLabVoiceId(config.defaultArabicVoice?.voiceId || "");
       if (!voiceLabText) setVoiceLabText(config.referenceScript || "");
       const voices: DiscoveredVoice[] = voicesResponse.data.voices || [];
       setVoiceLabVoices(voices);
-      const warnings: string[] = voicesResponse.data.warnings || [];
+      const warnings: string[] = [
+        ...(voicesResponse.data.warnings || []),
+        ...(config.setupRequiredReason ? [config.setupRequiredReason] : []),
+      ];
       if (warnings.length) setVoiceLabError(warnings.join(" "));
-      if (!voiceLabVoiceId && voices.length) setVoiceLabVoiceId(voices[0].id);
     } catch (err: any) {
       setVoiceLabError(err?.response?.data?.message || tr("providers.voiceLab.loadFailed"));
     } finally {
@@ -255,9 +262,11 @@ const ProvidersPage: React.FC = () => {
         voiceId: voiceLabVoiceId,
         voiceName: voiceLabVoices.find((voice) => voice.id === voiceLabVoiceId)?.name,
         preset: voiceLabPreset,
+        modelId: voiceLabConfig?.model,
       });
       setDefaultArabicVoiceId(voiceLabVoiceId);
       setVoiceLabError(null);
+      await load();
     } catch (err) {
       setVoiceLabError(
         (err as any)?.response?.data?.message || tr("providers.voiceLab.saveDefaultFailed"),
@@ -318,6 +327,18 @@ const ProvidersPage: React.FC = () => {
       setError(err?.response?.data?.message || tr("providers.disconnectFailed"));
     }
   };
+
+  const filteredVoiceLabVoices = useMemo(() => {
+    const needle = voiceLabSearch.trim().toLowerCase();
+    if (!needle) return voiceLabVoices;
+    return voiceLabVoices.filter((voice) =>
+      [voice.name, voice.accent, voice.gender, voice.category, voice.language, voice.dialect]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [voiceLabSearch, voiceLabVoices]);
 
   if (loading) return <LoadingState label={tr("providers.loading")} />;
 
@@ -575,6 +596,16 @@ const ProvidersPage: React.FC = () => {
                                   }
                                   color={provider.details.liveVerified ? "success" : "default"}
                                 />
+                                <Chip
+                                  size="small"
+                                  variant={provider.details.arabicProductionReady ? "filled" : "outlined"}
+                                  label={
+                                    provider.details.arabicProductionReady
+                                      ? tr("providers.badge.arabicReady")
+                                      : tr("providers.badge.arabicSetupRequired")
+                                  }
+                                  color={provider.details.arabicProductionReady ? "success" : "warning"}
+                                />
                               </Stack>
                             )}
                             {provider.id === "elevenlabs" && provider.details.errorDetail && (() => {
@@ -666,7 +697,17 @@ const ProvidersPage: React.FC = () => {
                   <Chip size="small" variant="outlined" label={tr("providers.voiceLab.model", { model: voiceLabConfig?.model || "—" })} />
                   <Chip size="small" variant="outlined" label={tr("providers.voiceLab.voicesDiscovered", { count: voiceLabVoices.length })} />
                   <Chip size="small" variant="outlined" label={tr("providers.voiceLab.usageBased")} />
+                  {voiceLabConfig?.arabicProductionReady && (
+                    <Chip size="small" color="success" label={tr("providers.badge.arabicReady")} />
+                  )}
                 </Stack>
+
+                <TextField
+                  label={tr("providers.voiceLab.search")}
+                  value={voiceLabSearch}
+                  onChange={(e) => setVoiceLabSearch(e.target.value)}
+                  fullWidth
+                />
 
                 <TextField
                   select
@@ -678,7 +719,7 @@ const ProvidersPage: React.FC = () => {
                   InputLabelProps={{ shrink: true }}
                 >
                   <option value="">{tr("providers.voiceLab.selectVoice")}</option>
-                  {voiceLabVoices.map((voice) => (
+                  {filteredVoiceLabVoices.map((voice) => (
                     <option key={voice.id} value={voice.id}>
                       {[voice.name, voice.accent, voice.gender, voice.category].filter(Boolean).join(" · ")}
                     </option>
@@ -741,7 +782,12 @@ const ProvidersPage: React.FC = () => {
                     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                       <Button
                         variant="contained"
-                        disabled={voiceLabGenerating || !voiceLabVoiceId || !voiceLabText.trim()}
+                        disabled={
+                          voiceLabGenerating ||
+                          !voiceLabConfig?.previewSynthesisAllowed ||
+                          !voiceLabVoiceId ||
+                          !voiceLabText.trim()
+                        }
                         onClick={generateVoiceLabPreview}
                       >
                         {voiceLabGenerating
@@ -756,6 +802,9 @@ const ProvidersPage: React.FC = () => {
                       >
                         {tr("providers.voiceLab.setDefaultArabic")}
                       </Button>
+                      {!voiceLabConfig?.previewSynthesisAllowed && (
+                        <Chip size="small" variant="outlined" label={tr("providers.voiceLab.previewPendingAuth")} />
+                      )}
                     </Stack>
 
                     {voiceLabAudio && (

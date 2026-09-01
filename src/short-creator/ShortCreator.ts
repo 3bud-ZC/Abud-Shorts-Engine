@@ -492,7 +492,8 @@ export class ShortCreator {
     // video with no captions at all. Decided before the scene loop because
     // scene assembly must know which engine will draw the words.
     const captionStyleSpec = resolveCaptionStyle(spec.captionStyle as string);
-    const fontsDir = process.env.ABUD_FONT_DIR || "";
+    const bundledFontsDir = "/usr/share/fonts/truetype/abud";
+    const fontsDir = process.env.ABUD_FONT_DIR || (fs.existsSync(bundledFontsDir) ? bundledFontsDir : "");
     const burnCaptionsWithLibass =
       Boolean(fontsDir) && fs.existsSync(fontsDir) && spec.captionStyle !== "none";
 

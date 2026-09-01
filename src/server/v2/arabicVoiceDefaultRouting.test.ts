@@ -34,7 +34,7 @@ const MAMDOH = {
   modelId: ELEVENLABS_DEFAULT_MODEL_ID,
 };
 
-/** A deliberately wrong legacy environment value the fix must not use. */
+/** A deliberately wrong legacy environment value the fix must ignore. */
 const ENV_DECOY_VOICE_ID = "env_legacy_voice_should_not_win";
 
 /** Minimal database stub with working app_settings and jobs tables. */
@@ -232,7 +232,7 @@ describe("Persisted Arabic voice default drives real production requests", () =>
     expect(preview.body.spec.voicePreset).toBe("calm");
   });
 
-  it("falls back to the legacy environment voice only when no human selection exists", async () => {
+  it("does not use the legacy environment voice when no human selection exists", async () => {
     vi.stubEnv("ELEVENLABS_DEFAULT_VOICE_ID", ENV_DECOY_VOICE_ID);
     const { app } = makeApp();
 
@@ -242,8 +242,9 @@ describe("Persisted Arabic voice default drives real production requests", () =>
       .send(ARABIC_AUTO_REQUEST)
       .expect(200);
 
-    expect(preview.body.spec.voiceId).toBe(ENV_DECOY_VOICE_ID);
-    expect(preview.body.spec.metadata.uiContract.voiceSource).toBe("legacy_env_default");
+    expect(preview.body.spec.voiceId).toBe("");
+    expect(preview.body.spec.metadata.uiContract.voiceSource).toBe("unresolved");
+    expect(preview.body.spec.voiceId).not.toBe(ENV_DECOY_VOICE_ID);
   });
 
   it("refuses an Arabic job with a controlled error when no voice can be resolved", async () => {
@@ -322,16 +323,33 @@ describe("Arabic voice precedence", () => {
     const resolved = resolveArabicVoiceSelection({
       requestedVoiceId: "explicit_voice",
       persisted,
-      envVoiceId: ENV_DECOY_VOICE_ID,
       defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
     });
     expect(resolved).toMatchObject({ voiceId: "explicit_voice", source: "explicit_request" });
   });
 
-  it("prefers the persisted human default over the legacy environment default", () => {
+  it("prefers a Brand Profile voice over the persisted human default", () => {
+    const resolved = resolveArabicVoiceSelection({
+      brandVoice: {
+        voiceId: "brand_voice",
+        voiceName: "Brand Voice",
+        preset: "professional",
+        modelId: "eleven_multilingual_v2",
+      },
+      persisted,
+      defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
+    });
+    expect(resolved).toMatchObject({
+      voiceId: "brand_voice",
+      voiceName: "Brand Voice",
+      preset: "professional",
+      source: "brand_profile_default",
+    });
+  });
+
+  it("prefers the persisted human default over the legacy environment", () => {
     const resolved = resolveArabicVoiceSelection({
       persisted,
-      envVoiceId: ENV_DECOY_VOICE_ID,
       defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
     });
     expect(resolved).toMatchObject({

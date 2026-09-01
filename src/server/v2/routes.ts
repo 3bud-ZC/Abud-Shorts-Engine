@@ -204,6 +204,30 @@ type SettingRow = {
   updated_at: Date;
 };
 
+function brandArabicVoiceDefault(brand: ReturnType<typeof mapBrand> | null | undefined): {
+  voiceId?: string;
+  voiceName?: string;
+  preset?: VoicePreset;
+  settings?: Record<string, unknown>;
+  modelId?: string;
+} | null {
+  const profile = brand?.voiceProfile || {};
+  if (profile.provider && profile.provider !== "elevenlabs") return null;
+  const voiceId = typeof profile.voiceId === "string" ? profile.voiceId.trim() : "";
+  if (!voiceId || isLegacyPiperVoiceId(voiceId)) return null;
+  const preset = coerceRequestedPreset(profile.style);
+  return {
+    voiceId,
+    voiceName: typeof profile.voiceName === "string" && profile.voiceName.trim() ? profile.voiceName.trim() : undefined,
+    preset,
+    settings:
+      profile.settings && typeof profile.settings === "object" && !Array.isArray(profile.settings)
+        ? profile.settings as Record<string, unknown>
+        : undefined,
+    modelId: typeof profile.modelId === "string" && profile.modelId.trim() ? profile.modelId.trim() : undefined,
+  };
+}
+
 function mapBrand(row: BrandRow) {
   const kit = (row.kit || {}) as Record<string, any>;
   const revision = row.revision || 1;
@@ -697,6 +721,7 @@ function defaultVoiceForResolvedProvider(provider: VoiceProviderId): string {
  */
 export type ProductionSpecDefaults = {
   arabicVoice?: PersistedArabicVoiceDefault | null;
+  brandArabicVoice?: ReturnType<typeof brandArabicVoiceDefault>;
 };
 
 type CreateVisualSource = "auto_free" | "auto_best" | "auto_budget" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
@@ -799,8 +824,8 @@ export function canonicalizeProductionSpecContract(
           requestedPreset:
             coerceRequestedPreset(controls.voicePreset) ??
             (canReuseSpecVoice ? coerceRequestedPreset(spec.voicePreset) : undefined),
+          brandVoice: defaults.brandArabicVoice,
           persisted: defaults.arabicVoice,
-          envVoiceId: process.env.ELEVENLABS_DEFAULT_VOICE_ID,
           defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
         })
       : null;
@@ -897,8 +922,9 @@ export function canonicalizeProductionSpecContract(
         voiceId,
         voicePreset,
         voiceModelId,
+        voiceSettings: arabicVoice?.settings,
         // How the voice was chosen, so the UI and job metadata can prove the
-        // persisted human selection - not an environment value - was used.
+        // persisted human or brand-profile selection was used.
         voiceSource: arabicVoice?.source,
         voiceName: arabicVoice?.voiceName,
       },
@@ -918,12 +944,15 @@ async function canonicalizeProductionSpecForRequest(
   spec: any,
   controls: any,
 ) {
-  const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
-  const canonical = canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
-  const brandId = String(controls.brandId || canonical.brandId || "").trim();
-  const templateId = String(controls.templateId || controls.businessTemplateId || canonical.templateId || "").trim();
+  const brandId = String(controls.brandId || spec.brandId || "").trim();
+  const templateId = String(controls.templateId || controls.businessTemplateId || spec.templateId || "").trim();
   const brand = await getBrandById(db, brandId).catch(() => null);
   const template = await getTemplateForSnapshot(db, templateId).catch(() => null);
+  const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
+  const canonical = canonicalizeProductionSpecContract(spec, controls, {
+    arabicVoice,
+    brandArabicVoice: brandArabicVoiceDefault(brand),
+  });
   const brandSnapshot = brand ? createBrandSnapshot(brand) : undefined;
   const baseMetadata = {
     ...(canonical.metadata || {}),
@@ -3001,25 +3030,87 @@ export function createV2PublicRouter(
     }
   });
 
-  // Egyptian Arabic reference script used for like-for-like voice auditions.
-  // The same text is reused for every voice so comparisons stay meaningful.
-  const VOICE_LAB_REFERENCE_SCRIPT = [
-    "\u0644\u0648 \u0639\u0646\u062F\u0643 \u0628\u064A\u0632\u0646\u0633 \u0648\u0644\u0633\u0647 \u0645\u0648\u0642\u0639\u0643 \u0634\u0643\u0644\u0647 \u0642\u062F\u064A\u0645 \u0623\u0648 \u0645\u0634 \u0645\u0648\u062C\u0648\u062F \u0623\u0635\u0644\u0627\u064B\u060C",
-    "\u0641\u0625\u0646\u062A \u063A\u0627\u0644\u0628\u0627\u064B \u0628\u062A\u0633\u064A\u0628 \u0639\u0645\u0644\u0627\u0621 \u064A\u0631\u0648\u062D\u0648\u0627 \u0644\u0645\u0646\u0627\u0641\u0633\u0643 \u0645\u0646 \u063A\u064A\u0631 \u0645\u0627 \u062A\u062D\u0633.",
-    "\u0645\u0648\u0642\u0639 \u0633\u0631\u064A\u0639 \u0648\u0634\u0643\u0644\u0647 \u0627\u062D\u062A\u0631\u0627\u0641\u064A \u0645\u0645\u0643\u0646 \u064A\u0641\u0631\u0642 \u0645\u0639\u0627\u0643 \u062C\u062F\u0627\u064B.",
-    "\u0627\u0628\u062F\u0623 \u062F\u0644\u0648\u0642\u062A\u064A \u0648\u062E\u0644\u064A \u0634\u063A\u0644\u0643 \u064A\u0638\u0647\u0631 \u0628\u0627\u0644\u0634\u0643\u0644 \u0627\u0644\u0644\u064A \u064A\u0633\u062A\u062D\u0642\u0647.",
-  ].join("\n");
+  // Short Arabic audition text. It is reused for every voice so comparisons
+  // stay meaningful, but synthesis is still gated by the paid-usage policy.
+  const VOICE_LAB_REFERENCE_SCRIPT =
+    "\u0623\u0647\u0644\u0627\u064B \u0628\u064A\u0643\u060C \u062F\u0647 \u0627\u062E\u062A\u0628\u0627\u0631 \u0644\u0644\u0635\u0648\u062A \u0627\u0644\u0639\u0631\u0628\u064A \u0641\u064A \u0641\u064A\u062F\u064A\u0648\u0647\u0627\u062A ABUD Shorts.";
 
   const VOICE_LAB_MAX_CHARS = 600;
+
+  async function voiceLabPreviewAllowed(): Promise<boolean> {
+    if (process.env.ABUD_ALLOW_ELEVENLABS_PREVIEW_SYNTHESIS === "true") return true;
+    const rows = await db.query<SettingRow>(
+      "SELECT key, value, updated_at FROM app_settings WHERE key = $1",
+      ["elevenlabs_voice_lab_policy"],
+    ).catch(() => []);
+    return rows[0]?.value?.allowPreviewSynthesis === true;
+  }
+
+  async function elevenLabsVoiceDefaultState(
+    provider: ElevenLabsVoiceProvider,
+    storedDefault: PersistedArabicVoiceDefault | null,
+  ) {
+    const state: {
+      defaultArabicVoiceConfigured: boolean;
+      defaultArabicVoiceAvailable?: boolean;
+      defaultArabicVoiceName?: string;
+      voiceCatalogueAvailable?: boolean;
+      arabicProductionReady: boolean;
+      setupRequiredReason?: string;
+      voices?: any[];
+      warnings: string[];
+    } = {
+      defaultArabicVoiceConfigured: Boolean(storedDefault?.voiceId),
+      arabicProductionReady: false,
+      warnings: [],
+    };
+    if (!provider.isConfigured()) {
+      state.setupRequiredReason = "credentials_not_connected";
+      return state;
+    }
+    try {
+      const voices = await provider.listVoices("ar");
+      state.voices = voices;
+      state.voiceCatalogueAvailable = true;
+      if (!storedDefault?.voiceId) {
+        state.defaultArabicVoiceAvailable = false;
+        state.setupRequiredReason = "default_arabic_voice_not_selected";
+        return state;
+      }
+      const match = voices.find((voice) => voice.id === storedDefault.voiceId);
+      state.defaultArabicVoiceAvailable = Boolean(match);
+      state.defaultArabicVoiceName = match?.name || storedDefault.voiceName;
+      state.arabicProductionReady = Boolean(match);
+      if (!match) {
+        state.setupRequiredReason = "saved_default_voice_unavailable";
+        state.warnings.push("The saved default Arabic voice is not available in the connected ElevenLabs account.");
+      }
+      return state;
+    } catch (error) {
+      state.voiceCatalogueAvailable = false;
+      state.setupRequiredReason = "voice_catalogue_unavailable";
+      state.warnings.push(error instanceof Error ? error.message : String(error));
+      return state;
+    }
+  }
 
   router.get("/voice-lab/config", async (req, res) => {
     await providerSecrets.refreshElevenLabsApiKey();
     const provider = new ElevenLabsVoiceProvider();
     const storedDefault = await readArabicVoiceDefault(db).catch(() => null);
+    const defaultState = await elevenLabsVoiceDefaultState(provider, storedDefault);
+    const previewAllowed = await voiceLabPreviewAllowed();
     res.status(200).json({
       provider: "elevenlabs",
       configured: provider.isConfigured(),
       defaultArabicVoice: storedDefault,
+      defaultArabicVoiceConfigured: defaultState.defaultArabicVoiceConfigured,
+      defaultArabicVoiceAvailable: defaultState.defaultArabicVoiceAvailable,
+      defaultArabicVoiceName: defaultState.defaultArabicVoiceName,
+      voiceCatalogueAvailable: defaultState.voiceCatalogueAvailable,
+      arabicProductionReady: defaultState.arabicProductionReady,
+      setupRequiredReason: defaultState.setupRequiredReason,
+      previewSynthesisAllowed: previewAllowed,
       model: ELEVENLABS_DEFAULT_MODEL_ID,
       referenceScript: VOICE_LAB_REFERENCE_SCRIPT,
       maxCharacters: VOICE_LAB_MAX_CHARS,
@@ -3055,6 +3146,13 @@ export function createV2PublicRouter(
       const voiceId = typeof req.body?.voiceId === "string" ? req.body.voiceId.trim() : "";
       const preset = ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : "natural";
       const language = req.body?.language === "en" ? "en" : "ar";
+      if (!(await voiceLabPreviewAllowed())) {
+        res.status(402).json({
+          error: "preview_synthesis_not_authorized",
+          message: "LIVE AUDIO PREVIEW PENDING PAID-USAGE AUTHORIZATION.",
+        });
+        return;
+      }
 
       const preview = await provider.generatePreview(rawText, voiceId || undefined, {
         preset,
@@ -3100,10 +3198,26 @@ export function createV2PublicRouter(
       return;
     }
     try {
+      await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
+      const provider = new ElevenLabsVoiceProvider();
+      if (provider.isConfigured() && process.env.VITEST !== "true") {
+        const voices = await provider.listVoices("ar");
+        if (!voices.some((voice) => voice.id === voiceId)) {
+          res.status(409).json({
+            error: "voice_unavailable",
+            message: "That ElevenLabs voice is not available in the connected account. Choose another voice from Voice Lab.",
+          });
+          return;
+        }
+      }
+      const preset: VoicePreset | undefined = ELEVENLABS_PRESET_IDS.includes(req.body?.preset)
+        ? req.body.preset
+        : undefined;
       const saved = await writeArabicVoiceDefault(db, {
         voiceId,
         voiceName: typeof req.body?.voiceName === "string" ? req.body.voiceName : undefined,
-        preset: ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : undefined,
+        preset,
+        settings: preset ? ELEVENLABS_PRESETS[preset] : undefined,
         // The model the preset was auditioned under travels with the selection
         // so a later model default cannot silently change the approved voice.
         modelId:
@@ -3169,6 +3283,19 @@ export function createV2PublicRouter(
       elevenLabsConfigured && shouldValidateLocalVoiceModels
         ? await elevenLabsProvider.validate().catch(() => undefined)
         : undefined;
+    const storedArabicVoiceDefault = await readArabicVoiceDefault(db).catch(() => null);
+    const elevenLabsDefaultState =
+      elevenLabsConfigured && shouldValidateLocalVoiceModels
+        ? await elevenLabsVoiceDefaultState(elevenLabsProvider, storedArabicVoiceDefault)
+        : {
+            defaultArabicVoiceConfigured: Boolean(storedArabicVoiceDefault?.voiceId),
+            defaultArabicVoiceAvailable: undefined,
+            defaultArabicVoiceName: storedArabicVoiceDefault?.voiceName,
+            voiceCatalogueAvailable: undefined,
+            arabicProductionReady: false,
+            setupRequiredReason: storedArabicVoiceDefault?.voiceId ? undefined : "default_arabic_voice_not_selected",
+            warnings: [],
+          };
     const googleTts = new GoogleCloudTtsProvider();
     const googleTtsValidation = voiceResults.find((provider) => provider.provider === "Google Cloud TTS");
     const googleTtsConfigured = googleTts.isConfigured();
@@ -3531,6 +3658,11 @@ export function createV2PublicRouter(
           voiceDiscoveryAvailable: elevenLabsValidation?.voiceDiscoveryAvailable,
           ttsReady: elevenLabsValidation?.ttsReady,
           voicesDiscovered: elevenLabsValidation?.voicesDiscovered,
+          defaultArabicVoiceConfigured: elevenLabsDefaultState.defaultArabicVoiceConfigured,
+          defaultArabicVoiceAvailable: elevenLabsDefaultState.defaultArabicVoiceAvailable,
+          defaultArabicVoiceName: elevenLabsDefaultState.defaultArabicVoiceName,
+          arabicProductionReady: elevenLabsDefaultState.arabicProductionReady,
+          arabicSetupRequiredReason: elevenLabsDefaultState.setupRequiredReason,
           errorDetail: elevenLabsValidation?.errorDetail,
           lastTestedAt: vaultByProvider.get("elevenlabs")?.lastTestedAt || undefined,
           accountTier: elevenLabsValidation?.accountTier,
