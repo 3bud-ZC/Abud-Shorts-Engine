@@ -317,6 +317,8 @@ const VideoCreator: React.FC = () => {
   }
   const [visualMode, setVisualMode] = useState("auto");
   const [visualSource, setVisualSource] = useState<"auto_free" | "auto_best" | "auto_budget" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
+  const [budgetMode, setBudgetMode] = useState<"free_only" | "smart_budget" | "best_available">("free_only");
+  const [maxExternalSpendUsd, setMaxExternalSpendUsd] = useState(1);
   const [stockProvider, setStockProvider] = useState<"auto_stock" | "pexels" | "pixabay">("auto_stock");
   const [mediaPolicy, setMediaPolicy] = useState<"auto_use_selected" | "only_selected">("auto_use_selected");
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
@@ -793,6 +795,8 @@ const VideoCreator: React.FC = () => {
         contentStyle,
         visualMode,
         visualSource,
+        budgetMode,
+        maxExternalSpendUsd: budgetMode === "smart_budget" ? maxExternalSpendUsd : undefined,
         stockProvider,
         mediaPolicy,
         selectedMediaIds,
@@ -879,6 +883,8 @@ const VideoCreator: React.FC = () => {
           animationIntensity,
           visualMode,
           visualSource,
+          budgetMode,
+          maxExternalSpendUsd: budgetMode === "smart_budget" ? maxExternalSpendUsd : undefined,
           stockProvider,
           mediaPolicy,
           selectedMediaIds,
@@ -903,6 +909,8 @@ const VideoCreator: React.FC = () => {
             mediaPolicy,
             stockProvider,
             aiVisualProvider,
+            budgetMode,
+            maxExternalSpendUsd: budgetMode === "smart_budget" ? maxExternalSpendUsd : undefined,
           },
         },
         {
@@ -1356,6 +1364,9 @@ const VideoCreator: React.FC = () => {
                         else if (next === "ai_generated") setVisualMode("ai");
                         else if (next === "mixed") setVisualMode("hybrid");
                         else setVisualMode("auto");
+                        if (next === "auto_free" || next === "stock" || next === "uploaded_media") setBudgetMode("free_only");
+                        if (next === "auto_budget") setBudgetMode("smart_budget");
+                        if (next === "ai_generated" || next === "mixed") setBudgetMode("best_available");
                       }}
                     >
                       <MenuItem value="auto_best">Auto Best</MenuItem>
@@ -1370,6 +1381,46 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+
+                {/* Budget */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="budget-mode-select-label">Budget</InputLabel>
+                    <Select
+                      labelId="budget-mode-select-label"
+                      id="budget-mode-select"
+                      label="Budget"
+                      value={budgetMode}
+                      onChange={(e) => {
+                        const next = e.target.value as typeof budgetMode;
+                        setBudgetMode(next);
+                        if (next === "free_only") setVisualSource("auto_free");
+                        if (next === "smart_budget") setVisualSource("auto_budget");
+                        if (next === "best_available" && visualSource === "auto_free") setVisualSource("auto_best");
+                      }}
+                    >
+                      <MenuItem value="free_only">Free Only</MenuItem>
+                      <MenuItem value="smart_budget">Smart Budget</MenuItem>
+                      <MenuItem value="best_available">Best Available</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {budgetMode === "smart_budget" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <TextField
+                      fullWidth
+                      type="number"
+                      label="Max external spend"
+                      value={maxExternalSpendUsd}
+                      onChange={(event) => setMaxExternalSpendUsd(Math.max(0, Number(event.target.value) || 0))}
+                      inputProps={{ min: 0, max: 1000, step: 0.5 }}
+                      InputProps={{
+                        startAdornment: <InputAdornment position="start">$</InputAdornment>,
+                      }}
+                    />
+                  </Grid>
+                )}
 
                 {/* Production Mode */}
                 {uiMode === "advanced" && (

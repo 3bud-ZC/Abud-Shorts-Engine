@@ -164,6 +164,19 @@ function sourceBreakdown(video: any): string {
   return parts.join(" · ");
 }
 
+function providerReport(video: any) {
+  const generatedShots =
+    video?.selectedVisuals?.filter((item: any) => item?.source === "ai" || item?.source === "local_ai").length ??
+    video?.productionSpec?.metadata?.uiContract?.heroShotAllocation?.filter((item: any) => item?.source === "generated").length ??
+    0;
+  return {
+    visualSources: labelList(PROVIDER_LABELS, video?.visualProvidersUsed) || sourceBreakdown(video) || "Free stock / local media",
+    generatedShots,
+    externalCost: videoCostLabel(video?.costEstimate),
+    voice: voiceEvidence(video) || (video?.voiceProvider === "elevenlabs" ? "ElevenLabs" : video?.voiceProvider || "Local / Auto"),
+  };
+}
+
 function voiceEvidence(video: any): string {
   const artifact = video?.voiceArtifacts?.[0];
   if (!artifact?.provider) return "";
@@ -323,6 +336,7 @@ const VideoDetailsContent: React.FC = () => {
   const cost = video?.costEstimate;
   const durableArtifacts = video?.durableArtifacts || [];
   const lastReuse = video?.artifactReuse || {};
+  const postJobProviderReport = video ? providerReport(video) : null;
 
   return (
     <>
@@ -772,6 +786,22 @@ const VideoDetailsContent: React.FC = () => {
                       {labelList(PROVIDER_LABELS, video.visualProvidersUsed) || "Pexels"}
                     </Typography>
                   </Stack>
+                  {postJobProviderReport && (
+                    <>
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography color="text.secondary">Visual Sources</Typography>
+                        <Typography fontWeight={700}>{postJobProviderReport.visualSources}</Typography>
+                      </Stack>
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography color="text.secondary">Generated Shots</Typography>
+                        <Typography fontWeight={700}>{postJobProviderReport.generatedShots}</Typography>
+                      </Stack>
+                      <Stack direction="row" justifyContent="space-between">
+                        <Typography color="text.secondary">Voice</Typography>
+                        <Typography fontWeight={700}>{postJobProviderReport.voice}</Typography>
+                      </Stack>
+                    </>
+                  )}
                   <Divider />
                   <Stack direction="row" justifyContent="space-between" alignItems="center">
                     <Typography color="text.secondary">Estimated Cost</Typography>

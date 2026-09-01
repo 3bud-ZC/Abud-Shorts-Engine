@@ -432,6 +432,22 @@ export type ProviderItem = {
   message: string;
   checkedAt?: string;
   details?: ProviderDetails;
+  canonical?: {
+    implemented: boolean;
+    category: string;
+    configured: boolean;
+    authenticated: boolean | null;
+    healthy: boolean | null;
+    liveVerified: boolean | null;
+    enabled: boolean;
+    billingClass: string;
+    capabilities: string[];
+    latencyClass: string;
+    qualityClass: string;
+    lastVerifiedAt?: string;
+    customerStatus: string;
+    blockerReason?: string;
+  };
   credentialTypes?: string[];
   vaultConfigured?: boolean;
   vault?: Array<{

@@ -62,6 +62,7 @@ export const SetupWizard: React.FC = () => {
   const [adminPassword, setAdminPassword] = useState("");
   const [adminPasswordConfirm, setAdminPasswordConfirm] = useState("");
   const [pexelsKey, setPexelsKey] = useState("");
+  const [pixabayKey, setPixabayKey] = useState("");
   const [telegramToken, setTelegramToken] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [elevenLabsKey, setElevenLabsKey] = useState("");
@@ -136,6 +137,7 @@ export const SetupWizard: React.FC = () => {
         // customer believing they had configured a provider when they had not.
         const keyEntries: Array<{ provider: string; value: string }> = [
           { provider: "pexels", value: pexelsKey },
+          { provider: "pixabay", value: pixabayKey },
           { provider: "gemini", value: geminiKey },
           { provider: "elevenlabs", value: elevenLabsKey },
         ].filter((entry) => entry.value.trim().length > 0);
@@ -148,9 +150,9 @@ export const SetupWizard: React.FC = () => {
             });
           } catch {
             // One key failing must not block finishing setup; the customer can
-            // add or correct it on the Integrations page.
+            // add or correct it on the Providers page.
             setError(
-              `Setup finished, but the ${entry.provider} key could not be saved. Add it again under Integrations.`,
+              `Setup finished, but the ${entry.provider} key could not be saved. Add it again under Providers.`,
             );
           }
         }
@@ -384,7 +386,7 @@ export const SetupWizard: React.FC = () => {
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 Pexels gives your videos real footage to work with. It is free — creating a key takes about a minute.
-                You can skip this and add it later on the Integrations page.
+                You can skip this and add it later on the Providers page.
               </Typography>
               <TextField
                 label="Pexels API key (recommended)"
@@ -394,6 +396,15 @@ export const SetupWizard: React.FC = () => {
                 fullWidth
                 size="small"
                 helperText="Skip this if you prefer — you can add it any time from Integrations."
+              />
+              <TextField
+                label="Pixabay API key (optional)"
+                value={pixabayKey}
+                onChange={(e) => setPixabayKey(e.target.value)}
+                type="password"
+                fullWidth
+                size="small"
+                helperText="Optional second free stock library."
               />
               <Alert severity="info">
                 English narration, captions and video rendering all run on this machine. Nothing here costs money.
@@ -430,7 +441,7 @@ export const SetupWizard: React.FC = () => {
                 helperText="Optional. Adds more variety to generated scripts."
               />
               <Typography variant="caption" color="text.secondary">
-                Both are optional. You can finish setup without either and add them whenever you want.
+                Optional premium video providers such as Veo, Runway, fal.ai, Replicate, Luma and local ComfyUI can be connected later from Providers. They stay skippable, and paid generation still requires an explicit budget choice.
               </Typography>
             </Stack>
           )}
