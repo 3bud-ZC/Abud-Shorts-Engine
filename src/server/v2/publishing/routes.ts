@@ -84,15 +84,19 @@ export function createPublishingRouter(
 
   router.delete("/accounts/:id", async (req, res) => {
     try {
-      const deleted = await publishingService.deleteAccount(req.params.id);
-      if (!deleted) {
+      const result = await publishingService.disconnectAccount(req.params.id);
+      if (!result.disconnected) {
         res.status(404).json({ error: "Account not found" });
         return;
       }
-      res.status(200).json({ success: true });
+      res.status(200).json({
+        success: true,
+        revoked: result.revoked,
+        scheduledNeedingAttention: result.scheduledNeedingAttention,
+      });
     } catch (error) {
       res.status(500).json({
-        error: "Failed to delete account",
+        error: "Failed to disconnect account",
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -337,16 +341,36 @@ export function createPublishingRouter(
 
       const items = providers.map((p) => {
         const val = validations.find((v) => v.provider === p.displayName);
+        const configured = val?.configured ?? false;
+        const authenticated = val?.healthy ?? false;
+        const connectionVerified = authenticated && val?.status === "healthy";
+        const blocker = !configured
+          ? "Ready to connect."
+          : !authenticated
+            ? val?.message || "Connection needs attention."
+            : undefined;
         return {
           id: p.id,
           name: p.displayName,
           category: "Publishing",
+          implemented: true,
+          enabled: true,
           supportedPlatforms: p.getSupportedPlatforms(),
-          configured: val?.configured ?? false,
+          configured,
+          authenticated,
+          connectionVerified,
+          // Publication verification requires a real external post reaching a
+          // provider-confirmed terminal state. Pass 8 intentionally performs no
+          // external posting, so the API must not claim it here.
+          publicationVerified: false,
+          accountIdentitySafeLabel: val?.accountDetails?.channelTitle || val?.accountDetails?.accountName,
           status: val?.status ?? "not_configured",
-          healthy: val?.healthy ?? false,
+          healthy: authenticated,
           message: val?.message ?? "Provider initialized.",
           checkedAt: val?.checkedAt ?? new Date().toISOString(),
+          lastVerifiedAt: val?.checkedAt,
+          blocker,
+          capabilities: p.getSupportedPlatforms().map((platform) => p.getCapabilities(platform)),
         };
       });
 

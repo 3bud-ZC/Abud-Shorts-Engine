@@ -412,7 +412,6 @@ export class YouTubeDirectProvider implements PublishingProvider {
       success: true,
       status: "processing",
       providerPostId: uploaded.videoId,
-      providerUrl: this.getPublishedUrl(uploaded.videoId),
       message: "Uploaded to YouTube. Waiting for processing to finish.",
     };
   }
