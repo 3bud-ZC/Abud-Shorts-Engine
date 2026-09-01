@@ -113,6 +113,8 @@ import {
   filterReusableArtifacts,
 } from "../server/v2/artifacts/durableArtifacts";
 import { assertStorageReady } from "../server/v2/storage/storagePolicy";
+import { decideRenderStrategy, type RenderStrategyDecision } from "../server/v2/rendering/renderStrategy";
+import { renderFfmpegFast, type FastRenderClip, type FastRenderVoice } from "../server/v2/rendering/ffmpegFastRenderer";
 
 type RenderProgressEvent = {
   status:
@@ -2123,16 +2125,41 @@ export class ShortCreator {
     }
 
 
+    let captionRenderer: "libass" | "remotion" = "remotion";
+    let captionFontFamily: string | undefined;
+    let captionQaResult: any = null;
+    const hasProductComposition = scenes.some((scene) =>
+      Boolean((scene as any).productNobgUrl || (scene as any).productImageUrl || (scene as any).visualSource === "product_composition"),
+    );
+    const renderDecision: RenderStrategyDecision = decideRenderStrategy({
+      spec,
+      shots: plannedShots,
+      captionsNativeAvailable: burnCaptionsWithLibass || spec.captionStyle === "none",
+      hasProductComposition,
+      fps: 25,
+      durationSeconds: totalDurationSeconds,
+    });
+    let renderFallbackReason: string | undefined;
+    let renderEngineUsed: "ffmpeg_fast" | "hybrid_ffmpeg" | "remotion" | "remotion_fallback" =
+      renderDecision.strategy === "FFMPEG_FAST"
+        ? "ffmpeg_fast"
+        : renderDecision.strategy === "HYBRID"
+          ? "hybrid_ffmpeg"
+          : "remotion";
+    let compositionMs = 0;
+    let finalEncodeMs = 0;
+    let remotionFramesRendered = renderDecision.baseFootageFramesThroughChromium;
+
     await this.emitProgress(onProgress, {
       status: "rendering",
       progress: 82,
       currentStage: "Rendering",
-      message: burnCaptionsWithLibass
-        ? "Rendering visuals and motion graphics with Remotion."
-        : "Rendering video with Remotion Motion Design and Advanced Captions.",
+      message: renderDecision.customerStage === "Editing"
+        ? "Editing scenes, captions, and audio into the final video."
+        : "Rendering the final video.",
       stageKey: "render",
       checkpointStatus: "running",
-      inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds },
+      inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds, strategy: renderDecision.strategy },
     });
     const renderStartedAt = Date.now();
 
@@ -2175,46 +2202,103 @@ export class ShortCreator {
       }
     }
 
-    await this.remotion.render(
-      {
-        music: musicForRender,
-        scenes,
-        config: {
-          durationMs: Math.round(totalDurationSeconds * 1000),
-          paddingBack: 0,
-          captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
-          captionPosition: "bottom" as any,
-          // Remotion still draws motion graphics, CTA, titles and brand
-          // overlays. Spoken captions are burned afterwards by libass, which
-          // shapes Arabic correctly, so they are suppressed here to avoid two
-          // caption layers on the same frame.
-          captionPreset: burnCaptionsWithLibass ? ("none" as any) : (mediaPlan.captionPreset || spec.captionStyle || "bold"),
-          ctaLayout: mediaPlan.ctaLayout || "centered",
-          musicVolume: "medium" as any,
-          musicDuckingProfile: "balanced",
-          brandKit: spec.brandKit,
+    const runRemotionRender = async () => {
+      remotionFramesRendered = Math.max(
+        remotionFramesRendered,
+        Math.round(totalDurationSeconds * 25),
+      );
+      await this.remotion.render(
+        {
+          music: musicForRender,
+          scenes,
+          config: {
+            durationMs: Math.round(totalDurationSeconds * 1000),
+            paddingBack: 0,
+            captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
+            captionPosition: "bottom" as any,
+            // Remotion still draws motion graphics, CTA, titles and brand
+            // overlays. Spoken captions are burned afterwards by libass, which
+            // shapes Arabic correctly, so they are suppressed here to avoid two
+            // caption layers on the same frame.
+            captionPreset: burnCaptionsWithLibass ? ("none" as any) : (mediaPlan.captionPreset || spec.captionStyle || "bold"),
+            ctaLayout: mediaPlan.ctaLayout || "centered",
+            musicVolume: "medium" as any,
+            musicDuckingProfile: "balanced",
+            brandKit: spec.brandKit,
+          },
         },
-      },
-      videoId,
-      orientation,
-      spec.quality === "max_quality_local" ? "high" : spec.quality || "standard",
-    );
+        videoId,
+        orientation,
+        spec.quality === "max_quality_local" ? "high" : spec.quality || "standard",
+      );
+    };
+
+    if (renderDecision.fastPathEligible) {
+      try {
+        const fastCaptionAssPath = burnCaptionsWithLibass
+          ? this.createTimelineCaptionAss({
+              videoId,
+              scenes,
+              sceneCaptionWords,
+              captionStyleId: spec.captionStyle as string,
+              orientation,
+              captionStyleSpec,
+              fontsDir,
+              tempFiles,
+            })
+          : undefined;
+        if (fastCaptionAssPath) {
+          captionRenderer = "libass";
+          captionFontFamily = fastCaptionAssPath.fontFamily;
+          captionQaResult = fastCaptionAssPath.qa;
+        }
+        const fastResult = await renderFfmpegFast({
+          clips: this.fastRenderClipsFromScenes(scenes),
+          voices: this.fastRenderVoicesFromScenes(scenes),
+          outputPath: this.getVideoPath(videoId),
+          width: orientation === OrientationEnum.portrait ? 1080 : 1920,
+          height: orientation === OrientationEnum.portrait ? 1920 : 1080,
+          fps: 25,
+          totalDurationSeconds,
+          musicPath: this.localPathForMediaUrl(musicForRender.url) || path.join(this.config.musicDirPath, musicForRender.file),
+          captionsAssPath: fastCaptionAssPath?.path,
+          fontsDir,
+        });
+        compositionMs = fastResult.compositionMs;
+        finalEncodeMs = fastResult.finalEncodeMs;
+        remotionFramesRendered = 0;
+      } catch (fastErr) {
+        renderFallbackReason = fastErr instanceof Error ? fastErr.message : String(fastErr);
+        logger.warn({ err: renderFallbackReason, videoId }, "FFmpeg fast render failed; falling back to Remotion");
+        renderEngineUsed = "remotion_fallback";
+        await runRemotionRender();
+        compositionMs = Date.now() - renderStartedAt;
+        finalEncodeMs = compositionMs;
+      }
+    } else {
+      await runRemotionRender();
+      compositionMs = Date.now() - renderStartedAt;
+      finalEncodeMs = compositionMs;
+    }
     await this.emitProgress(onProgress, {
       status: "rendering",
       progress: 88,
       currentStage: "Rendered",
-      message: "Remotion render completed.",
+      message: "Final video render completed.",
       stageKey: "render",
       checkpointStatus: "completed",
-      provider: "remotion",
-      artifacts: { videoId, sceneCount: scenes.length },
+      provider: renderEngineUsed,
+      artifacts: {
+        videoId,
+        sceneCount: scenes.length,
+        renderStrategy: renderDecision.strategy,
+        fastPathEligible: renderDecision.fastPathEligible,
+        fallbackReason: renderFallbackReason,
+      },
       timingMs: Date.now() - renderStartedAt,
     });
 
-    let captionRenderer: "libass" | "remotion" = "remotion";
-    let captionFontFamily: string | undefined;
-    let captionQaResult: any = null;
-    if (burnCaptionsWithLibass) {
+    if (burnCaptionsWithLibass && renderEngineUsed !== "ffmpeg_fast" && renderEngineUsed !== "hybrid_ffmpeg") {
       const burnStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "rendering",
@@ -2477,6 +2561,16 @@ export class ShortCreator {
       if (openClipPool?.getInitMs() != null) {
         perfAccumulatorMs.openClipPoolInitMs = openClipPool!.getInitMs()!;
       }
+      perfAccumulatorMs.visualCompositionMs = compositionMs;
+      perfAccumulatorMs.finalEncodeMs = finalEncodeMs;
+      perfAccumulatorMs.remotionMs =
+        renderEngineUsed === "remotion" || renderEngineUsed === "remotion_fallback"
+          ? compositionMs
+          : 0;
+      perfAccumulatorMs.ffmpegMs =
+        renderEngineUsed === "ffmpeg_fast" || renderEngineUsed === "hybrid_ffmpeg"
+          ? compositionMs
+          : 0;
 
       const metadata: VideoMetadata = {
         videoId,
@@ -2486,6 +2580,15 @@ export class ShortCreator {
         error: professionalReady ? undefined : readinessFailureReasons.join(" "),
         professionalReady,
         mixedSilenceGate: mixedSilenceGate as unknown as Record<string, unknown>,
+        renderStrategy: renderDecision.strategy,
+        rendererVersion: "hybrid-fast-v1",
+        fastPathEligible: renderDecision.fastPathEligible,
+        fastPathUsed: renderEngineUsed === "ffmpeg_fast" || renderEngineUsed === "hybrid_ffmpeg",
+        renderFallbackReason,
+        compositionMs,
+        finalEncodeMs,
+        remotionFramesRendered,
+        baseFootageFramesThroughChromium: remotionFramesRendered,
         detailedStageTimings: perfAccumulatorMs,
         detailedStageCounts: perfCounts,
         creationMode: spec.creationMode,
@@ -2598,6 +2701,9 @@ export class ShortCreator {
         revisionMetadata: revision,
         stageTimings: {
           totalMs: Date.now() - totalStartedAt,
+          renderMs: compositionMs,
+          visualCompositionMs: compositionMs,
+          finalEncodeMs,
           validationMs: Date.now() - validationStartedAt,
         },
         qualityScore: validationResult.technicalScore,
@@ -2695,6 +2801,115 @@ export class ShortCreator {
     }
 
     return videoId;
+  }
+
+  private localPathForMediaUrl(url: string | undefined): string | undefined {
+    if (!url) return undefined;
+    if (url.startsWith("file://")) return url.replace("file://", "");
+    if (path.isAbsolute(url)) return url;
+
+    try {
+      const parsed = new URL(url);
+      if (parsed.pathname.startsWith("/api/tmp/")) {
+        return path.join(this.config.tempDirPath, decodeURIComponent(path.basename(parsed.pathname)));
+      }
+      if (parsed.pathname.startsWith("/api/music/")) {
+        return path.join(this.config.musicDirPath, decodeURIComponent(path.basename(parsed.pathname)));
+      }
+    } catch {
+      // Not a URL.
+    }
+    return undefined;
+  }
+
+  private fastRenderClipsFromScenes(scenes: any[]): FastRenderClip[] {
+    const clips: FastRenderClip[] = [];
+    scenes.forEach((scene) => {
+      if (Array.isArray(scene.segments) && scene.segments.length > 0) {
+        scene.segments.forEach((segment: any) => {
+          const segmentPath = this.localPathForMediaUrl(segment.video);
+          if (!segmentPath || !fs.existsSync(segmentPath)) {
+            throw new Error("A selected video segment is not available for fast rendering.");
+          }
+          clips.push({
+            path: segmentPath,
+            durationSeconds: Number(segment.duration) || Number(scene.audio?.duration) || 1,
+            transition: scene.transition,
+          });
+        });
+        return;
+      }
+
+      const scenePath = this.localPathForMediaUrl(scene.video);
+      if (!scenePath || !fs.existsSync(scenePath)) {
+        throw new Error("A selected scene video is not available for fast rendering.");
+      }
+      clips.push({
+        path: scenePath,
+        durationSeconds: Number(scene.audio?.duration) || 1,
+        transition: scene.transition,
+      });
+    });
+    return clips;
+  }
+
+  private fastRenderVoicesFromScenes(scenes: any[]): FastRenderVoice[] {
+    return scenes.map((scene) => {
+      const audioPath = this.localPathForMediaUrl(scene.audio?.url);
+      if (!audioPath || !fs.existsSync(audioPath)) {
+        throw new Error("A selected narration track is not available for fast rendering.");
+      }
+      return {
+        path: audioPath,
+        durationSeconds: Number(scene.audio?.duration) || 1,
+      };
+    });
+  }
+
+  private createTimelineCaptionAss(input: {
+    videoId: string;
+    scenes: any[];
+    sceneCaptionWords: Array<Array<{ text: string; startMs: number; endMs: number }>>;
+    captionStyleId: string;
+    orientation: OrientationEnum;
+    captionStyleSpec: unknown;
+    fontsDir: string;
+    tempFiles: string[];
+  }): { path: string; fontFamily: string; qa: any } | undefined {
+    const sceneStartMs = input.scenes.map((_s, i) =>
+      input.scenes.slice(0, i).reduce((acc, curr) => acc + (curr.audio?.duration || 0) * 1000, 0),
+    );
+    const timelineWords = input.sceneCaptionWords.flatMap((words, sceneIndex) => {
+      const offsetMs = Math.round(sceneStartMs[sceneIndex] || 0);
+      return (words || [])
+        .map((word) => ({
+          text: word.text.trim(),
+          startMs: offsetMs + word.startMs,
+          endMs: offsetMs + word.endMs,
+        }))
+        .filter((word) => word.text.length > 0);
+    });
+
+    if (timelineWords.length === 0) return undefined;
+    const frame = {
+      width: input.orientation === OrientationEnum.portrait ? 1080 : 1920,
+      height: input.orientation === OrientationEnum.portrait ? 1920 : 1080,
+    };
+    const built = renderArabicCaptions(
+      timelineWords,
+      input.captionStyleId,
+      frame,
+      PLATFORM_SAFE_BOTTOM_RATIO,
+    );
+    const qa = runCaptionQa(built, {
+      style: input.captionStyleSpec as any,
+      frame,
+      platformSafeBottomRatio: PLATFORM_SAFE_BOTTOM_RATIO,
+    });
+    const assPath = path.join(this.config.tempDirPath, `${input.videoId}.captions.ass`);
+    fs.writeFileSync(assPath, built.content, "utf8");
+    input.tempFiles.push(assPath);
+    return { path: assPath, fontFamily: built.fontFamily, qa };
   }
 
   private async downloadFile(url: string, destPath: string, maxRetries = 3): Promise<void> {

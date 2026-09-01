@@ -132,6 +132,15 @@ export interface VideoMetadata {
    */
   professionalReady?: boolean;
   mixedSilenceGate?: Record<string, unknown>;
+  renderStrategy?: string;
+  rendererVersion?: string;
+  fastPathEligible?: boolean;
+  fastPathUsed?: boolean;
+  renderFallbackReason?: string;
+  compositionMs?: number;
+  finalEncodeMs?: number;
+  remotionFramesRendered?: number;
+  baseFootageFramesThroughChromium?: number;
   /**
    * V2.4 Pass 5 wall-clock accounting: fine-grained timings the coarse
    * per-stage progress buckets (see `stageTimings` in the jobs table) could
