@@ -7800,3 +7800,161 @@ Official documentation consulted during this pass:
 - Docker prune, volume deletion, customer-data deletion: 0.
 - Secrets exposed: 0.
 - Status files modified: only `ABUD_SHORTS_ENGINE_STATUS.md`.
+
+# V2.4 Pass 7 - Hybrid FFmpeg Fast Render Engine
+
+Date: 2026-09-01. Branch: `v2.4-professional-video-engine`.
+Starting local HEAD and `origin/v2.4-professional-video-engine` were both
+`11eb957136434fbabe3f3b109dfd9059c5f0a4c1`. `origin/main` remained
+`cd3a0e0401229193b54513dd62c7a38ddf606f16`.
+
+## Status
+
+PARTIAL. The hybrid fast-render engine is implemented, tested, built, and
+deployed into the established V2.4 Docker development runtime. Authenticated
+live product benchmarks are still blocked because the app rejects anonymous
+job creation and the sandbox security reviewer rejected direct insertion of a
+temporary `qa_pass7_` admin session without explicit user confirmation.
+
+## Runtime
+
+- App: `abud-shorts-app`, image `abud-shorts-engine:v2`, healthy after scoped
+  recreate.
+- Worker: `abud-shorts-render-worker`, image `abud-shorts-engine:v2`,
+  healthy after scoped recreate.
+- Rebuilt image manifest:
+  `sha256:aaff0ea1dd08eaa9adcf06145dd8746276c42f59d01027cbc854c8843846c764`,
+  created `2026-09-01T12:20:34Z`.
+- Postgres: `abud-shorts-postgres`, preserved and healthy.
+- n8n: `abud-shorts-n8n`, preserved and healthy.
+- Provider Vault: preserved; no provider secrets were printed or rewritten.
+- Container snapshot after recreate:
+  app `245.5MiB`, worker `221.8MiB`, Postgres `42.85MiB`, n8n `431.7MiB`;
+  all idle CPU under ~2.2%.
+
+## Architecture Decision
+
+- New canonical render strategy decision:
+  `FFMPEG_FAST`, `HYBRID`, `REMOTION_FULL`.
+- `FFMPEG_FAST`: selected for stock/uploaded/generated-video timelines with
+  native captions available.
+- `HYBRID`: selected when native footage is combined with pre-rendered local
+  overlay assets, such as mockup or motion clips, without forcing the base
+  footage through Chromium.
+- `REMOTION_FULL`: preserved for Motion Graphics, Animated Explainer, product
+  composition, image animation, unsupported sources, or caption modes that
+  cannot be drawn natively.
+- EDL source: unchanged. The existing `editDecisionList`/`plannedShots` remain
+  the source of truth for quality scoring and renderer eligibility.
+- Fallback: if FFmpeg fast render fails before delivery, the exact existing
+  Remotion render path runs and `renderFallbackReason` is persisted.
+
+## FFmpeg Fast Path
+
+- Added `src/server/v2/rendering/ffmpegFastRenderer.ts`.
+- Native graph performs trim, scale/crop, FPS normalization, SAR normalization,
+  yuv420p normalization, concat, voice concat/padding, music mix, compressor,
+  loudnorm, limiter, H.264/AAC final encode, and `+faststart`.
+- Fast path accepts stock, uploaded, and normalized generated-video assets
+  from future Veo/Runway/fal.ai/Replicate/Luma/ComfyUI outputs once they are
+  local approved MP4 assets.
+- Caption burn uses the same libass ASS generation path as the existing
+  post-Remotion caption path.
+- No separate weak fast-quality gate was added. Final thumbnail, duration,
+  black-frame, visual coverage, CTA/claim, and audio QA still run on the
+  final MP4.
+
+## Diagnostics
+
+New advanced metadata fields:
+
+- `renderStrategy`
+- `rendererVersion`
+- `fastPathEligible`
+- `fastPathUsed`
+- `renderFallbackReason`
+- `compositionMs`
+- `finalEncodeMs`
+- `remotionFramesRendered`
+- `baseFootageFramesThroughChromium`
+
+The customer-facing progress copy remains generic: Editing, Rendering,
+Captions, Mixing/Finalizing, Quality checking. No Simple-mode copy exposes
+FFmpeg filter graphs, Chromium internals, or Remotion internals.
+
+## Encoder Audit
+
+Current render-worker reports:
+
+- `libx264`: available.
+- `h264_nvenc`: available.
+
+NVENC remains disabled by default (`ABUD_HARDWARE_ACCELERATION=disable`)
+because Pass 5 found only modest speed gain with much larger files, and Pass 7
+live end-to-end data is still blocked pending QA-session approval.
+
+## Validation
+
+- `pnpm typecheck` -> PASS.
+- `pnpm exec vitest run` -> PASS: 70 test files, 1034 tests, 0 failures.
+- `pnpm build` -> PASS. Existing non-blocking warnings remain: stale
+  Browserslist data and a >500 kB UI chunk.
+- Docker image build from current source -> PASS.
+- Scoped Docker recreate -> PASS for only `abud-shorts-render-worker` and
+  `abud-shorts-app`. Postgres/n8n were not recreated.
+- FFmpeg fast-render smoke: PASS for actual native MP4 creation from two
+  generated video clips plus a generated audio track. Local Windows PATH did
+  not include `ffprobe`, so probe JSON was not extracted outside Docker.
+
+## Tests Added
+
+- `renderStrategy.test.ts`: verifies FFmpeg Fast, Hybrid, Remotion Full,
+  native-caption requirement, and product-composition fallback decisions.
+- `ffmpegFastRenderer.test.ts`: verifies one native FFmpeg graph, faststart,
+  H.264/AAC output policy, generated/uploaded video compatibility, and refusal
+  to build a partial-output plan without required media.
+
+## Benchmarks
+
+Requested live product benchmarks A/B/C and cold/warm measurements are BLOCKED
+until an authenticated QA path is approved. Anonymous `POST /api/v2/jobs`
+returned `401 Unauthorized`. Attempting the brief's temporary QA-session
+pattern was rejected by the sandbox security reviewer as an admin-boundary
+change without explicit confirmation.
+
+Pre-existing accepted comparison figures remain the only apples-to-apples live
+figures until approval:
+
+- Old cold: ~127.5s.
+- Old warm: ~113.2s.
+- Old Remotion bottleneck: ~50-92s.
+
+No new Pass 7 live wall-clock result is claimed.
+
+## Provider Regression
+
+- Pexels/Pixabay/Kokoro live product verification is BLOCKED for the same
+  authenticated job/API reason above.
+- Public `/health` after rebuild: OK.
+- Auth-protected `/api/v2/providers` correctly rejects anonymous reads with
+  `401 Unauthorized`.
+- Paid generation calls: 0.
+- Social posts: 0.
+
+## Safety
+
+- Paid AI video generations: 0.
+- Paid external calls intentionally authorized: 0.
+- Social posts/publications: 0.
+- Docker prune commands: 0.
+- `docker compose down -v`: 0.
+- Volumes removed: 0.
+- Customer data deleted: 0.
+- Secrets printed: 0.
+- Stable v2.3.1 untouched; no merge, tag, release, or stable move.
+
+## Human Visual Review
+
+PENDING. No Pass 7 live benchmark videos were generated yet because
+authenticated product-job execution is blocked pending explicit QA-session
+approval.
