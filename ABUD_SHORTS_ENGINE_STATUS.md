@@ -8147,3 +8147,259 @@ Fitness:
 - Secrets printed: 0.
 - Stable v2.3.1/main/tag/GHCR stable untouched; no merge, tag, release, or
   stable move.
+
+---
+
+# V2.4 Pass 8 — Publishing & Social Distribution Product Closure
+
+Date: 2026-09-01
+Branch: `v2.4-professional-video-engine`
+Starting HEAD: `9ac6b924dcd9fa191e9f53611faa617620cff5a8` (Pass 7.1)
+
+## Recovery
+
+The previous session hit its usage limit during Playwright Chromium
+installation (~40% downloaded). This session recovered the working tree
+exactly as left:
+
+- 13 uncommitted files with Pass-8 changes preserved intact.
+- Temporary `tmp/pass8-qa.js` script found and used, then deleted.
+- Chromium installation completed successfully in this session.
+- No code was discarded, reset, or rewritten.
+
+## Architecture Corrections (Previously Completed — Verified)
+
+### 1. Publishing Provider State Improvements
+
+Canonical distinction between five provider lifecycle states:
+
+| State | Meaning |
+|-------|---------|
+| `implemented` | Code adapter exists |
+| `configured` | Environment variables / app credentials present |
+| `authenticated` | Account token stored and decryptable |
+| `connectionVerified` | Live API handshake confirmed |
+| `publicationVerified` | At least one successful live publication recorded |
+
+Customer-safe provider status messages replace raw enum/ID exposure.
+
+### 2. Publishing State/Type Corrections
+
+- `needs_attention` added as a legal `PublishingStatus` and
+  `ScheduledPublicationStatus`.
+- `completed` handling verified.
+- Migration compatibility confirmed — no new migration required.
+
+### 3. Secure Manual Publishing Credentials
+
+Telegram bot tokens and Upload-Post API keys migrated from plaintext
+storage to the encrypted `SocialAccountService` credential model:
+
+- `createAccount` and `updateAccount` route tokens through
+  `accounts.upsertAccount()` with AES-256-GCM encryption.
+- `maskedToken` returns `"stored securely"` — never a partial credential.
+- Telegram provider token resolution chain: `encryptedCredentials ||
+  this.botToken`. The `maskedToken` fallback was removed.
+- Disconnect zeroes `encrypted_credentials` and `token_expires_at`.
+
+### 4. Upload-Post Modernization
+
+Updated to the current Upload-Post API contract:
+
+| Surface | Endpoint |
+|---------|----------|
+| Upload | `POST /api/upload` |
+| Profile | `GET /api/uploadposts/me` |
+| Status | `GET /api/uploadposts/status/:id` |
+| Cancel | `DELETE /api/uploadposts/schedule/:id` |
+| Auth | `Authorization: Apikey {key}` |
+
+- Async `request_id` / `job_id` handling via `pickUploadPostId`.
+- `pickUploadPostUrl` only returns URLs starting with `https://`.
+- All guessed platform URL construction removed (no hardcoded
+  `youtube.com/shorts/`, `tiktok.com/@user/video/`, etc.).
+
+### 5. YouTube Publication Semantics
+
+- Upload accepted returns `status: "processing"`, not `"published"`.
+- `providerUrl` is `undefined` while processing.
+- `publishedAt` remains `null` while processing.
+- Final URL only set when `getStatus` confirms `uploadStatus === "processed"`.
+- `getPublishedUrl` validates video ID with regex before construction.
+
+### 6. OAuth Connection UX
+
+`AccountConnectModal` improvements:
+
+- Callback URL displayed in read-only `TextField`.
+- Required scopes shown.
+- Provider console link available.
+- Frontend fetches OAuth config, then requests `/oauth/start` for
+  actual `authUrl` — customer is redirected to the real provider page.
+- Token inputs use `type="password"`.
+- No OAuth tokens, code verifiers, or client secrets handled in client.
+
+### 7. API / SSE Security Hardening
+
+#### Sanitization Functions
+
+- `SENSITIVE_PROVIDER_KEY`: Regex detecting token/credential/secret
+  field names.
+- `sanitizeProviderValue`: Recursive redactor for objects/arrays,
+  detects Bearer/Apikey headers, `sk-*` keys, JWTs.
+- `sanitizeProviderPayload`: Wrapper for complete payload sanitization.
+- `safePublishingEvent`: Strips `technicalMessage` and `payload` from
+  SSE events.
+
+#### Surfaces Protected
+
+| Surface | Protection |
+|---------|------------|
+| API: `/publications` | `technicalError: undefined` in `mapPublicationRow` |
+| API: `/events` | `technicalMessage: undefined`, `payload: undefined` |
+| SSE: `publishing-event` | `safePublishingEvent()` in `subscribe()` and `broadcastEvent()` |
+| API: `/accounts` | `encrypted_credentials` never returned; `maskedToken` = `"stored securely"` |
+| DB: event storage | `sanitizeProviderPayload()` before `JSON.stringify` |
+| DB: attempt storage | `sanitizeProviderPayload()` on provider response |
+
+### 8. Real Media Preflight
+
+`validateVideoForPlatform` now probes actual final MP4 bytes through
+`runPreflight` + `createFfprobeMediaProbe`:
+
+- Reports: file existence, video stream, audio stream, container, codec,
+  duration, resolution, aspect ratio, file size.
+- Sidecar metadata used only for text inputs (title, caption, hashtags).
+- All media validation based on `ffprobe` of the physical file.
+
+### 9. Publishing UI Cleanup
+
+- Technical error accordion removed; replaced with customer-safe support
+  note.
+- `PROVIDER_LABEL` map: `youtube_direct` → YouTube, `telegram_bot` →
+  Telegram Bot, etc.
+- `accountIdentitySafeLabel` replaces raw `accountId` display.
+- `connectionVerified` and `publicationVerified` chips on account cards.
+- English + Arabic localization for all new strings.
+
+### 10. Disconnect Behavior
+
+- Delegates to `SocialAccountService.disconnect()`.
+- Remote revocation POST if OAuth contract defines `revokeUrl`.
+- Credentials zeroed: `encrypted_credentials = NULL`,
+  `token_expires_at = NULL`.
+- Historical publication rows and URLs preserved.
+- Pending scheduled publications marked `needs_attention`.
+- No destructive `DELETE` on accounts or publications.
+- Route returns `{ revoked, scheduledNeedingAttention }`.
+
+## Provider Matrix
+
+| Provider | Implemented | Configured | Authenticated | Connection Verified | Publication Verified | Blocker |
+|----------|:-----------:|:----------:|:-------------:|:-------------------:|:--------------------:|---------|
+| YouTube (`youtube_direct`) | ✅ | ❌ | ❌ | ❌ | ❌ | Ready to connect |
+| TikTok (`tiktok_direct`) | ✅ | ❌ | ❌ | ❌ | ❌ | Ready to connect |
+| Instagram/Facebook (`meta_direct`) | ✅ | ❌ | ❌ | ❌ | ❌ | Ready to connect |
+| Telegram (`telegram_bot`) | ✅ | ❌ | ❌ | ❌ | ❌ | Ready to connect |
+| Upload-Post (`upload_post`) | ✅ | ❌ | ❌ | ❌ | ❌ | Ready to connect |
+
+All 5 providers implemented and ready for account connection. No
+`test_provider` visible in customer API. Publication verification requires
+live posts.
+
+## Security Audit
+
+Full audit of all 8 key files:
+
+| Component | Status |
+|-----------|--------|
+| `publishingService.ts` — sanitization, maskedToken, encrypted_credentials | PASS |
+| `routes.ts` — API response sanitization, SSE stream | PASS |
+| `telegramProvider.ts` — maskedToken fallback removed | PASS |
+| `uploadPostProvider.ts` — no guessed URLs, Apikey auth, HTTPS-only | PASS |
+| `youtubeDirectProvider.ts` — no premature URL, processing semantics | PASS |
+| `PublishingPage.tsx` — technical error removed, provider labels | PASS |
+| `AccountConnectModal.tsx` — safe OAuth flow, no token exposure | PASS |
+| `ReviewPublishModal.tsx` — clean payload submission | PASS |
+
+## Browser QA
+
+### Viewports × Locales (6 combinations)
+
+| Viewport | Locale | /publishing | /settings | Connect Modal | Callback URL |
+|----------|--------|:-----------:|:---------:|:-------------:|:------------:|
+| 1920×1080 | English | ✅ | ✅ | ✅ | ✅ |
+| 1920×1080 | Arabic RTL | ✅ | ✅ | ✅ | ✅ |
+| 1366×768 | English | ✅ | ✅ | ✅ | ✅ |
+| 1366×768 | Arabic RTL | ✅ | ✅ | ✅ | ✅ |
+| 390×844 | English | ✅ | ✅ | ✅ | ✅ |
+| 390×844 | Arabic RTL | ✅ | ✅ | ✅ | ✅ |
+
+### Acceptance Criteria
+
+| Criterion | Result |
+|-----------|--------|
+| Blank pages | 0 |
+| Fatal console errors | 0 |
+| Horizontal overflow | 0 |
+| Raw provider enum IDs in UI | 0 |
+| Access tokens | 0 |
+| Refresh tokens | 0 |
+| OAuth codes | 0 |
+| Client secrets | 0 |
+| encrypted_credentials | 0 |
+| Technical raw provider payloads | 0 |
+| TestPublishingProvider visible | No |
+| Broken Connect buttons | 0 |
+| Broken Disconnect buttons | 0 |
+| Inaccessible modal actions | 0 |
+
+### QA Session Cleanup
+
+- Session created: `qa_pass8_*` prefixed, 32-byte random token.
+- Existing admin only: yes.
+- Token exposed: never (not printed, logged, or committed).
+- Revoked: yes, deleted from DB.
+- Post-revoke 401: confirmed.
+- Remaining QA sessions: 0.
+
+## Automated Tests
+
+- Test files: 70 passed (70).
+- Tests: 1038 passed (1038).
+- Failures: 0.
+- TypeScript typecheck: PASS (server + UI).
+- Build: PASS.
+
+Baseline fully preserved from Pass 7.1 (same 70 files, 1038 tests).
+
+## Docker Runtime
+
+| Container | Status |
+|-----------|--------|
+| `abud-shorts-app` | Up, healthy |
+| `abud-shorts-render-worker` | Up, healthy |
+| `abud-shorts-postgres` | Up, healthy (not recreated) |
+| `abud-shorts-n8n` | Up, healthy (not recreated) |
+
+## External Actions
+
+- YouTube posts: 0.
+- TikTok posts: 0.
+- Instagram posts: 0.
+- Facebook posts: 0.
+- Telegram sends: 0.
+- Upload-Post posts: 0.
+- Paid AI video calls: 0.
+- ElevenLabs billable previews: 0.
+
+## Safety
+
+- Customer data deleted: 0.
+- Docker prune commands: 0.
+- Volumes removed: 0.
+- Postgres recreated: no.
+- n8n recreated: no.
+- Secrets exposed: 0.
+- Stable v2.3.1/main/tag/GHCR stable untouched; no merge, tag, release,
+  or stable move.
