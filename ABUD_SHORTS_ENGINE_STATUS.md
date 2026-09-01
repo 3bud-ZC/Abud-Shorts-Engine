@@ -7685,3 +7685,118 @@ Pass 5; no new performance work was opened.
 **PENDING.** New/re-run video this pass: `cmtfhn7za000107oeaxcgbfk6` (phone
 battery, re-run against the fixed CTA logic). Available in the normal Video
 Library. This status document does not assert user approval.
+
+# V2.4 Pass 6 - Provider Platform, Premium AI Readiness, and Cost Controls
+
+Date: 2026-09-01. Branch: `v2.4-professional-video-engine`.
+Stable public release remains v2.3.1. No merge, no tag, no release, no
+stable move.
+
+## Scope Completed
+
+- Added a canonical provider-state layer with customer-safe status labels:
+  Built In, Ready, Configured, Ready to Connect, Not Configured, Needs
+  Attention, Temporarily Unavailable, Disabled. Optional unconfigured
+  providers now show as connectable, not broken.
+- Added explicit budget policy controls: Free Only, Smart Budget, Best
+  Available. Paid AI video calls are hard-gated unless both the budget policy
+  and `ABUD_ALLOW_PAID_VIDEO_CALLS=true` allow them.
+- Added default hero-shot allocation for generated video: stock remains the
+  default, while Smart Budget/Best Available may allocate a maximum of one
+  high-value generated hero shot by default.
+- Added an AI-provider circuit breaker and wired it into the visual router so
+  repeated premium-provider failures temporarily skip that provider and fall
+  back to stock.
+- Updated premium video adapters against current public provider contracts:
+  Google Veo, Runway, fal.ai queue, Replicate predictions, and Luma Agents.
+  No live paid generation was performed.
+- Reworked cost estimates so usage-based AI video no longer invents fake
+  dollar prices. Usage-based visual generation now surfaces as "Usage Based -
+  estimate unavailable" unless a real priced estimate exists.
+- Updated Provider Vault/UI setup flow to include free stock keys, Gemini,
+  ElevenLabs, and later-connect premium video providers without making premium
+  setup mandatory.
+- Updated Video Creator and Video Details to expose budget posture, selected
+  provider mix, generated-shot counts, and customer-safe provider labels.
+
+## Provider Audit
+
+Local/built-in services:
+
+| Provider | Implemented | Configured | Authenticated | Healthy | Live Verified | Billing | Customer Status | Blocker |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Deterministic Local Content AI | yes | yes | n/a | yes | yes | LOCAL_FREE | Built In | none |
+| Motion graphics/local render | yes | yes | n/a | yes | yes | LOCAL_FREE | Built In | none |
+| Kokoro/local voice fallback | yes | yes | n/a | yes | tests only | LOCAL_FREE | Built In | none |
+| Ollama | yes | no | no | no | no | LOCAL_FREE | Ready to Connect | `OLLAMA_BASE_URL` unset; `ollama` command unavailable |
+| ComfyUI | yes | no | no | no | no | LOCAL_FREE | Ready to Connect | `COMFYUI_BASE_URL` unset |
+
+Free/API and free-tier services:
+
+| Provider | Implemented | Configured | Authenticated | Healthy | Live Verified | Billing | Customer Status | Blocker |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Pexels | yes | no | no | no | no | FREE_API | Ready to Connect | no key configured |
+| Pixabay | yes | no | no | no | no | FREE_API | Ready to Connect | no key configured |
+| Gemini Content AI | yes | no | no | no | no | FREE_TIER | Ready to Connect | no key configured |
+| Google Cloud TTS | surfaced | no | no | no | no | FREE_TIER | Ready to Connect | no service account configured |
+
+Usage-based/premium services:
+
+| Provider | Implemented | Configured | Authenticated | Healthy | Live Verified | Billing | Customer Status | Blocker |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Google Veo | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no key configured; paid gate off |
+| Runway | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no key configured; paid gate off |
+| fal.ai | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no key configured; paid gate off |
+| Replicate | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no token configured; paid gate off |
+| Luma | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no key configured; paid gate off |
+| ElevenLabs | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no key configured |
+
+Publishing services:
+
+| Provider | Implemented | Configured | Authenticated | Healthy | Live Verified | Billing | Customer Status | Blocker |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Upload-Post | yes | no | no | no | no | USAGE_BASED | Ready to Connect | no key configured |
+| Telegram Bot | yes | no | no | no | no | FREE_API | Ready to Connect | no bot token configured |
+| YouTube Direct | yes | no | no | no | no | FREE_API | Ready to Connect | OAuth/client credentials not configured |
+| TikTok Direct | yes | no | no | no | no | FREE_API | Ready to Connect | OAuth/client credentials not configured |
+| Meta/Instagram/Facebook Direct | yes | no | no | no | no | FREE_API | Ready to Connect | Meta app credentials not configured |
+
+Environment/vault presence audit was value-masked. No provider secret values
+were printed, committed, or written to status.
+
+## Provider Contract Sources
+
+Official documentation consulted during this pass:
+
+- Google Veo/Gemini API video docs:
+  `https://ai.google.dev/gemini-api/docs/veo`,
+  `https://ai.google.dev/gemini-api/docs/video`
+- Runway API docs: `https://docs.dev.runwayml.com/api/`
+- fal.ai async queue docs:
+  `https://fal.ai/docs/documentation/model-apis/inference/queue`
+- Replicate HTTP API docs: `https://replicate.com/docs/reference/http/`
+- Luma Agents docs: `https://docs.agents.lumalabs.ai/`
+
+## Validation
+
+- `pnpm typecheck` -> PASS.
+- `pnpm build` -> PASS after rerun with normal filesystem access; sandboxed
+  Vite config loading failed first with an access-denied read. Existing
+  non-blocking warnings remain: stale Browserslist data and >500 kB bundle
+  chunk.
+- `node_modules/.bin/vitest.CMD run` -> PASS: 68 test files, 1026 tests.
+- Focused free regressions:
+  `v24Pass4TrueVisualBed.test.ts` and `graphicProductionNoStock.test.ts` ->
+  PASS: 2 files, 7 tests.
+- Live free-stock benchmark script was attempted against the built server but
+  is BLOCKED in this checkout because `DATABASE_URL` is not configured. No
+  production database was created, modified, or reset to work around that.
+
+## Safety
+
+- Paid video generations: 0.
+- Paid external calls intentionally authorized: 0.
+- Social posts/publications: 0.
+- Docker prune, volume deletion, customer-data deletion: 0.
+- Secrets exposed: 0.
+- Status files modified: only `ABUD_SHORTS_ENGINE_STATUS.md`.
