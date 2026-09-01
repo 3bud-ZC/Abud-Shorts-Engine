@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   Alert,
@@ -66,6 +66,13 @@ type Destination = {
   oauthProvider?: string;
   oauthLabelKey?: string;
   fields: DestinationField[];
+};
+
+type OAuthSetup = {
+  configured: boolean;
+  callbackUrl: string;
+  consoleUrl?: string;
+  scopes?: Array<{ scope: string; reason: string }>;
 };
 
 const DESTINATIONS: Destination[] = [
@@ -186,6 +193,7 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [oauthSetup, setOauthSetup] = useState<OAuthSetup | null>(null);
 
   const destination = useMemo(
     () => DESTINATIONS.find((entry) => entry.id === selectedId) || null,
@@ -197,6 +205,7 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
   const reset = () => {
     setSelectedId(null);
     setValues({ accountName: "", accountId: "", token: "" });
+    setOauthSetup(null);
     setError(null);
     setTestResult(null);
   };
@@ -211,9 +220,47 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
     (field) => field.required && !values[field.key].trim(),
   );
 
-  const startOauth = () => {
+  useEffect(() => {
+    if (!open || !destination?.oauthProvider) {
+      setOauthSetup(null);
+      return;
+    }
+
+    let cancelled = false;
+    setOauthSetup(null);
+    axios
+      .get(`/api/v2/providers/${destination.oauthProvider}/oauth/config`)
+      .then((res) => {
+        if (!cancelled) setOauthSetup(res.data);
+      })
+      .catch(() => {
+        if (!cancelled) setError(tr("publishing.connect.oauthSetupFailed"));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [destination?.oauthProvider, open, tr]);
+
+  const startOauth = async () => {
     if (!destination?.oauthProvider) return;
-    window.location.href = `/api/v2/providers/${destination.oauthProvider}/oauth/start`;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get(`/api/v2/providers/${destination.oauthProvider}/oauth/start`, {
+        params: { returnTo: "/publishing?connected=1" },
+      });
+      const authUrl = typeof res.data?.authUrl === "string" ? res.data.authUrl : "";
+      if (!authUrl) throw new Error("Missing OAuth authorization URL.");
+      window.location.href = authUrl;
+    } catch (err: unknown) {
+      const message =
+        axios.isAxiosError(err) && err.response?.data?.message
+          ? String(err.response.data.message)
+          : tr("publishing.connect.oauthStartFailed");
+      setError(message);
+      setLoading(false);
+    }
   };
 
   const testConnection = async () => {
@@ -332,8 +379,55 @@ export const AccountConnectModal: React.FC<AccountConnectModalProps> = ({
                   destination: destinationLabel(destination),
                 })}
               </Typography>
-              <Button variant="contained" size="large" onClick={startOauth}>
-                {destination.oauthLabelKey ? tr(destination.oauthLabelKey) : tr("publishing.connectAccount")}
+
+              {oauthSetup && (
+                <Stack spacing={1.25} sx={{ width: "100%" }}>
+                  {!oauthSetup.configured && (
+                    <Alert severity="warning">
+                      {tr("publishing.connect.oauthConfigMissing", { destination: destinationLabel(destination) })}
+                    </Alert>
+                  )}
+                  <TextField
+                    size="small"
+                    fullWidth
+                    label={tr("publishing.connect.callbackUrl")}
+                    value={oauthSetup.callbackUrl}
+                    InputProps={{ readOnly: true }}
+                    dir="ltr"
+                  />
+                  {oauthSetup.scopes && oauthSetup.scopes.length > 0 && (
+                    <Typography variant="caption" sx={{ color: t.textSecondary }}>
+                      {tr("publishing.connect.requiredScopes", {
+                        scopes: oauthSetup.scopes.map((scope) => scope.scope).join(", "),
+                      })}
+                    </Typography>
+                  )}
+                  {oauthSetup.consoleUrl && (
+                    <Button
+                      component="a"
+                      href={oauthSetup.consoleUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      variant="outlined"
+                      size="small"
+                    >
+                      {tr("publishing.connect.openProviderConsole")}
+                    </Button>
+                  )}
+                </Stack>
+              )}
+
+              <Button
+                variant="contained"
+                size="large"
+                onClick={startOauth}
+                disabled={loading || oauthSetup?.configured === false}
+              >
+                {loading
+                  ? tr("publishing.connect.connecting")
+                  : destination.oauthLabelKey
+                    ? tr(destination.oauthLabelKey)
+                    : tr("publishing.connectAccount")}
               </Button>
               <Typography variant="caption" sx={{ color: t.muted }}>
                 {tr("publishing.connect.noPassword")}

@@ -509,6 +509,7 @@ export type PublishingStatus =
   | "processing"
   | "published"
   | "failed"
+  | "needs_attention"
   | "canceled";
 
 export type OverallDistributionStatus =
@@ -544,6 +545,11 @@ export type SocialAccount = {
   connectionStatus: "connected" | "disconnected" | "expired" | "error";
   capabilities: any;
   maskedToken?: string;
+  accountIdentitySafeLabel?: string;
+  authenticated?: boolean;
+  connectionVerified?: boolean;
+  publicationVerified?: boolean;
+  blocker?: string;
   lastCheckedAt: string;
   createdAt: string;
   updatedAt: string;

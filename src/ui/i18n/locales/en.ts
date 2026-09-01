@@ -395,11 +395,13 @@ export const en: TranslationCatalog = {
   "publishing.failedTab.retryNow": "Retry now",
   "publishing.failedTab.reason": "Reason:",
   "publishing.failedTab.unknownError": "The reason was not reported.",
-  "publishing.failedTab.technicalDetails": "Technical details",
+  "publishing.failedTab.supportNote": "Internal diagnostics were saved for support without exposing provider payloads here.",
 
   "publishing.accounts.title": "Connected publishing accounts ({count})",
   "publishing.accounts.empty": "No accounts connected yet.",
-  "publishing.accounts.idProvider": "ID: {id} · Service: {provider}",
+  "publishing.accounts.identityProvider": "{identity} · {provider}",
+  "publishing.accounts.connectionVerified": "Connection verified",
+  "publishing.accounts.publicationNotVerified": "No live post verified",
   "publishing.accounts.lastChecked": "Last checked: {time}",
   "publishing.accounts.disconnectConfirm": "Disconnect this account?",
 
@@ -421,6 +423,13 @@ export const en: TranslationCatalog = {
   "publishing.connect.oauthIntro":
     "{blurb} You will be taken to {destination} to approve access, then brought straight back here.",
   "publishing.connect.noPassword": "ABUD Shorts never sees your password.",
+  "publishing.connect.oauthSetupFailed": "The OAuth setup details could not be loaded.",
+  "publishing.connect.oauthStartFailed": "The connection could not be started.",
+  "publishing.connect.oauthConfigMissing":
+    "{destination} needs app credentials before account connection is available.",
+  "publishing.connect.callbackUrl": "Callback URL",
+  "publishing.connect.requiredScopes": "Requested permissions: {scopes}",
+  "publishing.connect.openProviderConsole": "Open provider console",
   "publishing.connect.required": "{field} is required.",
   "publishing.connect.testBot": "Test bot",
   "publishing.connect.connecting": "Connecting…",

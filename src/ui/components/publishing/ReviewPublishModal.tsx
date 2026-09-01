@@ -68,6 +68,14 @@ const TIMEZONES = [
   "America/Los_Angeles",
 ];
 
+const PROVIDER_LABEL: Record<string, string> = {
+  youtube_direct: "YouTube",
+  meta_direct: "Meta",
+  tiktok_direct: "TikTok",
+  telegram_bot: "Telegram Bot",
+  upload_post: "Upload-Post",
+};
+
 interface ReviewPublishModalProps {
   open: boolean;
   video: VideoItem;
@@ -460,7 +468,7 @@ export const ReviewPublishModal: React.FC<ReviewPublishModalProps> = ({
                         </Stack>
                         <Chip
                           size="small"
-                          label={connected ? "Connected" : "Via Upload-Post"}
+                          label={connected ? "Connected" : "Auto route"}
                           color={connected ? "success" : "default"}
                           sx={{ fontSize: 10, height: 20 }}
                         />
@@ -507,7 +515,7 @@ export const ReviewPublishModal: React.FC<ReviewPublishModalProps> = ({
                       .filter((a) => a.platform === activeTab)
                       .map((acc) => (
                         <MenuItem key={acc.id} value={acc.id}>
-                          {acc.accountName} ({acc.provider})
+                          {acc.accountName} ({PROVIDER_LABEL[acc.provider] || acc.provider})
                         </MenuItem>
                       ))}
                   </Select>

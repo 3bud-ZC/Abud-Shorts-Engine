@@ -392,11 +392,13 @@ export const ar: TranslationCatalog = {
   "publishing.failedTab.retryNow": "أعد المحاولة الآن",
   "publishing.failedTab.reason": "السبب:",
   "publishing.failedTab.unknownError": "لم يُذكر السبب.",
-  "publishing.failedTab.technicalDetails": "تفاصيل تقنية",
+  "publishing.failedTab.supportNote": "حُفظت التشخيصات الداخلية للدعم بدون عرض حمولات المزوّد هنا.",
 
   "publishing.accounts.title": "حسابات النشر المتصلة ({count})",
   "publishing.accounts.empty": "لا توجد حسابات متصلة بعد.",
-  "publishing.accounts.idProvider": "المعرّف: {id} · الخدمة: {provider}",
+  "publishing.accounts.identityProvider": "الحساب: {identity} · المزوّد: {provider}",
+  "publishing.accounts.connectionVerified": "تم التحقق من الاتصال",
+  "publishing.accounts.publicationNotVerified": "لم يُتحقَّق من منشور مباشر",
   "publishing.accounts.lastChecked": "آخر فحص: {time}",
   "publishing.accounts.disconnectConfirm": "قطع الاتصال بهذا الحساب؟",
 
@@ -418,6 +420,13 @@ export const ar: TranslationCatalog = {
   "publishing.connect.oauthIntro":
     "{blurb} سيُنقَل بك إلى {destination} للموافقة على الوصول، ثم تُعاد إلى هنا مباشرةً.",
   "publishing.connect.noPassword": "لا يطّلع ABUD Shorts على كلمة مرورك إطلاقًا.",
+  "publishing.connect.oauthSetupFailed": "تعذّر تحميل تفاصيل إعداد OAuth.",
+  "publishing.connect.oauthStartFailed": "تعذّر بدء الاتصال.",
+  "publishing.connect.oauthConfigMissing":
+    "يحتاج {destination} إلى بيانات اعتماد التطبيق قبل إتاحة ربط الحساب.",
+  "publishing.connect.callbackUrl": "رابط callback",
+  "publishing.connect.requiredScopes": "الأذونات المطلوبة: {scopes}",
+  "publishing.connect.openProviderConsole": "فتح لوحة المزوّد",
   "publishing.connect.required": "الحقل «{field}» مطلوب.",
   "publishing.connect.testBot": "اختبار البوت",
   "publishing.connect.connecting": "جارٍ الربط…",
