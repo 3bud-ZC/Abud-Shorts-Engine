@@ -176,6 +176,8 @@ export const costEstimateBreakdownSchema = z.object({
     aiCount: z.number().int().min(0).default(0),
     cost: z.number().min(0).default(0),
     provider: z.string().default("pexels"),
+    usageBased: z.boolean().optional(),
+    costLabel: z.string().optional(),
   }),
   voice: z.object({
     provider: z.string().default("kokoro"),

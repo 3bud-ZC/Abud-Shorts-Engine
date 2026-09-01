@@ -23,6 +23,7 @@ import {
   analyzeVideoSemanticSimilarity,
   type VideoSemanticAnalysis,
 } from "../media-intelligence/semanticSimilarity";
+import { ProviderCircuitBreaker, type HeroShotAllocation } from "../providers/providerServicePolicy";
 
 export type ResolvedSceneAsset = {
   sceneIndex: number;
@@ -197,6 +198,7 @@ export class AutoVisualRouter {
     private pexelsProvider: PexelsVisualProvider,
     private aiProviders: VisualProvider[] = [],
     private stockRegistry: StockProviderRegistry = new StockProviderRegistry(),
+    private circuitBreaker: ProviderCircuitBreaker = new ProviderCircuitBreaker(),
   ) {}
 
   public async resolveSceneVisual(
@@ -207,7 +209,7 @@ export class AutoVisualRouter {
     const visualMode: VisualMode = spec.visualMode || "auto";
     const quality = spec.quality || "standard";
 
-    const targetSource = this.determineSceneSource(scene, visualMode, quality);
+    const targetSource = this.determineSceneSource(spec, scene, visualMode, quality);
     const preferredAiProvider = this.getAvailableAiProvider();
 
     if (targetSource === "ai" && preferredAiProvider) {
@@ -217,6 +219,7 @@ export class AutoVisualRouter {
           "Generating visual scene with AI video provider",
         );
         const result = await preferredAiProvider.fetchOrGenerateScene(scene, options);
+        this.circuitBreaker.recordSuccess(preferredAiProvider.id);
         return {
           sceneIndex: scene.sceneIndex,
           provider: result.provider,
@@ -235,6 +238,7 @@ export class AutoVisualRouter {
           },
           "AI video generation failed; falling back to Pexels stock footage",
         );
+        this.circuitBreaker.recordFailure(preferredAiProvider.id);
         const stockResult = await this.resolveStockSceneVisual(scene, options);
         return {
           ...stockResult,
@@ -402,11 +406,17 @@ export class AutoVisualRouter {
   }
 
   private determineSceneSource(
+    spec: ProductionSpec,
     scene: ProductionSceneSpec,
     visualMode: VisualMode,
     quality: string,
   ): "stock" | "ai" {
     if (visualMode === "stock") return "stock";
+
+    const allocation = this.getHeroShotAllocation(spec, scene.sceneIndex);
+    if (allocation?.source === "stock") return "stock";
+    if (allocation?.source === "generated" && this.getAvailableAiProvider() !== null) return "ai";
+
     if (visualMode === "ai") return "ai";
     if (visualMode === "hybrid") {
       return scene.visualSource === "ai" ? "ai" : "stock";
@@ -426,11 +436,39 @@ export class AutoVisualRouter {
   }
 
   private getAvailableAiProvider(): VisualProvider | null {
-    for (const provider of this.aiProviders) {
+    const providers = [...this.aiProviders].sort((a, b) => {
+      const aPenalty = this.circuitBreaker.priorityPenalty(a.id);
+      const bPenalty = this.circuitBreaker.priorityPenalty(b.id);
+      if (aPenalty !== bPenalty) return aPenalty - bPenalty;
+      return 0;
+    });
+
+    for (const provider of providers) {
+      if (this.circuitBreaker.isOpen(provider.id)) continue;
       if (provider.isConfigured()) {
         return provider;
       }
     }
     return null;
+  }
+
+  private getHeroShotAllocation(spec: ProductionSpec, sceneIndex: number): HeroShotAllocation | null {
+    const uiContract =
+      spec.metadata && typeof spec.metadata === "object"
+        ? (spec.metadata as Record<string, unknown>).uiContract
+        : undefined;
+    const allocation =
+      uiContract && typeof uiContract === "object"
+        ? (uiContract as Record<string, unknown>).heroShotAllocation
+        : undefined;
+    if (!Array.isArray(allocation)) return null;
+    const match = allocation.find((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      return (entry as Record<string, unknown>).sceneIndex === sceneIndex;
+    });
+    if (!match || typeof match !== "object") return null;
+    const source = (match as Record<string, unknown>).source;
+    if (source !== "stock" && source !== "generated") return null;
+    return match as HeroShotAllocation;
   }
 }

@@ -57,7 +57,7 @@ export class LumaVisualProvider implements VisualProvider {
       multipleReferenceImages: false,
       portrait: true,
       landscape: true,
-      supportedDurations: [5, 9],
+      supportedDurations: [5, 10],
       supportedResolutions: ["720p", "1080p"],
       seed: false,
       audio: false,
@@ -106,8 +106,13 @@ export class LumaVisualProvider implements VisualProvider {
       {
         prompt: request.prompt,
         model: request.modelId || this.model,
+        type: "video",
         aspect_ratio: request.aspectRatio || "9:16",
-        ...(request.imageUrl ? { source: { type: "image", url: request.imageUrl } } : {}),
+        video: {
+          duration: (request.durationSeconds || 5) >= 10 ? "10s" : "5s",
+          resolution: request.resolution || "720p",
+          ...(request.imageUrl ? { start_frame: { url: request.imageUrl } } : {}),
+        },
       },
       {
         headers: { Authorization: `Bearer ${this.getApiKey()}`, "Content-Type": "application/json" },
@@ -144,7 +149,7 @@ export class LumaVisualProvider implements VisualProvider {
 
   public normalizeResult(payload: unknown, request: ProviderGenerationRequest): ProviderGenerationJob {
     const data = (payload || {}) as Record<string, any>;
-    const outputUrl = extractFirstUrl(data.assets?.video || data.video || data.output || data.result);
+    const outputUrl = extractFirstUrl(data.output || data.assets?.video || data.video || data.result);
     return {
       provider: "luma",
       providerRequestId: String(data.id || ""),
@@ -153,7 +158,11 @@ export class LumaVisualProvider implements VisualProvider {
       pollAfterMs: 5000,
       outputUrl,
       errorMessage: data.failure_reason || data.error,
-      metadata: { model: data.model || request.modelId || this.model, durationSeconds: request.durationSeconds },
+      metadata: {
+        model: data.model || request.modelId || this.model,
+        durationSeconds: request.durationSeconds,
+        failureCode: data.failure_code,
+      },
     };
   }
 

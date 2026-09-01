@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { LocalContentAIProvider } from "./content-ai/localProvider";
 import { ContentAIRegistry } from "./content-ai/registry";
+import { providerSecrets } from "./provider-vault/providerSecrets";
 
 describe("Content AI Providers & Creative Director", () => {
   it("Local AI creates valid Egyptian Arabic production spec from prompt", async () => {
@@ -78,5 +79,20 @@ describe("Content AI Providers & Creative Director", () => {
     const registry = new ContentAIRegistry();
     const provider = registry.getProvider();
     expect(provider.id).toBe("local_ai");
+  });
+
+  it("ContentAIRegistry prefers a Gemini credential resolved from Provider Vault over environment fallback", async () => {
+    providerSecrets.registerResolver(async (providerId, credentialType) =>
+      providerId === "gemini" && credentialType === "api_key" ? "vault-gemini-key-123" : null,
+    );
+    await providerSecrets.refresh("gemini", "api_key");
+
+    try {
+      const registry = new ContentAIRegistry();
+      expect(registry.getProvider("gemini").id).toBe("gemini");
+      expect(registry.getProvider().id).toBe("gemini");
+    } finally {
+      providerSecrets.unregisterResolver();
+    }
   });
 });

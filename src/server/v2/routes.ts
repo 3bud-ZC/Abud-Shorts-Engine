@@ -105,6 +105,18 @@ import { RevisionService } from "./revisions/revisionService";
 import { WorkerLeaseService } from "./workers/workerLeaseService";
 import { ProviderCredentialsVault, allowedCredentialTypes, type CredentialType } from "./provider-vault/providerCredentialsVault";
 import { providerSecrets } from "./provider-vault/providerSecrets";
+import {
+  normalizeProviderServiceState,
+  statusFromCanonicalProvider,
+  tierFromBillingClass,
+  type CanonicalProviderStateInput,
+  type ProviderBillingClass,
+} from "./providers/canonicalProviderState";
+import {
+  allocateHeroShots,
+  resolveProviderBudgetPolicy,
+  type ProviderBudgetPolicy,
+} from "./providers/providerServicePolicy";
 import { createOAuthRouter } from "./integrations/oauthRoutes";
 import { checkpointStages } from "./checkpoints";
 import {
@@ -747,6 +759,18 @@ function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function budgetControlsFrom(controls: any) {
+  return resolveProviderBudgetPolicy({
+    visualSource: controls.visualSource || controls.metadata?.uiContract?.visualSource,
+    budgetMode: controls.budgetMode || controls.metadata?.uiContract?.budgetMode,
+    maxExternalSpendUsd: controls.maxExternalSpendUsd ?? controls.metadata?.uiContract?.maxExternalSpendUsd,
+    paidCallsAllowed:
+      controls.paidCallsAllowed === true ||
+      controls.metadata?.uiContract?.paidCallsAllowed === true ||
+      process.env.ABUD_ALLOW_PAID_VIDEO_CALLS === "true",
+  });
+}
+
 export function canonicalizeProductionSpecContract(
   spec: any,
   controls: any,
@@ -793,8 +817,14 @@ export function canonicalizeProductionSpecContract(
   const stockProvider = (controls.stockProvider || controls.metadata?.stockProvider || "auto_stock") as StockProviderChoice;
   const mediaPolicy = (controls.mediaPolicy || controls.metadata?.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
   const aiVisualProvider = controls.aiVisualProvider || controls.metadata?.aiVisualProvider || "auto";
+  const budgetPolicy = budgetControlsFrom(controls);
   const productImageId = controls.metadata?.productImageId || controls.productImageId;
   const characterProfileId = characterProfileIdFromControls(controls);
+  const heroShotAllocation = allocateHeroShots(
+    { scenes: spec.scenes || [] },
+    budgetPolicy,
+    { maxGeneratedShots: visualSource === "ai_generated" ? spec.scenes?.length || 1 : 1 },
+  );
   return validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
@@ -849,6 +879,16 @@ export function canonicalizeProductionSpecContract(
         mediaPolicy,
         selectedMediaIds,
         aiVisualProvider,
+        budgetMode: budgetPolicy.mode,
+        maxExternalSpendUsd: budgetPolicy.maxExternalSpendUsd,
+        paidCallsAllowed: budgetPolicy.paidCallsAllowed,
+        preflightExternalUsage:
+          budgetPolicy.mode === "free_only"
+            ? "Free"
+            : budgetPolicy.maxExternalSpendUsd != null
+              ? `Up to configured budget ($${budgetPolicy.maxExternalSpendUsd})`
+              : "Usage Based - estimate unavailable",
+        heroShotAllocation,
         characterProfileId,
         characterConsistencyMode: characterProfileId ? "Provider capability required" : "None",
         captionEnabled,
@@ -1195,6 +1235,125 @@ function buildV22CapabilityProviders() {
   ];
 }
 
+function providerBillingClass(id: string): ProviderBillingClass {
+  if (["local_ai", "kokoro", "piper", "whisper_cpp", "remotion", "ffmpeg", "motion_canvas", "n8n", "postgres"].includes(id)) {
+    return "LOCAL_FREE";
+  }
+  if (["pexels", "pixabay"].includes(id)) return "FREE_API";
+  if (["gemini", "google_cloud_tts", "edge_tts"].includes(id)) return "FREE_TIER";
+  if (["elevenlabs", "veo", "fal", "runway", "replicate", "luma", "upload_post"].includes(id)) return "USAGE_BASED";
+  if (id === "comfyui") return "LOCAL_FREE";
+  return "UNKNOWN";
+}
+
+function canonicalCategoryForProvider(provider: any): string {
+  if (provider.category === "Content AI") return "Content AI";
+  if (provider.category === "Voice") return "Voice";
+  if (provider.category === "Captions") return "Captions";
+  if (provider.category === "Publishing") return "Publishing";
+  if (provider.category === "Renderer") return "Renderer";
+  if (provider.category === "Infrastructure") return "Infrastructure";
+  if (provider.id === "pexels" || provider.id === "pixabay") return "Stock Video";
+  if (provider.id === "comfyui") return "Local Generated Video";
+  if (["veo", "fal", "runway", "replicate", "luma"].includes(provider.id)) return "Generated Video";
+  return provider.category || "Infrastructure";
+}
+
+function capabilitiesForProvider(provider: any): string[] {
+  const visual = provider.details?.visualCapabilities || {};
+  const flags: Array<[string, string]> = [
+    ["textToVideo", "Text to video"],
+    ["imageToVideo", "Image to video"],
+    ["referenceImage", "Reference image"],
+    ["portrait", "Portrait"],
+    ["landscape", "Landscape"],
+    ["seed", "Seed"],
+    ["audio", "Native audio"],
+  ];
+  const fromVisual = flags.filter(([key]) => visual[key] === true).map(([, label]) => label);
+  const languages = Array.isArray(provider.details?.languages)
+    ? provider.details.languages.map((language: string) => `Language: ${language}`)
+    : [];
+  if (provider.id === "local_ai") return ["Deterministic planning", "Trusted fact packs", "CTA provenance"];
+  if (provider.id === "gemini") return ["Structured JSON planning", "Claim provenance", "Script generation"];
+  if (provider.id === "ollama") return ["Local structured planning", "Script generation"];
+  if (provider.id === "whisper_cpp") return ["Captions", "Timing baseline"];
+  if (provider.category === "Publishing") return ["Connect account", "Pre-flight", "Schedule", "Retry"];
+  return [...fromVisual, ...languages];
+}
+
+function canonicalizeProviderPayload(provider: any) {
+  const status = String(provider.status || "").toLowerCase();
+  const vaultHealth = Array.isArray(provider.vault) ? provider.vault.find((credential: any) => credential?.health)?.health : undefined;
+  const healthy =
+    provider.details?.healthy ??
+    (["healthy", "ready", "connected", "live_verified"].includes(status)
+      ? true
+      : ["not_configured", "disabled"].includes(status)
+        ? null
+        : false);
+  const liveVerified =
+    provider.details?.liveVerified === true ||
+    vaultHealth === "live_verified" ||
+    status === "live_verified";
+  const authenticated =
+    provider.details?.authenticated ??
+    (["invalid_credentials"].includes(status)
+      ? false
+      : ["healthy", "connected", "live_verified"].includes(status) || vaultHealth === "healthy" || liveVerified
+        ? true
+        : null);
+  const billingClass = providerBillingClass(provider.id);
+  const canonical = normalizeProviderServiceState({
+    id: provider.id,
+    name: provider.name,
+    category: canonicalCategoryForProvider(provider),
+    implemented: provider.details?.implemented !== false,
+    configured: provider.configured === true,
+    authenticated,
+    healthy,
+    liveVerified,
+    enabled: provider.details?.enabled !== false,
+    billingClass,
+    capabilities: capabilitiesForProvider(provider),
+    latencyClass:
+      provider.details?.visualCapabilities?.latencyTier ||
+      (["veo", "fal", "runway", "replicate", "luma", "comfyui"].includes(provider.id) ? "long" : "interactive"),
+    qualityClass:
+      provider.details?.visualCapabilities?.qualityTier ||
+      (["veo", "runway"].includes(provider.id) ? "premium" : ["fal", "replicate", "luma", "comfyui"].includes(provider.id) ? "professional" : "standard"),
+    lastVerifiedAt: provider.checkedAt,
+    blockerReason:
+      status === "invalid_credentials"
+        ? "Credentials were rejected. Replace them and test the connection again."
+        : status === "rate_limited"
+          ? "Provider rate limit reached. Try again later."
+          : status === "timeout" || status === "provider_unavailable"
+            ? "Provider did not respond during the latest check."
+            : provider.details?.blockerReason,
+    optional: !["local_ai", "kokoro", "whisper_cpp", "remotion", "ffmpeg", "postgres"].includes(provider.id),
+    builtIn: billingClass === "LOCAL_FREE" && provider.configured === true,
+  } as CanonicalProviderStateInput);
+  return {
+    ...provider,
+    tier: provider.tier || tierFromBillingClass(billingClass),
+    status: statusFromCanonicalProvider(canonical),
+    providerStatus: canonical.customerStatus,
+    message: providerCustomerMessage(canonical),
+    canonical,
+  };
+}
+
+function providerCustomerMessage(provider: ReturnType<typeof normalizeProviderServiceState>): string {
+  if (provider.customerStatus === "Built In") return "Built-in service is available in this installation.";
+  if (provider.customerStatus === "Ready") return "Connected and live verified.";
+  if (provider.customerStatus === "Configured") return "Credentials are saved. Run Test Connection for live verification.";
+  if (provider.customerStatus === "Disabled") return "Provider is disabled.";
+  if (provider.customerStatus === "Temporarily Unavailable") return provider.blockerReason || "Provider is temporarily unavailable.";
+  if (provider.customerStatus === "Needs Attention") return provider.blockerReason || "Provider needs attention.";
+  return "Optional provider is not configured. You can connect it from this page.";
+}
+
 async function persistSceneArtifacts(db: V2Database, projectId: string, artifacts: DurableSceneArtifact[]) {
   const safeArtifacts = filterReusableArtifacts({ artifacts });
   for (const artifact of safeArtifacts) {
@@ -1408,6 +1567,7 @@ export function createV2PublicRouter(
     const stockProvider = (controls.stockProvider || contract.stockProvider || "auto_stock") as StockProviderChoice;
     const mediaPolicy = (controls.mediaPolicy || contract.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
     const aiVisualProvider = String(controls.aiVisualProvider || contract.aiVisualProvider || "auto");
+    const budgetPolicy = budgetControlsFrom({ ...controls, metadata: { ...(controls.metadata || {}), uiContract: contract } });
     const characterProfileId = characterProfileIdFromControls({
       ...controls,
       metadata: {
@@ -1473,7 +1633,7 @@ export function createV2PublicRouter(
     }
 
     if (visualSource === "ai_generated") {
-      const aiProviders = ["veo", "fal"].filter((id) => providerIds.has(id));
+      const aiProviders = ["veo", "fal", "runway", "replicate", "luma", "comfyui"].filter((id) => providerIds.has(id));
       const ready = aiVisualProvider === "auto" ? aiProviders.length > 0 : providerIds.has(aiVisualProvider);
       add(
         "ai_video",
@@ -1483,6 +1643,19 @@ export function createV2PublicRouter(
         "Connect an AI video provider to use AI Generated visuals.",
         { label: "Configure an AI Video Provider", href: "/providers" },
       );
+      const selectedProviderIsLocal = aiVisualProvider === "comfyui" || (aiVisualProvider === "auto" && aiProviders.length === 1 && aiProviders[0] === "comfyui");
+      if (!selectedProviderIsLocal) {
+        add(
+          "paid_video_gate",
+          "Paid video safety gate",
+          budgetPolicy.paidCallsAllowed,
+          true,
+          budgetPolicy.mode === "free_only"
+            ? "AI Generated visuals require Best Available or Smart Budget plus paid-generation authorization."
+            : "Paid video generation requires explicit operator authorization before queueing.",
+          { label: "Review Budget", href: "/create" },
+        );
+      }
     }
 
     if (characterProfileId) {
@@ -1583,6 +1756,7 @@ export function createV2PublicRouter(
         aiVisualProvider,
         voiceProvider: spec?.voiceProvider || controls.voiceProvider,
         contentAIProvider: String(controls.contentAIProvider || "auto"),
+        budgetPolicy,
       }),
     };
   }
@@ -1594,6 +1768,7 @@ export function createV2PublicRouter(
     aiVisualProvider: string;
     voiceProvider?: string;
     contentAIProvider: string;
+    budgetPolicy: ProviderBudgetPolicy;
   }): string[] {
     const usage: string[] = [];
     if (input.voiceProvider === "elevenlabs") usage.push("ElevenLabs · Usage Based");
@@ -1620,6 +1795,13 @@ export function createV2PublicRouter(
                     ? "ComfyUI"
                     : "AI Video Provider";
       usage.push(ai === "ComfyUI" ? "ComfyUI · Local Compute" : `${ai} · Usage Based`);
+    }
+    if (input.budgetPolicy.mode === "smart_budget") {
+      usage.push(
+        input.budgetPolicy.maxExternalSpendUsd != null
+          ? `Budget ceiling · $${input.budgetPolicy.maxExternalSpendUsd}`
+          : "Budget ceiling · estimate unavailable",
+      );
     }
     if (input.visualSource === "stock") {
       usage.push(input.stockProvider === "pixabay" ? "Pixabay · Stock API" : input.stockProvider === "pexels" ? "Pexels · Stock API" : "Stock provider · API");
@@ -1923,6 +2105,9 @@ export function createV2PublicRouter(
     }
 
     try {
+      if (providerVault.isAvailable()) {
+        await providerSecrets.refresh("gemini", "api_key").catch(() => undefined);
+      }
       const provider = contentAIRegistry.getProvider();
       const generatedSpec = await provider.generateProductionSpec(parsed.data);
       const spec = await canonicalizeProductionSpecForRequest(db, generatedSpec, parsed.data);
@@ -1967,6 +2152,9 @@ export function createV2PublicRouter(
     }
 
     try {
+      if (providerVault.isAvailable()) {
+        await providerSecrets.refresh("gemini", "api_key").catch(() => undefined);
+      }
       const provider = contentAIRegistry.getProvider();
       const result = await provider.rewritePrompt(parsed.data.prompt, {
         language: parsed.data.language,
@@ -3494,22 +3682,25 @@ export function createV2PublicRouter(
     ];
 
     res.status(200).json({
-      providers: providers.map((provider: any) => ({
-        ...provider,
-        credentialTypes: provider.id ? allowedCredentialTypes(provider.id) : [],
-        vaultConfigured: provider.id ? vaultCredentials.some((credential) => credential.providerId === provider.id) : false,
-        vault: provider.id
-          ? vaultCredentials
-              .filter((credential) => credential.providerId === provider.id)
-              .map((credential) => ({
-                credentialType: credential.credentialType,
-                maskedHint: credential.maskedHint,
-                health: credential.health,
-                configuredAt: credential.configuredAt,
-                lastTestedAt: credential.lastTestedAt,
-              }))
-          : [],
-      })),
+      providers: providers.map((provider: any) => {
+        const enriched = {
+          ...provider,
+          credentialTypes: provider.id ? allowedCredentialTypes(provider.id) : [],
+          vaultConfigured: provider.id ? vaultCredentials.some((credential) => credential.providerId === provider.id) : false,
+          vault: provider.id
+            ? vaultCredentials
+                .filter((credential) => credential.providerId === provider.id)
+                .map((credential) => ({
+                  credentialType: credential.credentialType,
+                  maskedHint: credential.maskedHint,
+                  health: credential.health,
+                  configuredAt: credential.configuredAt,
+                  lastTestedAt: credential.lastTestedAt,
+                }))
+            : [],
+        };
+        return canonicalizeProviderPayload(enriched);
+      }),
       categories: [
         "Content AI",
         "Visuals",

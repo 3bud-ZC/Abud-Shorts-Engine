@@ -475,7 +475,10 @@ describe("V2.4 Professional Video Production Engine", () => {
       .post("/v1/generations", (body: any) => (
         body.prompt === "test prompt" &&
         body.model === "ray-3.2" &&
-        body.aspect_ratio === "9:16"
+        body.type === "video" &&
+        body.aspect_ratio === "9:16" &&
+        body.video?.duration === "5s" &&
+        body.video?.resolution === "720p"
       ))
       .reply(200, {
         id: "generation-1",

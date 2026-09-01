@@ -124,13 +124,27 @@ export class VeoVisualProvider implements VisualProvider {
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:predictLongRunning`,
       {
-        prompt: { text: request.prompt },
-        videoConfig: {
+        instances: [
+          {
+            prompt: request.prompt,
+            ...(request.imageUrl ? { image: { uri: request.imageUrl } } : {}),
+            ...(request.referenceImageUrls?.length
+              ? {
+                  referenceImages: request.referenceImageUrls.slice(0, 3).map((url) => ({
+                    image: { uri: url },
+                    referenceType: "asset",
+                  })),
+                }
+              : {}),
+          },
+        ],
+        parameters: {
+          numberOfVideos: 1,
           aspectRatio: request.aspectRatio || "9:16",
-          durationSeconds: Math.min(8, Math.max(4, Math.round(request.durationSeconds || 5))),
+          durationSeconds: this.normalizeDuration(request),
+          ...(request.resolution ? { resolution: request.resolution } : {}),
           ...(request.negativePrompt ? { negativePrompt: request.negativePrompt } : {}),
         },
-        ...(request.imageUrl ? { image: { uri: request.imageUrl } } : {}),
       },
       {
         headers: {
@@ -141,6 +155,14 @@ export class VeoVisualProvider implements VisualProvider {
       },
     );
     return this.normalizeResult(response.data, request);
+  }
+
+  private normalizeDuration(request: ProviderGenerationRequest): number {
+    const requested = Math.min(8, Math.max(4, Math.round(request.durationSeconds || 8)));
+    if (request.resolution === "1080p" || request.referenceImageUrls?.length) return 8;
+    return [4, 6, 8].reduce((best, value) =>
+      Math.abs(value - requested) < Math.abs(best - requested) ? value : best,
+    8);
   }
 
   public async poll(job: ProviderGenerationJob): Promise<ProviderGenerationJob> {
@@ -164,7 +186,13 @@ export class VeoVisualProvider implements VisualProvider {
     const data = (payload || {}) as Record<string, any>;
     const done = data.done === true;
     const error = data.error?.message || data.error;
-    const outputUrl = extractFirstUrl(data.response?.generatedVideos || data.response?.videos || data.video || data.output);
+    const outputUrl = extractFirstUrl(
+      data.response?.generateVideoResponse?.generatedSamples ||
+        data.response?.generatedVideos ||
+        data.response?.videos ||
+        data.video ||
+        data.output,
+    );
     return {
       provider: "veo",
       providerRequestId: String(data.name || data.operation?.name || data.id || ""),

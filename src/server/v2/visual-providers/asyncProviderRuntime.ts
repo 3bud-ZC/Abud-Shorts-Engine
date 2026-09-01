@@ -12,6 +12,7 @@ type ProbedVisualAsset = {
   durationSeconds: number;
   width: number;
   height: number;
+  fps?: number;
   hasVideoStream: boolean;
   fileSizeBytes: number;
   containerFormat?: string;
@@ -64,6 +65,9 @@ function probeDownloadedVisualAsset(filePath: string): Promise<ProbedVisualAsset
       const durationSeconds = Number(metadata?.format?.duration || videoStream?.duration || 0);
       const width = Number(videoStream?.width || 0);
       const height = Number(videoStream?.height || 0);
+      const avgFrameRate = String(videoStream?.avg_frame_rate || videoStream?.r_frame_rate || "");
+      const [fpsNumerator, fpsDenominator] = avgFrameRate.split("/").map(Number);
+      const fps = fpsNumerator && fpsDenominator ? Math.round((fpsNumerator / fpsDenominator) * 100) / 100 : undefined;
       const issues: string[] = [];
 
       if (!videoStream) issues.push("missing_video_stream");
@@ -75,6 +79,7 @@ function probeDownloadedVisualAsset(filePath: string): Promise<ProbedVisualAsset
         durationSeconds: Number.isFinite(durationSeconds) ? Math.round(durationSeconds * 100) / 100 : 0,
         width,
         height,
+        fps,
         hasVideoStream: Boolean(videoStream),
         fileSizeBytes: fileStats.size,
         containerFormat: metadata?.format?.format_name,
@@ -130,6 +135,9 @@ export async function downloadGeneratedAsset(
     url: job.outputUrl,
     localPath: destinationPath,
     durationSeconds: probe.durationSeconds || Number(job.metadata?.durationSeconds) || 0,
+    width: probe.width,
+    height: probe.height,
+    fps: probe.fps,
     estimatedCost: null,
     metadata: {
       ...(job.metadata || {}),
@@ -141,6 +149,7 @@ export async function downloadGeneratedAsset(
         width: probe.width,
         height: probe.height,
         durationSeconds: probe.durationSeconds,
+        fps: probe.fps,
         fileSizeBytes: probe.fileSizeBytes,
         containerFormat: probe.containerFormat,
         videoCodec: probe.videoCodec,

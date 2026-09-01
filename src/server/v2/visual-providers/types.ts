@@ -9,6 +9,7 @@ export type VisualAssetResult = {
   durationSeconds: number;
   width?: number;
   height?: number;
+  fps?: number;
   estimatedCost: number | null;
   fallbackUsed?: boolean;
   metadata?: Record<string, unknown>;

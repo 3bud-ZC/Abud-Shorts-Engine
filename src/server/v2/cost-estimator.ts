@@ -13,14 +13,16 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>, routeConte
   let stockScenesCount = 0;
   let visualCost = 0;
   let visualProvider = "pexels";
+  let visualUsageBased = false;
 
   scenes.forEach((scene) => {
     if (scene.visualSource === "ai" || scene.visualSource === "ai_generated_video" || routeContext.visualMode === "ai" || spec.visualMode === "ai") {
       aiScenesCount++;
       const p = scene.visualProvider || "veo";
       visualProvider = p;
-      const costPerScene = p === "motion_canvas" || p === "local" ? 0 : p === "fal" ? 0.15 : 0.2;
-      visualCost += costPerScene;
+      if (!["motion_canvas", "local", "comfyui"].includes(p)) {
+        visualUsageBased = true;
+      }
     } else {
       stockScenesCount++;
     }
@@ -57,14 +59,16 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>, routeConte
   const contentAICost = routeContext.contentAIProvider === "gemini" || spec.metadata?.planner === "GeminiContentAIProvider" ? 0.001 : 0;
   const totalCost = Math.round((contentAICost + visualCost + voiceCost) * 100) / 100;
   // A usage-based provider is never free, even though its exact cost is unknown.
-  const isFree = totalCost === 0 && !voiceUsageBased;
+  const isFree = totalCost === 0 && !voiceUsageBased && !visualUsageBased;
 
   return {
     estimatedCost: totalCost,
     currency: "USD",
     isFree,
-    usageBased: voiceUsageBased,
-    costLabel: voiceUsageBased
+    usageBased: voiceUsageBased || visualUsageBased,
+    costLabel: visualUsageBased
+      ? "Usage Based - estimate unavailable"
+      : voiceUsageBased
       ? voiceCostLabel
       : totalCost === 0
         ? "Free local pipeline"
@@ -76,6 +80,8 @@ export function estimateProductionCost(spec: Partial<ProductionSpec>, routeConte
         aiCount: aiScenesCount,
         cost: Math.round(visualCost * 100) / 100,
         provider: visualProvider,
+        usageBased: visualUsageBased,
+        costLabel: visualUsageBased ? "Usage Based - estimate unavailable" : "Free stock/local media",
       },
       voice: {
         provider: voiceProvider,
