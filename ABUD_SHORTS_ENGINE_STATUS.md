@@ -7958,3 +7958,192 @@ No new Pass 7 live wall-clock result is claimed.
 PENDING. No Pass 7 live benchmark videos were generated yet because
 authenticated product-job execution is blocked pending explicit QA-session
 approval.
+
+# V2.4 PASS 7.1 - LIVE FAST-RENDER VALIDATION + ELEVENLABS ARABIC DEFAULT CLOSURE
+
+Status: COMPLETE on branch `v2.4-professional-video-engine`.
+
+Source commit:
+
+- `66a03a01a127d9a8f267114690e9999ffc480852` -
+  `fix(v2.4): close elevenlabs arabic voice setup`
+
+## Provider Platform Closure
+
+- ElevenLabs no longer falls back to `ELEVENLABS_DEFAULT_VOICE_ID` or the
+  first discovered voice. Arabic production now requires an explicit request,
+  Brand Profile voice, or persisted human-selected default.
+- Voice Lab exposes Arabic readiness, saved-default availability, live
+  catalogue availability, and setup-required reason fields.
+- Voice Lab preview synthesis is blocked unless paid-usage preview policy is
+  explicitly enabled. The live endpoint returned HTTP 402 with:
+  `LIVE AUDIO PREVIEW PENDING PAID-USAGE AUTHORIZATION.`
+- Saving a default Arabic voice verifies the voice exists in the connected
+  ElevenLabs account and persists the selected preset settings/model.
+- Providers UI now shows Arabic ready/setup-required state, client-side voice
+  search, no first-voice auto-selection, and immediate provider-card refresh
+  after saving a default voice.
+- Brand Profile ElevenLabs voice defaults are supported ahead of persisted
+  app-wide defaults. Legacy Piper IDs are ignored for ElevenLabs routing.
+- Captioned fast-path renders now find the Docker-bundled Arabic font
+  directory by default when `ABUD_FONT_DIR` is not set.
+
+## Live Provider QA
+
+Temporary QA authorization was used exactly once with the existing `admin`
+account only:
+
+- One `qa_pass71_` admin session created.
+- Token generated with crypto-random 32 bytes, held in memory only.
+- Token was not printed, written, logged, or included in status.
+- Session revoked after QA.
+- Same token verified as `401 Unauthorized` after revocation.
+- Remaining `qa_` sessions after cleanup: `0`.
+
+Provider results:
+
+- Pexels: configured; live validation healthy; authorized video search
+  succeeded.
+- Pixabay: configured; live validation healthy; video search succeeded.
+- Kokoro: configured; validation healthy; local voice capability available.
+- ElevenLabs: configured; authenticated; voice discovery available; TTS access
+  confirmed; 27 voices discovered.
+- Before default selection, ElevenLabs Arabic production readiness was false
+  with `default_arabic_voice_not_selected`.
+- Voice Lab selected and persisted one live discovered account voice as the
+  Arabic default because no previous default existed.
+- After reload, the default remained present in the connected account and
+  Arabic production readiness became true.
+- Create-video canonicalization resolved that voice with
+  `voiceSource=persisted_human_default`.
+
+## Live Fast-Render Benchmarks
+
+All live benchmark videos used stock/provider media and the FFmpeg fast path.
+No paid AI video generation was used.
+
+Business cold:
+
+- Video/job: `cmtioio8c000707qb0f7beow1`
+- Status: ready.
+- `renderStrategy=FFMPEG_FAST`
+- `fastPathEligible=true`
+- `fastPathUsed=true`
+- `renderFallbackReason=null`
+- `baseFootageFramesThroughChromium=0`
+- `remotionFramesRendered=0`
+- Total wall clock: `96300ms`
+- Stage timings: planning `18222ms`, media `36610ms`, voice `6558ms`,
+  mastering `1121ms`, composition `4023ms`, final encode `4023ms`.
+- FFprobe: 1080x1920, 25 fps, 500 frames, 20.000s stream duration,
+  20.011s format duration, 8,917,642 bytes, 3,565,095 bit/s.
+- Quality: professional ready true, real visual coverage 100%,
+  text-only timeline 0%, black frames 0%, invented-claim risk 0,
+  raw prompt leaks 0.
+- `blackdetect`: 0 lines. `silencedetect`: 0 lines.
+- Human visual review: relevant real business footage and captions; no black
+  frames or full-screen graphic fallback observed.
+
+Business warm:
+
+- Video/job: `cmtioksqr000b07qb2kx423do`
+- Status: ready.
+- `renderStrategy=FFMPEG_FAST`
+- `fastPathEligible=true`
+- `fastPathUsed=true`
+- `renderFallbackReason=null`
+- `baseFootageFramesThroughChromium=0`
+- `remotionFramesRendered=0`
+- Total wall clock: `65470ms`
+- Stage timings: planning `2919ms`, media `26088ms`, voice `5673ms`,
+  mastering `1092ms`, composition `3879ms`, final encode `3879ms`.
+- FFprobe: 1080x1920, 25 fps, 500 frames, 20.000s stream duration,
+  20.011s format duration, 8,917,642 bytes, 3,565,095 bit/s.
+- Quality: professional ready true, real visual coverage 100%,
+  text-only timeline 0%, black frames 0%, invented-claim risk 0,
+  raw prompt leaks 0.
+- `blackdetect`: 0 lines. `silencedetect`: 0 lines.
+- Human visual review: relevant real business footage and captions; no black
+  frames observed.
+
+Curiosity airplane:
+
+- Video/job: `cmtiom9a8000f07qb2tkef1x0`
+- Status: ready.
+- `renderStrategy=FFMPEG_FAST`
+- `fastPathEligible=true`
+- `fastPathUsed=true`
+- `renderFallbackReason=null`
+- `baseFootageFramesThroughChromium=0`
+- `remotionFramesRendered=0`
+- Total wall clock: `50353ms`
+- Stage timings: planning `2848ms`, media `7835ms`, voice `10478ms`,
+  mastering `1214ms`, composition `5179ms`, final encode `5179ms`.
+- FFprobe: 1080x1920, 25 fps, 625 frames, 25.000s stream duration,
+  25.011s format duration, 9,558,466 bytes, 3,057,363 bit/s.
+- Quality: professional ready true, real visual coverage 100%,
+  text-only timeline 0%, black frames 0%, invented-claim risk 0,
+  raw prompt leaks 0.
+- `blackdetect`: 0 lines. `silencedetect`: 0 lines.
+- Human visual review: on-topic real plane/window/wing/cabin footage and
+  captions; no black frames or full-screen graphic fallback observed.
+
+Fitness:
+
+- Video/job: `cmtionecm000j07qb89dicyq3`
+- Status: ready.
+- `renderStrategy=FFMPEG_FAST`
+- `fastPathEligible=true`
+- `fastPathUsed=true`
+- `renderFallbackReason=null`
+- `baseFootageFramesThroughChromium=0`
+- `remotionFramesRendered=0`
+- Total wall clock: `95482ms`
+- Stage timings: planning `2749ms`, media `57449ms`, voice `5681ms`,
+  mastering `1035ms`, composition `4692ms`, final encode `4692ms`.
+- FFprobe: 1080x1920, 25 fps, 500 frames, 20.000s stream duration,
+  20.011s format duration, 7,156,367 bytes, 2,860,973 bit/s.
+- Quality: professional ready true, real visual coverage 100%,
+  text-only timeline 0%, black frames 0%, invented-claim risk 0,
+  raw prompt leaks 0.
+- `blackdetect`: 0 lines. `silencedetect`: 0 lines.
+- Human visual review: relevant real gym/fitness footage and captions; no
+  black frames observed.
+
+## Performance Result
+
+- Cold business target `<=100s`: PASS at `96.3s`.
+- Warm business target `<=85s`: PASS at `65.47s`.
+- Compared with accepted old figures, cold improved from ~127.5s to 96.3s
+  (~24.5% faster), and warm improved from ~113.2s to 65.47s (~42.2% faster).
+- Stretch target `<=80s` cold was not met.
+- Stretch target `<=65s` warm missed by about `0.47s`.
+- Remaining bottleneck is media acquisition/download, not render:
+  business cold media `36.61s`; fitness media `57.449s`.
+- Fast composition/final encode stayed around `3.879s-5.179s` per reported
+  field and under the requested 30s render-stage target.
+
+## Validation
+
+- `pnpm typecheck` -> PASS.
+- `pnpm test -- run` -> PASS: 70 test files, 1036 tests, 0 failures.
+- `pnpm build` -> PASS. Existing non-blocking warnings remain: stale
+  Browserslist data and a >500 kB UI chunk.
+- Docker image rebuild for `abud-shorts-render-worker` -> PASS.
+- Scoped Docker recreate for only `abud-shorts-render-worker` and
+  `abud-shorts-app` -> PASS.
+- Post-recreate health: app and render worker healthy; Postgres/n8n healthy
+  and not recreated.
+
+## Safety
+
+- Paid AI video generations: 0.
+- ElevenLabs billable preview synthesis: 0.
+- Social posts/publications: 0.
+- Docker prune commands: 0.
+- `docker compose down -v`: 0.
+- Volumes removed: 0.
+- Customer data deleted: 0.
+- Secrets printed: 0.
+- Stable v2.3.1/main/tag/GHCR stable untouched; no merge, tag, release, or
+  stable move.
