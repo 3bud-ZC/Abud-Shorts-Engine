@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.1 local repairs**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.2 Arabic Mixed-Script & Exact Retry Closure**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,10 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 baseline source SHA: `478d13b8ae8acc996d0c9f4b2fabc27e31d2cdb1` (branch
-`v2.4-professional-video-engine`, equal to
-`origin/v2.4-professional-video-engine` at Pass 9.1 start). Pass 9.1 repairs are
-local working-tree changes pending review.
+V2.4 baseline source SHA: `8023401ec0a0f3f384069d78305089708f3c1590` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.1 and Pass 9.2 work completed.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -110,6 +107,7 @@ Finalization track:
 | V2.3.1-GA | v2.3.1 hotfix general-availability release ceremony | **PASS / RELEASED** |
 | V2.4 Pass 9 | Release candidate closure | **RC_READY / SUPERSEDED BY PASS 9.1 BLOCK** |
 | V2.4 Pass 9.1 | Production failure root-cause, job reliability, retry forensics and server hardening | **FORENSIC CLOSURE / REPAIRS VERIFIED / RELEASE BLOCKED** |
+| V2.4 Pass 9.2 | Arabic Mixed-Script TTS Closure, Exact Incident Retry & RC.2 Qualification | **MIXED-SCRIPT HARNESS COMPLETE / INCIDENT RETRIED / 1 PAID CALL CONSUMED / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -8777,3 +8775,134 @@ RC.2 must NOT be created or released until:
 1. Explicit owner authorization is granted for any further paid provider calls.
 2. The remaining root cause of the Scene 1 ElevenLabs rejection is isolated.
 3. An authorized production retry succeeds end-to-end.
+
+# V2.4 Pass 9.2 - Arabic Mixed-Script TTS Closure, Exact Incident Retry & RC.2 Qualification
+
+**Date:** 2026-09-02 / 2026-09-03  
+**Branch:** `v2.4-professional-video-engine`  
+**Starting Remote HEAD:** `8023401ec0a0f3f384069d78305089708f3c1590` (verified clean tree)  
+**Status:** **MIXED-SCRIPT HARNESS VERIFIED / EXACT RETRY ATTEMPTED / RELEASE BLOCKED**  
+**Release Decision:** **BLOCKED / NOT RELEASED** (Do NOT merge main, tag v2.4.0, create GitHub Release, move GHCR stable, publish update manifest, or package RC.2 as ready). Stable v2.3.1 remains immutable.
+
+---
+
+## 1. Executive Summary
+
+Pass 9.2 addressed the root causes of mixed-script speech synthesis failures, implemented canonical pronunciation precedence, added comprehensive preflight safety checks, and executed an authorized live retry under explicit user budget constraints (maximum 2 paid ElevenLabs synthesis requests).
+
+- **Arabic Pronunciation & Mixed-Script Engine**:
+  - Expanded `SYSTEM_PRONUNCIATIONS` with reviewed generic business/tech words (`Demo -> ديمو`, `Pro -> برو`, `Premium -> بريميوم`, `Store -> ستور`, `App -> آب`, `Online -> أونلاين`, `Brand -> براند`, `Reel -> ريل`, `Post -> بوست`, `Link -> لينك`, `Discount -> ديسكاونت`, `Offer -> أوفر`, `Free -> فري`).
+  - Enforced strict semantic priority: `job/user override` > `brand pronunciation dictionary` > `system pronunciation dictionary` > `conservative default normalization` via `deduplicateEntries()`.
+  - Implemented `findUnresolvedLatinTokens` to detect and classify Latin script into `word`, `url`, `email`, `code`.
+  - Added preflight checks in `preflightElevenLabsInput` to reject unresolved Latin tokens before network synthesis with `VOICE_PRONUNCIATION_REQUIRED` or `UNRESOLVED_LATIN_SCRIPT`.
+  - Preserved the caption/display text invariant: customer wording (e.g. `"ABUD Demo"`) is strictly preserved in captions and on-screen text, while only TTS receives spoken Arabic forms (e.g. `"عبود ديمو"`).
+  - Mapped customer failure UX to `"Some words need a pronunciation before Arabic narration can be generated."` without leaking technical terms.
+  - Added 9 dedicated automated test cases to `src/server/v2/voiceProviders.test.ts` (100% pass, 64/64 tests).
+
+- **Exact Incident Retry Lineage**:
+  - Original incident: `cmtk9uo11000207ry72n76c5q`
+  - Pass 9.1 failed retry: `cmtkcs4mg000007ryfo4n9bt8`
+  - Pass 9.2 retry job: `cmtknn0vk000007lfgwx6cqyx`
+  - **Scene 0 Reuse**: **0 provider calls consumed**. Durable artifacts (`voice_376f5d939a42e63b_83630c60680d`, `captions_2e2e3060c9f77ec6_fa3d7d5e8548`, `media_3fe1d2c7bfda98bf_10e3c9eee9f6`) were reused from disk.
+  - **Scene 1 Call**: Exactly **1 paid synthesis request** was dispatched to ElevenLabs (Mamdoh `68MRVrnQAt8vLbu0FCzw`, model `eleven_multilingual_v2`).
+  - **Scene 1 Result**: ElevenLabs returned upstream HTTP 400 `Invalid input` (`taxonomyCode: INVALID_INPUT`).
+  - **Scene 2 Call**: **0 calls made**. Execution stopped immediately per strict rule (*"If Scene 1 fails: STOP IMMEDIATELY. Do NOT call Scene 1 again. Do NOT call Scene 2."*).
+  - **Total Paid Calls Consumed in Pass 9.2**: **1** (within the 2-call maximum authorization).
+
+- **English Free Regression**:
+  - Ran 15s 9:16 Auto Professional English job `cmtknxew2000307lfcczfcfpc` (Kokoro voice `af_heart`, `visualSource: auto_free`).
+  - Reached **`ready`** with **0 paid calls**. Proved free pipeline is completely healthy and untouched.
+
+- **Automated Verification Gates**:
+  - `npm run typecheck`: **PASSED** (0 errors).
+  - `npx vitest run`: **PASSED** (70 test files, 1,065 tests, 0 failures).
+  - `npm run build`: **PASSED**.
+
+- **Release Block**:
+  - Because Scene 1 synthesis returned HTTP 400 `Invalid input` from ElevenLabs, **V2.4 remains BLOCKED / NOT RELEASED**.
+  - Candidate RC.2 packaging is **NOT** qualified as ready.
+  - Stable v2.3.1 remains immutable.
+
+---
+
+## 2. Local Preflight Audit (0 Provider Calls)
+
+Before making any live request, local preflight verified both scenes:
+
+| Scene | Raw Customer Narration | Spoken Narration | TTS Normalized Spoken Text | Unresolved Latin Tokens | Preflight Status | Request Shape |
+|---|---|---|---|---|---|---|
+| **Scene 1** | `مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.` | `مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.` | `مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.` | `[]` (0) | `VALID` | `text-to-speech-with-timestamps`, `eleven_multilingual_v2`, 66 chars, 119 bytes |
+| **Scene 2** | `تابعنا وشوف التفاصيل` | `تابعنا وشوف التفاصيل` | `تابعنا وشوف التفاصيل` | `[]` (0) | `VALID` | `text-to-speech-with-timestamps`, `eleven_multilingual_v2`, 20 chars, 38 bytes |
+
+Display and caption invariants were strictly confirmed: captions retain original brand styling (`"ABUD Demo"`), while the audio synthesizer receives pure Arabic spoken forms (`"عبود ديمو"`).
+
+---
+
+## 3. Incident Retry Forensics
+
+### Retry Execution Details
+
+| Attribute | Value |
+|---|---|
+| **Target Job ID** | `cmtknn0vk000007lfgwx6cqyx` |
+| **Original Job ID** | `cmtk9uo11000207ry72n76c5q` |
+| **Previous Retry ID** | `cmtkcs4mg000007ryfo4n9bt8` |
+| **Retry Number** | 2 |
+| **Idempotency Key** | `pass92-live-retry-cmtkcs4mg000007ryfo4n9bt8` |
+| **Scene 0 Artifact Reuse** | Voice: `voice_376f5d939a42e63b_83630c60680d` (Reused, 0 calls)<br>Captions: `captions_2e2e3060c9f77ec6_fa3d7d5e8548` (Reused)<br>Media: `media_3fe1d2c7bfda98bf_10e3c9eee9f6` (Reused) |
+| **Scene 1 Voice Call** | Dispatched to ElevenLabs (1 paid call consumed) |
+| **Scene 1 Response** | Upstream HTTP 400 `Invalid input` |
+| **Scene 2 Voice Call** | **0 calls dispatched** (stopped immediately) |
+| **Total Paid Calls Consumed** | **1** |
+| **Database Job Status** | `failed` (progress: 33%, stage: `Generating voice`) |
+| **Customer Error Message** | `ElevenLabs could not generate the Arabic narration. Check the selected voice, then try again.` |
+| **Technical Error** | `Invalid input` |
+
+### Forensic Analysis of Upstream HTTP 400 `Invalid input`
+
+The retry failed with the exact same upstream error code as the original job:
+- The text submitted contained zero Latin characters: `"مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة."`.
+- All preflight checks passed.
+- The request was dispatched to `https://api.elevenlabs.io/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw/with-timestamps?output_format=mp3_44100_128`.
+- Upstream ElevenLabs rejected the request with HTTP 400 `status: invalid_input, message: Invalid input`.
+- Possible root cause hypotheses for ElevenLabs API rejection:
+  1. The selected voice ID (`68MRVrnQAt8vLbu0FCzw`, Mamdoh) may be incompatible with the `/with-timestamps` endpoint or specific voice settings (`style: 0.15`, `use_speaker_boost: true`) under this specific account plan.
+  2. ElevenLabs may require standard plain text-to-speech for certain voice categories rather than timestamps.
+  3. Character encoding or punctuation specific to Arabic comma (`،`) or dot (`.`) combined with voice parameters.
+- Because the budget was strictly capped at 2 calls, and Scene 1 failed on attempt 1, **no further synthesis attempts were made**.
+
+---
+
+## 4. English Free Pipeline Regression
+
+To confirm the free and local rendering pipeline was unaffected by the V2.4 voice changes:
+- Created and executed job `cmtknxew2000307lfcczfcfpc`:
+  - Language: English (`en`)
+  - Duration: 15s
+  - Aspect Ratio: 9:16
+  - Mode: Auto Hybrid / Auto Free
+  - Voice Provider: Kokoro (`af_heart`)
+  - Stock: Auto Free (Pixabay/Pexels)
+  - Result: Completed successfully, reached **`ready`** status (100% progress).
+  - External Paid Calls: **0**.
+
+---
+
+## 5. Security & Session Hygiene
+
+- Temporary admin session `qa_pass92_live_retry` deleted: verified 401.
+- Temporary admin session `qa_pass92_english_regression` deleted: verified 401.
+- Remaining active sessions: 2 pre-existing audit sessions only.
+- No secrets or credentials were logged or leaked.
+
+---
+
+## 6. Release Block Enforced
+
+- **V2.4 remains BLOCKED / NOT RELEASED**.
+- Do NOT merge `v2.4-professional-video-engine` to `main`.
+- Do NOT tag `v2.4.0`.
+- Do NOT create a GitHub Release.
+- Do NOT move GHCR `stable`.
+- Do NOT package RC.2 as production-ready.
+- Stable v2.3.1 remains immutable and authoritative.

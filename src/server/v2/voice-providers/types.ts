@@ -243,6 +243,7 @@ export type VoiceRouteRequest = {
   volume?: string;
   fallbackPolicy?: "none" | "local" | "configured";
   brandPronunciations?: Record<string, string>;
+  pronunciationOverrides?: Record<string, string>;
 };
 
 export type VoiceRouteDecision = {

@@ -2751,7 +2751,23 @@ export function createV2PublicRouter(
         typeof req.headers["idempotency-key"] === "string"
           ? req.headers["idempotency-key"]
           : undefined;
-      const reuseArtifacts = readDurableArtifactsForSourceJob(config, req.params.id);
+      const targetJob = await jobs.getJob(req.params.id);
+      const originalJobId =
+        (targetJob?.input as any)?.__originalJobId ||
+        ((targetJob?.productionSpec as any)?.metadata?.revision?.originalJobId) ||
+        req.params.id;
+      const directArtifacts = readDurableArtifactsForSourceJob(config, req.params.id);
+      const lineageArtifacts =
+        originalJobId && originalJobId !== req.params.id
+          ? readDurableArtifactsForSourceJob(config, originalJobId)
+          : [];
+      const priorReused =
+        (((targetJob?.productionSpec as any)?.metadata?.revision?.reuseArtifacts as DurableSceneArtifact[]) || []);
+      const allArtifactsMap = new Map<string, DurableSceneArtifact>();
+      for (const a of [...lineageArtifacts, ...priorReused, ...directArtifacts]) {
+        if (a?.artifactId) allArtifactsMap.set(a.artifactId, a);
+      }
+      const reuseArtifacts = Array.from(allArtifactsMap.values());
       const job = await jobs.retryJob(req.params.id, {
         idempotencyKey: headerIdempotencyKey,
         reuseArtifacts,

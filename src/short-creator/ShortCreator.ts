@@ -629,6 +629,11 @@ export class ShortCreator {
       });
 
       const brandVoiceProfile = spec.brandKit?.voiceProfile as any;
+      const jobPronunciationOverrides =
+        (spec as any).pronunciationOverrides ||
+        (spec as any).metadata?.pronunciationOverrides ||
+        (spec as any).pronunciations ||
+        undefined;
       const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || originalSceneSpec.narration || sceneTimeline.narration);
       let targetSceneDuration = sceneTimeline.durationSeconds;
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
@@ -705,6 +710,7 @@ export class ShortCreator {
           requestAlignment: true,
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+          pronunciationOverrides: jobPronunciationOverrides,
         });
         pinnedVoiceId = voiceAudio.voiceId || voiceAudio.decision.voiceId || pinnedVoiceId;
         const firstProvider = voiceAudio.provider || voiceAudio.decision.providerId;
@@ -743,6 +749,7 @@ export class ShortCreator {
               requestAlignment: true,
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+              pronunciationOverrides: jobPronunciationOverrides,
             });
             const retryProvider = voiceAudio.provider || voiceAudio.decision.providerId;
             if (retryProvider in artifactReuse.providerInvocations) {

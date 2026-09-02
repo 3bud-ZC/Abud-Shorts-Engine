@@ -356,7 +356,7 @@ describe("Voice Providers & Registry", () => {
 
   it("preflights the incident scene text without sending unsupported multilingual_v2 language_code", () => {
     const result = preflightElevenLabsInput({
-      text: "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      text: "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
       modelId: ELEVENLABS_DEFAULT_MODEL_ID,
       voiceId: "68MRVrnQAt8vLbu0FCzw",
       languageCode: "ar",
@@ -1133,3 +1133,140 @@ describe("ElevenLabs Error Taxonomy and Diagnostic Hardening", () => {
     expect(providerErr.toSanitizedTechnicalString()).toContain("[elevenlabs:TIMEOUT]");
   });
 });
+
+describe("Arabic Mixed-Script Pronunciation and Preflight Safety", () => {
+  it("resolves generic English Demo to ديمو in spoken TTS while preserving captionText", () => {
+    const raw = "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    // Display / caption invariant: original wording and branding preserved
+    expect(result.captionText).toBe(raw);
+
+    // Spoken narration invariant: tashkeel/digits normalized, original words preserved
+    expect(result.spokenNarration).toBe(raw);
+
+    // TTS normalized text: ABUD -> عبود, Demo -> ديمو, numbers expanded
+    expect(result.ttsNormalizedText).toContain("عبود");
+    expect(result.ttsNormalizedText).toContain("ديمو");
+    expect(result.ttsNormalizedText).not.toContain("Demo");
+    expect(result.ttsNormalizedText).not.toContain("ABUD");
+  });
+
+  it("resolves AI and API to Arabic spoken forms in spoken TTS", () => {
+    const raw = "تقنيات AI الحديثة مع أقوى API للمطورين";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    expect(result.captionText).toBe(raw);
+    expect(result.ttsNormalizedText).toContain("إيه آي");
+    expect(result.ttsNormalizedText).toContain("ايه بي آي");
+    expect(result.ttsNormalizedText).not.toContain("AI");
+    expect(result.ttsNormalizedText).not.toContain("API");
+  });
+
+  it("resolves generic tokens like Pro, Premium, and Store to reviewed Arabic spoken forms", () => {
+    const raw = "اشترك في خطة Pro أو باقة Premium من الـ Store الآن";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    expect(result.captionText).toBe(raw);
+    expect(result.ttsNormalizedText).toContain("برو");
+    expect(result.ttsNormalizedText).toContain("بريميوم");
+    expect(result.ttsNormalizedText).toContain("ستور");
+    expect(result.ttsNormalizedText).not.toContain("Pro");
+    expect(result.ttsNormalizedText).not.toContain("Premium");
+  });
+
+  it("applies job-level pronunciation override over brand dictionary and system dictionary", () => {
+    const raw = "جرب Demo مع المنتج";
+
+    // System default: Demo -> ديمو
+    const defaultRes = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+    expect(defaultRes.ttsNormalizedText).toContain("ديمو");
+
+    // Brand profile override: Demo -> عرض توضيحي
+    const brandRes = preprocessArabicSpeech(raw, {
+      dialect: "egyptian",
+      brandPronunciations: { Demo: "عرض توضيحي" },
+    });
+    expect(brandRes.ttsNormalizedText).toContain("عرض توضيحي");
+
+    // Job-level override: Demo -> نسخة تجريبية (should beat brand profile!)
+    const jobRes = preprocessArabicSpeech(raw, {
+      dialect: "egyptian",
+      brandPronunciations: { Demo: "عرض توضيحي" },
+      pronunciationOverrides: { Demo: "نسخة تجريبية" },
+    });
+    expect(jobRes.ttsNormalizedText).toContain("نسخة تجريبية");
+    expect(jobRes.ttsNormalizedText).not.toContain("عرض توضيحي");
+    expect(jobRes.ttsNormalizedText).not.toContain("ديمو");
+  });
+
+  it("does not guess unknown brand tokens like ZyphoraX and leaves them uninvented", () => {
+    const raw = "جرب منتجات ZyphoraX الحصرية";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    // Must NOT invent arbitrary phonetics for unknown brands
+    expect(result.captionText).toBe(raw);
+    expect(result.ttsNormalizedText).toContain("ZyphoraX");
+  });
+
+  it("preflight blocks unknown brand tokens with VOICE_PRONUNCIATION_REQUIRED and avoids billable calls", () => {
+    const preflight = preflightElevenLabsInput({
+      text: "جرب منتجات ZyphoraX الحصرية",
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(preflight.status).toBe("VOICE_INPUT_INVALID");
+    const issue = preflight.issues.find((i) => i.code === "VOICE_PRONUNCIATION_REQUIRED");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("error");
+    expect(issue?.unresolvedTokens).toContain("ZyphoraX");
+    expect(issue?.message).toContain("Some words need a pronunciation");
+  });
+
+  it("preflight blocks unresolved URLs and emails with UNRESOLVED_LATIN_SCRIPT", () => {
+    const preflight = preflightElevenLabsInput({
+      text: "راسلنا على info@abud.test للمزيد",
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(preflight.status).toBe("VOICE_INPUT_INVALID");
+    const issue = preflight.issues.find((i) => i.code === "UNRESOLVED_LATIN_SCRIPT");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("error");
+    expect(issue?.unresolvedTokens).toContain("info@abud.test");
+  });
+
+  it("preflight passes cleanly when all tokens are resolved with trusted pronunciations", () => {
+    const raw = "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+    const processed = preprocessArabicSpeech(raw, { dialect: "egyptian" }).ttsNormalizedText;
+
+    const preflight = preflightElevenLabsInput({
+      text: processed,
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      requestAlignment: true,
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(preflight.status).toBe("VALID");
+    expect(preflight.issues.filter((i) => i.severity === "error")).toHaveLength(0);
+    expect(preflight.requestShape.textLength).toBe(66);
+  });
+
+  it("classifyRenderFailure maps VOICE_PRONUNCIATION_REQUIRED to customer-safe message without leaking token names", () => {
+    const rawTechnical = "ElevenLabs voice input invalid before synthesis: VOICE_PRONUNCIATION_REQUIRED. Some words need a pronunciation before Arabic narration can be generated: \"ZyphoraX\".";
+    const classified = classifyRenderFailure(rawTechnical);
+
+    expect(classified.category).toBe("VOICE_FAILURE");
+    expect(classified.message).toBe("Some words need a pronunciation before Arabic narration can be generated.");
+    expect(classified.message).not.toContain("ZyphoraX");
+  });
+});
+

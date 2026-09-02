@@ -217,6 +217,12 @@ export function classifyRenderFailure(rawTechnicalMessage: string): {
 } {
   const raw = (rawTechnicalMessage || "").toLowerCase();
 
+  if (/voice_pronunciation_required|pronunciation required|need a pronunciation|تحتاج بعض الكلمات إلى تحديد طريقة النطق/.test(raw)) {
+    return {
+      category: "VOICE_FAILURE",
+      message: "Some words need a pronunciation before Arabic narration can be generated.",
+    };
+  }
   if (/enospc|enomem|out of memory|\boom\b|killed|sigkill|no space left|cannot allocate|resource temporarily unavailable/.test(raw)) {
     return {
       category: "RESOURCE_EXHAUSTION",

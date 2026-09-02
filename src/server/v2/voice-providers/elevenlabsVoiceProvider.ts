@@ -20,6 +20,7 @@ import {
   parseElevenLabsAlignment,
   type CharacterAlignment,
 } from "./elevenLabsAlignment";
+import { findUnresolvedLatinTokens } from "./arabicSpeechPreprocessor";
 
 export const ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2";
 
@@ -72,6 +73,7 @@ export type ElevenLabsInputPreflightIssue = {
   message: string;
   index?: number;
   codePoint?: string;
+  unresolvedTokens?: string[];
 };
 
 export type ElevenLabsInputPreflightResult = {
@@ -233,6 +235,32 @@ export function preflightElevenLabsInput(input: {
       severity: "warning",
       message: `Model ${input.modelId} does not support language_code; language will be inferred from text.`,
     });
+  }
+
+  const isArabic = input.languageCode === "ar" || /[\u0600-\u06FF]/.test(normalizedText);
+  if (isArabic) {
+    const unresolvedLatin = findUnresolvedLatinTokens(normalizedText);
+    if (unresolvedLatin.length > 0) {
+      const words = unresolvedLatin.filter((t) => t.type === "word");
+      const others = unresolvedLatin.filter((t) => t.type !== "word");
+
+      if (words.length > 0) {
+        addIssue({
+          code: "VOICE_PRONUNCIATION_REQUIRED",
+          severity: "error",
+          message: `Some words need a pronunciation before Arabic narration can be generated: ${words.map((w) => `"${w.token}"`).join(", ")}. Add a pronunciation in Brand Voice Profile or job settings.`,
+          unresolvedTokens: words.map((w) => w.token),
+        });
+      }
+      if (others.length > 0) {
+        addIssue({
+          code: "UNRESOLVED_LATIN_SCRIPT",
+          severity: "error",
+          message: `Arabic narration contains unresolved Latin text: ${others.map((o) => `"${o.token}"`).join(", ")}. Configure explicit pronunciations before synthesis.`,
+          unresolvedTokens: others.map((o) => o.token),
+        });
+      }
+    }
   }
 
   const hasErrors = issues.some((issue) => issue.severity === "error");

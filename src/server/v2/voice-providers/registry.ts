@@ -84,7 +84,8 @@ export class VoiceRegistry {
     const processed = detectedArabic
       ? preprocessArabicSpeech(request.text, {
           dialect: request.dialect,
-          pronunciationOverrides: request.brandPronunciations,
+          pronunciationOverrides: request.pronunciationOverrides,
+          brandPronunciations: request.brandPronunciations,
         }).ttsNormalizedText
       : request.text.trim();
 
