@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.3 ElevenLabs Request Contract Forensics**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.4 Plain-TTS Diagnostic & Arabic Stable Route**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,7 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Current Pass 9.3 request contract forensics and immutable runtime closure completed.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Current Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -109,6 +109,7 @@ Finalization track:
 | V2.4 Pass 9.1 | Production failure root-cause, job reliability, retry forensics and server hardening | **FORENSIC CLOSURE / REPAIRS VERIFIED / RELEASE BLOCKED** |
 | V2.4 Pass 9.2 | Arabic Mixed-Script TTS Closure, Exact Incident Retry & RC.2 Qualification | **MIXED-SCRIPT HARNESS COMPLETE / INCIDENT RETRIED / 1 PAID CALL CONSUMED / RELEASE BLOCKED** |
 | V2.4 Pass 9.3 | ElevenLabs Request Contract Regression Isolation & Immutable Runtime Closure | **FORENSICS COMPLETE / 0 PAID CALLS / SINGLE DIAGNOSTIC PROPOSED / RELEASE BLOCKED** |
+| V2.4 Pass 9.4 | ElevenLabs Plain-TTS Diagnostic & Arabic Stable Voice Route | **PLAIN-TTS PROVEN / 1 PAID CALL CONSUMED / ARABIC STABLE ROUTE IMPLEMENTED / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -9048,3 +9049,135 @@ Wire serialization tests verified:
 - **If FAILURE**:
   Conclusively proves that ElevenLabs upstream rejects this specific text string under both endpoints, isolating the issue to character/punctuation parsing.
 - **Quota Cost**: Exactly 1 call (66 characters).
+
+# V2.4 Pass 9.4 — ElevenLabs Plain-TTS Diagnostic & Arabic Stable Voice Route
+
+**Date:** 2026-09-03  
+**Branch:** `v2.4-professional-video-engine`  
+**Pass 9.4 Starting HEAD:** `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6` (verified)  
+**Status:** **PLAIN-TTS PROVEN / 1 PAID CALL CONSUMED / ARABIC STABLE ROUTE IMPLEMENTED / RELEASE BLOCKED**  
+**Release Decision:** **BLOCKED / NOT RELEASED** (Do NOT merge main, tag v2.4.0, create GitHub Release, move GHCR stable, publish update manifest, qualify RC.2, or publish any package). Stable v2.3.1 remains immutable.  
+**Paid Provider Calls Consumed in Pass 9.4:** **1** (Exactly 1 authorized ElevenLabs Plain-TTS call; 0 previews, 0 AI video calls, 0 social posts).
+
+---
+
+## 1. Executive Diagnostic Outcome
+
+Under explicit owner authorization for **exactly one billable ElevenLabs Plain-TTS call**, Scene 1 of the Arabic incident lineage was dispatched to Plain TTS (`POST /v1/text-to-speech/:voice_id`) without requesting timestamps.
+
+### Crucial Result:
+- **HTTP Status**: **200 OK**
+- **Roundtrip Network Time**: **1,557 ms**
+- **Upstream Request ID**: `zGjCkhuimmErnFFtm0vW`
+- **Audio Bytes Returned**: **71,515 bytes**
+- **Audio Validation (`ffprobe`)**: Duration **4.440816 seconds**, codec **MP3**, sample rate **44,100 Hz**, channels **1 (mono)**. PASS.
+- **Root-Cause Proof**:
+  - ElevenLabs upstream accepted the exact normalized Scene 1 text: `"مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة."` cleanly and immediately under Plain TTS.
+  - The previous HTTP 400 `invalid_input` on Scene 1 was **100% specific to the `/with-timestamps` endpoint's internal tokenizer / alignment engine**.
+  - Plain TTS is definitively proven as the robust, reliable synthesis route for Arabic speech on this voice and account.
+
+---
+
+## 2. Authorized Diagnostic Execution Audit
+
+| Attribute | Specification | Actual Value |
+|---|---|---|
+| **Authorized Limit** | Exactly 1 call | 1 call |
+| **Calls Dispatched** | Hard counter instrumented | 1 call |
+| **Endpoint** | `POST /v1/text-to-speech/68MRVrnQAt8vLbu0FCzw?output_format=mp3_44100_128` | Exact match |
+| **Voice ID** | `68MRVrnQAt8vLbu0FCzw` (Mamdoh) | Exact match |
+| **Model ID** | `eleven_multilingual_v2` | Exact match |
+| **Preset** | `natural` | Exact match |
+| **Voice Settings** | `stability: 0.5, similarity_boost: 0.75, style: 0.15, use_speaker_boost: true` | Exact match |
+| **Text (Spoken)** | `مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.` | Exact match (66 chars, pure Arabic) |
+| **Customer Display Text** | `مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.` | Preserved in metadata / captions |
+| **Unauthorized Calls** | 0 | 0 |
+
+---
+
+## 3. Durable Artifact Persistence & Local Whisper Alignment
+
+The paid audio was durably captured and attached to the incident lineage (`cmtknn0vk000007lfgwx6cqyx`):
+
+1. **Voice Artifact**:
+   - **Artifact ID**: `voice_76dd9485bc4d4ee5_e0251a3514e2`
+   - **Checksum**: `e0251a3514e2b0ee038057f6cb18afe251a55fdd35dcad0b51f640a0754cd311`
+   - **Storage Ref**: `artifacts/scene/voice/voice_76dd9485bc4d4ee5_e0251a3514e2.mp3`
+   - **Strategy Metadata**: `voiceStrategy: "plain_tts"`, `voiceSynthesisStrategy: "elevenlabs_plain_tts_whisper"`
+   - **Characters Billed**: 66
+
+2. **Captions Artifact (Local Whisper)**:
+   - **Artifact ID**: `captions_e76ddee264b42581_c092a9c0cc26`
+   - **Checksum**: `c092a9c0cc266318d029c6077fc36df4e1b4fe37c69e1a515db6a0019980ea23`
+   - **Storage Ref**: `artifacts/scene/captions/captions_e76ddee264b42581_c092a9c0cc26.json`
+   - **Timing Source**: `whisper` (0 provider calls)
+   - **Whisper Processing Time**: `14,070 ms`
+   - **Total Voice-Stage Duration**: `15,627 ms` (`1,557 ms` TTS + `14,070 ms` Whisper)
+
+---
+
+## 4. Production Arabic Stable Route Implementation
+
+Based on the verified diagnostic success, the production routing policy has been hardened:
+
+1. **Pre-Dispatch Strategy Selection**:
+   - For Arabic productions (`language === "ar"` or Egyptian Arabic dialect) using ElevenLabs and `eleven_multilingual_v2`, the engine selects **Plain TTS** (`voiceStrategy: "plain_tts"`, `requestAlignment: false`) **BEFORE synthesis**.
+   - Caption timing automatically routes to local Whisper.
+2. **Single-Call Invariant Enforced**:
+   - Eliminates the speculative `/with-timestamps` call for Arabic narration.
+   - Prevents double billing (no "timestamps then fallback to plain TTS").
+3. **Global Capability Retained**:
+   - `/with-timestamps` remains available globally for English, explicit capability requests, and non-Arabic productions where supported.
+4. **Artifact Fingerprint Strategy Separation**:
+   - `createVoiceInputHash` now incorporates `voiceStrategy` to cleanly separate `plain_tts` from `timestamps` artifacts while preserving backward compatibility for historical artifacts.
+5. **Mixed-Strategy Lineage Preservation**:
+   - Scene 0 artifact (`timestamps` + `elevenlabs_alignment`) remains 100% valid and preserved.
+   - Scene 1 artifact (`plain_tts` + `whisper`) is ready and valid.
+
+---
+
+## 5. Lineage & Exact Retry Readiness
+
+Inspecting the exact retry lineage (`cmtk9uo11000207ry72n76c5q` -> `cmtkcs4mg000007ryfo4n9bt8` -> `cmtknn0vk000007lfgwx6cqyx`):
+
+- **Scene 0**:
+  - Voice: **READY** (`voice_376f5d939a42e63b_83630c60680d`)
+  - Captions: **READY** (`captions_2e2e3060c9f77ec6_fa3d7d5e8548`, `elevenlabs_alignment`)
+  - Media: **READY** (`media_3fe1d2c7bfda98bf_10e3c9eee9f6`)
+- **Scene 1**:
+  - Voice: **READY** (`voice_76dd9485bc4d4ee5_e0251a3514e2`, `plain_tts`)
+  - Captions: **READY** (`captions_e76ddee264b42581_c092a9c0cc26`, `whisper`)
+  - Media: **READY** (to be linked upon retry resume)
+- **Scene 2**:
+  - Voice: **MISSING** (0 calls dispatched; uncalled)
+  - Captions: **DEPENDENT / MISSING**
+  - Media: **DEPENDENT**
+
+**Exact Future Provider Requirement**: Exactly **1** ElevenLabs Plain-TTS call for Scene 2 (requiring explicit owner authorization) before the video render can complete.
+
+---
+
+## 6. Verification Gates
+
+1. **Automated Unit & Contract Tests**:
+   - `npx vitest run src/server/v2/voiceProviders.test.ts`: **75 passed (75 tests)**.
+   - Full test suite: **70 test files passed, 1,079 tests passed, 0 failures**.
+2. **Typecheck**:
+   - `npm run typecheck`: **PASSED** (0 server errors, 0 UI errors).
+3. **Production Build**:
+   - `npm run build`: **PASSED** (`tsc` + `vite build`).
+4. **Immutable Runtime Deployment**:
+   - Built fresh Docker image `abud-shorts-engine:v2` (`sha256:bfa62cfdbdfa8f7edb5dc1cc3fdaa257ebd5f2259c340c2e9bcfb116fd036e2a`) from exact Git HEAD.
+   - Recreated only `abud-shorts-app` and `abud-shorts-render-worker`.
+   - Verified both containers run image `bfa62cfdbdfa8f7edb5dc1cc3fdaa257ebd5f2259c340c2e9bcfb116fd036e2a`.
+   - Zero `docker cp` commands run for code deployment.
+   - Zero docker prune commands run; all volumes and database data preserved.
+5. **Server Stack Health**:
+   - `abud-shorts-app`: Up (healthy)
+   - `abud-shorts-render-worker`: Up (healthy)
+   - `abud-shorts-postgres`: Up (healthy)
+   - `abud-shorts-n8n`: Up (healthy)
+   - `http://localhost:3130/health`: `{"status":"ok"}`
+   - Stuck jobs: 0
+   - False-ready jobs: 0
+   - QA sessions: 0
