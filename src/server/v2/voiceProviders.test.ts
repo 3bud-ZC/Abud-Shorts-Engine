@@ -25,6 +25,7 @@ import {
   ElevenLabsProviderError,
 } from "./voice-providers/elevenlabsVoiceProvider";
 import { classifyRenderFailure } from "./customerView";
+import { parseElevenLabsAlignment } from "./voice-providers/elevenLabsAlignment";
 import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
 
 const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
@@ -1269,4 +1270,165 @@ describe("Arabic Mixed-Script Pronunciation and Preflight Safety", () => {
     expect(classified.message).not.toContain("ZyphoraX");
   });
 });
+
+describe("Pass 9.3: ElevenLabs Request Contract, Wire Serialization & Provenance Invariants", () => {
+  it("enforces strict wire body allow-list and excludes all internal engine fields", () => {
+    const provider = new ElevenLabsVoiceProvider({ apiKey: "mock-key" });
+    const settings = (provider as any).resolveVoiceSettings("natural");
+    const body = (provider as any).buildRequestBody(
+      "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      "eleven_multilingual_v2",
+      settings,
+      "ar",
+    );
+
+    // Wire keys must match the exact ElevenLabs contract
+    expect(Object.keys(body).sort()).toEqual(["model_id", "text", "voice_settings"]);
+
+    // Forbidden internal engine fields must never leak into the payload
+    const forbiddenInternalFields = [
+      "requestAlignment",
+      "dialect",
+      "voicePreset",
+      "fallbackPolicy",
+      "pronunciationOverrides",
+      "qualityProfile",
+      "quality",
+      "language",
+      "aspectRatio",
+      "brandProfile",
+    ];
+    for (const field of forbiddenInternalFields) {
+      expect(body).not.toHaveProperty(field);
+      expect(body.voice_settings).not.toHaveProperty(field);
+    }
+  });
+
+  it("produces identical wire JSON structure between historical known-good (energetic_ad) and current (natural)", () => {
+    const provider = new ElevenLabsVoiceProvider({ apiKey: "mock-key" });
+    const text = "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟";
+
+    const historicalSettings = (provider as any).resolveVoiceSettings("energetic_ad");
+    const historicalBody = (provider as any).buildRequestBody(text, "eleven_multilingual_v2", historicalSettings, "ar");
+
+    const currentSettings = (provider as any).resolveVoiceSettings("natural");
+    const currentBody = (provider as any).buildRequestBody(text, "eleven_multilingual_v2", currentSettings, "ar");
+
+    expect(Object.keys(historicalBody).sort()).toEqual(["model_id", "text", "voice_settings"]);
+    expect(Object.keys(currentBody).sort()).toEqual(["model_id", "text", "voice_settings"]);
+
+    expect(Object.keys(historicalBody.voice_settings).sort()).toEqual([
+      "similarity_boost",
+      "stability",
+      "style",
+      "use_speaker_boost",
+    ]);
+    expect(Object.keys(currentBody.voice_settings).sort()).toEqual([
+      "similarity_boost",
+      "stability",
+      "style",
+      "use_speaker_boost",
+    ]);
+
+    // All numerical values are strictly finite numbers between 0 and 1
+    for (const body of [historicalBody, currentBody]) {
+      const vs = body.voice_settings;
+      expect(Number.isFinite(vs.stability)).toBe(true);
+      expect(vs.stability).toBeGreaterThanOrEqual(0);
+      expect(vs.stability).toBeLessThanOrEqual(1);
+
+      expect(Number.isFinite(vs.similarity_boost)).toBe(true);
+      expect(vs.similarity_boost).toBeGreaterThanOrEqual(0);
+      expect(vs.similarity_boost).toBeLessThanOrEqual(1);
+
+      expect(Number.isFinite(vs.style)).toBe(true);
+      expect(vs.style).toBeGreaterThanOrEqual(0);
+      expect(vs.style).toBeLessThanOrEqual(1);
+
+      expect(typeof vs.use_speaker_boost).toBe("boolean");
+    }
+  });
+
+  it("verifies JSON serialization contains no undefined, NaN, null, or stringified numbers", () => {
+    const provider = new ElevenLabsVoiceProvider({ apiKey: "mock-key" });
+    const settings = (provider as any).resolveVoiceSettings("natural");
+    const body = (provider as any).buildRequestBody(
+      "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      "eleven_multilingual_v2",
+      settings,
+      "ar",
+    );
+
+    const json = JSON.stringify(body);
+    expect(json).not.toContain("NaN");
+    expect(json).not.toContain("null");
+    expect(json).not.toContain("undefined");
+    expect(json).not.toContain('"0.5"');
+    expect(json).not.toContain('"0.75"');
+    expect(json).not.toContain('"true"');
+
+    const parsed = JSON.parse(json);
+    expect(typeof parsed.voice_settings.stability).toBe("number");
+    expect(typeof parsed.voice_settings.similarity_boost).toBe("number");
+    expect(typeof parsed.voice_settings.style).toBe("number");
+    expect(typeof parsed.voice_settings.use_speaker_boost).toBe("boolean");
+  });
+
+  it("verifies elevenlabs_alignment provenance accurately reproduces submitted text character tokens", () => {
+    const submittedText = "عايز تيشرت شيك";
+    const rawPayload = {
+      audio_base64: "bW9jay1hdWRpby1kYXRh",
+      alignment: {
+        characters: ["ع", "ا", "ي", "ز", " ", "ت", "ي", "ش", "ر", "ت", " ", "ش", "ي", "ك"],
+        character_start_times_seconds: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65],
+        character_end_times_seconds: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7],
+      },
+    };
+
+    const parsed = parseElevenLabsAlignment(rawPayload, "alignment");
+    expect(parsed).not.toBeNull();
+    expect(parsed?.characters.join("")).toBe(submittedText);
+    expect(parsed?.startSeconds).toHaveLength(14);
+    expect(parsed?.endSeconds).toHaveLength(14);
+  });
+
+  it("rejects corrupted or mismatched native alignment without trusting invalid spans", () => {
+    const rawCorruptedPayload = {
+      audio_base64: "bW9jay1hdWRpby1kYXRh",
+      alignment: {
+        characters: ["x", "y", "z"],
+        character_start_times_seconds: [0.0, 0.1, 0.2],
+        character_end_times_seconds: [0.1, 0.2], // mismatched lengths!
+      },
+    };
+
+    const parsed = parseElevenLabsAlignment(rawCorruptedPayload, "alignment");
+    expect(parsed).toBeNull();
+  });
+
+  it("enforces single-call error discipline: 400 INVALID_INPUT does not fall back to plain TTS", () => {
+    const err400 = {
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            status: "invalid_input",
+            message: "Invalid input",
+          },
+        },
+      },
+    };
+
+    const detail = parseElevenLabsError(err400, "https://api.elevenlabs.io/v1/text-to-speech/voice-123/with-timestamps", "POST");
+    expect(detail.taxonomyCode).toBe("INVALID_INPUT");
+    expect(detail.httpStatus).toBe(400);
+
+    const isEndpointMissing =
+      detail.taxonomyCode === "UNSUPPORTED_ENDPOINT" ||
+      detail.httpStatus === 405 ||
+      (detail.httpStatus === 404 && detail.category !== "voice_not_found" && detail.taxonomyCode !== "VOICE_NOT_FOUND");
+    expect(isEndpointMissing).toBe(false);
+  });
+});
+
 

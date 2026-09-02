@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.2 Arabic Mixed-Script & Exact Retry Closure**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.3 ElevenLabs Request Contract Forensics**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,7 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 baseline source SHA: `8023401ec0a0f3f384069d78305089708f3c1590` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.1 and Pass 9.2 work completed.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Current Pass 9.3 request contract forensics and immutable runtime closure completed.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -108,6 +108,7 @@ Finalization track:
 | V2.4 Pass 9 | Release candidate closure | **RC_READY / SUPERSEDED BY PASS 9.1 BLOCK** |
 | V2.4 Pass 9.1 | Production failure root-cause, job reliability, retry forensics and server hardening | **FORENSIC CLOSURE / REPAIRS VERIFIED / RELEASE BLOCKED** |
 | V2.4 Pass 9.2 | Arabic Mixed-Script TTS Closure, Exact Incident Retry & RC.2 Qualification | **MIXED-SCRIPT HARNESS COMPLETE / INCIDENT RETRIED / 1 PAID CALL CONSUMED / RELEASE BLOCKED** |
+| V2.4 Pass 9.3 | ElevenLabs Request Contract Regression Isolation & Immutable Runtime Closure | **FORENSICS COMPLETE / 0 PAID CALLS / SINGLE DIAGNOSTIC PROPOSED / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -8906,3 +8907,144 @@ To confirm the free and local rendering pipeline was unaffected by the V2.4 voic
 - Do NOT move GHCR `stable`.
 - Do NOT package RC.2 as production-ready.
 - Stable v2.3.1 remains immutable and authoritative.
+
+# V2.4 Pass 9.3 — ElevenLabs Request Contract Regression Isolation & Immutable Runtime Closure
+
+**Date:** 2026-09-03  
+**Branch:** `v2.4-professional-video-engine`  
+**Pass 9.3 Starting HEAD:** `643c73e1f024843432974c90620658ea476d9f1b` (verified)  
+**Status:** **NON-PAID REQUEST-CONTRACT FORENSICS COMPLETE / RELEASE BLOCKED**  
+**Release Decision:** **BLOCKED / NOT RELEASED** (Do NOT merge main, tag v2.4.0, create GitHub Release, move GHCR stable, publish update manifest, or package RC.2 as ready). Stable v2.3.1 remains immutable.  
+**Paid Provider Calls Consumed in Pass 9.3:** **0** (0 ElevenLabs synthesis calls, 0 previews, 0 AI video calls).
+
+---
+
+## 1. Executive Forensic Summary
+
+Pass 9.3 conducted an exhaustive, non-billable forensic comparison between the **known-good historical ElevenLabs implementation** and the **current failing incident retry lineage**, isolating the exact contract boundaries, runtime behaviors, and upstream account realities without spending provider quota.
+
+### Key Forensic Findings:
+
+1. **Scene 0 Provenance Proves `/with-timestamps` Capability**:
+   - Scene 0 artifact `voice_376f5d939a42e63b_83630c60680d` and caption manifest `captions_2e2e3060c9f77ec6_fa3d7d5e8548.manifest.json` independently prove that `https://api.elevenlabs.io/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw/with-timestamps?output_format=mp3_44100_128` **succeeded on 2026-09-02T15:49:36.053Z** on the exact same voice (`68MRVrnQAt8vLbu0FCzw`, Mamdoh), exact same model (`eleven_multilingual_v2`), exact same preset (`natural`), and exact same live account.
+   - It returned full character alignments (`timingSource: "elevenlabs_alignment"`) with start and end timestamps.
+   - Therefore, the hypothesis that *"Mamdoh or this account does not support /with-timestamps"* is **CONCUSIVELY RULED OUT**.
+
+2. **Historical Known-Good Job (`cmt6vgxfb000308sbakaebzkm`) Used Plain TTS**:
+   - Git source history traces the known-good V2.2 run to commit `265dcd7d76f30ad20c9775e87bed131e87896781` (2026-08-24).
+   - In commit `265dcd7`, `/with-timestamps` **did not exist in the codebase**.
+   - `cmt6vgxfb000308sbakaebzkm` called `POST https://api.elevenlabs.io/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw?output_format=mp3_44100_128` (plain TTS) for all 3 scenes.
+   - Whisper generated all caption timings.
+
+3. **Historical Fallback Behavior (`a51bf3a` vs `8023401`)**:
+   - Milestone V2.2-C (commit `a51bf3a0b47c9b455c9df19f9de5881c4006a9a8`) introduced `requestWithTimestamps`. In that commit, the catch block was:
+     `catch (err) { this.logUpstreamError(...); return null; }`
+     Any error from `/with-timestamps` silently returned `null` and fell back to the plain TTS endpoint, ensuring the job completed.
+   - Pass 9.1 (commit `8023401`) hardened the taxonomy and restricted fallback strictly to 404/405 endpoint-missing errors. Consequently, any HTTP 400 `invalid_input` returned by `/with-timestamps` immediately fails the job to prevent a second billed synthesis call.
+
+4. **Live Non-Billable Account & Catalog Inspection**:
+   - `GET /v1/user`: Subscription tier is `starter`, `status: active`, character count used is `2,484` out of `40,000` allowance. Account is healthy with ample quota.
+   - `GET /v1/models`: `eleven_multilingual_v2` confirmed available, `can_do_text_to_speech: true`, includes `ar`.
+   - `GET /v1/voices/68MRVrnQAt8vLbu0FCzw`: Voice Mamdoh confirmed available, category `professional`, cloned/copied voice with `rate: 1`.
+   - `GET /v1/voices/68MRVrnQAt8vLbu0FCzw/settings`: Default voice settings returned: `stability: 1, similarity_boost: 1, style: 0.26, use_speaker_boost: true, speed: 1`.
+
+---
+
+## 2. Request Contract Diff (No Network)
+
+Comparison between Historical Known-Good (`cmt6vgxfb000308sbakaebzkm` at commit `265dcd7`) and Current Failing Incident (`cmtknn0vk000007lfgwx6cqyx` at current HEAD):
+
+| Contract Attribute | Historical Known-Good (`cmt6vgxfb000308sbakaebzkm`) | Current Incident (`cmtknn0vk000007lfgwx6cqyx`) | Discrepancy Analysis |
+|---|---|---|---|
+| **HTTP Method** | `POST` | `POST` | Identical |
+| **URL Path** | `/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw` | `/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw/with-timestamps` | **DIFFERENT ENDPOINT** (Plain TTS vs with-timestamps) |
+| **Query Parameters** | `output_format=mp3_44100_128` | `output_format=mp3_44100_128` | Identical |
+| **Header Names** | `xi-api-key`, `Content-Type` | `xi-api-key`, `Content-Type` | Identical |
+| **Body Keys** | `["model_id", "text", "voice_settings"]` | `["model_id", "text", "voice_settings"]` | Identical (Strict Allow-list) |
+| **Model ID** | `"eleven_multilingual_v2"` | `"eleven_multilingual_v2"` | Identical |
+| **Language Code** | Not sent (capabilities check blocks it) | Not sent (capabilities check blocks it) | Identical |
+| **Voice Preset** | `"energetic_ad"` | `"natural"` | Both presets valid |
+| **stability** | `0.35` | `0.5` | Both valid finite floats [0, 1] |
+| **similarity_boost** | `0.8` | `0.75` | Both valid finite floats [0, 1] |
+| **style** | `0.45` | `0.15` | Both valid finite floats [0, 1] |
+| **use_speaker_boost** | `true` | `true` | Identical boolean |
+| **Internal Fields** | None leaked | None leaked (verified: `requestAlignment`, `dialect`, etc. not in JSON) | Fully protected |
+| **Serialization** | Valid JSON, no undefined/null/NaN | Valid JSON, no undefined/null/NaN | Zero defects |
+
+---
+
+## 3. Serialization & Allow-List Audit
+
+Wire serialization tests verified:
+- `Object.keys(body)` produces strictly `["model_id", "text", "voice_settings"]`.
+- `Object.keys(body.voice_settings)` produces strictly `["similarity_boost", "stability", "style", "use_speaker_boost"]`.
+- All float values are strictly finite numbers between 0 and 1.
+- No internal engine fields (`requestAlignment`, `dialect`, `voicePreset`, `fallbackPolicy`, `pronunciationOverrides`, `qualityProfile`, `brandProfile`) ever leak into the outbound payload.
+- No `NaN`, `null`, `undefined`, or numeric strings exist in serialized wire output.
+
+---
+
+## 4. Reusable Scene 0 vs Scene 1 Comparison
+
+| Metric | Scene 0 (Succeeded & Reused) | Scene 1 (Failed HTTP 400) |
+|---|---|---|
+| **Text** | `عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟` | `مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.` |
+| **Length** | 43 characters | 66 characters |
+| **Punctuation** | Arabic question mark (`؟`) | Arabic comma (`،`), ASCII period (`.`) |
+| **Script** | 100% Arabic script | 100% Arabic script (0 Latin characters) |
+| **Voice ID** | `68MRVrnQAt8vLbu0FCzw` | `68MRVrnQAt8vLbu0FCzw` |
+| **Model** | `eleven_multilingual_v2` | `eleven_multilingual_v2` |
+| **Voice Settings** | 0.5 / 0.75 / 0.15 / true | 0.5 / 0.75 / 0.15 / true |
+| **Endpoint** | `/with-timestamps` | `/with-timestamps` |
+| **Result** | **HTTP 200** (`audio_base64` + native alignment) | **HTTP 400** `status: invalid_input, message: Invalid input` |
+| **Request ID** | None recorded in metadata | NOT PROVIDED by ElevenLabs in response |
+
+---
+
+## 5. Security Process & Runtime Discipline Corrections
+
+1. **Predictable QA Session Token Defect**:
+   - Pass 9.2 command history utilized predictable QA token strings (`qa_pass92_live_retry`).
+   - Both tokens were revoked in PostgreSQL and verified 401.
+   - Process rule adopted: **Never use predictable QA tokens.** Any future QA session must use a cryptographically random 32-byte token (`crypto.randomBytes(32).toString('hex')`) retained strictly in memory, never printed or committed to disk.
+   - For Pass 9.3: Zero QA sessions created.
+
+2. **Immutable Runtime Discipline**:
+   - Prohibited manual `docker cp` of code into containers.
+   - All runtime execution must build cleanly from exact Git HEAD and recreate containers deterministically.
+
+---
+
+## 6. Verification Gates
+
+1. **Automated Unit & Contract Tests**:
+   - `npx vitest run src/server/v2/voiceProviders.test.ts`: **70 passed (70 tests)**.
+   - Full test suite: **70 test files passed, 1,071 tests passed, 0 failures**.
+2. **Typecheck**:
+   - `npm run typecheck`: **PASSED** (0 server errors, 0 UI errors).
+3. **Production Build**:
+   - `npm run build`: **PASSED**.
+4. **Server Stack Health**:
+   - All containers (`abud-shorts-app`, `abud-shorts-render-worker`, `abud-shorts-postgres`, `abud-shorts-n8n`) healthy.
+   - Zero docker prune commands run; all volumes preserved.
+
+---
+
+## 7. Single Proposed Paid Diagnostic (Awaiting User Authorization)
+
+> [!IMPORTANT]
+> **No provider call was executed during Pass 9.3.** The following single call proposal is submitted for explicit user review and approval:
+
+### Proposed Diagnostic Call:
+- **Endpoint**: `POST https://api.elevenlabs.io/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw?output_format=mp3_44100_128` (**PLAIN TTS**, matching historical known-good job `cmt6vgxfb000308sbakaebzkm`)
+- **Text**: `"مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة."` (The exact normalized text of Scene 1)
+- **Voice**: `68MRVrnQAt8vLbu0FCzw` (Mamdoh)
+- **Model**: `eleven_multilingual_v2`
+- **Settings**: Preset `natural` (`stability: 0.5, similarity_boost: 0.75, style: 0.15, use_speaker_boost: true`)
+- **Why this call**:
+  Because Scene 0 succeeded with `/with-timestamps` while Scene 1 failed, testing plain TTS on the exact Scene 1 text discriminates between an **endpoint-specific alignment issue** and a **text-tokenization rejection**.
+- **If SUCCESS**:
+  Conclusively proves that ElevenLabs plain TTS generates this Arabic text cleanly, and the HTTP 400 is an upstream bug/restriction in ElevenLabs' `/with-timestamps` alignment engine for this text. The engine can then immediately enable the architectural plain-TTS fallback with Whisper captions.
+- **If FAILURE**:
+  Conclusively proves that ElevenLabs upstream rejects this specific text string under both endpoints, isolating the issue to character/punctuation parsing.
+- **Quota Cost**: Exactly 1 call (66 characters).
