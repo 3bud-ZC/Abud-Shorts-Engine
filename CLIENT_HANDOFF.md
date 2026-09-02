@@ -1,8 +1,8 @@
-# ABUD Shorts Engine V2.2.0 - Client Handoff
+# ABUD Shorts Engine V2.4.0-rc.1 - Client Handoff
 
 ## What The Client Receives
 
-- `ABUD-Shorts-Engine-2.2.0.tar.gz`
+- `ABUD-Shorts-Engine-2.4.0-rc.1.tar.gz`
 - `update-manifest.json`
 - `ABUD-Shorts-Engine-2.2.0.tar.gz.sha256`
 - Release notes and quick-start documentation

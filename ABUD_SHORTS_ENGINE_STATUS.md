@@ -8403,3 +8403,193 @@ Baseline fully preserved from Pass 7.1 (same 70 files, 1038 tests).
 - Secrets exposed: 0.
 - Stable v2.3.1/main/tag/GHCR stable untouched; no merge, tag, release,
   or stable move.
+
+# V2.4 Pass 9 - Release Candidate Closure
+
+Date: 2026-09-02
+
+## Status
+
+RC_READY pending user human review and explicit release approval.
+
+No merge to `main`, no tag, no GitHub Release, no GHCR stable move, and no
+public package publication were performed.
+
+## Source
+
+- Branch: `v2.4-professional-video-engine`.
+- Starting HEAD: `403b526954170d76bfb1136d25124bbcf1fcf3ce`.
+- Starting `origin/v2.4-professional-video-engine`: `403b526954170d76bfb1136d25124bbcf1fcf3ce`.
+- Starting `origin/main`: `cd3a0e0401229193b54513dd62c7a38ddf606f16`.
+- Stable tag preserved: `v2.3.1`.
+
+## Version Contract
+
+- Product version: `2.4.0-rc.1`.
+- Product stage: `Release Candidate`.
+- Product build: `2026.09.02.1`.
+- Schema version: `2.13.0`.
+- Migration count: 12.
+- Latest applied migration: `2.13.0`.
+- Schema change from v2.3.1 to this RC: none.
+
+## Code Closure
+
+- Final metadata with `status=failed` or `professionalReady=false` is now a hard
+  job failure at the internal completion boundary.
+- Direct `/api/v2/jobs` ProductionSpec creation now preserves visual/budget
+  contract metadata from `spec.metadata` and `spec.metadata.uiContract`; it no
+  longer silently falls back to `auto_best`.
+- Version-aware tests now accept the RC product contract and semver prerelease
+  versions.
+
+## Package
+
+- Local RC package: `release/v2.4.0-rc.1-local`.
+- Package file: `ABUD-Shorts-Engine-2.4.0-rc.1.tar.gz`.
+- Package SHA256: `d37e10c90224057510a8ee70c522cfe7858bbf6d7bc7664aba4091ae346e3435`.
+- Package channel: `development` (RC-compatible local channel; updater schema
+  supports `stable` and `development`).
+- Package verification: PASS.
+- Verified package contains installer, updater, compose files and docs.
+- Verified package excludes source, dependencies, developer data and secrets.
+
+## Docker
+
+- Final RC image: `abud-shorts-engine:v2.4.0-rc.local`.
+- Runtime tag: `abud-shorts-engine:v2`.
+- Image ID/digest: `sha256:4215d34093e080acd64763beaca81057aae1ba9d583f69f8135043f7fb9350d7`.
+- Architecture/OS: `amd64/linux`.
+- Image size: 6.82 GB.
+- v2.3.1 rehearsal image preserved: `sha256:5076022e68d0`, 7.77 GB.
+- Docker prune commands: 0.
+- Docker volume deletion: 0.
+
+## Primary Runtime
+
+| Container | Status |
+|-----------|--------|
+| `abud-shorts-app` | Up, healthy |
+| `abud-shorts-render-worker` | Up, healthy |
+| `abud-shorts-postgres` | Up, healthy; not recreated |
+| `abud-shorts-n8n` | Up, healthy; not recreated |
+
+- `/health`: PASS.
+- `/api/v2/system/info`: `2.4.0-rc.1`, `Release Candidate`,
+  `2026.09.02.1`, schema `2.13.0`.
+- Primary release channel remains `stable` unless the operator opts into another
+  channel.
+
+## Pass 9 QA
+
+- Temporary QA admin session: created with `qa_pass9_*`, token never printed.
+- Post-cleanup same-token request: 401.
+- Remaining `qa_pass9_*` admin sessions: 0.
+- Protected anonymous API: 401.
+- Wrong-token API: 401.
+- Scoped API token: create 201, read 200, write 403, revoked true.
+- Endpoints checked: 25/25 returned 200.
+- Browser matrix: 6 viewport/locale combinations, 16 pages each.
+- Browser blank pages: 0.
+- Browser horizontal overflow: 0.
+- Browser fatal console/page errors: 0.
+- Browser visible secret hits: 0.
+- Backup created: `cmtjzj7kn000007rybtar890h`.
+- Backup SHA256: `84fd53180d320e4ca5c354d426945db208a756c97651df0b9af58c0729897ba9`.
+- Backup includes secrets: false.
+
+## Golden Render
+
+- Golden job: `cmtjzjc54000607ryce2letv6`.
+- Golden video: `cmtjzjc54000607ryce2letv6`.
+- Status: ready.
+- Professional readiness: true.
+- Render strategy: `FFMPEG_FAST`.
+- Wall time: 155684 ms.
+- Provider mix: Pexels stock.
+- Revision job: `cmtjzmofp000a07rygl8oelpk`.
+- Revision reuse: planning, media, voice, speech timings.
+- Revision output: ready.
+- Delivery: preview 206 video/mp4, download 200 video/mp4, thumbnail 200 image/jpeg.
+- ffprobe: H.264 video, 1080x1920, 25 fps, AAC stereo, 20.011 seconds,
+  11,436,937 bytes.
+- Black/silence analysis: no blackdetect or silencedetect events reported.
+- Human review contact sheet: `tmp/pass9-contact-cmtjzjc54000607ryce2letv6.jpg`.
+
+## Upgrade Rehearsal
+
+- Isolated v2.3.1 source/image/package created from stable tag.
+- v2.3.1 rehearsal package SHA256:
+  `a499b1c01f1fc055e7d3dd82895c2e071c1db97d8f355090194b45c951ca4d25`.
+- Isolated project: `abud-pass9-v231`, port 3231.
+- Representative data inserted under v2.3.1:
+  app setting, brand, template, job, generated asset, publication, schedule.
+- Representative media checksum before upgrade:
+  `1dc2cc5f8d6989a54785686011f455d5739b30b471b2d7c9ab40c47d0b77c4a3`.
+- Final RC upgrade with the real installer: PASS.
+- Post-upgrade `/health`: PASS.
+- Post-upgrade system info: `2.4.0-rc.1`, schema `2.13.0`, channel
+  `development`.
+- Representative data after final RC upgrade: `1|1|1|1|1|1|1`.
+- Representative media checksum after final RC upgrade:
+  `1dc2cc5f8d6989a54785686011f455d5739b30b471b2d7c9ab40c47d0b77c4a3`.
+- Controlled missing-image upgrade failure: failed before data mutation; existing
+  install remained healthy.
+- Manual rollback to v2.3.1: PASS, data and media checksum preserved.
+- Binary rollback is supported for this RC because schema stays `2.13.0`.
+
+## Fresh Install
+
+- Isolated project: `abud-pass9-fresh`, port 3232.
+- Final RC installer run: PASS.
+- `/health`: PASS.
+- Setup status: unconfigured clean state; admin not configured; providers 0.
+- Fresh system info: `2.4.0-rc.1`, schema `2.13.0`, channel `development`.
+- Fresh containers: app, worker, Postgres and n8n healthy.
+
+## Provider And Publishing Closure
+
+- Content: local deterministic available; external content providers remain
+  adapter/config dependent.
+- Stock: Pexels and Pixabay implemented; primary Golden used Pexels stock.
+- Voice: Kokoro used for English Golden; ElevenLabs Arabic readiness endpoints
+  configured, no billable preview generated.
+- AI video: paid providers not invoked.
+- Publishing endpoints: providers, accounts, summary and publications returned
+  200.
+- Publications: 0.
+- Scheduled publications: 0.
+- Publishing attempts/events: 0.
+- Real external social posts: 0.
+
+## Security And Resource Health
+
+- Package secret verification: PASS.
+- Docker app/worker log secret scan: 0 hits.
+- Changed-file secret scan: no literal secret values; two code/test false
+  positives from token/key field names.
+- GPU visible: NVIDIA GeForce RTX 3050 6GB Laptop GPU, 6144 MiB total,
+  6001 MiB free at check time.
+- CPU visible: 13th Gen Intel Core i5-13450HX, 10 cores, 16 logical processors.
+- System memory at check time: 16,478,072 KiB total, 1,957,956 KiB free.
+- Docker disk usage at check time: images 27.69 GB, containers 1.953 GB,
+  local volumes 187 MB, build cache 33.13 GB.
+
+## Automated Gates
+
+- `pnpm typecheck`: PASS.
+- `pnpm run test -- --run`: PASS, 70 files, 1040 tests.
+- `pnpm build`: PASS.
+- Docker image build: PASS.
+- `git diff --check`: PASS; only Windows line-ending warnings reported.
+
+## Final Safety
+
+- v2.3.1 stable tag: untouched.
+- `main`: untouched.
+- GHCR stable: untouched.
+- GitHub Release: not created.
+- Public updater manifest: not published.
+- Customer data deleted: 0.
+- Docker volumes removed: 0.
+- Docker prune commands: 0.

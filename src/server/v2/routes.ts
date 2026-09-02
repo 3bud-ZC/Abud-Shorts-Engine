@@ -785,13 +785,16 @@ function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
 }
 
 function budgetControlsFrom(controls: any) {
+  const metadata = controls.metadata || {};
+  const contract = metadata.uiContract || {};
   return resolveProviderBudgetPolicy({
-    visualSource: controls.visualSource || controls.metadata?.uiContract?.visualSource,
-    budgetMode: controls.budgetMode || controls.metadata?.uiContract?.budgetMode,
-    maxExternalSpendUsd: controls.maxExternalSpendUsd ?? controls.metadata?.uiContract?.maxExternalSpendUsd,
+    visualSource: controls.visualSource || metadata.visualSource || contract.visualSource,
+    budgetMode: controls.budgetMode || metadata.budgetMode || contract.budgetMode,
+    maxExternalSpendUsd: controls.maxExternalSpendUsd ?? metadata.maxExternalSpendUsd ?? contract.maxExternalSpendUsd,
     paidCallsAllowed:
       controls.paidCallsAllowed === true ||
-      controls.metadata?.uiContract?.paidCallsAllowed === true ||
+      metadata.paidCallsAllowed === true ||
+      contract.paidCallsAllowed === true ||
       process.env.ABUD_ALLOW_PAID_VIDEO_CALLS === "true",
   });
 }
@@ -835,14 +838,57 @@ export function canonicalizeProductionSpecContract(
   const voicePreset = arabicVoice ? arabicVoice.preset : coerceRequestedPreset(controls.voicePreset);
   const voiceModelId = arabicVoice ? arabicVoice.modelId : undefined;
   const captionEnabled = controls.captionEnabled !== false && controls.captions !== false;
-  const visualSource = (controls.visualSource || "auto_best") as CreateVisualSource;
+  const specMetadata = spec.metadata || {};
+  const specContract = specMetadata.uiContract || {};
+  const controlsMetadata = controls.metadata || {};
+  const controlsContract = controlsMetadata.uiContract || {};
+  const visualSource = (
+    controls.visualSource ||
+    controlsMetadata.visualSource ||
+    controlsContract.visualSource ||
+    spec.visualSource ||
+    specMetadata.visualSource ||
+    specContract.visualSource ||
+    "auto_best"
+  ) as CreateVisualSource;
   const selectedMediaIds = selectedMediaIdsFromControls(controls);
   const sourceVisualMode = visualModeForSource(visualSource);
   const resolvedVisualMode = sourceVisualMode || controls.visualMode || spec.visualMode;
-  const stockProvider = (controls.stockProvider || controls.metadata?.stockProvider || "auto_stock") as StockProviderChoice;
-  const mediaPolicy = (controls.mediaPolicy || controls.metadata?.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
-  const aiVisualProvider = controls.aiVisualProvider || controls.metadata?.aiVisualProvider || "auto";
-  const budgetPolicy = budgetControlsFrom(controls);
+  const stockProvider = (
+    controls.stockProvider ||
+    controlsMetadata.stockProvider ||
+    controlsContract.stockProvider ||
+    specMetadata.stockProvider ||
+    specContract.stockProvider ||
+    "auto_stock"
+  ) as StockProviderChoice;
+  const mediaPolicy = (
+    controls.mediaPolicy ||
+    controlsMetadata.mediaPolicy ||
+    controlsContract.mediaPolicy ||
+    specMetadata.mediaPolicy ||
+    specContract.mediaPolicy ||
+    "auto_use_selected"
+  ) as MediaPolicyChoice;
+  const aiVisualProvider =
+    controls.aiVisualProvider ||
+    controlsMetadata.aiVisualProvider ||
+    controlsContract.aiVisualProvider ||
+    specMetadata.aiVisualProvider ||
+    specContract.aiVisualProvider ||
+    "auto";
+  const budgetPolicy = budgetControlsFrom({
+    ...controls,
+    visualSource,
+    metadata: {
+      ...specMetadata,
+      ...controlsMetadata,
+      uiContract: {
+        ...specContract,
+        ...controlsContract,
+      },
+    },
+  });
   const productImageId = controls.metadata?.productImageId || controls.productImageId;
   const characterProfileId = characterProfileIdFromControls(controls);
   const heroShotAllocation = allocateHeroShots(
@@ -5335,6 +5381,38 @@ export function createV2InternalRouter(
       res.status(400).json({ error: "Invalid complete payload." });
       return;
     }
+    const completedMetadata = readMetadata(config.videosDirPath, parsed.data.videoId);
+    const metadataRejected =
+      completedMetadata?.status === "failed" ||
+      completedMetadata?.professionalReady === false;
+    if (metadataRejected) {
+      const message =
+        typeof completedMetadata?.error === "string" && completedMetadata.error.trim()
+          ? completedMetadata.error
+          : "Video failed final quality readiness checks.";
+      const job = await jobs.updateJob(req.params.id, "failed", 100, "Quality review", message, {
+        error: message,
+        output: {
+          ...parsed.data.output,
+          videoId: parsed.data.videoId,
+          previewUrl: `/api/short-video/${parsed.data.videoId}`,
+          downloadUrl: `/api/videos/${parsed.data.videoId}/download`,
+          professionalReady: completedMetadata?.professionalReady,
+          validationStatus: completedMetadata?.status,
+        },
+      });
+      if (db) {
+        await new WorkerLeaseService(db).release(process.env.WORKER_ID || "render-worker");
+        await new WebhookService(db, { timeoutMs: config.webhookTimeoutMs }).dispatchEvent("job.failed", {
+          jobId: req.params.id,
+          videoId: parsed.data.videoId,
+          error: message,
+        } as any);
+      }
+      res.status(200).json({ job });
+      return;
+    }
+
     const job = await jobs.completeJob(
       req.params.id,
       parsed.data.videoId,
@@ -5343,7 +5421,6 @@ export function createV2InternalRouter(
     if (db) {
       await new WorkerLeaseService(db).release(process.env.WORKER_ID || "render-worker");
       const revision = await new RevisionService(db).markRevisionReadyForJob(req.params.id, parsed.data.videoId);
-      const completedMetadata = readMetadata(config.videosDirPath, parsed.data.videoId);
       const projectId = revision?.projectId || (completedMetadata?.revisionMetadata as any)?.parentVideoId || parsed.data.videoId;
       if (completedMetadata?.durableArtifacts) {
         await persistSceneArtifacts(db, projectId, completedMetadata.durableArtifacts as DurableSceneArtifact[]);

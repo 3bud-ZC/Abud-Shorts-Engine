@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import nock from "nock";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Config } from "../../config";
 import { ShortCreator } from "../../short-creator/ShortCreator";
 import { Server } from "../server";
@@ -529,6 +529,58 @@ describe("V2 routes", () => {
     await request(app).post("/internal/v1/render/jobs/test/start").send({}).expect(401);
   });
 
+  it("rejects internal completion when final metadata failed professional readiness", async () => {
+    const config = makeConfig();
+    const videosDir = fs.mkdtempSync(path.join(os.tmpdir(), "abud-v2-complete-"));
+    config.videosDirPath = videosDir;
+    writeMetadata(videosDir, {
+      videoId: "vid_failed_gate",
+      filename: "vid_failed_gate.mp4",
+      status: "failed",
+      error: "One or more sections need better footage; a scene fell back to a graphic instead of real video.",
+      professionalReady: false,
+    } as any);
+    const jobs = {
+      completeJob: vi.fn(),
+      updateJob: vi.fn(async (_id: string, status: string, progress: number, stage: string, message: string, options: any) => ({
+        id: "job_failed_gate",
+        status,
+        progress,
+        currentStage: stage,
+        error: options.error,
+        output: options.output,
+        message,
+      })),
+    };
+
+    const app = express();
+    app.use("/internal/v1", createV2InternalRouter(config, {} as ShortCreator, jobs as any));
+
+    const res = await request(app)
+      .post("/internal/v1/jobs/job_failed_gate/complete")
+      .set("x-internal-token", config.internalServiceToken)
+      .send({ videoId: "vid_failed_gate", output: { path: "/app/data/videos/vid_failed_gate.mp4" } })
+      .expect(200);
+
+    expect(jobs.completeJob).not.toHaveBeenCalled();
+    expect(jobs.updateJob).toHaveBeenCalledWith(
+      "job_failed_gate",
+      "failed",
+      100,
+      "Quality review",
+      expect.stringContaining("better footage"),
+      expect.objectContaining({
+        error: expect.stringContaining("better footage"),
+        output: expect.objectContaining({
+          videoId: "vid_failed_gate",
+          professionalReady: false,
+          validationStatus: "failed",
+        }),
+      }),
+    );
+    expect(res.body.job.status).toBe("failed");
+  });
+
   it("keeps media API responses free of internal storage details", () => {
     const asset = serializeMediaAssetForApi({
       id: "asset_1",
@@ -680,6 +732,62 @@ describe("V2 routes", () => {
     expect(res.body.job.productionSpec.visualMode).toBe("auto");
     expect(res.body.job.productionSpec.voiceProvider).toBe("kokoro");
     expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_best");
+  });
+
+  it("preserves direct ProductionSpec visual contract metadata on job creation", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        type: "video",
+        title: "Direct free-stock contract",
+        creationMode: "prompt",
+        prompt: "Create a short coffee shop video with free stock visuals.",
+        productionSpec: {
+          id: "direct_free_stock_contract",
+          title: "Direct free-stock contract",
+          language: "en",
+          durationSeconds: 20,
+          visualMode: "auto",
+          metadata: {
+            visualSource: "auto_free",
+            budgetMode: "free_only",
+            stockProvider: "auto_stock",
+            uiContract: {
+              visualSource: "auto_free",
+              budgetMode: "free_only",
+              stockProvider: "auto_stock",
+              paidCallsAllowed: false,
+            },
+          },
+          scenes: [
+            {
+              sceneIndex: 0,
+              purpose: "hook",
+              durationSeconds: 5,
+              narration: "Start the morning with a simple cup of coffee.",
+              displayText: "Morning coffee",
+              visualSource: "stock",
+              stockSearchTerms: ["coffee shop morning"],
+            },
+          ],
+        },
+      })
+      .expect(201);
+
+    expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_free");
+    expect(res.body.job.productionSpec.metadata.uiContract.sourceStrategy).toBe("Auto Free");
+    expect(res.body.job.productionSpec.metadata.uiContract.budgetMode).toBe("free_only");
+    expect(res.body.job.productionSpec.metadata.uiContract.paidCallsAllowed).toBe(false);
   });
 
   it("accepts production job Free Only visual routing controls", async () => {

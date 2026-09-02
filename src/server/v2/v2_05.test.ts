@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { getProductInfo, PRODUCT_VERSION, DATABASE_SCHEMA_VERSION } from "../../version";
+import { getProductInfo, PRODUCT_VERSION, PRODUCT_STAGE, DATABASE_SCHEMA_VERSION } from "../../version";
 import { AuthService } from "./auth/authService";
 import { BackupService } from "./backup/backupService";
 import { DiagnosticsService, redactSecrets } from "./diagnostics/diagnosticsService";
@@ -157,12 +157,12 @@ describe("V2-05 Release-Gate Engine Suites", () => {
   it("1. Product Versioning & Metadata", () => {
     const info = getProductInfo();
     expect(info.version).toBe(PRODUCT_VERSION);
-    expect(info.stage).toBe("General Availability");
+    expect(info.stage).toBe(PRODUCT_STAGE);
     expect(info.schemaVersion).toBe(DATABASE_SCHEMA_VERSION);
     // Pinned to the version this branch builds. The updater compares this
     // constant against a published release, so it must describe the running
     // code rather than the newest version that exists.
-    expect(PRODUCT_VERSION).toBe("2.3.1");
+    expect(PRODUCT_VERSION).toBe("2.4.0-rc.1");
   });
 
   it("2. Local Admin Authentication & Password Security", async () => {
