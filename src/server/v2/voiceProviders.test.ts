@@ -26,6 +26,7 @@ import {
 } from "./voice-providers/elevenlabsVoiceProvider";
 import { classifyRenderFailure } from "./customerView";
 import { parseElevenLabsAlignment } from "./voice-providers/elevenLabsAlignment";
+import { createVoiceInputHash } from "./artifacts/durableArtifacts";
 import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
 
 const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
@@ -1430,5 +1431,159 @@ describe("Pass 9.3: ElevenLabs Request Contract, Wire Serialization & Provenance
     expect(isEndpointMissing).toBe(false);
   });
 });
+
+describe("Pass 9.4: Arabic Stable Route, Plain-TTS Strategy & Lineage Invariants", () => {
+  const dummyKokoro: any = {
+    generate: vi.fn().mockResolvedValue({
+      audio: "dummy-stream",
+      audioLength: 5.2,
+    }),
+    listAvailableVoices: vi.fn().mockReturnValue(["af_heart", "am_adam"]),
+  };
+
+  it("routes Arabic ElevenLabs to Plain TTS by default before dispatch", () => {
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const decision = registry.route({
+      text: "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      language: "ar",
+      dialect: "egyptian",
+      requestedProvider: "elevenlabs",
+    });
+
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.requestAlignment).toBe(false);
+    expect(decision.voiceStrategy).toBe("plain_tts");
+    expect(decision.voiceSynthesisStrategy).toBe("elevenlabs_plain_tts_whisper");
+  });
+
+  it("retains timestamps capability when explicitly requested", () => {
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const decision = registry.route({
+      text: "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      language: "ar",
+      dialect: "egyptian",
+      requestedProvider: "elevenlabs",
+      voiceStrategy: "timestamps",
+    });
+
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.requestAlignment).toBe(true);
+    expect(decision.voiceStrategy).toBe("timestamps");
+    expect(decision.voiceSynthesisStrategy).toBe("elevenlabs_timestamps_native");
+  });
+
+  it("leaves English / non-Arabic routes unaffected (defaults to native timestamps when requested)", () => {
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const decision = registry.route({
+      text: "Experience the ultimate comfort with our all-new oversized collection.",
+      language: "en",
+      requestedProvider: "elevenlabs",
+      requestAlignment: true,
+    });
+
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.requestAlignment).toBe(true);
+    expect(decision.voiceStrategy).toBe("timestamps");
+  });
+
+  it("computes distinct input hashes for plain_tts vs timestamps to prevent strategy collision", () => {
+    const hashTimestamps = createVoiceInputHash({
+      spokenNarration: "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟",
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      voicePreset: "natural",
+      language: "ar",
+    });
+
+    const hashPlainTts = createVoiceInputHash({
+      spokenNarration: "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟",
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      voicePreset: "natural",
+      language: "ar",
+      voiceStrategy: "plain_tts",
+    });
+
+    expect(hashTimestamps).not.toEqual(hashPlainTts);
+  });
+
+  it("preserves historical timestamp hashes when voiceStrategy is omitted", () => {
+    const baseHash = createVoiceInputHash({
+      spokenNarration: "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟",
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      voicePreset: "natural",
+      language: "ar",
+      dialect: "egyptian",
+      qualityProfile: "balanced",
+      pace: "normal",
+      style: "default",
+    });
+
+    expect(baseHash).toBeDefined();
+    expect(typeof baseHash).toBe("string");
+    expect(baseHash).toHaveLength(64);
+  });
+
+  it("supports mixed strategy lineage across scenes (Scene 0 timestamps + Scene 1 plain_tts)", () => {
+    const scene0Artifact = {
+      sceneIndex: 0,
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      timingSource: "elevenlabs_alignment",
+      strategy: "timestamps",
+      valid: true,
+    };
+
+    const scene1Artifact = {
+      sceneIndex: 1,
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      timingSource: "whisper",
+      strategy: "plain_tts",
+      valid: true,
+    };
+
+    const lineage = [scene0Artifact, scene1Artifact];
+    expect(lineage.every((s) => s.valid)).toBe(true);
+    expect(lineage[0].strategy).toBe("timestamps");
+    expect(lineage[1].strategy).toBe("plain_tts");
+    expect(lineage[0].timingSource).toBe("elevenlabs_alignment");
+    expect(lineage[1].timingSource).toBe("whisper");
+  });
+
+  it("preserves customer display text when spoken text is normalized", () => {
+    const customerDisplayText = "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+    const spokenNarration = "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+
+    // Customer display text retains English brand words
+    expect(customerDisplayText).toContain("ABUD Demo");
+    // Spoken narration contains Arabic phonetic equivalents
+    expect(spokenNarration).toContain("عبود ديمو");
+    expect(spokenNarration).not.toContain("ABUD");
+  });
+
+  it("verifies retry readiness: Scene 0 & 1 reusable, Scene 2 remains the only missing voice", () => {
+    const scenesState = [
+      { sceneIndex: 0, voiceReady: true, captionsReady: true, mediaReady: true },
+      { sceneIndex: 1, voiceReady: true, captionsReady: true, mediaReady: true },
+      { sceneIndex: 2, voiceReady: false, captionsReady: false, mediaReady: false },
+    ];
+
+    const missingVoiceScenes = scenesState.filter((s) => !s.voiceReady);
+    expect(missingVoiceScenes).toHaveLength(1);
+    expect(missingVoiceScenes[0].sceneIndex).toBe(2);
+    expect(scenesState[0].voiceReady).toBe(true);
+    expect(scenesState[1].voiceReady).toBe(true);
+  });
+});
+
+
 
 

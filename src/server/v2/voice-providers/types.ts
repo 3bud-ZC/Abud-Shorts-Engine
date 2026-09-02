@@ -238,6 +238,8 @@ export type VoiceRouteRequest = {
   modelId?: string;
   /** Request native character alignment alongside the audio. */
   requestAlignment?: boolean;
+  /** Explicit synthesis strategy: plain_tts (with Whisper) or timestamps (native alignment) */
+  voiceStrategy?: "plain_tts" | "timestamps" | "auto";
   rate?: string;
   pitch?: string;
   volume?: string;
@@ -260,4 +262,6 @@ export type VoiceRouteDecision = {
   voiceSettings?: Partial<ElevenLabsVoiceSettings>;
   modelId?: string;
   requestAlignment?: boolean;
+  voiceStrategy?: "plain_tts" | "timestamps";
+  voiceSynthesisStrategy?: string;
 };

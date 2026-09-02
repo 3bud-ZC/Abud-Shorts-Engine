@@ -706,8 +706,10 @@ export class ShortCreator {
           voiceId: requestedVoiceId,
           voicePreset: requestedVoicePreset,
           modelId: requestedVoiceModelId,
-          // Native alignment rides along with the audio; no second billed call.
-          requestAlignment: true,
+          // Arabic ElevenLabs production defaults to Plain TTS + local Whisper timing for stability and single-call guarantee.
+          // Non-Arabic or explicit timestamp routes retain native alignment.
+          requestAlignment: spec.language === "ar" ? false : true,
+          voiceStrategy: spec.language === "ar" ? "plain_tts" : "timestamps",
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
           pronunciationOverrides: jobPronunciationOverrides,
@@ -746,7 +748,8 @@ export class ShortCreator {
               voiceId: pinnedVoiceId || requestedVoiceId,
               voicePreset: requestedVoicePreset,
               modelId: requestedVoiceModelId,
-              requestAlignment: true,
+              requestAlignment: spec.language === "ar" ? false : true,
+              voiceStrategy: spec.language === "ar" ? "plain_tts" : "timestamps",
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
               pronunciationOverrides: jobPronunciationOverrides,
@@ -814,6 +817,8 @@ export class ShortCreator {
 
       if (!voiceArtifact && voiceAudio && voiceMastering) {
         voiceProvidersUsed.add(voiceAudio.provider || voiceAudio.decision.providerId);
+        const resolvedVoiceStrategy = (voiceAudio.decision as any)?.voiceStrategy || (spec.language === "ar" ? "plain_tts" : undefined);
+        const resolvedVoiceSynthesisStrategy = (voiceAudio.decision as any)?.voiceSynthesisStrategy || (spec.language === "ar" ? "elevenlabs_plain_tts_whisper" : "elevenlabs_timestamps_native");
         const voiceInputHash = createVoiceInputHash({
           spokenNarration: requestedSpokenNarration,
           provider: voiceAudio.provider || voiceAudio.decision.providerId,
@@ -825,6 +830,7 @@ export class ShortCreator {
           qualityProfile: requestedVoiceQuality,
           pace: brandVoiceProfile?.pace,
           style: brandVoiceProfile?.style,
+          voiceStrategy: resolvedVoiceStrategy,
         });
         const voiceArtifactDetails = {
           sceneIndex: index,
@@ -840,6 +846,8 @@ export class ShortCreator {
           modelId: voiceAudio.modelId,
           voicePreset: requestedVoicePreset,
           voiceSettings: voiceAudio.voiceSettings,
+          voiceStrategy: resolvedVoiceStrategy,
+          voiceSynthesisStrategy: resolvedVoiceSynthesisStrategy,
           generationMs: voiceAudio.generationMs,
           sampleRate: voiceAudio.sampleRate,
           processedText: voiceAudio.processedText,

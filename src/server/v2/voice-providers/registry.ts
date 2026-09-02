@@ -90,6 +90,28 @@ export class VoiceRegistry {
       : request.text.trim();
 
     const requestedProvider = request.requestedProvider === "auto" ? undefined : request.requestedProvider;
+    // ARABIC ELEVENLABS PRODUCTION ROUTE POLICY:
+    // To guarantee cost predictability and avoid /with-timestamps upstream tokenization rejections,
+    // Arabic productions use Plain TTS with local Whisper caption timing as the stable single-call route.
+    const isArabic = language === "ar" || detectedArabic;
+    let resolvedStrategy: "plain_tts" | "timestamps" = "timestamps";
+    if (isArabic && (requestedProvider === "elevenlabs" || !requestedProvider)) {
+      if (request.voiceStrategy === "timestamps") {
+        resolvedStrategy = "timestamps";
+      } else {
+        resolvedStrategy = "plain_tts";
+      }
+    } else if (request.voiceStrategy && request.voiceStrategy !== "auto") {
+      resolvedStrategy = request.voiceStrategy;
+    } else {
+      resolvedStrategy = request.requestAlignment === false ? "plain_tts" : "timestamps";
+    }
+
+    const resolvedRequestAlignment = resolvedStrategy === "timestamps";
+    const voiceSynthesisStrategy = resolvedStrategy === "plain_tts"
+      ? "elevenlabs_plain_tts_whisper"
+      : "elevenlabs_timestamps_native";
+
     const fallbackAllowed = request.fallbackPolicy !== "none";
 
     const pick = (provider: VoiceProvider, voiceId: string, reason: string): VoiceRouteDecision => ({
@@ -105,7 +127,9 @@ export class VoiceRegistry {
       voicePreset: request.voicePreset,
       voiceSettings: request.voiceSettings,
       modelId: request.modelId,
-      requestAlignment: request.requestAlignment,
+      requestAlignment: resolvedRequestAlignment,
+      voiceStrategy: resolvedStrategy,
+      voiceSynthesisStrategy,
     });
 
     // FINAL ARABIC PRODUCTION POLICY: ELEVENLABS ONLY.
