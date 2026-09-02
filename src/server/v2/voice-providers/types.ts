@@ -126,6 +126,8 @@ export type VoiceAudioResult = {
   };
   /** The exact TTS string the alignment above describes. */
   alignmentText?: string;
+  /** SHA-256 of the exact normalized provider input sent for synthesis. */
+  textFingerprint?: string;
 };
 
 /**
@@ -147,14 +149,29 @@ export type ProviderErrorCategory =
   | "plan_upgrade_required"
   | "unknown";
 
+export type ElevenLabsTaxonomyCode =
+  | "INVALID_INPUT"
+  | "AUTH_FAILED"
+  | "VOICE_NOT_FOUND"
+  | "MODEL_UNAVAILABLE"
+  | "QUOTA_EXHAUSTED"
+  | "RATE_LIMITED"
+  | "PROVIDER_UNAVAILABLE"
+  | "TIMEOUT"
+  | "UNSUPPORTED_ENDPOINT";
+
 export type ProviderErrorDetail = {
   category: ProviderErrorCategory;
+  taxonomyCode?: ElevenLabsTaxonomyCode;
+  provider?: string;
+  endpointClass?: string;
   httpStatus?: number;
   upstreamStatus?: string;
   upstreamMessage?: string;
   requestId?: string;
   endpoint: string;
   method: string;
+  sanitizedDiagnostic?: string;
 };
 
 export type VoiceProviderValidationResult = {

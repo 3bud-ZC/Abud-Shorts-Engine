@@ -42,6 +42,7 @@ import { useI18n, useT } from "../i18n";
 import { localizedStatus } from "../i18n/status";
 import type { CustomerFailure, CustomerTimelineStep, V2Job, V2JobEvent } from "./v2Types";
 import { withMediaAccessToken } from "../utils/auth";
+import { isFreeCost, isUsageBasedCost, videoCostLabel } from "../../types/costDisplay";
 
 function formatDuration(startedAt?: string, completedAt?: string) {
   if (!startedAt) return "Not started";
@@ -156,6 +157,10 @@ const JobDetailsContent: React.FC = () => {
   const videoId = job?.output?.videoId || (job?.status === "ready" ? job?.id : undefined);
   const isPromptMode = job?.creationMode === "prompt";
   const cost = job?.costEstimate || job?.productionSpec?.costEstimate;
+  const costIsFree = isFreeCost(cost as any);
+  const costIsUsageBased = isUsageBasedCost(cost as any);
+  const costText = videoCostLabel(cost as any);
+  const failureMessage = failure?.category ? t(`productions.failure.${failure.category}`) : failure?.message;
   const stageKeys = ["planning", "media", "voice", "captions", "render", "mastering", "validation"];
 
   const isActive = job ? !["ready", "failed", "canceled"].includes(job.status) : false;
@@ -389,7 +394,7 @@ const JobDetailsContent: React.FC = () => {
               <SectionCard title={t("productions.failureTitle")}>
                 <Stack spacing={1.5}>
                   <Alert severity="warning" icon={<ErrorIcon />}>
-                    {failure.message}
+                    {failureMessage || failure.message}
                   </Alert>
                   <Typography variant="caption" color="text.secondary">
                     {t("productions.supportCode")}: <code>{failure.supportCode}</code>
@@ -743,8 +748,8 @@ const JobDetailsContent: React.FC = () => {
                   <Typography variant="body2" color="text.secondary">{t("productions.detail.estimatedCost")}</Typography>
                   <Chip
                     size="small"
-                    color={cost?.isFree || cost?.estimatedCost === 0 ? "success" : "warning"}
-                    label={cost?.isFree || cost?.estimatedCost === 0 ? t("productions.detail.costFree") : `$${cost?.estimatedCost} USD`}
+                    color={costIsFree ? "success" : costIsUsageBased ? "warning" : "default"}
+                    label={costIsFree ? t("productions.detail.costFree") : costText}
                     sx={{ fontWeight: 700 }}
                   />
                 </Stack>

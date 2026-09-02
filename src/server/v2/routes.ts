@@ -125,6 +125,7 @@ import {
   buildCustomerTimeline,
   sanitizeJobFailure,
   classifyRenderFailure,
+  customerDisplayProgress,
   scrubInternal,
   STATUS_GROUPS,
   type JobListFilters,
@@ -132,6 +133,7 @@ import {
 import {
   buildRevisionReusePlan,
   filterReusableArtifacts,
+  readDurableArtifactsForSourceJob,
   type DurableSceneArtifact,
 } from "./artifacts/durableArtifacts";
 import { capabilityManager } from "./capabilities/capabilityManager";
@@ -784,6 +786,15 @@ function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function normalizeTitleDuration(title: string | undefined, durationSeconds: number): string | undefined {
+  if (!title) return title;
+  const duration = String(Math.round(durationSeconds * 10) / 10).replace(/\.0$/, "");
+  return title
+    .replace(/(مدته\s*)\d+(?:\.\d+)?/gi, `$1${duration}`)
+    .replace(/\d+(?:\.\d+)?\s*(ثانية|ثواني|ثوان)/gi, `${duration} ثانية`)
+    .replace(/\b\d+(?:\.\d+)?\s*(-?\s*)?(second|seconds|sec|secs|s)\b/gi, `${duration}s`);
+}
+
 function budgetControlsFrom(controls: any) {
   const metadata = controls.metadata || {};
   const contract = metadata.uiContract || {};
@@ -896,7 +907,7 @@ export function canonicalizeProductionSpecContract(
     budgetPolicy,
     { maxGeneratedShots: visualSource === "ai_generated" ? spec.scenes?.length || 1 : 1 },
   );
-  return validateProductionSpec({
+  const canonical = validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
     dialect,
@@ -976,6 +987,10 @@ export function canonicalizeProductionSpecContract(
       },
     },
   });
+  return {
+    ...canonical,
+    title: normalizeTitleDuration(canonical.title, canonical.durationSeconds) || canonical.title,
+  };
 }
 
 /**
@@ -1067,7 +1082,7 @@ async function canonicalizeProductionSpecForRequest(
     supportsReferenceImages: referenceProviders.length > 0,
   });
   if (!snapshot) return withSnapshots;
-  return validateProductionSpec({
+  const withCharacterSnapshot = validateProductionSpec({
     ...withSnapshots,
     metadata: {
       ...(withSnapshots.metadata || {}),
@@ -1085,6 +1100,12 @@ async function canonicalizeProductionSpecForRequest(
       },
     },
   });
+  return {
+    ...withCharacterSnapshot,
+    title:
+      normalizeTitleDuration(withCharacterSnapshot.title, withCharacterSnapshot.durationSeconds) ||
+      withCharacterSnapshot.title,
+  };
 }
 
 /**
@@ -2647,6 +2668,7 @@ export function createV2PublicRouter(
     res.status(200).json({
       job: {
         ...scrubInternal(safeJob),
+        progress: customerDisplayProgress(job),
         technicalError:
           job.technicalError && !/(file:\/\/|\/(app|root|home|data|var)\/|[A-Za-z]:[\\/])/.test(job.technicalError)
             ? job.technicalError.slice(0, 400)
@@ -2725,7 +2747,15 @@ export function createV2PublicRouter(
 
   router.post("/jobs/:id/retry", async (req, res) => {
     try {
-      const job = await jobs.retryJob(req.params.id);
+      const headerIdempotencyKey =
+        typeof req.headers["idempotency-key"] === "string"
+          ? req.headers["idempotency-key"]
+          : undefined;
+      const reuseArtifacts = readDurableArtifactsForSourceJob(config, req.params.id);
+      const job = await jobs.retryJob(req.params.id, {
+        idempotencyKey: headerIdempotencyKey,
+        reuseArtifacts,
+      });
       try {
         await orchestrator.enqueue(job);
       } catch {
@@ -2736,7 +2766,13 @@ export function createV2PublicRouter(
         });
         return;
       }
-      res.status(201).json({ job });
+      const retryMeta = ((job.productionSpec as any)?.metadata || {}).revision || {};
+      res.status(201).json({
+        job,
+        reusedStages: retryMeta.reuseStages || [],
+        regeneratedStages: retryMeta.regeneratedStages || [],
+        reusedArtifactIds: reuseArtifacts.map((artifact) => artifact.artifactId),
+      });
     } catch (error) {
       res.status(400).json({
         error: error instanceof Error ? error.message : "Retry failed.",
@@ -5386,12 +5422,14 @@ export function createV2InternalRouter(
       completedMetadata?.status === "failed" ||
       completedMetadata?.professionalReady === false;
     if (metadataRejected) {
-      const message =
+      const rawMessage =
         typeof completedMetadata?.error === "string" && completedMetadata.error.trim()
           ? completedMetadata.error
           : "Video failed final quality readiness checks.";
-      const job = await jobs.updateJob(req.params.id, "failed", 100, "Quality review", message, {
+      const { message } = classifyRenderFailure(rawMessage);
+      const job = await jobs.updateJob(req.params.id, "failed", 99, "Quality review failed", message, {
         error: message,
+        technicalError: rawMessage,
         output: {
           ...parsed.data.output,
           videoId: parsed.data.videoId,
@@ -5459,14 +5497,17 @@ export function createV2InternalRouter(
       res.status(400).json({ error: "Invalid fail payload." });
       return;
     }
+    const current = await jobs.getJob(req.params.id);
+    const rawMessage = parsed.data.technicalMessage || parsed.data.message;
+    const { message } = classifyRenderFailure(rawMessage);
     const job = await jobs.updateJob(
       req.params.id,
       "failed",
-      100,
-      "Failed",
-      parsed.data.message,
+      Math.min(99, Math.max(0, current?.progress || 99)),
+      current?.currentStage && current.currentStage !== "Queued" ? current.currentStage : "Failed",
+      message,
       {
-        error: parsed.data.message,
+        error: message,
         technicalError: parsed.data.technicalMessage,
       },
     );
@@ -5527,7 +5568,14 @@ export function createV2InternalRouter(
         );
       })
       .catch(async (error) => {
-        const rawMsg = error instanceof Error ? error.message : String(error);
+        const rawMsg =
+          typeof (error as any)?.toSanitizedTechnicalString === "function"
+            ? (error as any).toSanitizedTechnicalString()
+            : (error as any)?.detail?.sanitizedDiagnostic
+              ? (error as any).detail.sanitizedDiagnostic
+              : error instanceof Error
+                ? error.message
+                : String(error);
         // The customer sees a recoverable category, never the raw message.
         const { message: customerMessage } = classifyRenderFailure(rawMsg);
         await axios.post(

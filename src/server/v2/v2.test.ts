@@ -445,6 +445,117 @@ describe("V2 jobs", () => {
     expect(second.idempotencyKey).toBe("job-retry-001");
     expect(sanitizeIdempotencyKey("../../bad")).toBeUndefined();
   });
+
+  it("creates checkpoint-aware idempotent full retries with reusable billable voice artifacts", async () => {
+    const db = new FakeDb();
+    const service = new JobService(db as any);
+    const original = await service.createVideoJob({
+      type: "video",
+      creationMode: "prompt",
+      productionSpec: {
+        id: "original",
+        title: "إنتاج إعلان مدته 10",
+        userPrompt: "اعمل Reel سريع مدته 20 ثانية",
+        language: "ar",
+        dialect: "egyptian",
+        durationSeconds: 10,
+        aspectRatio: "16:9",
+        resolution: "1080p",
+        quality: "standard",
+        productionMode: "studio",
+        visualMode: "auto",
+        voiceProvider: "elevenlabs",
+        voiceId: "voice_abc",
+        captionStyle: "bold",
+        scenes: [
+          {
+            sceneIndex: 0,
+            purpose: "hook",
+            durationSeconds: 3,
+            narration: "مشهد أول",
+            stockSearchTerms: ["fashion"],
+            visualSource: "stock",
+          },
+        ],
+      },
+    } as any);
+    const row = db.jobs.get(original.id)! as any;
+    row.status = "failed";
+    row.progress = 100;
+    row.current_stage = "Generating voice";
+    row.completed_at = new Date();
+    row.checkpoint = {
+      planning: { status: "completed", attempt: 1 },
+      media: { status: "completed", attempt: 1 },
+      voice: { status: "running", attempt: 2 },
+    };
+
+    const voiceArtifact: any = {
+      artifactId: "voice_abc1234567890abc_deadbeef0000",
+      type: "voice",
+      sceneIndex: 0,
+      sourceJobId: original.id,
+      provider: "elevenlabs",
+      inputHash: "abc",
+      storageRef: "artifacts/scene/voice/voice_abc1234567890abc_deadbeef0000.mp3",
+      checksum: "deadbeef",
+      createdAt: new Date().toISOString(),
+      metadata: { reuseKey: { voiceId: "voice_abc" } },
+      valid: true,
+    };
+    const captionArtifact: any = {
+      artifactId: "captions_def1234567890def_feedface0000",
+      type: "captions",
+      sceneIndex: 0,
+      sourceJobId: original.id,
+      provider: "elevenlabs",
+      inputHash: "def",
+      storageRef: "artifacts/scene/captions/captions_def1234567890def_feedface0000.json",
+      checksum: "feedface",
+      createdAt: new Date().toISOString(),
+      valid: true,
+    };
+    const mediaArtifact: any = {
+      artifactId: "media_ghi1234567890ghi_cafebabe0000",
+      type: "media",
+      sceneIndex: 0,
+      sourceJobId: original.id,
+      provider: "pexels",
+      inputHash: "ghi",
+      storageRef: "artifacts/scene/media/media_ghi1234567890ghi_cafebabe0000.mp4",
+      checksum: "cafebabe",
+      createdAt: new Date().toISOString(),
+      valid: true,
+    };
+    const artifacts = [voiceArtifact, captionArtifact, mediaArtifact];
+    const retry = await service.retryJob(original.id, { reuseArtifacts: artifacts });
+    const duplicate = await service.retryJob(original.id, { reuseArtifacts: artifacts });
+    const retryMeta = (retry.productionSpec as any).metadata.revision;
+
+    expect(duplicate.id).toBe(retry.id);
+    expect(retry.input.__retryOf).toBe(original.id);
+    expect(retry.input.__retryReuse.reusedArtifactIds).toEqual([
+      voiceArtifact.artifactId,
+      captionArtifact.artifactId,
+      mediaArtifact.artifactId,
+    ]);
+    expect(retryMeta.retryOf).toBe(original.id);
+    expect(retryMeta.retryNumber).toBe(1);
+    expect(retryMeta.reuseStages).toContain("planning");
+    expect(retryMeta.reuseStages).toContain("voice");
+    expect(retryMeta.reuseStages).toContain("captions");
+    expect(retryMeta.reuseStages).toContain("media");
+    expect(retryMeta.regeneratedStages).toContain("render");
+    expect(retryMeta.regeneratedStages).toContain("validation");
+    expect(retryMeta.regeneratedStages).not.toContain("planning");
+    expect(retryMeta.regeneratedStages).not.toContain("voice");
+    expect(retryMeta.regeneratedStages).not.toContain("captions");
+    expect(retryMeta.regeneratedStages).not.toContain("media");
+    expect(retryMeta.reuseArtifacts).toHaveLength(3);
+    expect(retryMeta.reuseArtifacts[0].provider).toBe("elevenlabs");
+    expect(retryMeta.reuseArtifacts[1].type).toBe("captions");
+    expect(retryMeta.reuseArtifacts[2].provider).toBe("pexels");
+  });
 });
 
 describe("V2 storage policy", () => {
@@ -566,11 +677,12 @@ describe("V2 routes", () => {
     expect(jobs.updateJob).toHaveBeenCalledWith(
       "job_failed_gate",
       "failed",
-      100,
-      "Quality review",
-      expect.stringContaining("better footage"),
+      99,
+      "Quality review failed",
+      expect.stringContaining("Final video quality checks"),
       expect.objectContaining({
-        error: expect.stringContaining("better footage"),
+        error: expect.stringContaining("Final video quality checks"),
+        technicalError: expect.stringContaining("better footage"),
         output: expect.objectContaining({
           videoId: "vid_failed_gate",
           professionalReady: false,

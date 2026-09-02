@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { LocalContentAIProvider, extractDurationFromPrompt } from "./content-ai/localProvider";
 import { promptJobInputSchema, productionSpecPreviewSchema } from "./types";
 import { resolveProductionTimeline } from "../../types/productionSpec";
+import { canonicalizeProductionSpecContract } from "./routes";
 
 describe("Duration Precedence & API Compatibility Invariants", () => {
   const provider = new LocalContentAIProvider();
@@ -26,6 +27,43 @@ describe("Duration Precedence & API Compatibility Invariants", () => {
     const timeline = resolveProductionTimeline(spec);
     expect(timeline.requestedDurationSeconds).toBe(20);
     expect(timeline.finalExpectedDurationSeconds).toBe(20);
+  });
+
+  it("normalizes generated titles to the canonical explicit duration", async () => {
+    const canonical = canonicalizeProductionSpecContract(
+      {
+        id: "job_title_duration",
+        creationMode: "prompt",
+        title: "Create a 20-second product Reel",
+        userPrompt: "Create a 20-second product Reel",
+        language: "en",
+        dialect: "none",
+        durationSeconds: 20,
+        aspectRatio: "16:9",
+        resolution: "1080p",
+        quality: "standard",
+        productionMode: "auto_hybrid",
+        visualMode: "auto",
+        voiceProvider: "kokoro",
+        voiceId: "af_heart",
+        captionStyle: "bold",
+        scenes: [
+          {
+            sceneIndex: 0,
+            purpose: "hook",
+            durationSeconds: 10,
+            narration: "A concise product opening.",
+            stockSearchTerms: ["product"],
+            visualSource: "stock",
+          },
+        ],
+      },
+      { language: "en", dialect: "none", durationSeconds: 10, voiceProvider: "kokoro" },
+    );
+
+    expect(canonical.durationSeconds).toBe(10);
+    expect(canonical.title).toBe("Create a 10s product Reel");
+    expect(canonical.title).not.toContain("20");
   });
 
   it("prioritizes prompt-extracted duration when API duration is omitted", async () => {

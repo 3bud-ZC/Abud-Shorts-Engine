@@ -836,6 +836,7 @@ export class ShortCreator {
           generationMs: voiceAudio.generationMs,
           sampleRate: voiceAudio.sampleRate,
           processedText: voiceAudio.processedText,
+          textFingerprint: voiceAudio.textFingerprint,
           requestedSpokenNarration,
           displayText: (originalSceneSpec as any).displayText || originalSceneSpec.onScreenText,
           captionText: (originalSceneSpec as any).captionText || originalSceneSpec.narration,
@@ -873,6 +874,7 @@ export class ShortCreator {
               pace: brandVoiceProfile?.pace || "normal",
               style: brandVoiceProfile?.style || "default",
               preprocessingVersion: "arabic-preprocessor-v2",
+              textFingerprint: voiceAudio.textFingerprint,
             },
           },
         });

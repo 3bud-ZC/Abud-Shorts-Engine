@@ -1,8 +1,10 @@
 import axios from "axios";
+import crypto from "crypto";
 import { Readable } from "stream";
 import { logger } from "../../../logger";
 import { providerSecrets } from "../provider-vault/providerSecrets";
 import type {
+  ElevenLabsTaxonomyCode,
   ElevenLabsVoicePreset,
   ElevenLabsVoiceSettings,
   ProviderErrorCategory,
@@ -19,11 +21,6 @@ import {
   type CharacterAlignment,
 } from "./elevenLabsAlignment";
 
-/**
- * Canonical production model for Arabic / Egyptian Arabic / MSA narration.
- * eleven_multilingual_v2 is the currently documented high-quality multilingual
- * model and is the only model this engine defaults to.
- */
 export const ELEVENLABS_DEFAULT_MODEL_ID = "eleven_multilingual_v2";
 
 export const ARABIC_NOT_CONFIGURED_MESSAGE =
@@ -67,6 +64,195 @@ export function getElevenLabsModelCapabilities(modelId: string): ElevenLabsModel
       supportsAlignment: false,
     }
   );
+}
+
+export type ElevenLabsInputPreflightIssue = {
+  code: string;
+  severity: "error" | "warning";
+  message: string;
+  index?: number;
+  codePoint?: string;
+};
+
+export type ElevenLabsInputPreflightResult = {
+  status: "VALID" | "VOICE_INPUT_INVALID";
+  normalizedText: string;
+  textFingerprint: string;
+  issues: ElevenLabsInputPreflightIssue[];
+  requestShape: {
+    endpoint: "text-to-speech" | "text-to-speech-with-timestamps";
+    modelId: string;
+    voiceIdPresent: boolean;
+    languageCodeRequested?: string;
+    languageCodeSent: boolean;
+    outputFormat: "mp3_44100_128";
+    voiceSettingsKeys: string[];
+    textLength: number;
+    textBytes: number;
+  };
+};
+
+function codePointLabel(codePoint: number): string {
+  return `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+}
+
+export function normalizeElevenLabsInputText(text: string): string {
+  return String(text ?? "").normalize("NFC").replace(/\r\n?/g, "\n");
+}
+
+export function preflightElevenLabsInput(input: {
+  text: string;
+  modelId: string;
+  voiceId?: string;
+  voiceSettings: ElevenLabsVoiceSettings;
+  languageCode?: string;
+  requestAlignment?: boolean;
+}): ElevenLabsInputPreflightResult {
+  const normalizedText = normalizeElevenLabsInputText(input.text);
+  const capabilities = getElevenLabsModelCapabilities(input.modelId);
+  const issues: ElevenLabsInputPreflightIssue[] = [];
+  const addIssue = (issue: ElevenLabsInputPreflightIssue) => issues.push(issue);
+
+  if (!normalizedText.trim()) {
+    addIssue({
+      code: "EMPTY_TEXT",
+      severity: "error",
+      message: "ElevenLabs synthesis text is empty after normalization.",
+    });
+  }
+  if (normalizedText.trim() && !/[\p{Letter}\p{Number}]/u.test(normalizedText)) {
+    addIssue({
+      code: "PUNCTUATION_ONLY_TEXT",
+      severity: "error",
+      message: "ElevenLabs synthesis text contains no letters or numbers.",
+    });
+  }
+  if (!input.voiceId || !input.voiceId.trim()) {
+    addIssue({
+      code: "MISSING_VOICE_ID",
+      severity: "error",
+      message: "ElevenLabs synthesis requires an explicit voice id.",
+    });
+  }
+
+  const serializedTextPattern = /\\u[0-9a-fA-F]{4}|\\n|\\r|\\"|^["']?\s*[\[{]/;
+  if (serializedTextPattern.test(normalizedText)) {
+    addIssue({
+      code: "SERIALIZED_TEXT_ARTIFACT",
+      severity: "error",
+      message: "ElevenLabs synthesis text appears to contain JSON/string escaping.",
+    });
+  }
+  if (/<\/?[a-zA-Z][^>]*>/.test(normalizedText)) {
+    addIssue({
+      code: "MARKUP_OR_SSML_TEXT",
+      severity: "error",
+      message: "ElevenLabs synthesis text contains HTML/SSML-like markup.",
+    });
+  }
+
+  let codeUnitIndex = 0;
+  for (const char of normalizedText) {
+    const codePoint = char.codePointAt(0) || 0;
+    const label = codePointLabel(codePoint);
+    const isAllowedWhitespace = codePoint === 0x09 || codePoint === 0x0a;
+    if ((codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) && !isAllowedWhitespace) {
+      addIssue({
+        code: codePoint === 0 ? "NULL_CHARACTER" : "CONTROL_CHARACTER",
+        severity: "error",
+        message: `ElevenLabs synthesis text contains unsupported control character ${label}.`,
+        index: codeUnitIndex,
+        codePoint: label,
+      });
+    }
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      addIssue({
+        code: "INVALID_SURROGATE",
+        severity: "error",
+        message: `ElevenLabs synthesis text contains an invalid UTF-16 surrogate ${label}.`,
+        index: codeUnitIndex,
+        codePoint: label,
+      });
+    }
+    if (codePoint === 0xfffd) {
+      addIssue({
+        code: "REPLACEMENT_CHARACTER",
+        severity: "error",
+        message: "ElevenLabs synthesis text contains a Unicode replacement character.",
+        index: codeUnitIndex,
+        codePoint: label,
+      });
+    }
+    if (codePoint === 0x200b) {
+      addIssue({
+        code: "ZERO_WIDTH_SPACE",
+        severity: "error",
+        message: "ElevenLabs synthesis text contains a zero-width space.",
+        index: codeUnitIndex,
+        codePoint: label,
+      });
+    }
+    if (codePoint === 0x200c || codePoint === 0x200d) {
+      addIssue({
+        code: "ARABIC_JOINER_PRESENT",
+        severity: "warning",
+        message: `Arabic joiner ${label} is present; preserved because it can be valid shaping text.`,
+        index: codeUnitIndex,
+        codePoint: label,
+      });
+    }
+    if (
+      codePoint === 0x200e ||
+      codePoint === 0x200f ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069)
+    ) {
+      addIssue({
+        code: "DIRECTIONAL_CONTROL",
+        severity: "error",
+        message: `ElevenLabs synthesis text contains directional control ${label}.`,
+        index: codeUnitIndex,
+        codePoint: label,
+      });
+    }
+    codeUnitIndex += char.length;
+  }
+
+  for (const [key, value] of Object.entries(input.voiceSettings || {})) {
+    if (typeof value === "number" && (!Number.isFinite(value) || value < 0 || value > 1)) {
+      addIssue({
+        code: "VOICE_SETTING_OUT_OF_RANGE",
+        severity: "error",
+        message: `ElevenLabs voice setting ${key} must be between 0 and 1.`,
+      });
+    }
+  }
+  if (input.languageCode && !capabilities.supportsLanguageCode) {
+    addIssue({
+      code: "LANGUAGE_CODE_OMITTED_FOR_MODEL",
+      severity: "warning",
+      message: `Model ${input.modelId} does not support language_code; language will be inferred from text.`,
+    });
+  }
+
+  const hasErrors = issues.some((issue) => issue.severity === "error");
+  return {
+    status: hasErrors ? "VOICE_INPUT_INVALID" : "VALID",
+    normalizedText,
+    textFingerprint: crypto.createHash("sha256").update(normalizedText).digest("hex"),
+    issues,
+    requestShape: {
+      endpoint: input.requestAlignment ? "text-to-speech-with-timestamps" : "text-to-speech",
+      modelId: input.modelId,
+      voiceIdPresent: Boolean(input.voiceId && input.voiceId.trim()),
+      languageCodeRequested: input.languageCode,
+      languageCodeSent: Boolean(input.languageCode && capabilities.supportsLanguageCode),
+      outputFormat: "mp3_44100_128",
+      voiceSettingsKeys: Object.keys(input.voiceSettings || {}).sort(),
+      textLength: Array.from(normalizedText).length,
+      textBytes: Buffer.byteLength(normalizedText, "utf8"),
+    },
+  };
 }
 
 /**
@@ -118,31 +304,179 @@ export function categorizeElevenLabsError(
  * ElevenLabs call. Only the upstream response body is read - never our own
  * request headers - so the API key is structurally excluded from the result.
  */
+export function classifyElevenLabsEndpoint(endpoint: string): string {
+  if (endpoint.includes("/with-timestamps")) return "text-to-speech-with-timestamps";
+  if (endpoint.includes("/text-to-speech")) return "text-to-speech";
+  if (endpoint.includes("/voices")) return "voices";
+  if (endpoint.includes("/user")) return "user";
+  return "other";
+}
+
+export function categorizeElevenLabsTaxonomy(
+  httpStatus: number | undefined,
+  upstreamStatus: string,
+  upstreamMessage: string,
+  endpoint: string,
+  isTimeout: boolean = false,
+): ElevenLabsTaxonomyCode {
+  if (isTimeout) return "TIMEOUT";
+  const s = upstreamStatus.toLowerCase();
+  const m = upstreamMessage.toLowerCase();
+  const ep = endpoint.toLowerCase();
+
+  if (
+    httpStatus === 401 ||
+    s.includes("api_key") ||
+    s.includes("unauthorized") ||
+    m.includes("unauthorized") ||
+    m.includes("api key") ||
+    s.includes("permission") ||
+    m.includes("permission")
+  ) {
+    return "AUTH_FAILED";
+  }
+
+  if (
+    httpStatus === 402 ||
+    s.includes("quota") ||
+    s.includes("credit") ||
+    m.includes("quota") ||
+    m.includes("credit") ||
+    s.includes("payment_required") ||
+    m.includes("paid plan") ||
+    m.includes("subscription") ||
+    s.includes("character_limit") ||
+    m.includes("character limit")
+  ) {
+    return "QUOTA_EXHAUSTED";
+  }
+
+  if (httpStatus === 429 || s.includes("rate_limit") || m.includes("rate limit") || m.includes("too many requests")) {
+    return "RATE_LIMITED";
+  }
+
+  if (
+    s.includes("voice_not_found") ||
+    m.includes("voice not found") ||
+    (httpStatus === 404 && ep.includes("/text-to-speech/") && !ep.endsWith("/with-timestamps"))
+  ) {
+    return "VOICE_NOT_FOUND";
+  }
+
+  if (
+    s.includes("model_not_found") ||
+    s.includes("model_unavailable") ||
+    m.includes("model not found") ||
+    m.includes("model is not available") ||
+    m.includes("model does not exist")
+  ) {
+    return "MODEL_UNAVAILABLE";
+  }
+
+  if (httpStatus === 405 || (httpStatus === 404 && ep.includes("/with-timestamps"))) {
+    return "UNSUPPORTED_ENDPOINT";
+  }
+
+  if ((httpStatus && httpStatus >= 500) || s.includes("server_error")) {
+    return "PROVIDER_UNAVAILABLE";
+  }
+
+  if (
+    httpStatus === 400 ||
+    httpStatus === 422 ||
+    s.includes("invalid_input") ||
+    s.includes("validation_error") ||
+    m.includes("invalid input") ||
+    m.includes("validation") ||
+    m.includes("malformed")
+  ) {
+    return "INVALID_INPUT";
+  }
+
+  return "INVALID_INPUT";
+}
+
 export function parseElevenLabsError(err: any, endpoint: string, method: string): ProviderErrorDetail {
   const httpStatus: number | undefined = err?.response?.status;
+  const isTimeout =
+    err?.code === "ECONNABORTED" ||
+    err?.code === "ETIMEDOUT" ||
+    Boolean(err?.message && /timeout|timed out/i.test(err.message)) ||
+    httpStatus === 504 ||
+    httpStatus === 408;
+
   const detail = err?.response?.data?.detail;
   let upstreamStatus = "";
   let upstreamMessage = "";
   let requestId: string | undefined;
+
   if (detail && typeof detail === "object") {
-    upstreamStatus = String(detail.status || detail.code || "");
-    upstreamMessage = String(detail.message || "");
-    requestId = detail.request_id ? String(detail.request_id) : undefined;
+    if (Array.isArray(detail)) {
+      upstreamStatus = String(detail[0]?.type || "validation_error");
+      upstreamMessage = detail
+        .map((item) => (typeof item === "string" ? item : item?.msg || item?.message || JSON.stringify(item)))
+        .join("; ");
+    } else {
+      upstreamStatus = String(detail.status || detail.code || "");
+      upstreamMessage = String(detail.message || "");
+      requestId = detail.request_id ? String(detail.request_id) : undefined;
+    }
   } else if (typeof detail === "string") {
     upstreamMessage = detail;
   } else if (err?.response?.data?.message) {
     upstreamMessage = String(err.response.data.message);
+  } else if (err?.message && !err.response) {
+    upstreamMessage = String(err.message);
   }
+
+  const headers = err?.response?.headers;
+  if (!requestId && headers && typeof headers === "object") {
+    const headerReqId = headers["request-id"] || headers["x-request-id"] || headers["xi-request-id"];
+    if (headerReqId) requestId = String(headerReqId);
+  }
+
   const category = categorizeElevenLabsError(httpStatus, upstreamStatus, upstreamMessage);
+  const endpointClass = classifyElevenLabsEndpoint(endpoint);
+  const taxonomyCode = categorizeElevenLabsTaxonomy(httpStatus, upstreamStatus, upstreamMessage, endpoint, isTimeout);
+
+  const diagParts = [
+    `[elevenlabs:${taxonomyCode}]`,
+    endpointClass ? `endpoint=${endpointClass}` : undefined,
+    httpStatus ? `HTTP ${httpStatus}` : isTimeout ? "TIMEOUT" : undefined,
+    upstreamStatus ? `code=${upstreamStatus}` : undefined,
+    requestId ? `req_id=${requestId}` : undefined,
+    upstreamMessage ? `: ${upstreamMessage}` : undefined,
+  ].filter(Boolean);
+  const sanitizedDiagnostic = diagParts.join(" ");
+
   return {
+    provider: "elevenlabs",
     category,
+    taxonomyCode,
+    endpointClass,
     httpStatus,
     upstreamStatus: upstreamStatus || undefined,
     upstreamMessage: upstreamMessage || undefined,
     requestId,
     endpoint,
     method,
+    sanitizedDiagnostic,
   };
+}
+
+export class ElevenLabsProviderError extends Error {
+  public readonly provider = "elevenlabs";
+  public readonly detail: ProviderErrorDetail;
+
+  constructor(detail: ProviderErrorDetail) {
+    super(describeElevenLabsErrorDetail(detail));
+    this.name = "ElevenLabsProviderError";
+    this.detail = detail;
+  }
+
+  public toSanitizedTechnicalString(): string {
+    return this.detail.sanitizedDiagnostic || `[elevenlabs:${this.detail.taxonomyCode || "PROVIDER_ERROR"}] ${this.message}`;
+  }
 }
 
 /** Turns a sanitized error detail into an actionable, human-facing message. */
@@ -425,14 +759,40 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         },
       );
     } catch (err: any) {
-      // A missing or restricted timestamps endpoint must not fail the job; the
-      // caller retries on the plain endpoint and captions fall back to Whisper.
-      this.logUpstreamError(parseElevenLabsError(err, endpoint, "POST"));
-      return null;
+      const detail = parseElevenLabsError(err, endpoint, "POST");
+      this.logUpstreamError(detail);
+      // Only endpoint capability failures are optional. Account, quota,
+      // voice, validation, rate-limit and malformed-input failures would also
+      // affect the plain TTS request, so do not issue a second synthesis call.
+      const isEndpointMissing =
+        detail.taxonomyCode === "UNSUPPORTED_ENDPOINT" ||
+        detail.httpStatus === 405 ||
+        (detail.httpStatus === 404 && detail.category !== "voice_not_found" && detail.taxonomyCode !== "VOICE_NOT_FOUND");
+      if (isEndpointMissing) {
+        return null;
+      }
+      throw new ElevenLabsProviderError(detail);
     }
 
+    if (!response.data || typeof response.data !== "object") {
+      throw new Error("ElevenLabs returned an invalid timestamp response.");
+    }
     const payload = response.data || {};
-    if (typeof payload.audio_base64 !== "string" || !payload.audio_base64) return null;
+    if (typeof payload.audio_base64 !== "string" || !payload.audio_base64) {
+      const detail = parseElevenLabsError({ response }, endpoint, "POST");
+      this.logUpstreamError(detail);
+      const isEndpointMissing =
+        detail.taxonomyCode === "UNSUPPORTED_ENDPOINT" ||
+        detail.httpStatus === 405 ||
+        (detail.httpStatus === 404 && detail.category !== "voice_not_found" && detail.taxonomyCode !== "VOICE_NOT_FOUND");
+      if (isEndpointMissing) {
+        return null;
+      }
+      if (detail.upstreamMessage || detail.upstreamStatus) {
+        throw new ElevenLabsProviderError(detail);
+      }
+      return null;
+    }
     const audio = Buffer.from(payload.audio_base64, "base64");
     const parsed = parseElevenLabsAlignment(payload, "alignment");
     // Only trust an alignment that actually describes the string we sent.
@@ -468,11 +828,27 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
 
     const isArabic = options.languageCode === "ar" || /[\u0600-\u06FF]/.test(text);
     const languageCode = options.languageCode || (isArabic ? "ar" : undefined);
+    const preflight = preflightElevenLabsInput({
+      text,
+      modelId,
+      voiceId: resolvedVoiceId,
+      voiceSettings,
+      languageCode,
+      requestAlignment: options.requestAlignment,
+    });
+    if (preflight.status !== "VALID") {
+      const codes = preflight.issues
+        .filter((issue) => issue.severity === "error")
+        .map((issue) => issue.code)
+        .join(", ");
+      throw new Error(`ElevenLabs voice input invalid before synthesis: ${codes || "VOICE_INPUT_INVALID"}`);
+    }
+    const synthesisText = preflight.normalizedText;
 
     if (options.requestAlignment) {
       const startedWithTimestamps = Date.now();
       const timestamped = await this.requestWithTimestamps(
-        text,
+        synthesisText,
         resolvedVoiceId,
         modelId,
         voiceSettings,
@@ -486,8 +862,8 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
         return {
           audio: stream,
           audioLength: timestamped.alignment
-            ? timestamped.alignment.endSeconds[timestamped.alignment.endSeconds.length - 1] || Math.max(text.length / 14, 1.5)
-            : Math.max(text.length / 14, 1.5),
+            ? timestamped.alignment.endSeconds[timestamped.alignment.endSeconds.length - 1] || Math.max(synthesisText.length / 14, 1.5)
+            : Math.max(synthesisText.length / 14, 1.5),
           // A native alignment carries the real spoken length, so this is a
           // measurement rather than the usual pre-decode guess.
           audioLengthEstimated: !timestamped.alignment,
@@ -499,11 +875,13 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
           language: isArabic ? "ar" : "en",
           voiceSettings,
           characterAlignment: timestamped.alignment || undefined,
-          alignmentText: timestamped.alignment ? text : undefined,
+          alignmentText: timestamped.alignment ? synthesisText : undefined,
+          processedText: synthesisText,
+          textFingerprint: preflight.textFingerprint,
           generationMs: Date.now() - startedWithTimestamps,
           estimatedCostTier: "premium",
           usageBasedCost: true,
-          charactersBilled: text.length,
+          charactersBilled: synthesisText.length,
         };
       }
     }
@@ -513,7 +891,7 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     try {
       response = await axios.post(
         `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}?output_format=mp3_44100_128`,
-        this.buildRequestBody(text, modelId, voiceSettings, languageCode),
+        this.buildRequestBody(synthesisText, modelId, voiceSettings, languageCode),
         {
           headers: {
             "xi-api-key": key,
@@ -538,7 +916,7 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
       audio: stream,
       // Rough pre-decode hint only. The render pipeline measures the real
       // duration with FFmpeg and uses that for scene fitting.
-      audioLength: Math.max(text.length / 14, 1.5),
+      audioLength: Math.max(synthesisText.length / 14, 1.5),
       audioLengthEstimated: true,
       sampleRate: 44100,
       provider: "elevenlabs",
@@ -547,12 +925,14 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
       voiceId: resolvedVoiceId,
       language: isArabic ? "ar" : "en",
       voiceSettings,
+      processedText: synthesisText,
+      textFingerprint: preflight.textFingerprint,
       generationMs: Date.now() - startedAt,
       // ElevenLabs pricing is subscription/credit based; we do not invent a
       // dollar figure here. The cost is reported as usage-based instead.
       estimatedCostTier: "premium",
       usageBasedCost: true,
-      charactersBilled: text.length,
+      charactersBilled: synthesisText.length,
     };
   }
 
@@ -587,13 +967,29 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
     const resolvedVoiceId = await this.resolveVoiceId(voiceId);
     const isArabic = options.languageCode === "ar" || /[\u0600-\u06FF]/.test(text);
     const languageCode = options.languageCode || (isArabic ? "ar" : undefined);
+    const preflight = preflightElevenLabsInput({
+      text,
+      modelId,
+      voiceId: resolvedVoiceId,
+      voiceSettings,
+      languageCode,
+      requestAlignment: false,
+    });
+    if (preflight.status !== "VALID") {
+      const codes = preflight.issues
+        .filter((issue) => issue.severity === "error")
+        .map((issue) => issue.code)
+        .join(", ");
+      throw new Error(`ElevenLabs voice input invalid before preview synthesis: ${codes || "VOICE_INPUT_INVALID"}`);
+    }
+    const synthesisText = preflight.normalizedText;
 
     const startedAt = Date.now();
     let response;
     try {
       response = await axios.post(
         `https://api.elevenlabs.io/v1/text-to-speech/${resolvedVoiceId}?output_format=mp3_44100_128`,
-        this.buildRequestBody(text, modelId, voiceSettings, languageCode),
+        this.buildRequestBody(synthesisText, modelId, voiceSettings, languageCode),
         {
           headers: {
             "xi-api-key": key,
@@ -616,7 +1012,7 @@ export class ElevenLabsVoiceProvider implements VoiceProvider {
       modelId,
       preset,
       voiceSettings,
-      charactersBilled: text.length,
+      charactersBilled: synthesisText.length,
       generationMs: Date.now() - startedAt,
     };
   }

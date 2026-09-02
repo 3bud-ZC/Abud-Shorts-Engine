@@ -15,20 +15,30 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.3.1**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.1 local repairs**
 
-Release: **GENERAL AVAILABILITY / RELEASED**
+Release: **BLOCKED / NOT RELEASED**
 
 Schema: **2.13.0** (unchanged from v2.3.0 — no migration)
 
-**Owner release approval:** APPROVED — explicit "RELEASE ABUD SHORTS ENGINE
-V2.3.1" instruction from the user.
+**Owner release approval:** NOT APPROVED for V2.4. The v2.3.1 stable release
+approval remains historical only. V2.4 is blocked after the real production
+failure on 2026-09-02 and must not be merged, tagged, published, promoted to
+stable, or called released until a post-fix production retry is explicitly
+authorized and passes.
 
-Candidate source SHA: `47d27979a0b77ff93d9c74d65653fcd0890d09c2` (branch
-`hotfix/v2.3.1-render-failure`)
-Release commit (merge to `main`): `15caa083e514d7cd1722593731f25c6520a5395c`
-Tag: `v2.3.1` (annotated, tag object `aac26824…`, on `15caa083…`, never moved) ·
-Release: https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.1
+V2.4 baseline source SHA: `478d13b8ae8acc996d0c9f4b2fabc27e31d2cdb1` (branch
+`v2.4-professional-video-engine`, equal to
+`origin/v2.4-professional-video-engine` at Pass 9.1 start). Pass 9.1 repairs are
+local working-tree changes pending review.
+
+V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
+`stable`: untouched.
+
+Previous stable release remains v2.3.1: release commit
+`15caa083e514d7cd1722593731f25c6520a5395c`, annotated tag `v2.3.1` (tag object
+`aac26824…`), GitHub Release:
+https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/tag/v2.3.1.
 
 **Canonical GA identity.** Unlike v2.3.0, the v2.3.1 image was **not** rebuilt at
 release time: the accepted candidate built by `ghcr-candidate.yml` run
@@ -98,6 +108,8 @@ Finalization track:
 | V2.3.1 | Hotfix: Auto→Motion render-routing + short-narration duration collapse | **PASS / COMPLETE** |
 | V2.3.1-RC | v2.3.1 release candidate preparation (notes, candidate image, package, manifest) | **PASS / COMPLETE** |
 | V2.3.1-GA | v2.3.1 hotfix general-availability release ceremony | **PASS / RELEASED** |
+| V2.4 Pass 9 | Release candidate closure | **RC_READY / SUPERSEDED BY PASS 9.1 BLOCK** |
+| V2.4 Pass 9.1 | Production failure root-cause, job reliability, retry forensics and server hardening | **FORENSIC CLOSURE / REPAIRS VERIFIED / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -8593,3 +8605,175 @@ public package publication were performed.
 - Customer data deleted: 0.
 - Docker volumes removed: 0.
 - Docker prune commands: 0.
+
+# V2.4 Pass 9.1 - Production Failure Root-Cause, Job Reliability & Server Hardening Closure
+
+Date: 2026-09-02
+
+## Status
+
+V2.4 remains **BLOCKED / NOT RELEASED**.
+
+DO NOT declare RC.2 READY. Do not package a release candidate as accepted. Do not promote images to stable.
+
+Pass 9.1 repairs and non-paid forensics are complete. A single paid live retry was executed under prior user authorization and failed at Scene 1 voice generation. All forensic evidence has been captured, the error capture and taxonomy have been hardened, and all verification gates pass.
+
+Current allowed paid ElevenLabs calls: **0 additional calls**.
+Further live provider execution requires explicit user authorization.
+
+## Source & Baseline
+
+- Branch: `v2.4-professional-video-engine`
+- Baseline committed HEAD: `478d13b8ae8acc996d0c9f4b2fabc27e31d2cdb1`
+- Untouched stable release: `v2.3.1`
+
+## Incident & Retry Forensics
+
+### 1. Original Production Incident (`cmtk9uo11000207ry72n76c5q`)
+- Created: `2026-09-02 15:49:28.741979+00`
+- Completed (failed): `2026-09-02 15:50:31.474674+00`
+- Stored raw status: `failed`, progress: `100` (legacy un-capped)
+- Technical error: `Invalid input`
+- Customer failure category: `ELEVENLABS_PROVIDER_ERROR`
+- Customer display progress (post-repair): `99`
+- Support code: `ASE-U4VSG7`
+- Cost display: `Usage Based` (`isFree: false`)
+- Duration: `10` seconds canonical spec duration
+
+### 2. Single Paid Live Retry Record (`cmtkcs4mg000007ryfo4n9bt8`)
+- Retry of: `cmtk9uo11000207ry72n76c5q` (retryNumber: 1)
+- Idempotency key: `pass91-live-retry-cmtk9uo11000207ry72n76c5q`
+- Created: `2026-09-02 17:11:29.128963+00`
+- Started: `2026-09-02 17:11:29.337443+00`
+- Completed (failed): `2026-09-02 17:12:02.651622+00`
+- Stored status: `failed`
+- Progress: `33`
+- Current stage: `Generating voice`
+- Error: `ElevenLabs could not generate the Arabic narration. Check the selected voice, then try again.`
+- Technical error: `Invalid input`
+- Reused stages: `["planning", "media", "voice", "captions"]`
+- Regenerated stages: `["render", "mastering", "validation"]`
+- Support code: `ASE-GTD140`
+- Customer UX: Displays `33%`, stage `Generating voice`, recoverable retry action, no raw technical leaks.
+
+### 3. Paid Call Accounting
+- **Scene 0**: 0 new calls. Successfully reused existing durable manifests:
+  - Voice: `voice_376f5d939a42e63b_83630c60680d`
+  - Captions: `captions_2e2e3060c9f77ec6_fa3d7d5e8548`
+  - Media: `media_3fe1d2c7bfda98bf_10e3c9eee9f6`
+- **Scene 1**: Exactly 1 new paid synthesis call. Failed with `Invalid input`.
+- **Scene 2**: 0 new calls. Pipeline aborted immediately on Scene 1 failure.
+- **Plain-TTS Fallback**: Bypassed per Pass 9.1 contract (400/422 fails fast; only 404/405 falls back).
+- **Total New Paid Calls Consumed**: Exactly 1 call.
+- **Additional Paid Calls Allowed**: 0.
+
+### 4. Non-Secret Request Shape Reconstruction (Scene 1)
+- Endpoint: `POST https://api.elevenlabs.io/v1/text-to-speech/68MRVrnQAt8vLbu0FCzw/with-timestamps?output_format=mp3_44100_128`
+- Model ID: `eleven_multilingual_v2`
+- Voice ID: `68MRVrnQAt8vLbu0FCzw` ("Mamdoh - Deep Egyptian Arabic Male voice", category `professional`)
+- Voice Settings: `{ stability: 0.5, similarity_boost: 0.75, style: 0.15, use_speaker_boost: true }`
+- Preprocessed Text: `مع كولكشن عبود Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.`
+- Preprocessed Text Fingerprint: `8143d5508d4e01c1563837ec66d60410cb827d28ceb2d35ff884b61a192d11a1`
+- Raw Text Fingerprint: `8cb514c8c1cbdc1fa4346da8802361e0e5252b2b34e65a6edaaeeabbc09e2498`
+- Character Count: 66 characters, 115 UTF-8 bytes
+- `languageCodeSent`: `false` (omitted for `eleven_multilingual_v2`)
+- Alignment Requested: `true`
+
+### 5. Root-Cause Investigation Findings
+- **Ruling on `language_code`**: Code inspection of baseline commit `478d13b8` and live container testing verified that `language_code` was already omitted by `buildRequestBody` for `eleven_multilingual_v2`. The retry sent the request without `language_code` and STILL failed with `Invalid input`. Therefore, `language_code` alone is **conclusively ruled out** as the sole root cause.
+- **Account & Voice Compatibility**: Non-billable verification (`GET /v1/user`, `GET /v1/voices/68MRVrnQAt8vLbu0FCzw`) confirmed:
+  - Account is healthy, tier `starter`, 40,000 character limit (2,435 used).
+  - Voice `68MRVrnQAt8vLbu0FCzw` exists, is active, supports `eleven_multilingual_v2`, and supports verified language `ar` / `ar-EG`.
+- **Text-Level Difference**:
+  - Scene 0 (succeeded): 43 characters, pure Arabic text.
+  - Scene 1 (failed): 66 characters, contains Latin phrase `"Demo"` within Arabic text (`"مع كولكشن عبود Demo الجديد..."`).
+  - Character code points are all valid Unicode; no unprintable control characters.
+- **Remaining Root Cause**: **UNKNOWN** without further paid authorization. The mixed-script Latin token `"Demo"`, punctuation, or upstream model parsing anomaly are leading hypotheses, but cannot be proven without sending additional provider synthesis calls.
+
+## Hardened Provider Diagnostics & Error Taxonomy
+
+1. **Structured Diagnostic Taxonomy**:
+   - Added `ElevenLabsTaxonomyCode`:
+     - `INVALID_INPUT`
+     - `AUTH_FAILED`
+     - `VOICE_NOT_FOUND`
+     - `MODEL_UNAVAILABLE`
+     - `QUOTA_EXHAUSTED`
+     - `RATE_LIMITED`
+     - `PROVIDER_UNAVAILABLE`
+     - `TIMEOUT`
+     - `UNSUPPORTED_ENDPOINT`
+   - Added `classifyElevenLabsEndpoint` to identify endpoint class (`text-to-speech-with-timestamps`, `text-to-speech`, `voices`, `user`, `other`).
+   - Added `ElevenLabsProviderError` extending `Error`. Carries `detail: ProviderErrorDetail` and `toSanitizedTechnicalString()`.
+
+2. **Upstream Error Capture Hardening**:
+   - `parseElevenLabsError` extracts request IDs from headers (`request-id`, `x-request-id`, `xi-request-id`) in addition to body detail.
+   - Handles FastAPI validation error arrays (HTTP 422).
+   - Generates sanitized diagnostic string (`[elevenlabs:TAXONOMY] endpoint=... HTTP ... req_id=...: message`).
+   - Guarantees API keys, authorization headers, and raw payloads are never leaked into logs, diagnostics, or database fields.
+   - Render failure callbacks capture sanitized diagnostics and store them in `jobs.technical_error`.
+
+3. **Fallback Discipline**:
+   - `requestWithTimestamps` only falls back to plain TTS on endpoint capability failures (`404`/`405` unsupported endpoint).
+   - Input validation, quota, voice, auth, and rate-limit errors fail fast with zero duplicate paid requests.
+
+## Audits & Verification Summary
+
+1. **QA Session Cleanup**:
+   - Identified and deleted temporary QA sessions: `qa_pass91_live_retry`, `qa_pass91_verify`.
+   - Remaining `qa_` sessions in `admin_sessions`: **0**.
+   - Verified that revoked QA session tokens return **401 Unauthorized**.
+   - Normal operator sessions preserved untouched.
+
+2. **False Ready Audit**:
+   - Pass 9.1 jobs (`cmtk9uo11000207ry72n76c5q`, `cmtkcs4mg000007ryfo4n9bt8`): **0 false ready**. Both properly recorded as `failed`.
+   - Historical audit identified 10 pre-Pass 9.1 jobs (from Pass 8 and early Pass 9 before completion callback fix) with status mismatches. Preserved untouched per audit policy.
+
+3. **Stuck Job Audit**:
+   - Non-terminal jobs (`queued`, `preparing`, `generating`, `rendering`, `validating`): **0**.
+   - All jobs in the database are in terminal states.
+
+4. **Retry Idempotency Verification**:
+   - Submitting the same retry idempotency key (`pass91-live-retry-cmtk9uo11000207ry72n76c5q`) resolves to the exact existing retry job without creating a new job or triggering provider processing.
+
+5. **Durable Artifact Reuse Tests**:
+   - Strengthened `src/server/v2/v2.test.ts` to verify that Scene-0 voice, captions, and media artifacts are attached to retries and that planning, voice, captions, and media stages are not regenerated.
+
+6. **Provider Diagnostic Tests**:
+   - Added comprehensive mocked tests in `src/server/v2/voiceProviders.test.ts` covering:
+     - 400 Invalid Input (taxonomy `INVALID_INPUT`, single call, no leak)
+     - 401 Auth Failed (taxonomy `AUTH_FAILED`, single call)
+     - 404 Voice Not Found (taxonomy `VOICE_NOT_FOUND`, no fallback)
+     - 404/405 Unsupported Endpoint (taxonomy `UNSUPPORTED_ENDPOINT`, graceful fallback to plain TTS)
+     - 422 Validation Error array (taxonomy `INVALID_INPUT`)
+     - 429 Rate Limit (taxonomy `RATE_LIMITED`)
+     - 402 Quota Exhausted (taxonomy `QUOTA_EXHAUSTED`)
+     - 500 Provider Unavailable (taxonomy `PROVIDER_UNAVAILABLE`)
+     - Network Timeout (taxonomy `TIMEOUT`)
+
+7. **Full Test & Build Gate**:
+   - `npm run typecheck`: **PASS** (Server & UI, 0 errors).
+   - `npx vitest run`: **PASS** (1,056 tests passed, 0 failed across 70 test files).
+   - `npm run build`: **PASS** (Clean bundle produced in `dist/`).
+   - Docker build & recreate:
+     - `abud-shorts-engine:v2` rebuilt cleanly.
+     - Only `abud-shorts-app` and `abud-shorts-render-worker` recreated.
+     - `abud-shorts-postgres` and `abud-shorts-n8n` untouched.
+     - Container health: **healthy**.
+     - `/health`: **{"status":"ok"}**.
+
+8. **Safety Check**:
+   - Paid provider calls consumed: exactly 1 (the single authorized retry).
+   - Additional calls allowed: 0.
+   - Docker prune commands executed: 0.
+   - Volumes deleted: 0.
+   - Public release / Git tags created: 0.
+
+## Release State & Next Steps
+
+Current release state: **BLOCKED / NOT RELEASED**.
+
+RC.2 must NOT be created or released until:
+1. Explicit owner authorization is granted for any further paid provider calls.
+2. The remaining root cause of the Scene 1 ElevenLabs rejection is isolated.
+3. An authorized production retry succeeds end-to-end.

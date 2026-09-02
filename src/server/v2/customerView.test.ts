@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   toCustomerStatus,
   buildCustomerTimeline,
+  customerDisplayProgress,
   sanitizeJobFailure,
   scrubInternal,
   serializeJobForCustomer,
@@ -86,7 +87,8 @@ describe("failure sanitisation", () => {
 
   it("keeps a clean message and adds a deterministic support code", () => {
     const failure = sanitizeJobFailure(job({ status: "failed", error: "Stock provider is not configured." }));
-    expect(failure?.message).toContain("Stock provider");
+    expect(failure?.message).toContain("suitable real footage");
+    expect(failure?.category).toBe("STOCK_COVERAGE_FAILURE");
     expect(failure?.supportCode).toMatch(/^ASE-[0-9A-Z]{6}$/);
     expect(failure?.action?.href).toBe("/providers");
     // deterministic
@@ -106,6 +108,21 @@ describe("failure sanitisation", () => {
   it("supportCode is stable for the same seed", () => {
     expect(supportCode("hello")).toBe(supportCode("hello"));
     expect(supportCode("hello")).not.toBe(supportCode("world"));
+  });
+
+  it("classifies the observed ElevenLabs invalid-input failure without showing 100% success progress", () => {
+    const failed = job({
+      status: "failed",
+      progress: 100,
+      currentStage: "Generating voice",
+      error: "The video render did not finish. Please try again.",
+      technicalError: "Invalid input",
+    });
+    const failure = sanitizeJobFailure(failed);
+    expect(failure?.category).toBe("ELEVENLABS_PROVIDER_ERROR");
+    expect(failure?.message).toContain("ElevenLabs");
+    expect(customerDisplayProgress(failed)).toBe(99);
+    expect(serializeJobForCustomer(failed).progress).toBe(99);
   });
 });
 

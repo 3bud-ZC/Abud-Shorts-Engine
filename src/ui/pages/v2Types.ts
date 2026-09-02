@@ -77,6 +77,8 @@ export type CustomerFailure = {
   message: string;
   supportCode: string;
   recoverable: boolean;
+  category?: string;
+  stage?: string;
   action?: { label: string; href: string };
 };
 

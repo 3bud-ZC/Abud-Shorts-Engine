@@ -259,6 +259,69 @@ export class DurableArtifactStore {
   }
 }
 
+function manifestTypeFromArtifactId(artifactId: string): DurableArtifactType | null {
+  if (artifactId.startsWith("voice_")) return "voice";
+  if (artifactId.startsWith("captions_")) return "captions";
+  if (artifactId.startsWith("media_")) return "media";
+  if (artifactId.startsWith("mastered_voice_")) return "mastered_voice";
+  return null;
+}
+
+export function readDurableArtifactsForSourceJob(config: Config, sourceJobId: string): DurableSceneArtifact[] {
+  const root = path.join(config.dataDirPath, "artifacts", "scene");
+  if (!sourceJobId || !fs.existsSync(root)) return [];
+  const found: DurableSceneArtifact[] = [];
+  const scan = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scan(fullPath);
+        continue;
+      }
+      if (!entry.name.endsWith(".manifest.json")) continue;
+      try {
+        const artifact = fs.readJsonSync(fullPath) as DurableSceneArtifact;
+        if (artifact?.sourceJobId === sourceJobId && filterReusableArtifacts({ artifacts: [artifact] }).length === 1) {
+          found.push(artifact);
+        }
+      } catch {
+        // Ignore malformed historical manifests; retry can still proceed with
+        // the artifacts that validate.
+      }
+    }
+  };
+  scan(root);
+  return found.sort((a, b) => {
+    if (a.sceneIndex !== b.sceneIndex) return a.sceneIndex - b.sceneIndex;
+    return a.type.localeCompare(b.type);
+  });
+}
+
+export function readDurableArtifactsById(config: Config, artifactIds: string[]): DurableSceneArtifact[] {
+  const store = new DurableArtifactStore(config);
+  const unique = Array.from(new Set(artifactIds.filter(Boolean)));
+  const found: DurableSceneArtifact[] = [];
+  for (const artifactId of unique) {
+    const type = manifestTypeFromArtifactId(artifactId);
+    if (!type) continue;
+    const relative = path.posix.join(
+      "artifacts",
+      "scene",
+      type === "mastered_voice" ? "mastered_voice" : type,
+      `${artifactId}.manifest.json`,
+    );
+    try {
+      const manifestPath = store.resolveStorageRef(relative);
+      if (!fs.existsSync(manifestPath)) continue;
+      const artifact = fs.readJsonSync(manifestPath) as DurableSceneArtifact;
+      if (filterReusableArtifacts({ artifacts: [artifact] }).length === 1) found.push(artifact);
+    } catch {
+      // Invalid IDs or missing manifests are ignored; retry remains bounded.
+    }
+  }
+  return found;
+}
+
 export function filterReusableArtifacts(input: {
   artifacts: DurableSceneArtifact[];
   type?: DurableArtifactType;

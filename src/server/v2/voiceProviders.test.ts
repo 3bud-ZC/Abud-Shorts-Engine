@@ -19,7 +19,12 @@ import {
   getElevenLabsModelCapabilities,
   normalizeElevenLabsVoice,
   parseElevenLabsError,
+  preflightElevenLabsInput,
+  classifyElevenLabsEndpoint,
+  categorizeElevenLabsTaxonomy,
+  ElevenLabsProviderError,
 } from "./voice-providers/elevenlabsVoiceProvider";
+import { classifyRenderFailure } from "./customerView";
 import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
 
 const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
@@ -195,6 +200,33 @@ describe("Voice Providers & Registry", () => {
     expect(result.estimatedCost).toBeUndefined();
   });
 
+  it("does not issue a second paid TTS request when the timestamp synthesis is rejected", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount += 1;
+        return true;
+      })
+      .query(true)
+      .reply(400, {
+        detail: {
+          status: "invalid_input",
+          message: "Invalid input",
+          request_id: "req_invalid_input",
+        },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    await expect(
+      provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      }),
+    ).rejects.toThrow(/Invalid input/);
+    expect(callCount).toBe(1);
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
   it("keeps the same voice and model across every scene of one video", async () => {
     const bodies: any[] = [];
     nock("https://api.elevenlabs.io")
@@ -320,6 +352,37 @@ describe("Voice Providers & Registry", () => {
     // have not confirmed the model accepts.
     const unknownModel = getElevenLabsModelCapabilities("eleven_future_model_v9");
     expect(unknownModel.supportsLanguageCode).toBe(false);
+  });
+
+  it("preflights the incident scene text without sending unsupported multilingual_v2 language_code", () => {
+    const result = preflightElevenLabsInput({
+      text: "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      requestAlignment: true,
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(result.status).toBe("VALID");
+    expect(result.requestShape.languageCodeRequested).toBe("ar");
+    expect(result.requestShape.languageCodeSent).toBe(false);
+    expect(result.requestShape.endpoint).toBe("text-to-speech-with-timestamps");
+    expect(result.requestShape.textLength).toBe(66);
+    expect(result.textFingerprint).toHaveLength(64);
+    expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+  });
+
+  it("blocks malformed ElevenLabs text before an HTTP synthesis request", async () => {
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+
+    await expect(
+      provider.generateVoice("مرحبا\u0000<script>alert(1)</script>", "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      }),
+    ).rejects.toThrow(/ElevenLabs voice input invalid before synthesis/);
+    expect(nock.pendingMocks()).toEqual([]);
   });
 
   it("pages through GET /v2/voices until has_more is false", async () => {
@@ -815,5 +878,258 @@ describe("Voice Providers & Registry", () => {
     expect(result.spokenText).toContain("الف وخمسمية جنيه");
     expect(result.spokenText).toContain("خمسين في المية");
     expect(result.spokenText).toContain("abud دوت fun");
+  });
+});
+
+describe("ElevenLabs Error Taxonomy and Diagnostic Hardening", () => {
+  it("classifies endpoint types accurately", () => {
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/text-to-speech/v1/with-timestamps")).toBe("text-to-speech-with-timestamps");
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/text-to-speech/v1")).toBe("text-to-speech");
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/voices")).toBe("voices");
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/user")).toBe("user");
+  });
+
+  it("handles 400 invalid input with correct taxonomy, single paid call, and customer-safe error", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(400, {
+        detail: { status: "invalid_input", message: "Invalid input", request_id: "req_invalid_400" },
+      }, { "request-id": "hdr_req_400" });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught).toBeInstanceOf(ElevenLabsProviderError);
+    expect(caught.detail.taxonomyCode).toBe("INVALID_INPUT");
+    expect(caught.detail.httpStatus).toBe(400);
+    expect(caught.detail.requestId).toBe("req_invalid_400");
+    expect(caught.detail.endpointClass).toBe("text-to-speech-with-timestamps");
+    const sanitized = caught.toSanitizedTechnicalString();
+    expect(sanitized).toContain("[elevenlabs:INVALID_INPUT]");
+    expect(sanitized).not.toContain(TEST_ELEVENLABS_KEY);
+    const customer = classifyRenderFailure(sanitized);
+    expect(customer.category).toBe("ELEVENLABS_PROVIDER_ERROR");
+  });
+
+  it("handles 401 auth failure without fallback calls", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(401, {
+        detail: { status: "invalid_api_key", message: "Invalid API key" },
+      }, { "xi-request-id": "req_auth_401" });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("AUTH_FAILED");
+    expect(caught.detail.requestId).toBe("req_auth_401");
+    expect(caught.toSanitizedTechnicalString()).not.toContain(TEST_ELEVENLABS_KEY);
+  });
+
+  it("handles 404 voice not found without retry fallback", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_unknown\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(404, {
+        detail: { status: "voice_not_found", message: "Voice not found" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_unknown", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("VOICE_NOT_FOUND");
+    expect(caught.message).toContain("not found");
+  });
+
+  it("falls back to plain TTS only on 404/405 endpoint missing errors", async () => {
+    let tsCount = 0;
+    let plainCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        tsCount++;
+        return true;
+      })
+      .query(true)
+      .reply(404, "Cannot POST /v1/text-to-speech/voice_abc/with-timestamps");
+
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\?output_format=.*/, () => {
+        plainCount++;
+        return true;
+      })
+      .reply(200, Buffer.from("audio-bytes"));
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+      languageCode: "ar",
+      requestAlignment: true,
+    });
+
+    expect(tsCount).toBe(1);
+    expect(plainCount).toBe(1);
+    expect(result.characterAlignment).toBeUndefined();
+  });
+
+  it("handles 422 FastAPI validation errors with array detail envelope", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(422, {
+        detail: [
+          { loc: ["body", "text"], msg: "field required", type: "value_error.missing" }
+        ],
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("INVALID_INPUT");
+    expect(caught.detail.upstreamMessage).toContain("field required");
+  });
+
+  it("handles 429 rate limit errors", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(429, {
+        detail: { status: "too_many_requests", message: "Rate limit exceeded" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("RATE_LIMITED");
+  });
+
+  it("handles 402 quota exhausted errors", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(402, {
+        detail: { status: "quota_exceeded", message: "Quota exceeded" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("QUOTA_EXHAUSTED");
+  });
+
+  it("handles 500 server unavailable errors", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(500, {
+        detail: { status: "server_error", message: "Internal server error" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("PROVIDER_UNAVAILABLE");
+  });
+
+  it("handles network timeouts with TIMEOUT taxonomy", () => {
+    const timeoutErr = {
+      code: "ECONNABORTED",
+      message: "timeout of 60000ms exceeded",
+    };
+    const detail = parseElevenLabsError(timeoutErr, "https://api.elevenlabs.io/v1/text-to-speech/voice_abc/with-timestamps", "POST");
+    expect(detail.taxonomyCode).toBe("TIMEOUT");
+    const providerErr = new ElevenLabsProviderError(detail);
+    expect(providerErr.toSanitizedTechnicalString()).toContain("[elevenlabs:TIMEOUT]");
   });
 });

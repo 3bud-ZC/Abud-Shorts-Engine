@@ -14,12 +14,14 @@ import type { ProductionSpec } from "../../types/productionSpec";
 import { estimateProductionCost } from "./cost-estimator";
 import {
   type CheckpointStage,
+  checkpointStages,
   completeStage,
   failStage,
   beginStage,
   invalidateFromStage,
   reusableStages,
 } from "./checkpoints";
+import type { DurableSceneArtifact } from "./artifacts/durableArtifacts";
 
 const allowedTransitions: Record<JobStatus, JobStatus[]> = {
   queued: ["preparing", "canceled", "failed"],
@@ -494,7 +496,13 @@ export class JobService {
     );
   }
 
-  public async retryJob(id: string): Promise<JobRecord> {
+  public async retryJob(
+    id: string,
+    options: {
+      idempotencyKey?: string;
+      reuseArtifacts?: DurableSceneArtifact[];
+    } = {},
+  ): Promise<JobRecord> {
     const current = await this.getJob(id);
     if (!current) {
       throw new Error("Job not found.");
@@ -502,20 +510,68 @@ export class JobService {
     if (current.status !== "failed" && current.status !== "canceled") {
       throw new Error("Only failed or canceled jobs can be retried.");
     }
+    const priorLineage = Array.isArray((current.input as any)?.__retryLineage)
+      ? (current.input as any).__retryLineage.filter((item: unknown) => typeof item === "string")
+      : [];
+    const originalJobId = (current.input as any)?.__originalJobId || priorLineage[0] || current.id;
+    const retryNumber = priorLineage.length + 1;
+    const safeReuseArtifacts = (options.reuseArtifacts || []).filter((artifact) => artifact.valid === true);
+    const reusedStageSet = new Set<string>(reusableStages(current.checkpoint));
+    for (const artifact of safeReuseArtifacts) {
+      if (artifact.type === "voice") reusedStageSet.add("voice");
+      if (artifact.type === "captions") reusedStageSet.add("captions");
+      if (artifact.type === "media") reusedStageSet.add("media");
+      if (artifact.type === "mastered_voice") reusedStageSet.add("mastering");
+    }
+    reusedStageSet.add("planning");
+    const reusedStageList = checkpointStages.filter((stage) => reusedStageSet.has(stage));
+    const regeneratedStages = checkpointStages.filter(
+      (stage) => !reusedStageSet.has(stage) || stage === "render" || stage === "validation",
+    );
+    const retryIdempotencyKey =
+      sanitizeIdempotencyKey(options.idempotencyKey) ||
+      sanitizeIdempotencyKey(`retry:${current.id}:${current.completedAt || current.updatedAt}:${retryNumber}`);
+
+    const productionSpec = current.productionSpec
+      ? {
+          ...current.productionSpec,
+          metadata: {
+            ...((current.productionSpec as any).metadata || {}),
+            revision: {
+              ...(((current.productionSpec as any).metadata || {}).revision || {}),
+              type: "retry",
+              originalJobId,
+              retryOf: current.id,
+              retryNumber,
+              reuseStages: reusedStageList,
+              regeneratedStages,
+              reuseArtifacts: safeReuseArtifacts,
+            },
+          },
+        }
+      : undefined;
+
     // Historical truth is preserved: the failed record is untouched and the new
-    // attempt records its lineage. Idempotency keys are not carried across so the
-    // retry is a genuinely new production, not a dedupe hit.
-    const { idempotencyKey, ...carried } = (current.input || {}) as Record<string, unknown>;
+    // attempt records its lineage. The retry gets its own idempotency key so a
+    // double-click cannot create parallel retries for the same failed attempt.
+    const carried = { ...((current.input || {}) as Record<string, unknown>) };
+    delete carried.idempotencyKey;
     return this.createVideoJob({
       ...carried,
+      ...(productionSpec ? { productionSpec } : {}),
       title: current.title ? `${current.title} retry` : undefined,
+      idempotencyKey: retryIdempotencyKey,
+      __originalJobId: originalJobId,
       __retryOf: current.id,
       __retryLineage: [
-        ...(Array.isArray((current.input as any)?.__retryLineage)
-          ? (current.input as any).__retryLineage
-          : []),
+        ...priorLineage,
         current.id,
       ],
+      __retryReuse: {
+        reusedStages: reusedStageList,
+        regeneratedStages,
+        reusedArtifactIds: safeReuseArtifacts.map((artifact) => artifact.artifactId),
+      },
     });
   }
 
