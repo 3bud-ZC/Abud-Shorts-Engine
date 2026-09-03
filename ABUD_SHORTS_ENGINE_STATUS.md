@@ -9181,3 +9181,107 @@ Inspecting the exact retry lineage (`cmtk9uo11000207ry72n76c5q` -> `cmtkcs4mg000
    - Stuck jobs: 0
    - False-ready jobs: 0
    - QA sessions: 0
+
+---
+
+# V2.4 Pass 9.5 - Final Arabic Incident Completion & RC.2 Qualification
+
+**Recorded**: 2026-09-03T06:28:02.7213568+03:00
+**Status**: **BLOCKED / NOT RELEASED**
+**Release state**: Stable `v2.3.1` remains immutable. No GA release, tag, GitHub Release, GHCR stable move, public updater manifest, social publication, paid AI video generation, or public RC.2 publication was performed.
+
+## Starting Repository Verification
+
+- Branch: `v2.4-professional-video-engine`
+- Working tree before pass: clean
+- Starting HEAD: `866816f48fffe26cb04576f0e784650876222f5b`
+- `origin/v2.4-professional-video-engine`: `866816f48fffe26cb04576f0e784650876222f5b`
+- `origin/main`: `cd3a0e0401229193b54513dd62c7a38ddf606f16`
+- Required starting remote HEAD matched exactly.
+
+## Owner Authorization & Provider Call Counter
+
+- Authorized maximum new ElevenLabs calls: `1`
+- Actual new ElevenLabs calls during Pass 9.5: `0`
+- Unauthorized calls: `0`
+- Scene 0 calls: `0`
+- Scene 1 calls: `0`
+- Scene 2 calls: `0`
+- Paid AI video calls: `0`
+- Social posts: `0`
+
+## Hard Blocker Before Billable Work
+
+Pass 9.5 required healthy live runtime verification before any billable provider dispatch:
+
+- `abud-shorts-app`
+- `abud-shorts-render-worker`
+- `abud-shorts-postgres`
+- `abud-shorts-n8n`
+
+The required Docker runtime could not be inspected or started from this session:
+
+- Initial `docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"` failed because Docker config access was denied inside the sandbox and the Docker engine pipe was unavailable.
+- Escalated `docker ps` also failed: `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`; the pipe did not exist.
+- `docker context ls` showed `desktop-linux` as current, targeting `npipe:////./pipe/dockerDesktopLinuxEngine`; `default` targeted `npipe:////./pipe/docker_engine`.
+- `docker --context default ps` also failed because `npipe:////./pipe/docker_engine` did not exist.
+- No `Docker Desktop`, `com.docker.backend`, or `dockerd` process was running.
+- `com.docker.service` was installed but stopped.
+- Attempting to start `com.docker.service` failed with a Windows host permission error: `Cannot open 'com.docker.service' service on computer '.'`.
+- Docker backend error file reported startup failure while initializing the Inference manager: it could not remove `C:\Users\Abud\AppData\Local\Docker\run\dockerInference`.
+- The exact `dockerInference` runtime socket was inspected as a zero-byte reparse point.
+- A narrowly scoped attempt to remove only that stale runtime socket failed: `The file cannot be accessed by the system`.
+
+Because the runtime health gate failed, Pass 9.5 stopped before:
+
+- Scene-2 paid ElevenLabs synthesis
+- retry creation/resume
+- final render
+- audio QA
+- visual/contact-sheet QA
+- browser QA
+- RC.2 image/package/manifest generation
+- isolated upgrade smoke
+- fresh install smoke
+- final typecheck/test/build gate
+
+## Lineage State
+
+No production records or historical failed rows were modified in this pass.
+
+- Original incident: `cmtk9uo11000207ry72n76c5q`
+- Pass 9.1 retry: `cmtkcs4mg000007ryfo4n9bt8`
+- Pass 9.2 retry: `cmtknn0vk000007lfgwx6cqyx`
+- Pass 9.5 retry: not created
+
+## Scene State
+
+- Scene 0 voice reuse: not reverified live in Pass 9.5 because Docker/runtime access was blocked.
+- Scene 1 voice reuse: not reverified live in Pass 9.5 because Docker/runtime access was blocked.
+- Scene 2 canonical text/preflight: not reverified live in Pass 9.5 because Docker/runtime access was blocked.
+- Scene 2 provider result: no call dispatched.
+- Scene 2 voice artifact: not created.
+- Scene 2 caption artifact: not created.
+
+## RC.2 State
+
+- Accepted RC.2 product source SHA: not established.
+- RC.2 image: not built.
+- RC.2 package: not generated.
+- Local RC.2 manifest: not generated.
+- Upgrade smoke: not run.
+- Fresh install smoke: not run.
+- Human review set: unchanged; final Arabic incident video is still pending.
+
+## Safety
+
+- No Docker prune commands were run.
+- No Docker volumes were removed.
+- Postgres was not recreated.
+- n8n was not recreated.
+- No customer data was deleted.
+- No secrets were printed or written to this status file.
+
+## Pass 9.5 Result
+
+**V2.4 RELEASE BLOCKED** - exact remaining blocker: Docker Desktop / Docker Engine is unavailable on the host, and the required live runtime health gate cannot be satisfied before the authorized Scene-2 paid synthesis call.
