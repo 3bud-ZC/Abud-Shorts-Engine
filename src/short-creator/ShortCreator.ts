@@ -43,6 +43,7 @@ import {
   buildStockQueryFamilies,
   queryFamilyTerms,
 } from "../server/v2/creative/stockQueryFamilies";
+import { preprocessArabicSpeech } from "../server/v2/voice-providers/arabicSpeechPreprocessor";
 import {
   cropMetadata,
   planSmartCrop,
@@ -111,6 +112,8 @@ import {
   createMediaInputHash,
   createVoiceInputHash,
   filterReusableArtifacts,
+  sha256Text,
+  type RetryReuseManifest,
 } from "../server/v2/artifacts/durableArtifacts";
 import { assertStorageReady } from "../server/v2/storage/storagePolicy";
 import { decideRenderStrategy, type RenderStrategyDecision } from "../server/v2/rendering/renderStrategy";
@@ -137,6 +140,139 @@ type RenderProgressEvent = {
 };
 
 type RenderProgressCallback = (event: RenderProgressEvent) => Promise<void> | void;
+
+export const RETRY_ARTIFACT_REUSE_INVALID = "RETRY_ARTIFACT_REUSE_INVALID";
+
+type ExplicitRetryReuseValidationInput = {
+  artifact: DurableSceneArtifact;
+  expectedType: DurableSceneArtifact["type"];
+  expectedSceneIndex: number;
+  expectedProvider?: string;
+  expectedModel?: string;
+  expectedVoiceId?: string;
+  canonicalSpokenContentFingerprint?: string;
+  displayContentFingerprint?: string;
+};
+
+export type ExplicitRetryReuseValidationResult = {
+  valid: boolean;
+  reason?: string;
+};
+
+function artifactVoiceId(artifact: DurableSceneArtifact): string | undefined {
+  const retryManifest = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  const reuseKey = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+  const voiceArtifact = (artifact.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+  return String(retryManifest.voiceId || reuseKey.voiceId || voiceArtifact.voiceId || "").trim() || undefined;
+}
+
+function artifactVoiceStrategy(artifact: DurableSceneArtifact): string | undefined {
+  const retryManifest = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  const reuseKey = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+  const voiceArtifact = (artifact.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+  return String(retryManifest.voiceStrategy || reuseKey.voiceStrategy || voiceArtifact.voiceStrategy || "").trim() || undefined;
+}
+
+export function retryContentFingerprint(input: {
+  text: string;
+  language?: string;
+  dialect?: string;
+}): string {
+  return sha256Text({
+    text: String(input.text || "").trim(),
+    language: input.language || "auto",
+    dialect: input.dialect || "none",
+  });
+}
+
+export function validateExplicitRetryReuseArtifact(
+  input: ExplicitRetryReuseValidationInput,
+): ExplicitRetryReuseValidationResult {
+  const { artifact } = input;
+  const manifest = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  if (!artifact.valid) return { valid: false, reason: "artifact is not valid" };
+  if (artifact.supersededAt) return { valid: false, reason: "artifact is superseded" };
+  if (artifact.type !== input.expectedType) return { valid: false, reason: `expected ${input.expectedType}, got ${artifact.type}` };
+  if (artifact.sceneIndex !== input.expectedSceneIndex) {
+    return { valid: false, reason: `expected scene ${input.expectedSceneIndex}, got ${artifact.sceneIndex}` };
+  }
+  if (!artifact.sourceJobId) return { valid: false, reason: "missing source job id" };
+  if (
+    !artifact.storageRef ||
+    !artifact.storageRef.replace(/\\/g, "/").startsWith("artifacts/scene/") ||
+    artifact.storageRef.includes("..") ||
+    artifact.storageRef.startsWith("/") ||
+    /^[a-zA-Z]:/.test(artifact.storageRef)
+  ) {
+    return { valid: false, reason: "unsafe storage ref" };
+  }
+  if (!/^[a-f0-9]{64}$/i.test(artifact.checksum || "")) {
+    return { valid: false, reason: "invalid checksum metadata" };
+  }
+  if (manifest.compatibilityDecision !== "planner_bound") {
+    return { valid: false, reason: "missing planner-bound retry reuse manifest" };
+  }
+  if (manifest.compatibilityVersion !== "retry-reuse-v1") {
+    return { valid: false, reason: "unsupported retry reuse manifest version" };
+  }
+  if (manifest.artifactId && manifest.artifactId !== artifact.artifactId) {
+    return { valid: false, reason: "manifest artifact id mismatch" };
+  }
+  if (manifest.artifactType && manifest.artifactType !== artifact.type) {
+    return { valid: false, reason: "manifest artifact type mismatch" };
+  }
+  if (typeof manifest.sceneIndex === "number" && manifest.sceneIndex !== artifact.sceneIndex) {
+    return { valid: false, reason: "manifest scene index mismatch" };
+  }
+  if (manifest.checksum && manifest.checksum !== artifact.checksum) {
+    return { valid: false, reason: "manifest checksum mismatch" };
+  }
+  if (
+    manifest.canonicalSpokenContentFingerprint &&
+    input.canonicalSpokenContentFingerprint &&
+    manifest.canonicalSpokenContentFingerprint !== input.canonicalSpokenContentFingerprint
+  ) {
+    return { valid: false, reason: "canonical spoken content changed" };
+  }
+  if (
+    manifest.displayContentFingerprint &&
+    input.displayContentFingerprint &&
+    manifest.displayContentFingerprint !== input.displayContentFingerprint
+  ) {
+    return { valid: false, reason: "display content changed" };
+  }
+  const artifactProvider = artifact.provider || manifest.provider;
+  if (input.expectedProvider && input.expectedProvider !== "auto" && artifactProvider && artifactProvider !== input.expectedProvider) {
+    return { valid: false, reason: `provider mismatch: ${artifactProvider}` };
+  }
+  const artifactModel = artifact.model || manifest.model;
+  if (input.expectedModel && artifactModel && artifactModel !== input.expectedModel) {
+    return { valid: false, reason: `model mismatch: ${artifactModel}` };
+  }
+  if (input.expectedType === "voice" && input.expectedVoiceId) {
+    const voiceId = artifactVoiceId(artifact);
+    if (!voiceId) return { valid: false, reason: "missing voice id metadata" };
+    if (voiceId !== input.expectedVoiceId) return { valid: false, reason: `voice mismatch: ${voiceId}` };
+  }
+  const voiceStrategy = artifactVoiceStrategy(artifact);
+  if (input.expectedType === "voice" && voiceStrategy && !["plain_tts", "timestamps"].includes(voiceStrategy)) {
+    return { valid: false, reason: `voice strategy mismatch: ${voiceStrategy}` };
+  }
+  return { valid: true };
+}
+
+function failExplicitRetryReuse(
+  artifact: DurableSceneArtifact,
+  expectedType: DurableSceneArtifact["type"],
+  sceneIndex: number,
+  reason: string,
+): never {
+  const error = new Error(
+    `${RETRY_ARTIFACT_REUSE_INVALID}: scene=${sceneIndex} type=${expectedType} artifact=${artifact.artifactId} reason=${reason}`,
+  );
+  (error as any).code = RETRY_ARTIFACT_REUSE_INVALID;
+  throw error;
+}
 
 /**
  * Bottom band of a 9:16 frame commonly covered by TikTok / Reels UI. Captions
@@ -538,9 +674,22 @@ export class ShortCreator {
     const artifactStore = new DurableArtifactStore(this.config);
     const revision = (spec.metadata?.revision || {}) as any;
     const reusableMediaAssets = Array.isArray(revision.reuseMediaAssets) ? revision.reuseMediaAssets : [];
+    const revisionReuseArtifacts = Array.isArray(revision.reuseArtifacts)
+      ? revision.reuseArtifacts as DurableSceneArtifact[]
+      : [];
     const reusableArtifacts = filterReusableArtifacts({
-      artifacts: Array.isArray(revision.reuseArtifacts) ? revision.reuseArtifacts as DurableSceneArtifact[] : [],
+      artifacts: revisionReuseArtifacts,
     });
+    const explicitRetryArtifactFor = (
+      type: DurableSceneArtifact["type"],
+      sceneIndex: number,
+    ) =>
+      String(revision.type || "") === "retry"
+        ? revisionReuseArtifacts.find((artifact) =>
+            artifact.type === type &&
+            artifact.sceneIndex === sceneIndex,
+          )
+        : undefined;
     const reusableArtifactFor = (
       type: DurableSceneArtifact["type"],
       sceneIndex: number,
@@ -644,6 +793,25 @@ export class ShortCreator {
       // cannot quietly drop back to the provider's "natural" default.
       const requestedVoicePreset = spec.voicePreset || undefined;
       const requestedVoiceModelId = spec.voiceModelId || undefined;
+      const requestedDialect = (brandVoiceProfile?.dialect || spec.dialect) as string | undefined;
+      const retryReuseSpokenNarration =
+        spec.language === "ar"
+          ? preprocessArabicSpeech(requestedSpokenNarration, {
+              dialect: requestedDialect as any,
+              pronunciationOverrides: jobPronunciationOverrides,
+              brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+            }).ttsNormalizedText
+          : requestedSpokenNarration.trim();
+      const canonicalSpokenContentFingerprint = retryContentFingerprint({
+        text: retryReuseSpokenNarration,
+        language: spec.language,
+        dialect: requestedDialect,
+      });
+      const displayContentFingerprint = retryContentFingerprint({
+        text: String(originalSceneSpec.narration || ""),
+        language: spec.language,
+        dialect: requestedDialect,
+      });
 
       const tempId = cuid();
       const tempWavFileName = `${tempId}.wav`;
@@ -662,7 +830,8 @@ export class ShortCreator {
       let voiceArtifact: DurableSceneArtifact | undefined;
       const revisionType = String(revision.type || "");
       const upstreamVoiceIsExplicitlyReusable = ["media", "caption", "display_text", "music"].includes(revisionType);
-      const reusableVoice = reusableArtifactFor("voice", index, (artifact) => {
+      const explicitRetryVoice = explicitRetryArtifactFor("voice", index);
+      const reusableVoice = explicitRetryVoice || reusableArtifactFor("voice", index, (artifact) => {
         if (upstreamVoiceIsExplicitlyReusable) return true;
         const key = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
         const artifactProvider = artifact.provider || key.provider;
@@ -680,8 +849,36 @@ export class ShortCreator {
         );
       });
 
+      if (explicitRetryVoice) {
+        const validation = validateExplicitRetryReuseArtifact({
+          artifact: explicitRetryVoice,
+          expectedType: "voice",
+          expectedSceneIndex: index,
+          expectedProvider: requestedVoiceProvider,
+          expectedModel: requestedVoiceModelId,
+          expectedVoiceId: requestedVoiceId,
+          canonicalSpokenContentFingerprint,
+          displayContentFingerprint,
+        });
+        if (!validation.valid) {
+          failExplicitRetryReuse(explicitRetryVoice, "voice", index, validation.reason || "invalid retry voice artifact");
+        }
+      }
+
       if (reusableVoice) {
-        artifactStore.copyToTemp(reusableVoice, tempMp3Path);
+        try {
+          artifactStore.copyToTemp(reusableVoice, tempMp3Path);
+        } catch (error: any) {
+          if (explicitRetryVoice) {
+            failExplicitRetryReuse(
+              explicitRetryVoice,
+              "voice",
+              index,
+              error?.message || "retry voice artifact could not be copied",
+            );
+          }
+          throw error;
+        }
         actualVoiceDuration = reusableVoice.duration || await this.ffmpeg.getMediaDuration(tempMp3Path);
         captionAudioPath = tempMp3Path;
         voiceArtifact = reusableVoice;
@@ -940,12 +1137,46 @@ export class ShortCreator {
         whisperModel: this.config.whisperModel,
         language: spec.language,
       });
-      const reusableCaption = reusableArtifactFor("captions", index, (artifact) =>
+      const explicitRetryCaption = explicitRetryArtifactFor("captions", index);
+      const reusableCaption = explicitRetryCaption || reusableArtifactFor("captions", index, (artifact) =>
         artifact.inputHash === captionInputHash &&
         (artifact.metadata as any)?.voiceArtifactId === voiceArtifact?.artifactId,
       );
+      if (explicitRetryCaption) {
+        const validation = validateExplicitRetryReuseArtifact({
+          artifact: explicitRetryCaption,
+          expectedType: "captions",
+          expectedSceneIndex: index,
+          canonicalSpokenContentFingerprint,
+          displayContentFingerprint,
+        });
+        if (!validation.valid) {
+          failExplicitRetryReuse(explicitRetryCaption, "captions", index, validation.reason || "invalid retry caption artifact");
+        }
+        const captionVoiceArtifactId = String((explicitRetryCaption.metadata as any)?.voiceArtifactId || "");
+        if (captionVoiceArtifactId && captionVoiceArtifactId !== voiceArtifact?.artifactId) {
+          failExplicitRetryReuse(explicitRetryCaption, "captions", index, "caption voice artifact mismatch");
+        }
+        const captionVoiceChecksum = String((explicitRetryCaption.metadata as any)?.voiceChecksum || "");
+        if (captionVoiceChecksum && captionVoiceChecksum !== voiceArtifact?.checksum) {
+          failExplicitRetryReuse(explicitRetryCaption, "captions", index, "caption voice checksum mismatch");
+        }
+      }
       if (reusableCaption) {
-        const payload = artifactStore.readJsonArtifact<{ captions: Caption[]; timingSource?: typeof timingSource }>(reusableCaption);
+        let payload: { captions: Caption[]; timingSource?: typeof timingSource };
+        try {
+          payload = artifactStore.readJsonArtifact<{ captions: Caption[]; timingSource?: typeof timingSource }>(reusableCaption);
+        } catch (error: any) {
+          if (explicitRetryCaption) {
+            failExplicitRetryReuse(
+              explicitRetryCaption,
+              "captions",
+              index,
+              error?.message || "retry caption artifact could not be read",
+            );
+          }
+          throw error;
+        }
         rawCaptions = payload.captions || [];
         timingSource = payload.timingSource || "whisper";
         captionArtifact = reusableCaption;

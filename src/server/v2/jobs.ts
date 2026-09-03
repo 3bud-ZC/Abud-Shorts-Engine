@@ -21,7 +21,12 @@ import {
   invalidateFromStage,
   reusableStages,
 } from "./checkpoints";
-import type { DurableSceneArtifact } from "./artifacts/durableArtifacts";
+import {
+  attachRetryReuseManifest,
+  sha256Text,
+  type DurableSceneArtifact,
+} from "./artifacts/durableArtifacts";
+import { preprocessArabicSpeech } from "./voice-providers/arabicSpeechPreprocessor";
 
 const allowedTransitions: Record<JobStatus, JobStatus[]> = {
   queued: ["preparing", "canceled", "failed"],
@@ -89,6 +94,39 @@ type DbJobEventRow = {
   technical_message?: string;
   created_at: Date;
 };
+
+function retrySceneTextFingerprints(spec: ProductionSpec | undefined, artifact: DurableSceneArtifact): {
+  canonicalSpokenContentFingerprint?: string;
+  displayContentFingerprint?: string;
+} {
+  const scene = spec?.scenes?.[artifact.sceneIndex] as any;
+  if (!scene) return {};
+  const displayText = String(scene.narration || "");
+  const spokenText = String(scene.spokenNarration || scene.narration || "");
+  const normalizedSpoken =
+    spec?.language === "ar"
+      ? preprocessArabicSpeech(spokenText, {
+          dialect: spec.dialect,
+          pronunciationOverrides:
+            (spec as any).pronunciationOverrides ||
+            (spec as any).metadata?.pronunciationOverrides ||
+            (spec as any).pronunciations,
+          brandPronunciations: (spec.brandKit?.voiceProfile as any)?.pronunciationDictionary,
+        }).ttsNormalizedText
+      : spokenText.trim();
+  return {
+    canonicalSpokenContentFingerprint: sha256Text({
+      text: normalizedSpoken,
+      language: spec?.language || "auto",
+      dialect: spec?.dialect || "none",
+    }),
+    displayContentFingerprint: sha256Text({
+      text: displayText.trim(),
+      language: spec?.language || "auto",
+      dialect: spec?.dialect || "none",
+    }),
+  };
+}
 
 export function isValidJobTransition(current: JobStatus, next: JobStatus): boolean {
   if (current === next) return true;
@@ -515,7 +553,11 @@ export class JobService {
       : [];
     const originalJobId = (current.input as any)?.__originalJobId || priorLineage[0] || current.id;
     const retryNumber = priorLineage.length + 1;
-    const safeReuseArtifacts = (options.reuseArtifacts || []).filter((artifact) => artifact.valid === true);
+    const safeReuseArtifacts = (options.reuseArtifacts || [])
+      .filter((artifact) => artifact.valid === true)
+      .map((artifact) =>
+        attachRetryReuseManifest(artifact, retrySceneTextFingerprints(current.productionSpec, artifact)),
+      );
     const reusedStageSet = new Set<string>(reusableStages(current.checkpoint));
     for (const artifact of safeReuseArtifacts) {
       if (artifact.type === "voice") reusedStageSet.add("voice");

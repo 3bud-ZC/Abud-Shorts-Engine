@@ -498,7 +498,7 @@ describe("V2 jobs", () => {
       provider: "elevenlabs",
       inputHash: "abc",
       storageRef: "artifacts/scene/voice/voice_abc1234567890abc_deadbeef0000.mp3",
-      checksum: "deadbeef",
+      checksum: "d".repeat(64),
       createdAt: new Date().toISOString(),
       metadata: { reuseKey: { voiceId: "voice_abc" } },
       valid: true,
@@ -511,7 +511,7 @@ describe("V2 jobs", () => {
       provider: "elevenlabs",
       inputHash: "def",
       storageRef: "artifacts/scene/captions/captions_def1234567890def_feedface0000.json",
-      checksum: "feedface",
+      checksum: "f".repeat(64),
       createdAt: new Date().toISOString(),
       valid: true,
     };
@@ -523,7 +523,7 @@ describe("V2 jobs", () => {
       provider: "pexels",
       inputHash: "ghi",
       storageRef: "artifacts/scene/media/media_ghi1234567890ghi_cafebabe0000.mp4",
-      checksum: "cafebabe",
+      checksum: "c".repeat(64),
       createdAt: new Date().toISOString(),
       valid: true,
     };
@@ -555,6 +555,21 @@ describe("V2 jobs", () => {
     expect(retryMeta.reuseArtifacts[0].provider).toBe("elevenlabs");
     expect(retryMeta.reuseArtifacts[1].type).toBe("captions");
     expect(retryMeta.reuseArtifacts[2].provider).toBe("pexels");
+    expect(retryMeta.reuseArtifacts[0].metadata.retryReuseManifest).toMatchObject({
+      sceneIndex: 0,
+      artifactType: "voice",
+      artifactId: voiceArtifact.artifactId,
+      sourceJobId: original.id,
+      inputHash: "abc",
+      inputHashVersion: "legacy",
+      checksum: "d".repeat(64),
+      provider: "elevenlabs",
+      voiceId: "voice_abc",
+      compatibilityDecision: "planner_bound",
+      compatibilityVersion: "retry-reuse-v1",
+    });
+    expect(retryMeta.reuseArtifacts[0].metadata.retryReuseManifest.canonicalSpokenContentFingerprint).toHaveLength(64);
+    expect(retryMeta.reuseArtifacts[0].metadata.retryReuseManifest.displayContentFingerprint).toHaveLength(64);
   });
 });
 

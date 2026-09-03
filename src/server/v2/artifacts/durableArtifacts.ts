@@ -24,6 +24,25 @@ export type DurableSceneArtifact = {
   supersededAt?: string;
 };
 
+export type RetryReuseManifest = {
+  sceneIndex: number;
+  artifactType: DurableArtifactType;
+  artifactId: string;
+  sourceJobId: string;
+  sourceRevisionId?: string;
+  inputHash: string;
+  inputHashVersion: string;
+  checksum: string;
+  provider?: string;
+  model?: string;
+  voiceId?: string;
+  voiceStrategy?: string;
+  compatibilityDecision: "planner_bound";
+  compatibilityVersion: "retry-reuse-v1";
+  canonicalSpokenContentFingerprint?: string;
+  displayContentFingerprint?: string;
+};
+
 export type ReusePlan = {
   artifacts: DurableSceneArtifact[];
   reusedStages: string[];
@@ -41,6 +60,43 @@ export function stableStringify(value: unknown): string {
 
 export function sha256Text(value: unknown): string {
   return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+export function attachRetryReuseManifest(
+  artifact: DurableSceneArtifact,
+  manifest: Omit<RetryReuseManifest, "sceneIndex" | "artifactType" | "artifactId" | "sourceJobId" | "sourceRevisionId" | "inputHash" | "checksum" | "provider" | "model" | "inputHashVersion" | "compatibilityDecision" | "compatibilityVersion"> & {
+    inputHashVersion?: string;
+  } = {},
+): DurableSceneArtifact {
+  const existing = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  const voiceArtifact = (artifact.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+  const reuseKey = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+  return {
+    ...artifact,
+    metadata: {
+      ...artifact.metadata,
+      retryReuseManifest: {
+        sceneIndex: artifact.sceneIndex,
+        artifactType: artifact.type,
+        artifactId: artifact.artifactId,
+        sourceJobId: artifact.sourceJobId,
+        sourceRevisionId: artifact.sourceRevisionId,
+        inputHash: artifact.inputHash,
+        inputHashVersion: manifest.inputHashVersion || existing.inputHashVersion || "legacy",
+        checksum: artifact.checksum,
+        provider: artifact.provider,
+        model: artifact.model,
+        voiceId: manifest.voiceId || existing.voiceId || String(reuseKey.voiceId || voiceArtifact.voiceId || ""),
+        voiceStrategy: manifest.voiceStrategy || existing.voiceStrategy || String(reuseKey.voiceStrategy || voiceArtifact.voiceStrategy || ""),
+        compatibilityDecision: "planner_bound",
+        compatibilityVersion: "retry-reuse-v1",
+        canonicalSpokenContentFingerprint:
+          manifest.canonicalSpokenContentFingerprint || existing.canonicalSpokenContentFingerprint,
+        displayContentFingerprint:
+          manifest.displayContentFingerprint || existing.displayContentFingerprint,
+      } satisfies RetryReuseManifest,
+    },
+  };
 }
 
 export function sha256File(filePath: string): string {
