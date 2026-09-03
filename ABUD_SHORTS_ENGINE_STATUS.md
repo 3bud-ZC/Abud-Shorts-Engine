@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.4 Plain-TTS Diagnostic & Arabic Stable Route**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.6 Durable Retry Artifact Reuse Contract Closure**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,7 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Current Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Current Pass 9.6 product-source checkpoint is `289e97cba3236745c24f6cd973c224319e7dd9f5`; it adds planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.6 consumed 0 paid provider calls and did not create or qualify RC.2.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -110,6 +110,8 @@ Finalization track:
 | V2.4 Pass 9.2 | Arabic Mixed-Script TTS Closure, Exact Incident Retry & RC.2 Qualification | **MIXED-SCRIPT HARNESS COMPLETE / INCIDENT RETRIED / 1 PAID CALL CONSUMED / RELEASE BLOCKED** |
 | V2.4 Pass 9.3 | ElevenLabs Request Contract Regression Isolation & Immutable Runtime Closure | **FORENSICS COMPLETE / 0 PAID CALLS / SINGLE DIAGNOSTIC PROPOSED / RELEASE BLOCKED** |
 | V2.4 Pass 9.4 | ElevenLabs Plain-TTS Diagnostic & Arabic Stable Voice Route | **PLAIN-TTS PROVEN / 1 PAID CALL CONSUMED / ARABIC STABLE ROUTE IMPLEMENTED / RELEASE BLOCKED** |
+| V2.4 Pass 9.5 | Final authenticated incident retry after Docker recovery | **RETRY REUSE DEFECT PROVEN / 1 PAID CALL CONSUMED / RELEASE BLOCKED** |
+| V2.4 Pass 9.6 | Durable Retry Artifact Reuse Contract Closure | **CONTRACT FIX IMPLEMENTED / 0 PAID CALLS / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -9475,3 +9477,165 @@ Because provider activity is now closed and Scene 2 was not synthesized, the pas
 ## Final Pass 9.5 Result
 
 **V2.4 RELEASE BLOCKED** - exact current blocker: the authenticated retry attempted a new ElevenLabs synthesis for zero-based Scene 1 instead of reusing the valid existing Scene 1 Plain-TTS voice artifact; the single remaining provider request budget is now closed, Scene 2 was not synthesized, and RC.2 cannot qualify.
+
+---
+
+# V2.4 Pass 9.6 - Durable Retry Artifact Reuse Contract Closure
+
+**Recorded**: 2026-09-03T16:36:37.9331004+03:00
+**Status**: **CONTRACT FIX IMPLEMENTED / BLOCKED / NOT RELEASED**
+
+## Scope
+
+Pass 9.6 repaired the retry artifact reuse contract exposed by Pass 9.5. It did
+not resume the failed production, did not call ElevenLabs, did not generate paid
+AI images or videos, did not post to social platforms, and did not create,
+package, publish, promote, or qualify RC.2.
+
+## Git State
+
+- Branch: `v2.4-professional-video-engine`
+- Baseline before Pass 9.6: `210c90f1344142f93a2e183188319f4c284e2e48`
+- Product/test checkpoint commit: `289e97cba3236745c24f6cd973c224319e7dd9f5`
+- Commit message: `fix(v2.4): enforce retry artifact reuse manifest`
+- Status file: updated after runtime verification
+- V2.4 release commit: none
+- V2.4 tag: none
+- V2.4 GitHub Release: none
+- GHCR `stable`: untouched
+
+## Root Cause Closed
+
+Pass 9.5 proved the retry endpoint returned Scene 1's existing durable artifacts,
+but the worker still evaluated the voice artifact through the ordinary generated
+voice input hash predicate. That predicate rejected the valid historical artifact
+after hash drift, then crossed the provider boundary and attempted an unexpected
+Scene 1 ElevenLabs synthesis.
+
+Exact Scene 1 drift recorded:
+
+- Stored artifact input hash:
+  `76dd9485bc4d4ee56aa39705e4c18e53b4f8ec59237133787c85067ac9e7df21`
+- Current runtime examples did not match, including:
+  `fb4cc225165eec6fdf254e2a1edbe3cd4569172e09f44f1848da413229047ded`
+  and `dc5421a7bf5daea7a269fc29ff607261225f404bbcfad312b47447619a9a8f14`
+- Differing fields: stored Scene 1 narration metadata was legacy/garbled,
+  quality profile drifted from `standard` to `balanced`, preprocessing version
+  drifted from `arabic-preprocessor-v2-plain-tts` to
+  `arabic-preprocessor-v2`, and the old artifact had no compatibility manifest
+  telling the worker the planner had already approved reuse.
+
+## Contract Implemented
+
+- Added `RetryReuseManifest` and `attachRetryReuseManifest()` in durable
+  artifacts.
+- The retry planner now attaches a planner-bound manifest to every valid reuse
+  artifact passed into a retry job.
+- Manifest compatibility version: `retry-reuse-v1`
+- Input hash version for historical artifacts: `legacy`
+- Planner manifest includes artifact identity, source job/revision, checksum,
+  provider/model, voice ID/strategy where available, and display/spoken content
+  fingerprints.
+- The worker now treats retry-bound artifacts as authoritative only when their
+  manifest is present and `planner_bound`.
+- Worker validation fails closed with stable code
+  `RETRY_ARTIFACT_REUSE_INVALID` before provider synthesis or Whisper timing if
+  a retry-bound voice/caption artifact is invalid, superseded, unsafe, missing,
+  checksum-invalid, mismatched by scene/type/provider/model/voice, or mismatched
+  by content fingerprint.
+- Ordinary non-retry reuse remains on the existing predicate path.
+- Explicit retry media reuse was not weakened or regressed.
+
+## Incident Dry Run
+
+New regression coverage includes an exact no-network Pass 9.5 incident dry run:
+
+- Reused Scene 0 voice:
+  `voice_376f5d939a42e63b_83630c60680d`
+- Reused Scene 0 captions:
+  `captions_2e2e3060c9f77ec6_fa3d7d5e8548`
+- Reused Scene 1 voice despite legacy input hash drift:
+  `voice_76dd9485bc4d4ee5_e0251a3514e2`
+- Reused Scene 1 captions:
+  `captions_e76ddee264b42581_c092a9c0cc26`
+- First would-be synthesis boundary: zero-based Scene 2
+- Provider calls during dry run: `0`
+
+## Verification
+
+- `npx vitest run src/short-creator/retryArtifactReuse.test.ts src/server/v2/v2.test.ts`: PASS, 2 files / 44 tests
+- `npm run typecheck`: PASS
+- `npx vitest run`: PASS, 71 files / 1085 tests
+- `npm run build`: PASS
+- The initial sandboxed Vitest/Vite invocations failed only because Windows
+  sandboxing denied config resolution for `vitest.config.ts` / `vite.config.ts`;
+  the same commands passed when rerun through the approved local execution path.
+
+## Docker Rebuild & Runtime
+
+- Docker image rebuilt from clean product-source checkpoint
+  `289e97cba3236745c24f6cd973c224319e7dd9f5`
+- Image tag: `abud-shorts-engine:v2`
+- Image ID / manifest list:
+  `sha256:d0d1e2501fec6422fb114ff34cfab3f81bf84b97944888a722746e54fc9d6ba3`
+- Image created: `2026-09-03T13:33:18.608398445Z`
+- Recreated containers only:
+  - `abud-shorts-render-worker`
+  - `abud-shorts-app`
+- Preserved containers:
+  - `abud-shorts-postgres`
+  - `abud-shorts-n8n`
+- Docker volumes removed: `0`
+- Docker prune commands: `0`
+- `docker compose down -v`: not run
+- Final runtime health:
+  - `abud-shorts-app`: healthy
+  - `abud-shorts-render-worker`: healthy
+  - `abud-shorts-postgres`: healthy
+  - `abud-shorts-n8n`: healthy
+- App health endpoint: `{"status":"ok"}`
+
+## Data Preservation
+
+The four incident-lineage jobs remain present:
+
+- `cmtk9uo11000207ry72n76c5q`: `failed`, current stage `Failed`
+- `cmtkcs4mg000007ryfo4n9bt8`: `failed`, current stage `Generating voice`
+- `cmtknn0vk000007lfgwx6cqyx`: `failed`, current stage `Generating voice`
+- `cmtljdwcb000007qkbbvpguw6`: `failed`, current stage `Generating voice`
+
+The retry manifest for `cmtljdwcb000007qkbbvpguw6` still lists all five reusable
+artifact IDs as valid. The corresponding mounted files exist under
+`C:\abud-shorts-engine\data-dev` and their SHA-256 hashes match the recorded
+manifest checksums:
+
+- `voice_376f5d939a42e63b_83630c60680d`: checksum match
+- `captions_2e2e3060c9f77ec6_fa3d7d5e8548`: checksum match
+- `media_3fe1d2c7bfda98bf_10e3c9eee9f6`: checksum match
+- `voice_76dd9485bc4d4ee5_e0251a3514e2`: checksum match
+- `captions_e76ddee264b42581_c092a9c0cc26`: checksum match
+
+The `scene_artifacts` table contains no matching rows for these historical IDs;
+preservation evidence for this incident remains the existing job JSON metadata
+plus the immutable files/checksums in the mounted artifact store. No incident
+job, artifact file, manifest checksum, provider credential, or customer payload
+was modified or deleted.
+
+## Call Counter & Safety
+
+- ElevenLabs synthesis/previews during Pass 9.6: `0`
+- Paid AI image/video calls during Pass 9.6: `0`
+- Social posts during Pass 9.6: `0`
+- Recent app/worker logs after rebuild: no `ElevenLabs`, `text-to-speech`,
+  `synthesize`, or `voice generation` activity detected during Pass 9.6 runtime
+  validation.
+- Admin/session token use: none
+- Secrets printed or persisted: no
+
+## Remaining Release Block
+
+**V2.4 remains BLOCKED / NOT RELEASED.** Pass 9.6 closes the retry-reuse defect
+in source, tests, and rebuilt local runtime, but it does not qualify RC.2. A
+future owner-authorized production retry with a fresh paid-provider budget is
+still required to synthesize zero-based Scene 2, complete render/QA/delivery
+validation, and only then decide whether RC.2 can be created.
