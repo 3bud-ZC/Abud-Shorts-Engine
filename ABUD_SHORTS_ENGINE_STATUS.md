@@ -9337,3 +9337,141 @@ Because the Docker API never became reachable, the mandatory live runtime gate c
 ## Resumed Pass 9.5 Result
 
 **V2.4 RELEASE BLOCKED** - exact remaining blocker: Docker Desktop / Docker Engine is still unavailable on the host; the required Docker API and live runtime health gates cannot be satisfied before the single authorized Scene-2 Plain-TTS call.
+
+---
+
+# V2.4 Pass 9.5 - Final Resume With Docker Restored
+
+**Recorded**: 2026-09-03T16:07:10.8191926+03:00
+**Status**: **BLOCKED / NOT RELEASED**
+
+## Current Git State
+
+- Branch: `v2.4-professional-video-engine`
+- Local HEAD before execution: `ff73f8d7a10f8a708d10fe814bf9aa93c7db1f07`
+- `origin/v2.4-professional-video-engine`: `ff73f8d7a10f8a708d10fe814bf9aa93c7db1f07`
+- Working tree before execution: clean
+- Previous Pass 9.5 Docker-blocker status commits preserved.
+
+## Docker & Runtime Recovery
+
+- Docker API: reachable
+- Docker context: `desktop-linux`
+- Docker client/server: `29.6.2` / `29.6.2`
+- `abud-shorts-app`: healthy, image `abud-shorts-engine:v2`, image ID `sha256:bfa62cfdbdfa8f7edb5dc1cc3fdaa257ebd5f2259c340c2e9bcfb116fd036e2a`
+- `abud-shorts-render-worker`: healthy, image `abud-shorts-engine:v2`, image ID `sha256:bfa62cfdbdfa8f7edb5dc1cc3fdaa257ebd5f2259c340c2e9bcfb116fd036e2a`
+- `abud-shorts-postgres`: healthy, image `postgres:16-alpine`
+- `abud-shorts-n8n`: healthy, image `n8nio/n8n:latest`
+- App health: `{"status":"ok"}`
+- Running app image contains the Pass 9.4 Arabic route: Arabic ElevenLabs -> `plain_tts` -> local Whisper timing.
+- Provider Vault metadata: ElevenLabs, Pexels, and Pixabay credentials reported healthy/configured without selecting ciphertext or plaintext secrets.
+
+## Authentication
+
+- Method: existing active admin session, memory-only
+- Token printed: no
+- Token persisted: no
+- Token written to status/source/logs: no
+- Authentication result: succeeded
+- QA session created: no
+
+## Preflight & Reuse Verification
+
+- Original incident: `cmtk9uo11000207ry72n76c5q`
+- Pass 9.1 retry: `cmtkcs4mg000007ryfo4n9bt8`
+- Pass 9.2 retry: `cmtknn0vk000007lfgwx6cqyx`
+- Lineage contract: Arabic, Egyptian dialect, `10` seconds, `16:9`, `1080p`, standard quality, ElevenLabs voice provider, 3 scenes.
+- Scene 0 voice artifact present/valid: `voice_376f5d939a42e63b_83630c60680d`, checksum `83630c60680d6494ffbb0ba18866f55a30f42a28c44b61c8d210d3b65ab89bc5`, bytes `45549`
+- Scene 0 captions artifact present/valid: `captions_2e2e3060c9f77ec6_fa3d7d5e8548`
+- Scene 0 media artifact present/valid: `media_3fe1d2c7bfda98bf_10e3c9eee9f6`
+- Scene 1 voice artifact present/valid: `voice_76dd9485bc4d4ee5_e0251a3514e2`, checksum `e0251a3514e2b0ee038057f6cb18afe251a55fdd35dcad0b51f640a0754cd311`, bytes `71515`
+- Scene 1 captions artifact present/valid: `captions_e76ddee264b42581_c092a9c0cc26`
+- Scene 2 canonical text: `تابعنا وشوف التفاصيل`
+- Scene 2 normalized/spoken text: `تابعنا وشوف التفاصيل`
+- Scene 2 preflight status: `VALID`
+- Scene 2 endpoint class: `text-to-speech`
+- Scene 2 strategy: `plain_tts`
+- Scene 2 requestAlignment: `false`
+- Scene 2 `language_code` sent: `false`
+- Scene 2 unresolved Latin tokens: `0`
+- Scene 2 text fingerprint: `14bdfd098f39a5a600af6ab11d8bbfe1aae174f1b24d17e69c3e6a75e34b7b36`
+
+## Retry Execution
+
+- Retry endpoint: normal product `POST /api/v2/jobs/:id/retry`
+- Idempotency key: `pass95-resume-scene2-cmtknn0vk-20260903T1320Z`
+- New retry job: `cmtljdwcb000007qkbbvpguw6`
+- Retry of: `cmtknn0vk000007lfgwx6cqyx`
+- Retry lineage: `cmtk9uo11000207ry72n76c5q` -> `cmtkcs4mg000007ryfo4n9bt8` -> `cmtknn0vk000007lfgwx6cqyx`
+- Idempotency rows for this key: `1`
+- Active duplicate retries from Pass 9.2 job: `0`
+- Reused artifact IDs returned by product endpoint:
+  - `captions_2e2e3060c9f77ec6_fa3d7d5e8548`
+  - `media_3fe1d2c7bfda98bf_10e3c9eee9f6`
+  - `voice_376f5d939a42e63b_83630c60680d`
+  - `captions_e76ddee264b42581_c092a9c0cc26`
+  - `voice_76dd9485bc4d4ee5_e0251a3514e2`
+
+## Provider Failure
+
+The retry started normally and reused Scene 0 voice/captions/media. It then entered voice generation for scene `2/3` (zero-based Scene 1) instead of reusing the already-valid Scene 1 Plain-TTS artifact.
+
+- Final retry status: `failed`
+- Final current stage: `Generating voice`
+- User-safe error: `ElevenLabs could not generate the Arabic narration. Check the selected voice, then try again.`
+- Technical error persisted by product: `Invalid input`
+- Failed scene observed from events: scene `2/3` display label, corresponding to zero-based Scene 1
+- Expected Scene 1 behavior: reuse `voice_76dd9485bc4d4ee5_e0251a3514e2` and `captions_e76ddee264b42581_c092a9c0cc26`
+- Actual Scene 1 behavior: attempted new ElevenLabs synthesis and failed
+- Scene 2 synthesis: not reached
+- Scene 2 voice artifact: not created
+- Scene 2 captions artifact: not created
+- New durable artifacts for retry `cmtljdwcb000007qkbbvpguw6`: `0`
+- Sanitized provider code/taxonomy: `Invalid input`
+- HTTP status / request ID: not persisted in job state or visible logs for this failed retry
+- Endpoint class: runtime route and preflight resolve Arabic production to `text-to-speech` Plain TTS; the exact outbound URL was not persisted
+
+## Call Counter & Safety
+
+- Remaining authorized ElevenLabs calls before retry: `1`
+- Observed new ElevenLabs synthesis attempts during retry: `1`
+- Scene 0 new ElevenLabs calls: `0`
+- Scene 1 new ElevenLabs calls: `1` unexpected and release-blocking
+- Scene 2 new ElevenLabs calls: `0`
+- Remaining authorized ElevenLabs calls after failure: `0`
+- Unauthorized follow-up calls: `0`
+- Provider activity stopped immediately after failure.
+- No retry, punctuation change, alternate voice/model, preview, timestamp call, or second attempt was run.
+- Paid AI video calls: `0`
+- Social posts: `0`
+- Docker prune commands: `0`
+- Docker volumes removed: `0`
+- Postgres recreated: no
+- n8n recreated: no
+- Customer data deleted: no
+- Secrets exposed in status/source/logs: no
+
+## Root Cause Snapshot
+
+The product retry endpoint returned Scene 1's existing voice and caption artifacts in `reusedArtifactIds`, but the render worker did not reuse the Scene 1 voice at execution time. Hash diagnostics showed the current runtime's expected Scene 1 Plain-TTS hash does not match the historical Scene 1 artifact hash, so the per-scene reuse predicate bypassed the valid artifact even though it was explicitly carried in the retry metadata. This is a release-blocking retry-reuse defect because it can spend a provider request on a scene that was required to be reused.
+
+## Gates Not Run
+
+Because provider activity is now closed and Scene 2 was not synthesized, the pass did not proceed to:
+
+- final render
+- professionalReady validation
+- final duration validation
+- audio QA
+- caption QA
+- visual/contact-sheet QA
+- delivery endpoint QA
+- full typecheck/test/build gate
+- RC.2 versioning/image/package/manifest
+- isolated upgrade smoke
+- fresh install smoke
+- browser QA
+
+## Final Pass 9.5 Result
+
+**V2.4 RELEASE BLOCKED** - exact current blocker: the authenticated retry attempted a new ElevenLabs synthesis for zero-based Scene 1 instead of reusing the valid existing Scene 1 Plain-TTS voice artifact; the single remaining provider request budget is now closed, Scene 2 was not synthesized, and RC.2 cannot qualify.
