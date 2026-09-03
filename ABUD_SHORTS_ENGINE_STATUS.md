@@ -9285,3 +9285,55 @@ No production records or historical failed rows were modified in this pass.
 ## Pass 9.5 Result
 
 **V2.4 RELEASE BLOCKED** - exact remaining blocker: Docker Desktop / Docker Engine is unavailable on the host, and the required live runtime health gate cannot be satisfied before the authorized Scene-2 paid synthesis call.
+
+---
+
+# V2.4 Pass 9.5 - Resumed Execution Attempt
+
+**Recorded**: 2026-09-03T15:13:56.0542395+03:00
+**Status**: **BLOCKED / NOT RELEASED**
+
+## Git Recovery
+
+- Starting local HEAD on resume: `29609c49ca703027ec0c9adea45af6b79ea2eccd`
+- Previous blocker commit: `29609c49ca703027ec0c9adea45af6b79ea2eccd`
+- Remote before blocker push: `866816f48fffe26cb04576f0e784650876222f5b`
+- Blocker commit pushed to `origin/v2.4-professional-video-engine`: yes
+- Remote after blocker push: `29609c49ca703027ec0c9adea45af6b79ea2eccd`
+- Pushed refs: feature branch only; no main, tags, releases, stable channel, or public manifest updates.
+
+## Docker Recovery Gate
+
+The resumed pass first re-ran the required Docker runtime checks before any paid provider activity:
+
+- `docker version`: client available, but Docker API unavailable at `npipe:////./pipe/dockerDesktopLinuxEngine`.
+- `docker context show`: `desktop-linux`
+- `docker ps`: failed because the Docker Desktop Linux engine pipe did not exist.
+- `Docker Desktop`, `com.docker.backend`, and `dockerd` processes: not running.
+- `com.docker.service`: installed, stopped.
+- Docker backend error still referenced `C:\Users\Abud\AppData\Local\Docker\run\dockerInference`.
+- The `dockerInference` path still existed as a zero-byte reparse-point runtime socket.
+- Docker Desktop was launched again from `C:\Program Files\Docker\Docker\Docker Desktop.exe`; after a bounded wait, `docker version` still failed because the Docker Desktop Linux engine pipe did not exist.
+
+Because the Docker API never became reachable, the mandatory live runtime gate could not proceed to container health, database lineage inspection, Provider Vault verification, or product retry execution.
+
+## Authorization & Safety
+
+- Remaining authorized ElevenLabs calls before resumed execution: `1`
+- Actual new ElevenLabs calls during resumed execution: `0`
+- Unauthorized ElevenLabs calls: `0`
+- Scene 0 calls: `0`
+- Scene 1 calls: `0`
+- Scene 2 calls: `0`
+- Paid AI video calls: `0`
+- Social posts: `0`
+- Docker prune commands: `0`
+- Docker volumes removed: `0`
+- Postgres recreated: no
+- n8n recreated: no
+- Customer data deleted: no
+- Secrets exposed in status/source/logs: no
+
+## Resumed Pass 9.5 Result
+
+**V2.4 RELEASE BLOCKED** - exact remaining blocker: Docker Desktop / Docker Engine is still unavailable on the host; the required Docker API and live runtime health gates cannot be satisfied before the single authorized Scene-2 Plain-TTS call.
