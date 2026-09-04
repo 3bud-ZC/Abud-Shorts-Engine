@@ -180,6 +180,13 @@ export const ar: TranslationCatalog = {
   "create.eyebrow": "الإنتاج",
   "create.narrationLanguage": "لغة التعليق الصوتي",
   "create.narrationLanguageHint": "اللغة المنطوقة في الفيديو، وهي مستقلة عن لغة الواجهة.",
+  "create.readiness.writePrompt": "اكتب وصفًا لإنشاء الفيديو.",
+  "create.readiness.arabicLocalVoiceRequired":
+    "يلزم إعداد صوت عربي مصري محلي. ثبّت VoiceTut للجودة المحلية العالية أو KemeTone للخفيف المحلي، أو اختر ElevenLabs كخيار مدفوع صريح.",
+  "create.readiness.providerNotConfigured": "مزوّد الصوت المختار غير مُعدّ.",
+  "create.readiness.setupNotRunnable": "إعداد الإنتاج المختار غير جاهز للتشغيل بعد.",
+  "create.voiceGuidance.arabic":
+    "يتم إنتاج التعليق الصوتي بالعربية والمصرية والفصحى محليًا افتراضيًا عبر VoiceTut أو KemeTone. يظل ElevenLabs متاحًا كخيار مدفوع صريح؛ وتقيّم أنت جودة الصوت في المزوّدون - استوديو الصوت.",
 
   // ----------------------------------------------------------- productions
   "productions.title": "الإنتاجات",

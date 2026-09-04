@@ -273,7 +273,7 @@ function costLabel(costEstimate: CostEstimateData | null): string {
 const VideoCreator: React.FC = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const ui = creatorCopy[locale === "ar" ? "ar" : "en"];
 
   // Mode Selection: "prompt" vs "template"
@@ -702,11 +702,11 @@ const VideoCreator: React.FC = () => {
   }
 
   function readinessMessage(): string | null {
-    if (!prompt.trim()) return "Write a prompt to create a video.";
-    if (arabicBlocked) return "Arabic narration requires ElevenLabs. Configure ElevenLabs before creating.";
-    if (selectedProviderUnavailable) return "The selected voice provider is not configured.";
+    if (!prompt.trim()) return t("create.readiness.writePrompt");
+    if (arabicBlocked) return t("create.readiness.arabicLocalVoiceRequired");
+    if (selectedProviderUnavailable) return t("create.readiness.providerNotConfigured");
     if (modeReadiness && !modeReadiness.ready) {
-      return modeReadiness.missingRequirements?.[0] || "The selected production setup is not runnable yet.";
+      return modeReadiness.missingRequirements?.[0] || t("create.readiness.setupNotRunnable");
     }
     return null;
   }
@@ -729,20 +729,16 @@ const VideoCreator: React.FC = () => {
   const isArabicMode = language === "ar" || (language === "auto" && dialect !== "none");
   const selectedVoice = voiceOptions.find((voice) => voice.id === voiceId);
 
-  const elevenLabsProvider = useMemo(
-    () => providers.find((provider) => provider.id === "elevenlabs" || provider.name === "ElevenLabs"),
-    [providers],
-  );
-  const elevenLabsConfigured = elevenLabsProvider?.configured !== false;
-
-  // Arabic / Egyptian / MSA narration is served by ElevenLabs only. Without a
-  // configured credential the job would fail during render, so the form blocks
-  // submission up front and offers the configure action instead.
-  const arabicBlocked = Boolean(isArabicMode && (arabicVoiceBlocked || !elevenLabsConfigured));
+  // Arabic / Egyptian / MSA narration is local-first (VoiceTut, then KemeTone);
+  // `arabicVoiceBlocked` mirrors the server's real routing decision (which already
+  // accounts for local voice readiness and an explicit ElevenLabs premium
+  // selection), so it alone determines whether the form blocks submission -
+  // ElevenLabs configuration is never required on its own.
+  const arabicBlocked = Boolean(isArabicMode && arabicVoiceBlocked);
 
   function voiceProviderGuidance(): string {
     if (isArabicMode) {
-      return "Arabic, Egyptian Arabic and MSA narration is produced with ElevenLabs. Voice quality is judged by you in Providers - Voice Lab; the engine does not label any voice as Egyptian on its own.";
+      return t("create.voiceGuidance.arabic");
     }
     if (voiceProvider === "piper") return "Piper is legacy only. It stays available so historical videos remain readable and is not used for new production.";
     if (voiceProvider === "edge_tts") return "Edge TTS is experimental, online, and disabled by default. It is never a production Arabic route.";

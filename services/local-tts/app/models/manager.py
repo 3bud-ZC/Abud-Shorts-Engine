@@ -66,6 +66,8 @@ class ModelManager:
                 speakers_count=17,
                 dialect="egyptian",
                 sample_rate=24000,
+                device=self.voicetut.device,
+                load_time_seconds=self.voicetut.load_time_seconds,
             ),
             ModelItem(
                 id="kemetone",

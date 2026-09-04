@@ -183,6 +183,13 @@ export const en: TranslationCatalog = {
   "create.narrationLanguage": "Narration language",
   "create.narrationLanguageHint":
     "The language spoken in the video. Independent of the interface language.",
+  "create.readiness.writePrompt": "Write a prompt to create a video.",
+  "create.readiness.arabicLocalVoiceRequired":
+    "Local Egyptian Arabic voice setup is required. Install VoiceTut for Local High Quality or KemeTone for Local Lightweight, or choose ElevenLabs as an explicit premium voice.",
+  "create.readiness.providerNotConfigured": "The selected voice provider is not configured.",
+  "create.readiness.setupNotRunnable": "The selected production setup is not runnable yet.",
+  "create.voiceGuidance.arabic":
+    "Arabic, Egyptian Arabic and MSA narration is produced locally with VoiceTut or KemeTone by default. ElevenLabs is available as an explicit premium option; voice quality is judged by you in Providers - Voice Lab.",
 
   // ----------------------------------------------------------- productions
   "productions.title": "Productions",

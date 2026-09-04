@@ -1,4 +1,5 @@
 """VoiceTut-TTS Provider for Egyptian Arabic (mohammedaly22/VoiceTut-TTS)."""
+import logging
 import os
 import time
 from pathlib import Path
@@ -8,6 +9,8 @@ from app.config import MODEL_CACHE_DIR, VOICETUT_DEFAULT_SPEAKER, VOICETUT_REPO_
 from app.audio import generate_silence_or_test_tone
 from app.providers.base import BaseTTSProvider
 from app.schemas import VoiceItem
+
+logger = logging.getLogger("abud.local_tts.voicetut")
 
 VOICETUT_SPEAKERS: List[VoiceItem] = [
     VoiceItem(id="Mohamed", name="Mohamed", gender="male", provider="voicetut", is_default=True),
@@ -34,29 +37,59 @@ class VoiceTutProvider(BaseTTSProvider):
         self.cache_dir = Path(cache_dir or MODEL_CACHE_DIR) / "tts" / "voicetut"
         self._model = None
         self._is_loaded = False
+        self._is_mock = False
+        self.device: Optional[str] = None
+        self.load_time_seconds: Optional[float] = None
+
+    def _has_real_weights(self) -> bool:
+        return (self.cache_dir / "config.json").exists() and (self.cache_dir / "model.safetensors").exists()
 
     def is_ready(self) -> bool:
         if os.getenv("ABUD_LOCAL_TTS_ASSUME_READY") in ("1", "true", "voicetut"):
             return True
-        config_path = self.cache_dir / "config.json"
+        if self._has_real_weights():
+            return True
         metadata_path = self.cache_dir / "metadata.json"
-        return config_path.exists() or metadata_path.exists()
+        return metadata_path.exists()
 
     def load(self) -> None:
         if self._is_loaded:
             return
-        # If in mock or test environment, initialize dummy model
-        if os.getenv("ABUD_LOCAL_TTS_MOCK") == "1" or not self.cache_dir.exists():
+
+        # Deterministic mock path used by the unit test suite (no GPU/model required)
+        if os.getenv("ABUD_LOCAL_TTS_MOCK") == "1" or not self._has_real_weights():
             self._model = "mock_voicetut"
+            self._is_mock = True
             self._is_loaded = True
             return
-        # Real inference load if model weights present
-        self._model = "voicetut_engine"
+
+        # Real inference load from the selectively-downloaded local snapshot.
+        # `from_pretrained` is given a local directory path (not the repo id) so it
+        # loads purely from disk and never re-fetches training-only files such as
+        # optimizer.bin.
+        import torch
+        from voicetut_tts import VoiceTutTTS
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device == "cuda" else torch.float32
+
+        t0 = time.time()
+        self._model = VoiceTutTTS.from_pretrained(str(self.cache_dir), device_map=device, dtype=dtype)
+        self.load_time_seconds = round(time.time() - t0, 3)
+        self.device = device
+        self._is_mock = False
         self._is_loaded = True
+        logger.info(
+            "VoiceTut real model loaded device=%s dtype=%s load_time_s=%s",
+            device, dtype, self.load_time_seconds,
+        )
 
     def unload(self) -> None:
         self._model = None
         self._is_loaded = False
+        self._is_mock = False
+        self.device = None
+        self.load_time_seconds = None
 
     def synthesize(
         self,
@@ -71,10 +104,21 @@ class VoiceTutProvider(BaseTTSProvider):
         speaker = speaker_id or VOICETUT_DEFAULT_SPEAKER
         sample_rate = 24000
 
-        # Estimate duration based on Arabic word count (~12-14 chars per sec)
-        char_count = len(text.strip())
-        duration = max(1.5, char_count / (13.0 * max(0.5, speed)))
+        if self._is_mock:
+            # Deterministic synthetic waveform for the unit test suite only.
+            char_count = len(text.strip())
+            duration = max(1.5, char_count / (13.0 * max(0.5, speed)))
+            audio = generate_silence_or_test_tone(duration_seconds=duration, sample_rate=sample_rate)
+            return audio, sample_rate
 
-        # In real execution or mock, return 24 kHz audio
-        audio = generate_silence_or_test_tone(duration_seconds=duration, sample_rate=sample_rate)
+        # Real VoiceTut inference. Named built-in speakers resolve internally via
+        # reference_speakers/references.json in the local snapshot.
+        audio = self._model.synthesize(
+            text,
+            speaker=speaker,
+            language="ar",
+            normalize=True,
+            **{k: v for k, v in {"speed": speed}.items() if speed != 1.0},
+        )
+        audio = np.asarray(audio, dtype=np.float32)
         return audio, sample_rate

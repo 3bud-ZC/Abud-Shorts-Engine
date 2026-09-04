@@ -65,6 +65,7 @@ $py.class
 venv/
 *.safetensors
 *.pt
+*.pth
 *.onnx
 /models/
 data-dev/models/

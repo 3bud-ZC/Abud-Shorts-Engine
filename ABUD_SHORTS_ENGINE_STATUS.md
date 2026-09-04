@@ -9695,8 +9695,8 @@ During Pass 9.7-H, a rigorous audit of the evidence was conducted:
 
 - **Branch:** `v2.4-professional-video-engine`
 - **Pre-Handoff Laptop Commit:** `10df7437115c63ff40865a18b6965e345d1c89ca`
-- **Final Laptop Source SHA:** recorded below upon commit
-- **Remote Feature SHA:** in sync with final laptop source SHA
+- **Final Laptop Source SHA:** `a37be8681e44ac5f89ca3c5bddcb189d163e3d3c`
+- **Remote Feature SHA:** `a37be8681e44ac5f89ca3c5bddcb189d163e3d3c` (verified equal to `origin/v2.4-professional-video-engine` on PC recovery)
 - **origin/main SHA:** `cd3a0e0401229193b54513dd62c7a38ddf606f16`
 - **Stable Release:** `v2.3.1` (commit `15caa083…`, digest `sha256:5076022e…`)
 - **Schema:** `2.13.0` (unchanged)

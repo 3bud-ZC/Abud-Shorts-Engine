@@ -62,8 +62,21 @@ EOF
     echo "[✓] Model '${id}' is ready and verified!"
 }
 
-VOICETUT_FILES=("config.json" "chat_template.jinja" "model.safetensors" "tokenizer.json" "tokenizer_config.json" "reference_speakers/references.json")
-KEMETONE_FILES=("config.json" "model.safetensors")
+VOICETUT_FILES=(
+    "config.json" "chat_template.jinja" "model.safetensors" "tokenizer.json" "tokenizer_config.json"
+    "reference_speakers/references.json"
+    "reference_speakers/Abdelrahman_clean.wav" "reference_speakers/Abdullah_clean.wav" "reference_speakers/Ahmed_clean.mp3"
+    "reference_speakers/Aly_reference.wav" "reference_speakers/Asmaa_clean.wav" "reference_speakers/Esraa_clean.wav"
+    "reference_speakers/Essam_clean.mp3" "reference_speakers/Hanan_clean.wav" "reference_speakers/Hossam_clean.wav"
+    "reference_speakers/Kamal_clean.wav" "reference_speakers/Mohamed_clean.wav" "reference_speakers/Omar_clean.wav"
+    "reference_speakers/Omnia_clean.wav" "reference_speakers/Sarah_clean.wav" "reference_speakers/Sayed_clean.wav"
+    "reference_speakers/Yasmin_clean.wav" "reference_speakers/Zaki_clean.wav"
+)
+KEMETONE_FILES=(
+    "config.json" "kemetone.pth" "voices/kemetone.pt"
+    "kemetone/__init__.py" "kemetone/arabic.py" "kemetone/g2p.py" "kemetone/normalize_tashkeel.py" "kemetone/runtime.py"
+    "kemetone/lexicons/ث.tsv" "kemetone/lexicons/ذ.tsv" "kemetone/lexicons/ظ.tsv" "kemetone/lexicons/ق.tsv"
+)
 
 if [ "${MODEL_ID}" = "voicetut" ] || [ "${MODEL_ID}" = "all" ]; then
     install_model "voicetut" "mohammedaly22/VoiceTut-TTS" "41c1a79ab2eb872ecfb2ad56ab40a94cff28d8c3" "${VOICETUT_FILES[@]}"

@@ -39,6 +39,8 @@ class ModelItem(BaseModel):
     speakers_count: int
     dialect: str
     sample_rate: int
+    device: Optional[str] = None
+    load_time_seconds: Optional[float] = None
 
 class ModelsResponse(BaseModel):
     models: List[ModelItem]
