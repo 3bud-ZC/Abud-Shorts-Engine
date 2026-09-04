@@ -108,8 +108,13 @@ function enforcePromptTruthSafety(
         ...scene,
         narration: resolvedCta.text,
         onScreenText: resolvedCta.text,
+        // Not website-specific: this fallback fires for any business
+        // vertical's CTA scene (food, real estate, clothing, ...), and a
+        // website-themed description here previously pushed the visual
+        // classifier straight to WEBSITE_MOCKUP regardless of the actual
+        // business, failing the real-footage coverage gate.
         visualPrompt: inventsUngroundedClaim(scene.visualPrompt || "", prompt)
-          ? "Happy business owner reviewing their professional new website"
+          ? "Happy satisfied customer smiling while enjoying the product in a real everyday setting"
           : scene.visualPrompt,
         stockSearchTerms: safeStockSearchTerms(scene.stockSearchTerms, prompt),
         notes: [
