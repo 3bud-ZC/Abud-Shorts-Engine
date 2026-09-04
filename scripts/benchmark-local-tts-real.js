@@ -15,6 +15,7 @@ const axios = require("axios");
 
 const baseUrl = process.argv[2] || process.env.LOCAL_TTS_BASE_URL || "http://127.0.0.1:8765";
 const outDir = path.join(__dirname, "..", "data-dev", "qa-samples", "voicetut-benchmark");
+const authHeaders = process.env.INTERNAL_SERVICE_TOKEN ? { "x-internal-token": process.env.INTERNAL_SERVICE_TOKEN } : {};
 
 const SENTENCES = [
   "إزيك يا صاحبي، عامل إيه النهارده؟",
@@ -41,7 +42,7 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   console.log(`[benchmark] Target service: ${baseUrl}`);
 
-  const health = await axios.get(`${baseUrl}/health`, { timeout: 5000 });
+  const health = await axios.get(`${baseUrl}/health`, { timeout: 5000, headers: authHeaders });
   console.log("[benchmark] /health:", JSON.stringify(health.data.hardware));
 
   const results = [];
@@ -56,7 +57,7 @@ async function main() {
         response = await axios.post(
           `${baseUrl}/synthesize`,
           { model: "voicetut", text, speakerId: speaker, speed: 1.0 },
-          { timeout: Number(process.env.LOCAL_TTS_SYNTHESIS_TIMEOUT_MS || 180000) },
+          { timeout: Number(process.env.LOCAL_TTS_SYNTHESIS_TIMEOUT_MS || 180000), headers: authHeaders },
         );
       } catch (error) {
         console.error(`[benchmark] FAILED speaker=${speaker} sentence=${i + 1}:`, error.message);
@@ -73,7 +74,7 @@ async function main() {
       const durationSeconds = response.data.durationSeconds;
       const rtf = wallMs / 1000 / durationSeconds;
 
-      const postHealth = await axios.get(`${baseUrl}/health`, { timeout: 5000 });
+      const postHealth = await axios.get(`${baseUrl}/health`, { timeout: 5000, headers: authHeaders });
 
       const record = {
         speaker,
@@ -101,7 +102,7 @@ async function main() {
     }
   }
 
-  const finalModels = await axios.get(`${baseUrl}/models`, { timeout: 5000 });
+  const finalModels = await axios.get(`${baseUrl}/models`, { timeout: 5000, headers: authHeaders });
   const voicetutModel = (finalModels.data.models || []).find((m) => m.id === "voicetut");
 
   const summary = {

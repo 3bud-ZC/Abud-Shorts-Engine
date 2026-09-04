@@ -7,7 +7,11 @@ import { kokoroModelPrecision, whisperModels } from "./types/shorts";
 
 const defaultLogLevel: pino.Level = "info";
 const defaultPort = 3123;
-const whisperVersion = "1.7.1";
+// Pinned to a release that actually publishes a `whisper-bin-x64.zip` asset -
+// 1.7.1 (the previous pin) 404s on Windows install and, worse, feeds the
+// resulting GitHub error page into Expand-Archive as if it were a real zip,
+// which crashes the whole Node process rather than raising a catchable error.
+const whisperVersion = "1.9.2";
 const defaultWhisperModel: whisperModels = "small";
 const defaultRequestTimeoutMs = 30_000;
 const defaultProviderTimeoutMs = 45_000;

@@ -71,10 +71,10 @@ class VoiceTutProvider(BaseTTSProvider):
         from voicetut_tts import VoiceTutTTS
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        dtype = "float16" if device == "cuda" else "float32"
 
         t0 = time.time()
-        self._model = VoiceTutTTS.from_pretrained(str(self.cache_dir), device_map=device, dtype=dtype)
+        self._model = VoiceTutTTS.from_pretrained(str(self.cache_dir), device=device, dtype=dtype)
         self.load_time_seconds = round(time.time() - t0, 3)
         self.device = device
         self._is_mock = False

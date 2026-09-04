@@ -61,6 +61,12 @@ export class Whisper {
         printOutput: true,
       });
       logger.debug("WhisperCpp installed");
+      // downloadWhisperModel writes straight to `${modelsDir}/ggml-*.bin` and
+      // does not create the parent directory itself; a fresh install (nothing
+      // pre-created by installWhisperCpp's extracted archive) fails with an
+      // ENOENT that is easy to miss because it surfaces as an unhandled write
+      // stream error rather than a rejected promise.
+      await fs.ensureDir(modelsDir);
       logger.debug("Downloading Whisper model");
       await downloadWhisperModel({
         model: config.whisperModel,
