@@ -19,8 +19,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("status", "update", "backup", "diagnostics", "start", "stop", "restart", "rollback", "help")]
+    [ValidateSet("status", "update", "backup", "diagnostics", "start", "stop", "restart", "rollback", "owner", "help")]
     [string]$Command = "status",
+
+    [Parameter(Position = 1)]
+    [string]$SubCommand = "",
 
     [switch]$Check,
     [string]$TargetVersion = "",
@@ -532,6 +535,33 @@ function Invoke-Restart {
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
 
+function Invoke-OwnerCommand {
+    param([string]$Action)
+    Assert-Docker
+
+    if ($Action -ne "reset-password") {
+        Write-Host 'Usage: abud-shorts.ps1 owner reset-password'
+        Write-Host '  Interactively resets the owner account when you cannot sign in.'
+        Write-Host '  Requires local access to this machine. No customer data is touched.'
+        return
+    }
+
+    $appContainer = Get-ContainerName "app"
+    $running = Invoke-Docker @("inspect", "-f", "{{.State.Running}}", $appContainer)
+    if ($LASTEXITCODE -ne 0 -or ($running | Select-Object -Last 1) -ne "true") {
+        Stop-WithMessage "The app service is not running. Start ABUD Shorts first (Status shortcut), then try again."
+    }
+
+    Write-Step "Owner password recovery"
+    Write-Host "      This runs inside the application, asks for the new username/password"
+    Write-Host "      directly (never on this command line), and signs out every existing"
+    Write-Host "      session. Nothing else about this installation is changed."
+    Write-Host ""
+
+    & docker exec -it $appContainer node dist/scripts/resetOwnerCredentials.js
+    exit $LASTEXITCODE
+}
+
 function Invoke-Backup {
     Assert-Docker
     Write-Step "Creating a backup..."
@@ -977,6 +1007,7 @@ ABUD Shorts Engine
   abud-shorts.ps1 diagnostics                Write a support bundle
   abud-shorts.ps1 start | stop | restart
   abud-shorts.ps1 rollback                   Return to the previous working version
+  abud-shorts.ps1 owner reset-password       Recover a lost owner username/password locally
 
 Backups, videos, media and settings are never removed by any of these commands.
 "@
@@ -991,5 +1022,6 @@ switch ($Command) {
     "stop"        { Invoke-Stop }
     "restart"     { Invoke-Restart }
     "rollback"    { Invoke-Rollback }
+    "owner"       { Invoke-OwnerCommand $SubCommand }
     default       { Show-Usage }
 }

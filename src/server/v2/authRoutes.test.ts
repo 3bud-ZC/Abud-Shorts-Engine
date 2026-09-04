@@ -203,4 +203,20 @@ describe("V2 auth route matrix", () => {
       .send({})
       .expect(401);
   });
+
+  it("blocks anonymous owner bootstrap once an owner already exists", async () => {
+    const db = new AuthMatrixDb({ setupComplete: true, adminConfigured: true });
+    const res = await request(makeApp(db))
+      .post("/api/v2/auth/setup-admin")
+      .send({ username: "attacker", password: "password123" });
+    expect(res.status).toBe(401);
+  });
+
+  it("returns a stable error code (not raw English prose) on wrong credentials", async () => {
+    const res = await request(makeApp(new AuthMatrixDb()))
+      .post("/api/v2/auth/login")
+      .send({ username: "admin", password: "wrong" });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("invalid_credentials");
+  });
 });

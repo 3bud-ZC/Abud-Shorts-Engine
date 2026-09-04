@@ -146,7 +146,12 @@ export class CapabilityManager {
     for (const p of candidates) {
       if (fs.existsSync(p)) return p;
     }
-    return process.platform === "win32" ? "python" : "python3";
+    // On Windows, a bare "python"/"python3" on PATH can resolve to the
+    // Microsoft Store's App Execution Alias stub even when a real
+    // interpreter is installed elsewhere, which prints a Store-install
+    // prompt instead of running. The "py" launcher (registered by the
+    // official python.org installer) resolves the real interpreter instead.
+    return process.platform === "win32" ? "py" : "python3";
   }
 
   public listCapabilities(): CapabilityStatus[] {

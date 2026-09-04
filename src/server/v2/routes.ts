@@ -4882,7 +4882,7 @@ export function createV2PublicRouter(
       const { username, password } = req.body;
       const session = await authService.authenticate(username, password);
       if (!session) {
-        res.status(401).json({ error: "Invalid username or password." });
+        res.status(401).json({ error: "invalid_credentials" });
         return;
       }
       res.status(200).json({ session });
@@ -4911,6 +4911,57 @@ export function createV2PublicRouter(
       return;
     }
     res.status(200).json({ user });
+  });
+
+  router.post("/auth/change-password", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    try {
+      const { currentPassword, newPassword } = req.body || {};
+      await authService.changePassword(auth.user.id, currentPassword, newPassword);
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/auth/change-username", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    try {
+      const { username } = req.body || {};
+      const updated = await authService.changeUsername(auth.user.id, username);
+      res.status(200).json({ success: true, username: updated });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/auth/sessions", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const sessions = await authService.listSessions(auth.user.id);
+    res.status(200).json({ sessions });
+  });
+
+  router.post("/auth/sessions/revoke-others", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const token = bearerToken(req) || "";
+    const revoked = await authService.revokeOtherSessions(auth.user.id, token);
+    res.status(200).json({ success: true, revoked });
   });
 
   // 3. Backups

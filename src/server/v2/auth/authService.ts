@@ -248,4 +248,92 @@ export class AuthService {
     if (!token || !this.db.enabled) return;
     await this.db.query(`DELETE FROM admin_sessions WHERE token = $1`, [token]);
   }
+
+  /**
+   * Changes the owner's password. Requires the current password so a
+   * hijacked but still-live session cannot silently lock the real owner out.
+   * Revokes every session (including the caller's) - the safest option given
+   * there is no per-session "this is me, keep me logged in" signal today.
+   */
+  public async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    if (!this.db.enabled) return;
+    if (!newPassword || newPassword.length < 8) {
+      throw new Error("Password must be at least 8 characters long.");
+    }
+
+    const rows = await this.db.query<{ password_hash: string; salt: string }>(
+      `SELECT password_hash, salt FROM admin_users WHERE id = $1`,
+      [userId],
+    );
+    if (rows.length === 0) throw new Error("Account not found.");
+
+    const valid = this.verifyPassword(currentPassword, rows[0].password_hash, rows[0].salt);
+    if (!valid) throw new Error("Current password is incorrect.");
+
+    const { hash, salt } = this.hashPassword(newPassword);
+    await this.db.query(
+      `UPDATE admin_users SET password_hash = $1, salt = $2, updated_at = now() WHERE id = $3`,
+      [hash, salt, userId],
+    );
+    await this.db.query(`DELETE FROM admin_sessions WHERE user_id = $1`, [userId]);
+    logger.info({ userId }, "Owner password changed; all sessions revoked");
+  }
+
+  /**
+   * Changes the owner's username. Sessions are kept: unlike a password
+   * change, the credential an attacker would need (the password) hasn't
+   * moved, so there's nothing forcing a re-login protects against here.
+   */
+  public async changeUsername(userId: string, newUsername: string): Promise<string> {
+    if (!this.db.enabled) return newUsername;
+    const trimmed = (newUsername || "").trim();
+    if (trimmed.length < 3) {
+      throw new Error("Username must be at least 3 characters.");
+    }
+    const normalized = trimmed.toLowerCase();
+
+    const existing = await this.db.query<{ id: string }>(
+      `SELECT id FROM admin_users WHERE username = $1 AND id != $2`,
+      [normalized, userId],
+    );
+    if (existing.length > 0) {
+      throw new Error("That username is already in use.");
+    }
+
+    await this.db.query(
+      `UPDATE admin_users SET username = $1, updated_at = now() WHERE id = $2`,
+      [normalized, userId],
+    );
+    logger.info({ userId }, "Owner username changed");
+    return normalized;
+  }
+
+  /** Safe session metadata only - never the token itself. */
+  public async listSessions(
+    userId: string,
+  ): Promise<Array<{ id: string; createdAt: Date; expiresAt: Date }>> {
+    if (!this.db.enabled) return [];
+    const rows = await this.db.query<{ id: string; created_at: string; expires_at: string }>(
+      `SELECT id, created_at, expires_at FROM admin_sessions WHERE user_id = $1 AND expires_at > now() ORDER BY created_at DESC`,
+      [userId],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      createdAt: new Date(r.created_at),
+      expiresAt: new Date(r.expires_at),
+    }));
+  }
+
+  public async revokeOtherSessions(userId: string, currentToken: string): Promise<number> {
+    if (!this.db.enabled) return 0;
+    const rows = await this.db.query(
+      `DELETE FROM admin_sessions WHERE user_id = $1 AND token != $2 RETURNING id`,
+      [userId, currentToken],
+    );
+    return rows.length;
+  }
 }
