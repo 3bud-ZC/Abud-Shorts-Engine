@@ -71,7 +71,16 @@ export const visualModeEnum = z.enum([
 ]);
 export type VisualMode = z.infer<typeof visualModeEnum>;
 
-export const voiceProviderEnum = z.enum(["auto", "kokoro", "piper", "edge_tts", "google_cloud_tts", "elevenlabs"]);
+export const voiceProviderEnum = z.enum([
+  "auto",
+  "kokoro",
+  "voicetut",
+  "kemetone",
+  "piper",
+  "edge_tts",
+  "google_cloud_tts",
+  "elevenlabs",
+]);
 export type VoiceProvider = z.infer<typeof voiceProviderEnum>;
 
 /**

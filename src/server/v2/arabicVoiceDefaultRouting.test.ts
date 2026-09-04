@@ -131,7 +131,7 @@ const ARABIC_AUTO_REQUEST = {
   durationSeconds: 20,
   aspectRatio: "9:16",
   resolution: "1080p",
-  voiceProvider: "auto",
+  voiceProvider: "elevenlabs",
 };
 
 describe("Persisted Arabic voice default drives real production requests", () => {
@@ -161,7 +161,7 @@ describe("Persisted Arabic voice default drives real production requests", () =>
     // The contract records *how* the voice was chosen so the UI and job
     // metadata can prove it came from the human selection.
     expect(preview.body.spec.metadata.uiContract).toMatchObject({
-      requestedVoiceProvider: "auto",
+      requestedVoiceProvider: "elevenlabs",
       resolvedVoiceProvider: "elevenlabs",
       voiceId: MAMDOH.voiceId,
       voicePreset: "energetic_ad",
@@ -184,7 +184,7 @@ describe("Persisted Arabic voice default drives real production requests", () =>
         language: "ar",
         dialect: "egyptian",
         durationSeconds: 20,
-        voiceProvider: "auto",
+        voiceProvider: "elevenlabs",
       });
 
     // The job was never refused, and the spec that reached the jobs table names
@@ -260,6 +260,7 @@ describe("Persisted Arabic voice default drives real production requests", () =>
         prompt: ARABIC_AUTO_REQUEST.prompt,
         language: "ar",
         dialect: "egyptian",
+        voiceProvider: "elevenlabs",
       })
       .expect(409);
 
@@ -434,7 +435,7 @@ describe("Canonicalization stays pure", () => {
   it("applies one voice and one preset to the whole spec, not per scene", () => {
     const canonical = canonicalizeProductionSpecContract(
       arabicSpec(),
-      { language: "ar", dialect: "egyptian", voiceProvider: "auto" },
+      { language: "ar", dialect: "egyptian", voiceProvider: "elevenlabs" },
       { arabicVoice: persisted },
     );
     expect(canonical.scenes.length).toBe(3);
@@ -447,7 +448,7 @@ describe("Canonicalization stays pure", () => {
   it("keeps a historical Piper job readable while routing its revision to ElevenLabs", () => {
     const canonical = canonicalizeProductionSpecContract(
       { ...arabicSpec(), voiceProvider: "piper", voiceId: "ar_JO-kareem-medium" },
-      { language: "ar", dialect: "egyptian", voiceProvider: "auto" },
+      { language: "ar", dialect: "egyptian", voiceProvider: "elevenlabs" },
       { arabicVoice: persisted },
     );
     expect(canonical.voiceProvider).toBe("elevenlabs");

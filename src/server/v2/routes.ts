@@ -76,13 +76,18 @@ import {
 import { resolveTrustedProxy } from "./system/trustedProxy";
 import { AuthService } from "./auth/authService";
 import { ApiTokenService, type ApiTokenScope } from "./auth/apiTokenService";
-import type { VoiceProviderId } from "./voice-providers/types";
 import {
   ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+  ARABIC_LIGHTWEIGHT_PROVIDER,
+  ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+  ARABIC_PREMIUM_CLOUD_PROVIDER,
   ARABIC_PRODUCTION_PROVIDER,
   isArabicLanguage,
   isLegacyPiperVoiceId,
+  type VoiceProviderId,
 } from "./voice-providers/types";
+import { LOCAL_TTS_MODELS } from "./voice-providers/localTtsModels";
+import { LocalModelManager } from "./voice-providers/localModelManager";
 import {
   ELEVENLABS_DEFAULT_MODEL_ID,
   ELEVENLABS_PRESETS,
@@ -699,7 +704,11 @@ function inferResolvedVoiceProvider(input: {
   const isArabic =
     input.language === "ar" ||
     (input.language === "auto" && Boolean(input.dialect) && input.dialect !== "none");
-  if (isArabic) return ARABIC_PRODUCTION_PROVIDER;
+  if (isArabic) {
+    if (input.voiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER) return ARABIC_PREMIUM_CLOUD_PROVIDER;
+    if (input.voiceProvider === "kemetone") return "kemetone";
+    return ARABIC_PRODUCTION_PROVIDER;
+  }
   if (input.voiceProvider && input.voiceProvider !== "auto") {
     return input.voiceProvider as VoiceProviderId;
   }
@@ -707,8 +716,10 @@ function inferResolvedVoiceProvider(input: {
 }
 
 function defaultVoiceForResolvedProvider(provider: VoiceProviderId): string {
-  // ElevenLabs is deliberately absent here: an Arabic voice is a human decision
-  // resolved through resolveArabicVoiceSelection, never an environment guess.
+  if (provider === "voicetut") return process.env.VOICETUT_DEFAULT_SPEAKER || LOCAL_TTS_MODELS.voicetut.defaultSpeakerId;
+  if (provider === "kemetone") return LOCAL_TTS_MODELS.kemetone.defaultSpeakerId;
+  // ElevenLabs is deliberately absent here: a premium cloud Arabic voice is a
+  // human decision resolved through resolveArabicVoiceSelection.
   if (provider === "piper") return process.env.PIPER_AR_VOICE_ID || "ar_JO-kareem-medium";
   if (provider === "edge_tts") return process.env.EDGE_TTS_DEFAULT_VOICE || "ar-EG-SalmaNeural";
   if (provider === "google_cloud_tts") return process.env.GOOGLE_CLOUD_TTS_DEFAULT_VOICE || "";
@@ -832,7 +843,7 @@ export function canonicalizeProductionSpecContract(
   // Historical Arabic jobs carry Piper model names. Never forward one to
   // ElevenLabs; resolveArabicVoiceSelection discards them for us.
   const arabicVoice: ResolvedArabicVoice | null =
-    resolvedVoiceProvider === ARABIC_PRODUCTION_PROVIDER
+    resolvedVoiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER
       ? resolveArabicVoiceSelection({
           requestedVoiceId,
           requestedPreset:
@@ -847,7 +858,11 @@ export function canonicalizeProductionSpecContract(
     ? arabicVoice.voiceId
     : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
   const voicePreset = arabicVoice ? arabicVoice.preset : coerceRequestedPreset(controls.voicePreset);
-  const voiceModelId = arabicVoice ? arabicVoice.modelId : undefined;
+  const voiceModelId = arabicVoice
+    ? arabicVoice.modelId
+    : resolvedVoiceProvider === "voicetut" || resolvedVoiceProvider === "kemetone"
+      ? LOCAL_TTS_MODELS[resolvedVoiceProvider].providerModelId
+      : undefined;
   const captionEnabled = controls.captionEnabled !== false && controls.captions !== false;
   const specMetadata = spec.metadata || {};
   const specContract = specMetadata.uiContract || {};
@@ -1120,25 +1135,41 @@ async function arabicProductionBlocker(spec: {
   language?: string;
   dialect?: string;
   voiceId?: string;
+  voiceProvider?: string;
 }): Promise<{ error: string; message: string; action: { label: string; href: string } } | null> {
   if (!isArabicLanguage(spec.language, spec.dialect as any)) return null;
-  await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
-  if (!new ElevenLabsVoiceProvider().isConfigured()) {
+  if (spec.voiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER) {
+    await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
+    if (!new ElevenLabsVoiceProvider().isConfigured()) {
+      return {
+        error: "elevenlabs_not_configured",
+        message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+        action: { label: "Configure ElevenLabs", href: "/providers" },
+      };
+    }
+    if (!spec.voiceId) {
+      return {
+        error: "arabic_default_voice_not_selected",
+        message:
+          "No premium Arabic cloud voice has been selected. Open Voice Lab, audition the account voices and save a default.",
+        action: { label: "Open Voice Lab", href: "/voice-lab" },
+      };
+    }
+    return null;
+  }
+
+  if (!new VoiceRegistry({} as any).isArabicProductionConfigured()) {
     return {
-      error: "elevenlabs_not_configured",
-      message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
-      action: { label: "Configure ElevenLabs", href: "/providers" },
+      error: "local_voice_setup_required",
+      message: ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+      action: { label: "Open Local Voice Setup", href: "/providers" },
     };
   }
-  // Nothing resolved a speaker: no explicit voice, no persisted human default
-  // and no legacy environment value. Refuse rather than narrate the job with an
-  // arbitrary account voice nobody chose.
   if (!spec.voiceId) {
     return {
-      error: "arabic_default_voice_not_selected",
-      message:
-        "No default Arabic voice has been selected. Open Voice Lab, audition the account voices and save a default.",
-      action: { label: "Open Voice Lab", href: "/voice-lab" },
+      error: "local_voice_speaker_not_selected",
+      message: "No local Arabic voice speaker has been selected.",
+      action: { label: "Open Local Voice Setup", href: "/providers" },
     };
   }
   return null;
@@ -3415,6 +3446,9 @@ export function createV2PublicRouter(
       ? await providerVault.list().catch(() => [])
       : [];
     const vaultByProvider = new Map(vaultCredentials.map((credential) => [credential.providerId, credential]));
+    const localModelManager = new LocalModelManager();
+    const voicetutRecord = localModelManager.read("voicetut");
+    const kemetoneRecord = localModelManager.read("kemetone");
 
     const providers = [
       // Content AI
@@ -3608,6 +3642,69 @@ export function createV2PublicRouter(
       },
       // Voice
       {
+        id: "voicetut",
+        name: "VoiceTut Local High Quality",
+        category: "Voice",
+        tier: "free",
+        status: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy" ? "healthy" : (voicetutRecord.state === "downloading" ? "configuring" : "not_configured"),
+        configured: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy",
+        isDefault: true,
+        message: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy"
+          ? "VoiceTut local high-quality Egyptian Arabic engine is ready with 17 native voices."
+          : (voicetutRecord.lastError || "VoiceTut model is not installed. Install it from the Models tab."),
+        checkedAt: voicetutRecord.lastVerifiedAt || voicetutRecord.installedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy",
+          healthy: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy",
+          liveVerified: voicetutRecord.state === "ready",
+          languages: ["ar", "ar-EG", "en"],
+          dialect: "egyptian",
+          speakersCount: 17,
+          modelId: "voicetut",
+          repoId: "mohammedaly22/VoiceTut-TTS",
+          revision: "41c1a79ab2eb872ecfb2ad56ab40a94cff28d8c3",
+          sampleRate: 24000,
+          local: true,
+          costTier: "free",
+          license: "Apache-2.0",
+          downloadedBytes: voicetutRecord.downloadedBytes,
+          state: voicetutRecord.state,
+        },
+      },
+      {
+        id: "kemetone",
+        name: "KemeTone Local Lightweight",
+        category: "Voice",
+        tier: "free",
+        status: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy" ? "healthy" : (kemetoneRecord.state === "downloading" ? "configuring" : "not_configured"),
+        configured: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy",
+        isDefault: false,
+        message: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy"
+          ? "KemeTone local lightweight CPU-capable Cairene voice engine is ready."
+          : (kemetoneRecord.lastError || "KemeTone model is not installed."),
+        checkedAt: kemetoneRecord.lastVerifiedAt || kemetoneRecord.installedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy",
+          healthy: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy",
+          liveVerified: kemetoneRecord.state === "ready",
+          languages: ["ar", "ar-EG"],
+          dialect: "egyptian",
+          speakersCount: 1,
+          modelId: "kemetone",
+          repoId: "Rabe3/kemetone",
+          revision: "9d65fab8cd71bc31a248e53bd18fe94941753aa6",
+          sampleRate: 24000,
+          local: true,
+          cpuCapable: true,
+          costTier: "free",
+          license: "Apache-2.0",
+          downloadedBytes: kemetoneRecord.downloadedBytes,
+          state: kemetoneRecord.state,
+        },
+      },
+      {
         id: "kokoro",
         name: "Kokoro TTS",
         category: "Voice",
@@ -3733,7 +3830,7 @@ export function createV2PublicRouter(
         tier: "premium",
         status: elevenLabsValidation?.status || (elevenLabsConfigured ? "configured" : "not_configured"),
         configured: elevenLabsConfigured,
-        isDefault: true,
+        isDefault: false,
         message: elevenLabsValidation?.message ||
           (elevenLabsConfigured
             ? "ElevenLabs is configured. Run Test Connection to verify it live."
@@ -3987,6 +4084,46 @@ export function createV2PublicRouter(
       res.status(200).json({ deleted });
     } catch (error) {
       res.status(400).json({ error: "Credential delete failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/providers/local-voice/status", async (_req, res) => {
+    try {
+      const manager = new LocalModelManager();
+      const models = manager.list();
+      res.status(200).json({ models });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to read local voice model status.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/providers/local-voice/install", async (req, res) => {
+    try {
+      const modelId = req.body?.modelId;
+      if (modelId !== "voicetut" && modelId !== "kemetone") {
+        res.status(400).json({ error: "Invalid modelId. Must be 'voicetut' or 'kemetone'." });
+        return;
+      }
+      const manager = new LocalModelManager();
+      const record = manager.verify(modelId);
+      res.status(200).json({ record });
+    } catch (error) {
+      res.status(500).json({ error: "Model install/verify failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.delete("/providers/local-voice/:modelId", async (req, res) => {
+    try {
+      const modelId = req.params.modelId;
+      if (modelId !== "voicetut" && modelId !== "kemetone") {
+        res.status(400).json({ error: "Invalid modelId. Must be 'voicetut' or 'kemetone'." });
+        return;
+      }
+      const manager = new LocalModelManager();
+      const result = manager.removeModel(modelId as any);
+      res.status(200).json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Model removal failed.", message: error instanceof Error ? error.message : String(error) });
     }
   });
 

@@ -2,38 +2,39 @@ import { describe, expect, it } from "vitest";
 import { canonicalizeProductionSpecContract } from "./routes";
 
 describe("Production contract canonicalization", () => {
+  const staleSpec: any = {
+    id: "stale",
+    creationMode: "prompt",
+    title: "Stale preview",
+    userPrompt: "اعمل فيديو 20 ثانية",
+    language: "ar",
+    dialect: "saudi",
+    tone: "حماسي",
+    contentStyle: "advertisement",
+    durationSeconds: 15,
+    aspectRatio: "9:16",
+    resolution: "1080p",
+    quality: "standard",
+    sceneCount: 1,
+    productionMode: "auto_hybrid",
+    visualMode: "auto",
+    voiceProvider: "kokoro",
+    voiceId: "af_heart",
+    captionStyle: "bold",
+    scenes: [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: 5,
+        narration: "بتخسر عملاء بدون موقع؟",
+        stockSearchTerms: ["business website"],
+        visualSource: "stock",
+        transition: "cut",
+      },
+    ],
+  };
+
   it("overrides stale preview duration, dialect, and voice with current UI selections", () => {
-    const staleSpec: any = {
-      id: "stale",
-      creationMode: "prompt",
-      title: "Stale preview",
-      userPrompt: "اعمل فيديو 20 ثانية",
-      language: "ar",
-      dialect: "saudi",
-      tone: "حماسي",
-      contentStyle: "advertisement",
-      durationSeconds: 15,
-      aspectRatio: "9:16",
-      resolution: "1080p",
-      quality: "standard",
-      sceneCount: 1,
-      productionMode: "auto_hybrid",
-      visualMode: "auto",
-      voiceProvider: "kokoro",
-      voiceId: "af_heart",
-      captionStyle: "bold",
-      scenes: [
-        {
-          sceneIndex: 0,
-          purpose: "hook",
-          durationSeconds: 5,
-          narration: "بتخسر عملاء بدون موقع؟",
-          stockSearchTerms: ["business website"],
-          visualSource: "stock",
-          transition: "cut",
-        },
-      ],
-    };
 
     const canonical = canonicalizeProductionSpecContract(staleSpec, {
       language: "ar",
@@ -50,18 +51,36 @@ describe("Production contract canonicalization", () => {
 
     expect(canonical.durationSeconds).toBe(20);
     expect(canonical.dialect).toBe("egyptian");
-    // Arabic always canonicalizes to ElevenLabs, even when the stale spec named
-    // another provider.
-    expect(canonical.voiceProvider).toBe("elevenlabs");
-    // No ElevenLabs voice ID is hardcoded; it is resolved from the customer's
-    // own account at generation time.
-    expect(canonical.voiceId).toBe("");
+    // In Pass 9.7, Arabic auto canonicalizes to VoiceTut local high quality.
+    expect(canonical.voiceProvider).toBe("voicetut");
+    expect(canonical.voiceId).toBe("Mohamed");
     expect(canonical.visualMode).toBe("stock");
     expect(canonical.captionStyle).toBe("viral_bold");
     expect(canonical.metadata?.uiContract).toMatchObject({
       durationSeconds: 20,
       dialect: "egyptian",
       requestedVoiceProvider: "auto",
+      resolvedVoiceProvider: "voicetut",
+    });
+  });
+
+  it("canonicalizes Arabic explicit ElevenLabs requests to ElevenLabs", () => {
+    const canonical = canonicalizeProductionSpecContract(staleSpec, {
+      language: "ar",
+      dialect: "egyptian",
+      durationSeconds: 20,
+      aspectRatio: "9:16",
+      resolution: "1080p",
+      quality: "standard",
+      visualMode: "stock",
+      voiceProvider: "elevenlabs",
+      voiceId: "",
+      captionStyle: "viral_bold",
+    });
+
+    expect(canonical.voiceProvider).toBe("elevenlabs");
+    expect(canonical.metadata?.uiContract).toMatchObject({
+      requestedVoiceProvider: "elevenlabs",
       resolvedVoiceProvider: "elevenlabs",
     });
   });
@@ -96,8 +115,8 @@ describe("Production contract canonicalization", () => {
       voiceProvider: "auto",
     });
 
-    expect(canonical.voiceProvider).toBe("elevenlabs");
-    // A Piper model name must never be forwarded to ElevenLabs as a voice ID.
+    expect(canonical.voiceProvider).toBe("voicetut");
+    // A Piper model name must never be forwarded as a voice ID.
     expect(canonical.voiceId).not.toBe("ar_JO-kareem-medium");
   });
 

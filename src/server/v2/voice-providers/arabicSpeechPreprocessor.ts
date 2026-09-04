@@ -368,6 +368,7 @@ export function preprocessArabicSpeech(
     pronunciationOverrides?: Record<string, string> | PronunciationEntry[];
     brandPronunciations?: Record<string, string> | PronunciationEntry[];
     systemPronunciations?: Record<string, string> | PronunciationEntry[];
+    preserveSafeCodeSwitching?: boolean;
   } = {},
 ): ArabicSpeechPreprocessResult {
   const sourceText = rawText || "";
@@ -389,12 +390,16 @@ export function preprocessArabicSpeech(
   //    number/date/currency expansion applied. This is the string sent to TTS.
   let text = normalizeUrls(spokenNarration);
 
+  const systemEntries = options.preserveSafeCodeSwitching
+    ? SYSTEM_PRONUNCIATIONS.filter((entry) => !/^[A-Za-z][A-Za-z0-9 ._-]*$/.test(entry.written))
+    : SYSTEM_PRONUNCIATIONS;
+
   const dictionary = sanitizeEntries(
     deduplicateEntries([
       ...toEntries(options.pronunciationOverrides),
       ...toEntries(options.brandPronunciations),
       ...toEntries(options.systemPronunciations),
-      ...SYSTEM_PRONUNCIATIONS,
+      ...systemEntries,
     ]),
     options.dialect,
   );

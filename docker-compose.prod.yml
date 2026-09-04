@@ -96,6 +96,40 @@ services:
         aliases:
           - n8n
 
+  abud-shorts-local-tts:
+    image: ${ABUD_LOCAL_TTS_IMAGE:-ghcr.io/3bud-zc/abud-shorts-local-tts:2.4.0}
+    container_name: ${ABUD_CONTAINER_PREFIX:-abud-shorts}-local-tts
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      PORT: 8765
+      DOCKER: "true"
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must be set by the installer}
+      ABUD_MODEL_CACHE_DIR: /models
+      LOCAL_TTS_IDLE_UNLOAD_SECONDS: ${LOCAL_TTS_IDLE_UNLOAD_SECONDS:-600}
+    volumes:
+      - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}/models:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - local-tts
+
   # The render worker and the application are the same immutable image running
   # in two roles, which is what SERVICE_ROLE already selects. One image to pull,
   # one digest to verify, one thing to roll back.
@@ -129,6 +163,7 @@ services:
       # Arabic narration is ElevenLabs only, configured from the app UI and held
       # encrypted in the provider vault. This variable is an override, not the
       # normal route.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://local-tts:8765}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       CONCURRENCY: ${CONCURRENCY:-1}
@@ -162,10 +197,13 @@ services:
         condition: service_started
       abud-shorts-render-worker:
         condition: service_started
+      abud-shorts-local-tts:
+        condition: service_started
     environment:
       SERVICE_ROLE: app
       V2_ENABLED: "true"
       PORT: 3123
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://local-tts:8765}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}

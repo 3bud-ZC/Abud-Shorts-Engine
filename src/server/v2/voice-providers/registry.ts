@@ -10,6 +10,9 @@ import type {
 } from "./types";
 import {
   ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+  ARABIC_LIGHTWEIGHT_PROVIDER,
+  ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+  ARABIC_PREMIUM_CLOUD_PROVIDER,
   ARABIC_PRODUCTION_PROVIDER,
   isArabicLanguage,
   isLegacyPiperVoiceId,
@@ -19,17 +22,14 @@ import { ElevenLabsVoiceProvider } from "./elevenlabsVoiceProvider";
 import { PiperVoiceProvider } from "./piperVoiceProvider";
 import { GoogleCloudTtsProvider } from "./googleCloudTtsProvider";
 import { EdgeTtsProvider } from "./edgeTtsProvider";
+import { LocalEgyptianTtsProvider } from "./localEgyptianTtsProvider";
 import { preprocessArabicSpeech } from "./arabicSpeechPreprocessor";
+import { LOCAL_TTS_MODELS } from "./localTtsModels";
 
-/**
- * Voice routing authority.
- *
- * Arabic / Egyptian Arabic / MSA resolve to ElevenLabs and nothing else. If
- * ElevenLabs is not configured the route throws before any job work happens so
- * the failure surfaces in the UI rather than mid-render.
- */
 export class VoiceRegistry {
   private kokoroProvider: KokoroVoiceProvider;
+  private voiceTutProvider: LocalEgyptianTtsProvider;
+  private kemeToneProvider: LocalEgyptianTtsProvider;
   private elevenlabsProvider: ElevenLabsVoiceProvider;
   private piperProvider: PiperVoiceProvider;
   private edgeTtsProvider: EdgeTtsProvider;
@@ -37,6 +37,8 @@ export class VoiceRegistry {
 
   constructor(kokoro: Kokoro, elevenlabsApiKey?: string) {
     this.kokoroProvider = new KokoroVoiceProvider(kokoro);
+    this.voiceTutProvider = new LocalEgyptianTtsProvider("voicetut");
+    this.kemeToneProvider = new LocalEgyptianTtsProvider("kemetone");
     this.elevenlabsProvider = new ElevenLabsVoiceProvider(elevenlabsApiKey);
     this.piperProvider = new PiperVoiceProvider();
     this.edgeTtsProvider = new EdgeTtsProvider();
@@ -51,24 +53,17 @@ export class VoiceRegistry {
     return this.elevenlabsProvider;
   }
 
-  /** Arabic production is ready only when ElevenLabs holds a usable credential. */
   public isArabicProductionConfigured(): boolean {
-    return this.elevenlabsProvider.isConfigured();
+    return this.voiceTutProvider.isConfigured() || this.kemeToneProvider.isConfigured();
   }
 
   public getProvider(providerId?: string): VoiceProvider {
-    if (providerId === "elevenlabs") {
-      return this.elevenlabsProvider.isConfigured() ? this.elevenlabsProvider : this.kokoroProvider;
-    }
-    if (providerId === "piper") {
-      return this.piperProvider.isConfigured() ? this.piperProvider : this.kokoroProvider;
-    }
-    if (providerId === "edge_tts") {
-      return this.edgeTtsProvider.isConfigured() ? this.edgeTtsProvider : this.kokoroProvider;
-    }
-    if (providerId === "google_cloud_tts") {
-      return this.googleCloudTtsProvider.isConfigured() ? this.googleCloudTtsProvider : this.kokoroProvider;
-    }
+    if (providerId === "voicetut") return this.voiceTutProvider.isConfigured() ? this.voiceTutProvider : this.kokoroProvider;
+    if (providerId === "kemetone") return this.kemeToneProvider.isConfigured() ? this.kemeToneProvider : this.kokoroProvider;
+    if (providerId === "elevenlabs") return this.elevenlabsProvider.isConfigured() ? this.elevenlabsProvider : this.kokoroProvider;
+    if (providerId === "piper") return this.piperProvider.isConfigured() ? this.piperProvider : this.kokoroProvider;
+    if (providerId === "edge_tts") return this.edgeTtsProvider.isConfigured() ? this.edgeTtsProvider : this.kokoroProvider;
+    if (providerId === "google_cloud_tts") return this.googleCloudTtsProvider.isConfigured() ? this.googleCloudTtsProvider : this.kokoroProvider;
     return this.kokoroProvider;
   }
 
@@ -80,82 +75,93 @@ export class VoiceRegistry {
       : request.language && request.language !== "auto"
         ? request.language
         : "en";
-    const warnings: string[] = [];
-    const processed = detectedArabic
-      ? preprocessArabicSpeech(request.text, {
-          dialect: request.dialect,
-          pronunciationOverrides: request.pronunciationOverrides,
-          brandPronunciations: request.brandPronunciations,
-        }).ttsNormalizedText
-      : request.text.trim();
-
     const requestedProvider = request.requestedProvider === "auto" ? undefined : request.requestedProvider;
-    // ARABIC ELEVENLABS PRODUCTION ROUTE POLICY:
-    // To guarantee cost predictability and avoid /with-timestamps upstream tokenization rejections,
-    // Arabic productions use Plain TTS with local Whisper caption timing as the stable single-call route.
+    const warnings: string[] = [];
     const isArabic = language === "ar" || detectedArabic;
+
     let resolvedStrategy: "plain_tts" | "timestamps" = "timestamps";
-    if (isArabic && (requestedProvider === "elevenlabs" || !requestedProvider)) {
-      if (request.voiceStrategy === "timestamps") {
-        resolvedStrategy = "timestamps";
-      } else {
-        resolvedStrategy = "plain_tts";
-      }
+    if (isArabic) {
+      resolvedStrategy =
+        requestedProvider === "elevenlabs" && request.voiceStrategy === "timestamps"
+          ? "timestamps"
+          : "plain_tts";
     } else if (request.voiceStrategy && request.voiceStrategy !== "auto") {
       resolvedStrategy = request.voiceStrategy;
     } else {
       resolvedStrategy = request.requestAlignment === false ? "plain_tts" : "timestamps";
     }
 
-    const resolvedRequestAlignment = resolvedStrategy === "timestamps";
-    const voiceSynthesisStrategy = resolvedStrategy === "plain_tts"
-      ? "elevenlabs_plain_tts_whisper"
-      : "elevenlabs_timestamps_native";
-
     const fallbackAllowed = request.fallbackPolicy !== "none";
+    const resolvedRequestAlignment = resolvedStrategy === "timestamps";
 
-    const pick = (provider: VoiceProvider, voiceId: string, reason: string): VoiceRouteDecision => ({
-      provider,
-      providerId: provider.id as VoiceProviderId,
-      voiceId: this.resolveVoiceFor(provider.id as VoiceProviderId, voiceId),
-      language,
-      dialect: request.dialect,
-      processedText: processed,
-      reason,
-      fallbackAllowed,
-      warnings,
-      voicePreset: request.voicePreset,
-      voiceSettings: request.voiceSettings,
-      modelId: request.modelId,
-      requestAlignment: resolvedRequestAlignment,
-      voiceStrategy: resolvedStrategy,
-      voiceSynthesisStrategy,
-    });
+    const prepare = (providerId: VoiceProviderId) =>
+      detectedArabic
+        ? preprocessArabicSpeech(request.text, {
+            dialect: request.dialect,
+            pronunciationOverrides: request.pronunciationOverrides,
+            brandPronunciations: request.brandPronunciations,
+            preserveSafeCodeSwitching: providerId === "voicetut",
+          }).ttsNormalizedText
+        : request.text.trim();
 
-    // FINAL ARABIC PRODUCTION POLICY: ELEVENLABS ONLY.
-    // No Piper / Kokoro / Edge-TTS / Google Cloud TTS fallback is permitted.
+    const strategyLabel = (providerId: VoiceProviderId) => {
+      if (providerId === "voicetut" || providerId === "kemetone") return `${providerId}_local_tts_whisper`;
+      return resolvedStrategy === "plain_tts"
+        ? "elevenlabs_plain_tts_whisper"
+        : "elevenlabs_timestamps_native";
+    };
+
+    const pick = (provider: VoiceProvider, voiceId: string, reason: string): VoiceRouteDecision => {
+      const providerId = provider.id as VoiceProviderId;
+      return {
+        provider,
+        providerId,
+        voiceId: this.resolveVoiceFor(providerId, voiceId),
+        language,
+        dialect: request.dialect,
+        processedText: prepare(providerId),
+        reason,
+        fallbackAllowed,
+        warnings,
+        voicePreset: request.voicePreset,
+        voiceSettings: request.voiceSettings,
+        modelId: request.modelId,
+        requestAlignment: providerId === "elevenlabs" ? resolvedRequestAlignment : false,
+        voiceStrategy: providerId === "elevenlabs" ? resolvedStrategy : "plain_tts",
+        voiceSynthesisStrategy: strategyLabel(providerId),
+      };
+    };
+
     if (language === "ar") {
-      if (requestedProvider && requestedProvider !== ARABIC_PRODUCTION_PROVIDER) {
-        throw new Error(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+      if (requestedProvider === ARABIC_PREMIUM_CLOUD_PROVIDER) {
+        if (!this.elevenlabsProvider.isConfigured()) throw new Error(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+        return pick(this.elevenlabsProvider, request.voiceId || this.defaultVoiceFor("elevenlabs"), "arabic_explicit_premium_elevenlabs");
       }
-      if (!this.elevenlabsProvider.isConfigured()) {
-        throw new Error(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+      if (requestedProvider === "voicetut") {
+        if (!this.voiceTutProvider.isConfigured()) throw new Error(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
+        return pick(this.voiceTutProvider, request.voiceId || this.defaultVoiceFor("voicetut"), "arabic_local_high_quality_user_selected");
       }
-      return pick(
-        this.elevenlabsProvider,
-        request.voiceId || this.defaultVoiceFor("elevenlabs"),
-        "arabic_production_elevenlabs",
-      );
+      if (requestedProvider === "kemetone") {
+        if (!this.kemeToneProvider.isConfigured()) throw new Error(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
+        return pick(this.kemeToneProvider, request.voiceId || this.defaultVoiceFor("kemetone"), "arabic_local_lightweight_user_selected");
+      }
+      if (requestedProvider && requestedProvider !== ARABIC_PRODUCTION_PROVIDER && requestedProvider !== ARABIC_LIGHTWEIGHT_PROVIDER) {
+        throw new Error(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
+      }
+      if (this.voiceTutProvider.isConfigured()) {
+        return pick(this.voiceTutProvider, request.voiceId || this.defaultVoiceFor("voicetut"), "arabic_auto_local_high_quality_voicetut");
+      }
+      if (this.kemeToneProvider.isConfigured()) {
+        warnings.push("VoiceTut is not ready; using the local lightweight KemeTone route.");
+        return pick(this.kemeToneProvider, request.voiceId || this.defaultVoiceFor("kemetone"), "arabic_auto_local_lightweight_kemetone");
+      }
+      throw new Error(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
     }
 
     if (requestedProvider) {
       const provider = this.getStrictProvider(requestedProvider);
       if (provider?.isConfigured() && provider.supportsLanguage(language, request.dialect)) {
-        return pick(
-          provider,
-          request.voiceId || this.defaultVoiceFor(provider.id as VoiceProviderId),
-          "user_selected_provider",
-        );
+        return pick(provider, request.voiceId || this.defaultVoiceFor(provider.id as VoiceProviderId), "user_selected_provider");
       }
       warnings.push(`${requestedProvider} is not configured or does not support ${language}.`);
       throw new Error(
@@ -163,16 +169,11 @@ export class VoiceRegistry {
       );
     }
 
-    // English / other languages keep the existing local-first Kokoro route.
     if (this.kokoroProvider.isConfigured()) {
       return pick(this.kokoroProvider, request.voiceId || "af_heart", "auto_local_english_kokoro");
     }
     if (this.elevenlabsProvider.isConfigured()) {
-      return pick(
-        this.elevenlabsProvider,
-        request.voiceId || this.defaultVoiceFor("elevenlabs"),
-        "auto_cloud_english_elevenlabs",
-      );
+      return pick(this.elevenlabsProvider, request.voiceId || this.defaultVoiceFor("elevenlabs"), "auto_cloud_english_elevenlabs");
     }
 
     throw new Error("No configured English voice provider is available.");
@@ -180,6 +181,8 @@ export class VoiceRegistry {
 
   private getStrictProvider(providerId: VoiceProviderId): VoiceProvider | undefined {
     if (providerId === "kokoro") return this.kokoroProvider;
+    if (providerId === "voicetut") return this.voiceTutProvider;
+    if (providerId === "kemetone") return this.kemeToneProvider;
     if (providerId === "elevenlabs") return this.elevenlabsProvider;
     if (providerId === "piper") return this.piperProvider;
     if (providerId === "edge_tts") return this.edgeTtsProvider;
@@ -192,9 +195,9 @@ export class VoiceRegistry {
   }
 
   private defaultVoiceFor(providerId: VoiceProviderId): string {
-    // ElevenLabs voice IDs are account-specific. We never hardcode one: an empty
-    // value means "resolve from live voice discovery at generation time".
     if (providerId === "elevenlabs") return process.env.ELEVENLABS_DEFAULT_VOICE_ID || "";
+    if (providerId === "voicetut") return process.env.VOICETUT_DEFAULT_SPEAKER || LOCAL_TTS_MODELS.voicetut.defaultSpeakerId;
+    if (providerId === "kemetone") return LOCAL_TTS_MODELS.kemetone.defaultSpeakerId;
     if (providerId === "piper") return process.env.PIPER_AR_VOICE_ID || "ar_JO-kareem-medium";
     if (providerId === "edge_tts") return process.env.EDGE_TTS_DEFAULT_VOICE || "ar-EG-SalmaNeural";
     if (providerId === "google_cloud_tts") return process.env.GOOGLE_CLOUD_TTS_DEFAULT_VOICE || "";
@@ -202,20 +205,19 @@ export class VoiceRegistry {
   }
 
   private resolveVoiceFor(providerId: VoiceProviderId, voiceId?: string): string {
-    if (providerId === "elevenlabs") {
-      // A revision of a historical Piper job can still carry ar_JO-kareem-medium.
-      // Drop it rather than sending a Piper model name to ElevenLabs.
-      return voiceId && !isLegacyPiperVoiceId(voiceId) ? voiceId : this.defaultVoiceFor("elevenlabs");
-    }
+    if (providerId === "elevenlabs") return voiceId && !isLegacyPiperVoiceId(voiceId) ? voiceId : this.defaultVoiceFor("elevenlabs");
     if (providerId === "piper") {
       const configuredVoice = process.env.PIPER_AR_VOICE_ID || "ar_JO-kareem-medium";
       return voiceId && (isLegacyPiperVoiceId(voiceId) || voiceId === configuredVoice)
         ? voiceId
         : this.defaultVoiceFor("piper");
     }
-    if (providerId === "kokoro") {
-      return voiceId && !isLegacyPiperVoiceId(voiceId) ? voiceId : "af_heart";
+    if (providerId === "kokoro") return voiceId && !isLegacyPiperVoiceId(voiceId) ? voiceId : "af_heart";
+    if (providerId === "voicetut") {
+      const allowed = new Set(LOCAL_TTS_MODELS.voicetut.voices.map((voice) => voice.id));
+      return voiceId && allowed.has(voiceId) ? voiceId : this.defaultVoiceFor("voicetut");
     }
+    if (providerId === "kemetone") return "kemetone";
     return voiceId || this.defaultVoiceFor(providerId);
   }
 
@@ -264,8 +266,6 @@ export class VoiceRegistry {
     return {
       ...result,
       provider: decision.providerId,
-      // The provider may resolve an empty ElevenLabs voice ID into a concrete
-      // account voice; that resolved ID is authoritative for the whole video.
       voiceId: result.voiceId || decision.voiceId,
       language: decision.language,
       dialect: decision.dialect,
@@ -277,8 +277,10 @@ export class VoiceRegistry {
 
   public async listAllVoices(language?: string): Promise<VoiceOption[]> {
     const kokoroVoices = await this.kokoroProvider.listVoices();
+    const voiceTutVoices = await this.voiceTutProvider.listVoices();
+    const kemeToneVoices = await this.kemeToneProvider.listVoices();
     const elevenlabsVoices = await this.elevenlabsProvider.listVoices(language).catch(() => []);
-    return [...kokoroVoices, ...elevenlabsVoices];
+    return [...kokoroVoices, ...voiceTutVoices, ...kemeToneVoices, ...elevenlabsVoices];
   }
 
   public async listCompatibleVoices(request: {
@@ -299,36 +301,52 @@ export class VoiceRegistry {
     const warnings: string[] = [];
 
     if (isArabic) {
-      if (provider !== "auto" && provider !== ARABIC_PRODUCTION_PROVIDER) {
+      if (provider === "elevenlabs") {
+        if (!this.elevenlabsProvider.isConfigured() && !request.includeUnavailable) {
+          return {
+            voices: [],
+            resolvedProvider: "elevenlabs",
+            warnings: [ARABIC_ELEVENLABS_REQUIRED_MESSAGE],
+            blocked: true,
+            blockedReason: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+          };
+        }
+        const voices = await this.elevenlabsProvider.listVoices("ar").catch(() => []);
+        return { voices, resolvedProvider: "elevenlabs", warnings };
+      }
+
+      const selected =
+        provider === "kemetone"
+          ? this.kemeToneProvider
+          : provider === "voicetut" || provider === "auto"
+            ? this.voiceTutProvider
+            : undefined;
+      if (!selected) {
         return {
           voices: [],
           resolvedProvider: ARABIC_PRODUCTION_PROVIDER,
-          warnings: [ARABIC_ELEVENLABS_REQUIRED_MESSAGE],
+          warnings: [ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE],
           blocked: true,
-          blockedReason: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+          blockedReason: ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
         };
       }
-      if (!this.elevenlabsProvider.isConfigured()) {
+      if (provider === "auto" && !this.voiceTutProvider.isConfigured() && this.kemeToneProvider.isConfigured()) {
         return {
-          voices: [],
-          resolvedProvider: ARABIC_PRODUCTION_PROVIDER,
-          warnings: [ARABIC_ELEVENLABS_REQUIRED_MESSAGE],
-          blocked: true,
-          blockedReason: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+          voices: await this.kemeToneProvider.listVoices(),
+          resolvedProvider: "kemetone",
+          warnings: ["VoiceTut is not ready; KemeTone is available as the local lightweight route."],
         };
       }
-      try {
-        const voices = await this.elevenlabsProvider.listVoices("ar");
-        return { voices, resolvedProvider: ARABIC_PRODUCTION_PROVIDER, warnings };
-      } catch (error) {
+      if (!selected.isConfigured() && !request.includeUnavailable) {
         return {
-          voices: [],
-          resolvedProvider: ARABIC_PRODUCTION_PROVIDER,
-          warnings: [error instanceof Error ? error.message : String(error)],
+          voices: await selected.listVoices(),
+          resolvedProvider: selected.id as VoiceProviderId,
+          warnings: [ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE],
           blocked: true,
-          blockedReason: "ElevenLabs voice discovery failed.",
+          blockedReason: ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
         };
       }
+      return { voices: await selected.listVoices(), resolvedProvider: selected.id as VoiceProviderId, warnings };
     }
 
     if (provider !== "auto") {
@@ -362,6 +380,8 @@ export class VoiceRegistry {
   public async validateAll(): Promise<VoiceProviderValidationResult[]> {
     return [
       await this.kokoroProvider.validate(),
+      await this.voiceTutProvider.validate(),
+      await this.kemeToneProvider.validate(),
       await this.elevenlabsProvider.validate(),
       await this.piperProvider.validate(),
       await this.edgeTtsProvider.validate(),

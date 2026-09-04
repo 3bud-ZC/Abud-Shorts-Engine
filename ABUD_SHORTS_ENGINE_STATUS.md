@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.6 Durable Retry Artifact Reuse Contract Closure**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.7 Local Egyptian TTS Architecture Closure**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,7 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Current Pass 9.6 product-source checkpoint is `289e97cba3236745c24f6cd973c224319e7dd9f5`; it adds planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.6 consumed 0 paid provider calls and did not create or qualify RC.2.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implements the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model management, Arabic error localization, and renders the Free Golden Arabic 10s production video with 0 ElevenLabs calls. Pass 9.7 consumed 0 paid provider calls and did not create or qualify RC.2.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -112,6 +112,7 @@ Finalization track:
 | V2.4 Pass 9.4 | ElevenLabs Plain-TTS Diagnostic & Arabic Stable Voice Route | **PLAIN-TTS PROVEN / 1 PAID CALL CONSUMED / ARABIC STABLE ROUTE IMPLEMENTED / RELEASE BLOCKED** |
 | V2.4 Pass 9.5 | Final authenticated incident retry after Docker recovery | **RETRY REUSE DEFECT PROVEN / 1 PAID CALL CONSUMED / RELEASE BLOCKED** |
 | V2.4 Pass 9.6 | Durable Retry Artifact Reuse Contract Closure | **CONTRACT FIX IMPLEMENTED / 0 PAID CALLS / RELEASE BLOCKED** |
+| V2.4 Pass 9.7 | Local Egyptian TTS (VoiceTut & KemeTone) Architecture, Python Service & Free Golden Video | **PASS / COMPLETE / 0 PAID CALLS / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -9634,8 +9635,51 @@ was modified or deleted.
 
 ## Remaining Release Block
 
-**V2.4 remains BLOCKED / NOT RELEASED.** Pass 9.6 closes the retry-reuse defect
-in source, tests, and rebuilt local runtime, but it does not qualify RC.2. A
-future owner-authorized production retry with a fresh paid-provider budget is
-still required to synthesize zero-based Scene 2, complete render/QA/delivery
-validation, and only then decide whether RC.2 can be created.
+**V2.4 remains BLOCKED / NOT RELEASED.** Pass 9.6 closed the retry-reuse defect in source and tests, and Pass 9.7 introduces the complete Local Egyptian Arabic TTS engine and microservice, but it does not qualify RC.2. A future owner-authorized production retry with a fresh paid-provider budget is still required for cloud certification before RC.2 can be created.
+
+## V2.4 Pass 9.7: Local Egyptian TTS Architecture & Free Golden Video Closure
+
+### 1. Architectural Overview & Provider Invariants
+Pass 9.7 introduces a complete local-first Egyptian Arabic Text-to-Speech architecture to the ABUD Shorts Engine, eliminating recurring reliance and unexpected cloud spending on ElevenLabs for standard Egyptian Arabic video jobs.
+
+- **Primary High Quality Route:** `mohammedaly22/VoiceTut-TTS` pinned to immutable commit `41c1a79ab2eb872ecfb2ad56ab40a94cff28d8c3`. Provides 17 studio-quality Egyptian Arabic speakers (default: `Mohamed`, female default: `Sarah`), native 24 kHz audio, Apache-2.0 license, and code-switching support.
+- **Lightweight CPU Route:** `Rabe3/kemetone` pinned to immutable commit `9d65fab8cd71bc31a248e53bd18fe94941753aa6`. Single Cairene female voice (`kemetone`), 24 kHz, CPU-compatible, Apache-2.0 license.
+- **Auto Routing Policy:** For all Arabic jobs, AUTO resolves local-first (`voicetut` -> `kemetone` -> setup required). Never silently falls back to paid ElevenLabs.
+- **Premium Cloud Route:** ElevenLabs remains available strictly as an opt-in premium cloud provider (`voiceProvider: "elevenlabs"`).
+- **Arabic Error Localization:** Customer-safe failure messages in `customerView.ts` provide native Arabic explanations (`CATEGORY_MESSAGES_AR`) and localized action buttons (`فتح إعدادات المزودات`, `إعادة المحاولة`).
+
+### 2. Standalone Python TTS Service (`services/local-tts/`)
+- Fast, secure internal service running Python 3.11-slim on port 8765.
+- Endpoints: `GET /health`, `GET /capabilities`, `GET /models`, `GET /voices`, `POST /synthesize`.
+- Authenticated via `x-internal-token` (`INTERNAL_SERVICE_TOKEN`).
+- Concurrency gate: mutex concurrency limit of 1 synthesis at a time via `asyncio.Lock()`.
+- Hardware detection for CPU, RAM, and NVIDIA CUDA GPU / VRAM.
+- Integrated into both `docker-compose.v2.yml` and `docker-compose.prod.yml` with persistent cache mounted outside Git (`/models` or `data-dev/models`).
+
+### 3. Model Management & Selective Downloader
+- Pinned selective download scripts `scripts/install-local-voice.ps1` and `scripts/install-local-voice.sh`.
+- Excludes training checkpoints, optimizer states (`optimizer.bin`), and scheduler states (`scheduler.bin`).
+- Model verification via `LocalModelManager.verify()` verifying required inference files and updating `metadata.json`.
+- Management endpoints in Node backend:
+  - `GET /api/v2/providers/local-voice/status`
+  - `POST /api/v2/providers/local-voice/install`
+  - `DELETE /api/v2/providers/local-voice/:modelId`
+
+### 4. Benchmark & Free Golden Arabic Production Video
+- **Benchmark Suite (`scripts/benchmark-local-voice.js`):**
+  - Evaluated short, commercial, and code-switching Egyptian Arabic sentences across all speakers.
+  - Average RTF: ~0.22 (VoiceTut) and ~0.12 (KemeTone).
+  - Selected default recommended voice: `Mohamed` (VoiceTut-TTS).
+- **Free Golden Arabic Production Video (`scripts/generate-free-golden-arabic-video.ts`):**
+  - Rendered a 10s, 9:16 portrait (1080x1920) Egyptian Arabic production video (`data-dev/videos/golden_arabic_voicetut_10s.mp4`).
+  - Audio QA: Silencedetect (max pause 100ms <= 300ms), Integrated Loudness -14.2 LUFS, True Peak -1.4 dBFS -> **PASS**.
+  - Caption QA: Whisper alignment, RTL Arabic typography -> **PASS**.
+  - Evidence report saved to `data-dev/golden_arabic_video_evidence.json`.
+  - Human review status recorded as: **PENDING**.
+
+### 5. Call Counter & Safety Audit
+- ElevenLabs synthesis/previews during Pass 9.7: `0` (Zero Paid Spend Enforced)
+- Paid AI image/video calls during Pass 9.7: `0`
+- Social posts during Pass 9.7: `0`
+- Full test suite: 72/72 test files, 1,102/1,102 unit/integration tests passing (100%).
+

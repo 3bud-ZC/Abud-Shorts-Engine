@@ -27,7 +27,7 @@ import {
 import { classifyRenderFailure } from "./customerView";
 import { parseElevenLabsAlignment } from "./voice-providers/elevenLabsAlignment";
 import { createVoiceInputHash } from "./artifacts/durableArtifacts";
-import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
+import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
 
 const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
 
@@ -102,7 +102,7 @@ describe("Voice Providers & Registry", () => {
     expect(voices.some((v) => v.provider === "elevenlabs")).toBe(false);
   });
 
-  it("routes Arabic, Egyptian and MSA narration to ElevenLabs", () => {
+  it("routes Arabic, Egyptian and MSA narration to ElevenLabs when explicitly requested", () => {
     // Piper is fully installed here to prove it is never chosen for production.
     stubPiperConfigured();
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
@@ -113,10 +113,10 @@ describe("Voice Providers & Registry", () => {
         language: "ar",
         dialect,
         qualityProfile: "balanced",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
       });
       expect(decision.providerId).toBe("elevenlabs");
-      expect(decision.reason).toBe("arabic_production_elevenlabs");
+      expect(decision.reason).toBe("arabic_explicit_premium_elevenlabs");
     }
   });
 
@@ -133,7 +133,7 @@ describe("Voice Providers & Registry", () => {
         text: EGYPTIAN_TEST_SCRIPT,
         language: "ar",
         dialect: "egyptian",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
         fallbackPolicy: "local",
       }),
     ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
@@ -154,7 +154,7 @@ describe("Voice Providers & Registry", () => {
           requestedProvider: provider,
           fallbackPolicy: "local",
         }),
-      ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+      ).toThrow(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
     }
   });
 
@@ -168,7 +168,7 @@ describe("Voice Providers & Registry", () => {
       text: EGYPTIAN_TEST_SCRIPT,
       language: "ar",
       dialect: "egyptian",
-      requestedProvider: "auto",
+      requestedProvider: "elevenlabs",
       voiceId: "ar_JO-kareem-medium",
     });
     expect(decision.providerId).toBe("elevenlabs");
@@ -248,7 +248,7 @@ describe("Voice Providers & Registry", () => {
           text: sceneText,
           language: "ar",
           dialect: "egyptian",
-          requestedProvider: "auto",
+          requestedProvider: "elevenlabs",
           voiceId: "voice_abc",
         }),
       );
@@ -274,7 +274,7 @@ describe("Voice Providers & Registry", () => {
       text: EGYPTIAN_TEST_SCRIPT,
       language: "ar",
       dialect: "egyptian",
-      requestedProvider: "auto",
+      requestedProvider: "elevenlabs",
       voiceId: "voice_abc",
       voicePreset: "energetic_ad",
     });
@@ -303,7 +303,7 @@ describe("Voice Providers & Registry", () => {
         text: sceneText,
         language: "ar",
         dialect: "egyptian",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
         voiceId: "voice_abc",
         voicePreset: "energetic_ad",
       });
@@ -720,7 +720,7 @@ describe("Voice Providers & Registry", () => {
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
 
     const arabic = await registry.listCompatibleVoices({
-      provider: "auto",
+      provider: "elevenlabs",
       language: "ar",
       dialect: "egyptian",
     });
@@ -746,7 +746,7 @@ describe("Voice Providers & Registry", () => {
     const registry = new VoiceRegistry(dummyKokoro, "");
 
     const arabic = await registry.listCompatibleVoices({
-      provider: "auto",
+      provider: "elevenlabs",
       language: "ar",
       dialect: "egyptian",
     });
@@ -773,7 +773,7 @@ describe("Voice Providers & Registry", () => {
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
 
-    // Arabic is refused with the ElevenLabs policy message, not a provider message.
+    // Arabic is refused with the local voice policy message, not a provider message.
     expect(() =>
       registry.route({
         text: "مرحبا",
@@ -782,7 +782,7 @@ describe("Voice Providers & Registry", () => {
         requestedProvider: "google_cloud_tts",
         fallbackPolicy: "local",
       }),
-    ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+    ).toThrow(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
 
     expect(() =>
       registry.route({

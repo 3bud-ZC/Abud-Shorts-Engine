@@ -155,6 +155,7 @@ export function scrubInternal<T>(value: T, depth = 0): T {
 
 export type CustomerFailure = {
   message: string;
+  messageAr?: string;
   supportCode: string;
   recoverable: boolean;
   category: FailureCategory;
@@ -182,7 +183,7 @@ export type FailureCategory =
   | "STATE_MACHINE_DEFECT"
   | "UNKNOWN";
 
-const CATEGORY_MESSAGES: Record<FailureCategory, string> = {
+export const CATEGORY_MESSAGES: Record<FailureCategory, string> = {
   CONTENT_GATE: "The content request needs a safer or clearer prompt before production can continue.",
   VOICE_FAILURE: "The narration could not be generated. Please check the selected voice and try again.",
   ELEVENLABS_PROVIDER_ERROR: "ElevenLabs could not generate the Arabic narration. Check the selected voice, then try again.",
@@ -200,6 +201,26 @@ const CATEGORY_MESSAGES: Record<FailureCategory, string> = {
   RESOURCE_EXHAUSTION: "Production stopped because the server was low on resources. Please try again after freeing capacity.",
   STATE_MACHINE_DEFECT: "The production reached an inconsistent state. Please contact support with the reference code.",
   UNKNOWN: "This production could not be completed. Please try again.",
+};
+
+export const CATEGORY_MESSAGES_AR: Record<FailureCategory, string> = {
+  CONTENT_GATE: "يتطلب المحتوى صياغة أوضح وأكثر ملاءمة لمواصلة إنتاج الفيديو.",
+  VOICE_FAILURE: "تعذر توليد التعليق الصوتي. يرجى التحقق من الصوت المختار والمحاولة مرة أخرى.",
+  ELEVENLABS_PROVIDER_ERROR: "تعذر توليد التعليق الصوتي عبر إيلفن لابس. يرجى التحقق من مفتاح الحساب أو رصيده ثم المحاولة مجدداً.",
+  MEDIA_ACQUISITION_FAILURE: "تعذر تجهيز الوسائط المطلوبة للفيديو. يرجى المحاولة مرة أخرى أو اختيار مصدر مرئي بديل.",
+  STOCK_COVERAGE_FAILURE: "لم يتم العثور على مشاهد فيديو ملائمة كافية. جرب صياغة موضوع أوضح أو تفعيل مزود وسائط آخر.",
+  CAPTION_FAILURE: "تعذر إعداد مزامنة النصوص التوضيحية (الترجمة). يرجى المحاولة مجدداً.",
+  FFMPEG_FAILURE: "تعذر ترميز الفيديو النهائي. يرجى المحاولة مرة أخرى.",
+  REMOTION_FAILURE: "تعذرت مرحلة تركيب عناصر الفيديو. يرجى إعادة المحاولة.",
+  AUDIO_MASTERING_FAILURE: "فشل المزيج الصوتي النهائي في اجتياز فحوصات الجودة الصوتية. يرجى إعادة المحاولة.",
+  PROFESSIONAL_READINESS_FAILURE: "لم يجتز الفيديو النهائي فحوصات الجودة الاحترافية. عند إعادة المحاولة سيتم استخدام الأصول الصالحة المحفوظة.",
+  FINAL_MEDIA_VALIDATION: "لم يجتز الملف النهائي التحقق من سلامة الفيديو. يرجى المحاولة مجدداً.",
+  COMPLETE_CALLBACK_FAILURE: "اكتملت المعالجة ولكن تعذر تسجيل إشعار الانتهاء بنجاح. يرجى إعادة المحاولة.",
+  WORKER_CRASH: "توقف خادم المعالجة بشكل غير متوقع. يرجى المحاولة عند استقرار النظام.",
+  TIMEOUT: "استغرقت إحدى مراحل الإنتاج وقتاً أطول من المسموح به. يرجى المحاولة بعد قليل.",
+  RESOURCE_EXHAUSTION: "توقف الإنتاج مؤقتاً بسبب انخفاض موارد الخادم. يرجى المحاولة مجدداً.",
+  STATE_MACHINE_DEFECT: "حدث تعارض غير متوقع في حالة الإنتاج. يرجى التواصل مع الدعم الفني.",
+  UNKNOWN: "تعذر إكمال إنتاج هذا الفيديو. يرجى المحاولة مرة أخرى.",
 };
 
 /**
@@ -302,15 +323,17 @@ export function sanitizeJobFailure(job: JobRecord): CustomerFailure | undefined 
   const classified = classifyRenderFailure(rawMessage);
   const message = classified.message;
   const needsConfig = READINESS_ACTION_RE.test(rawMessage);
+  const isArabic = job.language === "ar" || (job.productionSpec as any)?.language === "ar";
   return {
     message,
+    messageAr: isArabic ? CATEGORY_MESSAGES_AR[classified.category] : undefined,
     supportCode: supportCode(`${job.id}:${job.currentStage}:${classified.category}:${rawMessage.slice(0, 40)}`),
     recoverable: true,
     category: classified.category,
     stage: job.currentStage,
     action: needsConfig
-      ? { label: "Open Providers", href: "/providers" }
-      : { label: "Retry production", href: `/jobs/${job.id}` },
+      ? { label: isArabic ? "فتح إعدادات المزودات" : "Open Providers", href: "/providers" }
+      : { label: isArabic ? "إعادة المحاولة" : "Retry production", href: `/jobs/${job.id}` },
   };
 }
 

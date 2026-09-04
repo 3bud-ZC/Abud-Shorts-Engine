@@ -11,6 +11,9 @@ import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvid
 import { VoiceRegistry } from "./voice-providers/registry";
 import {
   ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+  ARABIC_LIGHTWEIGHT_PROVIDER,
+  ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+  ARABIC_PREMIUM_CLOUD_PROVIDER,
   ARABIC_PRODUCTION_PROVIDER,
   isArabicLanguage,
   isLegacyPiperVoiceId,
@@ -67,8 +70,10 @@ describe("Arabic voice policy (V2.2)", () => {
     providerSecrets.unregisterResolver();
   });
 
-  it("names ElevenLabs as the single Arabic production provider", () => {
-    expect(ARABIC_PRODUCTION_PROVIDER).toBe("elevenlabs");
+  it("names VoiceTut as the canonical local high quality Arabic production provider", () => {
+    expect(ARABIC_PRODUCTION_PROVIDER).toBe("voicetut");
+    expect(ARABIC_LIGHTWEIGHT_PROVIDER).toBe("kemetone");
+    expect(ARABIC_PREMIUM_CLOUD_PROVIDER).toBe("elevenlabs");
     expect(isArabicLanguage("ar")).toBe(true);
     expect(isArabicLanguage("auto", "egyptian")).toBe(true);
     expect(isArabicLanguage("auto", "msa")).toBe(true);
@@ -141,13 +146,13 @@ describe("Arabic voice policy (V2.2)", () => {
     expect(new ElevenLabsVoiceProvider().isConfigured()).toBe(true);
 
     const registry = new VoiceRegistry(dummyKokoro);
-    expect(registry.isArabicProductionConfigured()).toBe(true);
+    expect(registry.getElevenLabsProvider().isConfigured()).toBe(true);
     expect(
       registry.route({
         text: "مرحبا بيكم",
         language: "ar",
         dialect: "egyptian",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
       }).providerId,
     ).toBe("elevenlabs");
   });
@@ -220,8 +225,9 @@ describe("Arabic production API gate", () => {
     providerSecrets.invalidate();
   });
 
-  it("refuses to create an Arabic job before execution when ElevenLabs is missing", async () => {
+  it("refuses to create an Arabic job before execution when local voice is not installed", async () => {
     delete process.env.ELEVENLABS_API_KEY;
+    delete process.env.ABUD_LOCAL_TTS_ASSUME_READY;
     const { app } = makeArabicRouterApp();
 
     const response = await request(app)
@@ -235,9 +241,29 @@ describe("Arabic production API gate", () => {
       })
       .expect(409);
 
+    expect(response.body.error).toBe("local_voice_setup_required");
+    expect(response.body.message).toBe(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
+    expect(response.body.action).toEqual({ label: "Open Local Voice Setup", href: "/providers" });
+  });
+
+  it("refuses to create an explicit ElevenLabs Arabic job before execution when ElevenLabs is missing", async () => {
+    delete process.env.ELEVENLABS_API_KEY;
+    const { app } = makeArabicRouterApp();
+
+    const response = await request(app)
+      .post("/api/v2/jobs")
+      .set(AUTH_HEADER)
+      .send({
+        creationMode: "prompt",
+        prompt: "اعمل اعلان 20 ثانية عن تصميم مواقع",
+        language: "ar",
+        dialect: "egyptian",
+        voiceProvider: "elevenlabs",
+      })
+      .expect(409);
+
     expect(response.body.error).toBe("elevenlabs_not_configured");
     expect(response.body.message).toBe(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
-    // The UI needs somewhere to send the customer.
     expect(response.body.action).toEqual({ label: "Configure ElevenLabs", href: "/providers" });
   });
 

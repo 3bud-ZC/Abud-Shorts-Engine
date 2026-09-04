@@ -55,3 +55,17 @@ test-product-*.png
 test-product-*.jpg
 test-edge-*.mp3
 *-Scenes.csv
+
+# Python & TTS model cache
+__pycache__/
+*.py[cod]
+$py.class
+.pytest_cache/
+.venv/
+venv/
+*.safetensors
+*.pt
+*.onnx
+/models/
+data-dev/models/
+

@@ -4,3 +4,14 @@ node_modules
 *.md
 dist
 !dist
+
+# Python & model cache
+__pycache__
+*.py[cod]
+.pytest_cache
+.venv
+venv
+*.safetensors
+*.pt
+/models
+
