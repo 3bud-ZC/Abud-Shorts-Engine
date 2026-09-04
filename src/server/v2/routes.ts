@@ -5729,6 +5729,20 @@ export function createV2InternalRouter(
               : error instanceof Error
                 ? error.message
                 : String(error);
+        // The customer-facing message (below) is deliberately sanitized down
+        // to a recoverable category, which previously meant the operator had
+        // no way to see what actually failed - only ever a short generic
+        // string. Log the real error (stack, and Zod's full issue list when
+        // that's the cause) so a render failure is diagnosable from the
+        // worker's own logs instead of requiring a live repro.
+        logger.error(
+          {
+            jobId,
+            err: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+            zodIssues: (error as any)?.issues,
+          },
+          "Render job failed",
+        );
         // The customer sees a recoverable category, never the raw message.
         const { message: customerMessage } = classifyRenderFailure(rawMsg);
         await axios.post(

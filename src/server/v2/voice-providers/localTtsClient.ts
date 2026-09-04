@@ -1,5 +1,4 @@
 import axios from "axios";
-import { Readable } from "stream";
 import type { LocalTtsModelId } from "./localTtsModels";
 import { LOCAL_TTS_MODELS } from "./localTtsModels";
 import type { VoiceAudioResult, VoiceOption } from "./types";
@@ -52,12 +51,16 @@ export class LocalTtsClient {
     const audioBase64 = String(response.data?.audioBase64 || "");
     if (!audioBase64) throw new Error("Local TTS service returned no audio.");
     const buffer = Buffer.from(audioBase64.replace(/^data:audio\/wav;base64,/, ""), "base64");
-    const stream = new Readable();
-    stream.push(buffer);
-    stream.push(null);
     const meta = LOCAL_TTS_MODELS[input.model];
     return {
-      audio: stream,
+      // A plain Buffer, not a one-shot Readable: FFMpeg.toReadableAudio()
+      // wraps a Buffer in a fresh stream on every call but passes a Readable
+      // through unchanged, and the render pipeline can normalize the same
+      // voiceAudio.audio more than once (a duration-overflow retry, then a
+      // tempo-correction pass) - a Readable would already be exhausted by
+      // the second call and fluent-ffmpeg's `.input()` throws "Invalid
+      // input" for it.
+      audio: buffer,
       audioLength: Number(response.data?.durationSeconds || Math.max(input.text.length / 13, 1.5)),
       audioLengthEstimated: typeof response.data?.durationSeconds !== "number",
       sampleRate: Number(response.data?.sampleRate || meta.sampleRate),

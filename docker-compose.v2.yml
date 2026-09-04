@@ -185,6 +185,10 @@ services:
       WHISPER_VERBOSE: ${WHISPER_VERBOSE:-false}
     volumes:
       - C:/abud-shorts-engine/data-dev:/app/data
+      # Local TTS model readiness (LocalModelManager) is checked from this
+      # filesystem view, not from a live call to local-tts, so app and
+      # render-worker need the same model cache mount local-tts uses.
+      - ${ABUD_MODEL_CACHE_DIR:-./data-dev/models}:/models
     entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3125/health >/dev/null || exit 1"]
@@ -265,6 +269,7 @@ services:
       - "3130:3123"
     volumes:
       - C:/abud-shorts-engine/data-dev:/app/data
+      - ${ABUD_MODEL_CACHE_DIR:-./data-dev/models}:/models
     entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3123/health >/dev/null || exit 1"]
