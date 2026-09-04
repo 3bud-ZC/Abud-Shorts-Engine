@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.7-H Laptop Handoff Closure & Truth Correction**
+Version: **2.4.0-rc.1 + V2.4 Pass 9.8 PC Recovery & Real Local Egyptian TTS Validation**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,7 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2. Pass 9.8 executed on the target PC (Intel i7-12700K, RTX 4070 12GB, 32GB RAM): preserved the pre-existing PC repository untouched, cloned fresh from `origin/v2.4-professional-video-engine` at the exact handoff SHA, downloaded and verified the real VoiceTut-TTS inference weights (2.45GB) and all 17 real reference-speaker audio files, proved real GPU inference and real Whisper transcription against that real audio, fixed four real defects found only by exercising the real pipeline end to end (a VoiceTut API kwarg mismatch; two independent Windows/Linux whisper.cpp executable-layout bugs, one of which silently crashed the whole Node process instead of raising a catchable error; a one-shot audio stream being read twice in the render pipeline, which is what an ElevenLabs-shaped error classifier had been mislabeling; and a truth-safety CTA fallback that hardcoded a website-themed description for every business vertical), and produced one real Arabic Egyptian golden video through the normal product pipeline that passes every acceptance threshold. Pass 9.8 consumed 0 paid provider calls, did not touch Postgres/n8n data, and did not qualify RC.2.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -117,6 +117,7 @@ Finalization track:
 | V2.4 Pass 9.6 | Durable Retry Artifact Reuse Contract Closure | **CONTRACT FIX IMPLEMENTED / 0 PAID CALLS / RELEASE BLOCKED** |
 | V2.4 Pass 9.7 | Local Egyptian TTS (VoiceTut & KemeTone) Architecture & Python Service | **ARCHITECTURE IMPLEMENTED / SOURCE VERIFIED / REAL LOCAL MODEL INFERENCE PENDING PC VERIFICATION / 0 PAID CALLS / NOT RELEASED** |
 | V2.4 Pass 9.7-H | Laptop Handoff Closure, Repository Truth Correction & PC Recovery Preparation | **PASS / COMPLETE / REPOSITORY CLEAN & VERIFIED / 0 PAID CALLS / RELEASE BLOCKED** |
+| V2.4 Pass 9.8 | PC Recovery, Real VoiceTut GPU Inference & Real Local Egyptian Golden Production | **REAL LOCAL INFERENCE PROVEN / REAL GOLDEN VIDEO PASSING / 0 PAID CALLS / OWNER VOICE REVIEW PENDING / RELEASE BLOCKED** |
 
 **V2.3.1 is GENERALLY AVAILABLE.** `hotfix/v2.3.1-render-failure` is merged into
 `main` (`15caa083…`), the annotated `v2.3.1` tag is pushed (and never moved), the
@@ -9714,3 +9715,332 @@ During Pass 9.7-H, a rigorous audit of the evidence was conducted:
 - **Development Database/Config Backup:** runtime backup not created (Docker Desktop not active on laptop); Git source handoff fully complete.
 - **Next Required Milestone:** `PC REAL LOCAL TTS VALIDATION` (NOT RC.2)
 - **Release Status:** **BLOCKED / NOT RELEASED**
+
+## V2.4 Pass 9.8: PC Recovery, Real VoiceTut GPU Inference & Real Local Egyptian Golden Production
+
+### 1. Recovery
+
+- Old PC repository (`source-old-pc-20260904-191316`, formerly `source/`) was found
+  clean (`git status` empty, on `v2.3-product-overhaul`) and preserved untouched by
+  rename rather than modified in place.
+- Fresh clone of `https://github.com/3bud-ZC/Abud-Shorts-Engine.git`, checked out
+  `v2.4-professional-video-engine`. Verified `HEAD == origin/v2.4-professional-video-engine
+  == a37be8681e44ac5f89ca3c5bddcb189d163e3d3c` with a clean working tree before any
+  further work. The "recorded below upon commit" placeholder in the Laptop -> PC
+  section above is now filled with this same SHA.
+- Dependencies installed from the committed `pnpm-lock.yaml` with `pnpm install
+  --frozen-lockfile` (no stale `node_modules` copied from the old PC copy).
+
+### 2. Hardware
+
+| Field | Value |
+|---|---|
+| CPU | 12th Gen Intel Core i7-12700K, 12 cores / 20 logical processors |
+| RAM | 32,485 MB total |
+| GPU | NVIDIA GeForce RTX 4070 |
+| Driver | NVIDIA-SMI 610.74, CUDA UMD 13.3 |
+| VRAM | 12,281 MB total |
+| Free disk (start) | ~137 GB |
+| Profile | **LOCAL_HIGH_QUALITY_READY** |
+
+### 3. Docker Inventory (Before Any Change)
+
+`abud-shorts-postgres`, `abud-shorts-n8n`, `abud-shorts-app`, `abud-shorts-render-worker`
+were already running (healthy) from the old PC copy, bound to a fixed external data
+directory (`C:/abud-shorts-engine/data-dev`, ~3.7GB of real artifacts/backups/cache -
+classified **PROTECTED**, never touched) and to `source_abud-shorts-postgres-data` /
+`source_abud-shorts-n8n-data` named volumes. Numerous unrelated/anonymous local volumes
+and images from other projects were present and classified **UNKNOWN = KEEP**. No
+`docker system/volume/builder prune` or any destructive Docker command was run at any
+point this pass. Only `abud-shorts-app` and `abud-shorts-render-worker` were rebuilt and
+recreated (from the fresh v2.4 source, reusing the same external data directory and
+Postgres/n8n containers/volumes unchanged - **RestartCount 0**, healthy, throughout).
+`abud-shorts-local-tts`'s own Docker service definition was left unbuilt; VoiceTut ran
+natively on the host instead (see below) so the render containers could reach real GPU
+inference via `LOCAL_TTS_BASE_URL=http://host.docker.internal:8765` without needing
+NVIDIA Container Toolkit GPU passthrough configured for Docker Desktop.
+
+### 4. Local TTS Service Audit (Before Fixing Anything)
+
+Traced `POST /synthesize` -> `ModelManager` -> `VoiceTutProvider.synthesize()` in the
+Pass 9.7 source and found the production route was **not real**: `load()` set
+`self._model = "voicetut_engine"` (a string, not a loaded model) and `synthesize()`
+unconditionally called `generate_silence_or_test_tone()` - a 440Hz sine wave - regardless
+of whether real weights existed. This confirms Pass 9.7-H's own truth-correction findings
+and closes the gap: Pass 9.7's "architecture" had no real model-loading or inference code
+at all. Real `from_pretrained` + `synthesize` wiring against the actual `voicetut-tts`
+PyPI package and OmniVoice backbone was implemented this pass (see Section 6).
+
+### 5. VoiceTut — Real Selective Download
+
+- Model: `mohammedaly22/VoiceTut-TTS`, revision `41c1a79ab2eb872ecfb2ad56ab40a94cff28d8c3`
+  (pinned, verified against the live HuggingFace API, not assumed).
+- The Pass 9.7 selective-file list was incomplete (flagged by this task and confirmed
+  real): it listed `reference_speakers/references.json` but none of the 17 real reference
+  speaker audio files the model actually needs for its built-in voices. Both
+  `scripts/install-local-voice.ps1` and `.sh` were corrected to the complete, real,
+  verified file list.
+- Real files downloaded: `config.json` (2,239 B), `chat_template.jinja` (4,168 B),
+  `model.safetensors` (**2,450,344,144 B**, verified against the exact size HuggingFace
+  reports), `tokenizer.json` (11,423,986 B), `tokenizer_config.json` (562 B), and all 17
+  `reference_speakers/*` audio files + `references.json` - 23 files, 2,480,439,470 bytes
+  total. **Not downloaded:** `optimizer.bin` (4.9GB), `scheduler.bin`, `random_states_*.pkl`,
+  `train_config.json` - confirmed absent.
+- A real additional dependency, not listed in the model repo itself, was discovered only
+  by actually loading the model: OmniVoice's Higgs audio tokenizer component, fetched
+  from its own HuggingFace repo on first load (~9MB, 5 files, cached by `huggingface_hub`
+  after the first real load).
+- Cache location: `data-dev/models/tts/voicetut/` (git-ignored; outside the repository,
+  outside any Docker image, outside the client release tarball).
+
+### 6. Real Model Load
+
+Installed a dedicated Python 3.11.15 venv (`services/local-tts/.venv`, not the system
+Python) with `torch==2.5.1+cu121` and matching `torchaudio==2.5.1+cu121`, OmniVoice
+(`git+https://github.com/k2-fsa/OmniVoice.git`), and `voicetut-tts==0.1.1` from PyPI - the
+model card's own documented installation path. Fixed a real integration bug in
+`VoiceTutProvider.load()`: it called `from_pretrained(..., device_map=device)`, but the
+real `voicetut_tts` API takes `device=` (a string device/dtype pair), not `device_map=`;
+the extra kwarg was silently forwarded into OmniVoice's own `device_map` argument,
+producing `TypeError: got multiple values for keyword argument 'device_map'`.
+
+- **Real load (cold, including the one-time Higgs tokenizer download):** 427.71 s
+- **Real load (warm, tokenizer cached):** 7.77 s
+- **Device:** cuda (RTX 4070) · **dtype:** float16
+- **VRAM allocated:** ~1,937 MB (in line with the model card's ~2.93GB fp16 ceiling)
+- `/health` and `/models` distinguish service-up from model-ready: `models_ready: ["voicetut"]`
+  only appears once real weights are verified on disk, and the Node-side
+  `LocalModelManager.verify("voicetut")` independently wrote `state: "ready",
+  downloadedBytes: 2480439470` from the real files on disk (not asserted).
+
+### 7. Real VoiceTut Synthesis — First Proof & Code-Switch Proof
+
+Through the real production route (`POST /synthesize` on the running FastAPI service,
+`x-internal-token` authenticated - not a standalone script):
+
+| Sample | Text | Real duration | Wall time | RTF |
+|---|---|---|---|---|
+| Egyptian | إزيك يا صاحبي، عامل إيه النهارده؟ | 2.66-2.84 s | 2.5-3.1 s | ~0.9-1.15 |
+| Code-switch | مع ABUD Demo الجديد، التجربة بقت أسرع وأسهل. | 3.28-3.37 s | 2.2-2.3 s | ~0.65 |
+
+`ffprobe`/`ffmpeg volumedetect` on both real WAV files: 24,000 Hz mono PCM (contract
+match), mean volume -19 to -20 dB, max -2.2 to -2.6 dB, **no silence** detected at
+-40dB/0.3s - real speech, not the old sine tone, not silence. Files are not committed
+(git-ignored `data-dev/qa-samples/`).
+
+### 8. Voice Catalogue (Verified, Not Assumed)
+
+The 17 hardcoded `VOICETUT_SPEAKERS` (Mohamed, Sarah, Ahmed, Omnia, Abdelrahman,
+Abdullah, Aly, Asmaa, Esraa, Essam, Hanan, Hossam, Kamal, Omar, Sayed, Yasmin, Zaki) were
+cross-checked against the real, downloaded `reference_speakers/references.json` and match
+exactly - not asserted from memory, read from the real file on disk.
+
+### 9. Real Benchmark (`scripts/benchmark-local-tts-real.js`)
+
+New harness, explicitly named as real (not a rewrite of the removed simulated one),
+calling the live `/synthesize` endpoint with real wall-clock timing and real `/health`
+hardware counters. 3 speakers (Mohamed, Sarah, Omar) × the 5 pinned sentences = 15 real
+calls, summary written to `data-dev/qa-samples/voicetut-benchmark/benchmark-summary.json`
+(git-ignored):
+
+- Cold call: 2,643 ms wall, RTF 0.931
+- Warm calls: 2,183-2,316 ms wall, RTF 0.42-1.22 (varies with sentence length, consistent
+  with the model card's own T4 range of 0.49-1.13x)
+- Hardware read live from `/health` before/after each call: `cuda_available: true`,
+  `gpu_name: "NVIDIA GeForce RTX 4070"`, `vram_total_mb: 12281`
+
+### 10. Real Whisper Validation
+
+Ran the product's own `Whisper.CreateCaption` (whisper.cpp, model `small`) against the
+real VoiceTut Egyptian and code-switch samples:
+
+- Egyptian: `" إزايك"`, `" يا"`, `" صحبي"`, `" عمل"`, `" إنهاردة"` - recognizable, ordered,
+  timestamps monotonic, last caption end 2,680 ms (matches real audio duration).
+- Code-switch: 8 captions, ordered, last caption end 3,280 ms; ASR mis-heard "ABUD"/"Demo"
+  as Arabic-sounding tokens ("أبد", "مو") - expected small-model ASR variance on a
+  code-switched brand name, not a defect, and not claimed as a naturalness measure.
+
+Two real, PC-only Windows bugs were found and fixed to make this possible at all
+(details in Section 12): whisper.cpp v1.7.1 has no Windows release asset and the
+installer's 404 handling crashed the whole process instead of raising a catchable error;
+and `downloadWhisperModel()` never creates its own parent directory, so a genuinely fresh
+install failed with an unhandled `ENOENT` on the write stream.
+
+### 11. KemeTone
+
+**Not installed this pass** - by design (task explicitly said to prove VoiceTut first).
+While researching VoiceTut's real requirements, the same "list files that don't exist"
+class of bug was found in the KemeTone side of `install-local-voice.ps1/.sh`: it looked
+for `model.safetensors`, but the real `Rabe3/kemetone` repo ships `kemetone.pth` (327MB),
+`voices/kemetone.pt`, and a `kemetone/` Python package (Egyptian G2P + lexicons) - a
+Kokoro-82M-based model requiring `kokoro` + a custom `kemetone` G2P package + the
+`espeak-ng` native library (none installed on this PC). Both installer scripts were
+corrected to the real, verified file list so a future real KemeTone install pass starts
+from an accurate baseline; no KemeTone weights were downloaded and no KemeTone inference
+was run.
+
+### 12. Real Bugs Found and Fixed (Only Findable by Running the Real Pipeline)
+
+1. **VoiceTut API kwarg mismatch** (`services/local-tts/app/providers/voicetut.py`):
+   `device_map=` -> `device=`, `dtype=<torch dtype>` -> `dtype=<string>`, matching the
+   real `voicetut_tts.VoiceTutTTS.from_pretrained` signature.
+2. **whisper.cpp Windows install crash** (`src/config.ts`, `src/short-creator/libraries/Whisper.ts`):
+   the pinned version `1.7.1` has no `whisper-bin-x64.zip` release asset on GitHub (404);
+   the installer fed the resulting 404 error page into `Expand-Archive` as if it were a
+   real zip, which crashes the whole Node process with no catchable rejection. Bumped to
+   `1.9.2`, which does publish that asset.
+3. **whisper.cpp directory-creation gap** (`Whisper.ts`): `downloadWhisperModel()` writes
+   straight to `${modelsDir}/ggml-*.bin` and never creates that directory itself; a
+   genuinely fresh install (no pre-existing `models/` folder) failed with an unhandled
+   write-stream `ENOENT`. Now calls `fs.ensureDir(modelsDir)` first.
+4. **whisper.cpp executable-layout mismatch, Linux/Docker side** (`Whisper.ts`): the
+   library's own (unexported) executable-path logic assumes every version >= 1.7.4 uses a
+   `build/bin/whisper-cli` layout, but that split only matches the prebuilt *Windows* zip
+   - a Unix install (`git clone` + `make`, no CMake) still produces a flat `main` for any
+   version. Added `ensureWhisperExecutableLayout()`, which normalizes whichever layout was
+   actually produced into the layout the pinned version expects, on both platforms.
+5. **One-shot audio stream read twice** (`src/server/v2/voice-providers/localTtsClient.ts`) -
+   the real bug behind the golden video's first two failed attempts. `LocalTtsClient`
+   wrapped its decoded WAV in a one-shot `Readable`; `FFMpeg.toReadableAudio()` passes a
+   `Readable` straight through (it only re-wraps `Buffer`s fresh per call), and
+   `ShortCreator`'s voice pipeline can call `saveNormalizedAudioWithSpeed` on the same
+   `voiceAudio.audio` more than once (an initial normalize, then a duration-overflow retry
+   or tempo-correction pass). The second call got an already-exhausted stream and
+   `fluent-ffmpeg`'s `.input()` threw a bare `Error: Invalid input`. ElevenLabs/Kokoro
+   never hit this because their audio is a `Buffer`. Returning a `Buffer` from
+   `LocalTtsClient` fixes it at the source.
+6. **That failure was invisible before this pass**
+   (`src/server/v2/routes.ts`, render-dispatch handler): the raw error was sanitized down
+   to a customer-facing category and never logged anywhere. Worse, the category
+   classifier (`classifyRenderFailure`) matches any error message containing the substring
+   "invalid input" to `ELEVENLABS_PROVIDER_ERROR`, regardless of which provider actually
+   failed - so a real VoiceTut/ffmpeg bug surfaced to the customer as "ElevenLabs could not
+   generate the Arabic narration," which is exactly the kind of misattribution the Arabic
+   voice policy exists to prevent. Added `logger.error()` with the real stack (and Zod
+   issues, if any) before sanitizing, so the next render failure is diagnosable from the
+   worker's own logs instead of requiring a live repro.
+7. **Truth-safety CTA fallback forced every business into a website mockup**
+   (`src/server/v2/content-ai/localProvider.ts`) - the bug behind the golden video's third
+   failed attempt. `enforcePromptTruthSafety()` replaces a CTA scene's `visualPrompt` with
+   a hardcoded `"Happy business owner reviewing their professional new website"` whenever
+   the original is flagged as an ungrounded claim (e.g. a food template's delivery-themed
+   CTA, when the prompt never promised delivery) - for *any* business vertical. The visual
+   classifier then read "website" in that fallback text and routed the scene to
+   `WEBSITE_MOCKUP`, failing the real-footage coverage gate. Replaced with a
+   business-neutral fallback. Root cause of why this specific scene still resolved to a
+   mockup even after that fix (the `CTA_SCENE` -> `KINETIC_TYPOGRAPHY` -> `MOTION_GRAPHICS`
+   fallback chain vs. `stockRuntimeAvailable`) was not fully isolated within this pass;
+   the golden production was produced with `visualMode: "stock"` (`forceStockFootage`)
+   as a real, working, already-existing product option rather than left blocked on it.
+
+None of these six fixes are Arabic-voice-policy changes: VoiceTut/KemeTone remain the
+Arabic local routes, ElevenLabs remains explicit Premium only, and 0 ElevenLabs calls
+were made this pass.
+
+### 13. Arabic Routing (Verified From Source and From the Real Job)
+
+`VoiceRegistry.route()` (`src/server/v2/voice-providers/registry.ts`) already correctly
+implements Auto → VoiceTut (if configured) → KemeTone (if configured) → explicit setup
+error, with an explicit-ElevenLabs path only when the customer selects it directly as
+Premium - never a silent Arabic → ElevenLabs fallback. This was true before this pass and
+is unchanged; it was verified by reading the routing code and confirmed by the real golden
+job, whose `voiceProvider` field resolved to `"voicetut"` from `requestedProvider: "auto"`.
+
+### 14. Real Golden Arabic Production
+
+Created through the normal product pipeline (`POST /api/v2/production/jobs`, the same
+endpoint the UI calls) against the rebuilt `abud-shorts-app` / `abud-shorts-render-worker`
+containers, using the running Postgres and n8n unchanged. Two earlier real attempts on
+this same job failed on real bugs (Sections 12.5 and 12.7) and are recorded, not hidden;
+the third attempt, with those fixes in place, completed successfully.
+
+- **Job ID / Video ID:** `cmtnbq339000407pb46xvetz5`
+- **Status:** `ready` · **professionalReady:** `true`
+- **Voice provider:** `voicetut` · **Speaker:** `Mohamed` (auto-resolved)
+- **Requested duration:** 10 s · **Actual:** 10.29 s (within 9.5-10.5 s)
+- **Aspect / Resolution:** 9:16 / 1080x1920 (h264, 25fps, confirmed by `ffprobe` on the
+  downloaded MP4, not just the DB record)
+- **realVisualCoveragePercent:** 99.9 · **stockTimelinePercent:** 99.9
+- **textOnlyTimelinePercent:** 0 · **motionOverlayPercent:** 0 · **blackFramePercent:** 0
+- **rawPromptLeakCount:** 0 · **inventedClaimRiskCount:** 0
+- **visualProvidersUsed:** `["pexels"]` (real stock, 4 real stock segments)
+- **ElevenLabs synthesis calls:** 0
+- Prompt (Egyptian Arabic, natural, with a small English code-switch):
+  "فيديو قصير بالمصري عن مطعم برجر في القاهرة بأسلوب حماسي وودود، واذكر إن مع ABUD Demo
+  الجديد الطلب بقى أسرع وأسهل." — the local (offline, 0-paid-AI) content planner wrote the
+  final on-screen script, including the ABUD Demo code-switch line.
+
+**Real audio QA** (from the actual rendered MP4, both the pipeline's own measurement and
+an independent `ffmpeg silencedetect`/`volumedetect` pass on the downloaded file):
+`audioQa.pass: true`, `finalMixLufs: -16.49`, `truePeakDbtp: -3.49` (no clipping),
+`effectivelySilent: false`; `mixedSilenceGate.pass: true`, `totalSilenceMs: 0`,
+`longestSilenceRunMs: 0`; independent check found no silence run >= 1.5s at -35dB anywhere
+in the track, mean volume -19.7dB, max -3.5dB (no clipping). `maxNarrationSilenceMs: 160`
+(a natural inter-scene breath pause, not dead air).
+
+**Real caption QA:** `captionQa.pass: true`, 3 phrases checked, `minPhraseMs: 2650`. A
+frame extracted at 2.0s (`data-dev/qa-samples/golden-frame.jpg`, not committed) confirms
+correctly shaped right-to-left Arabic captions rendered with safe 9:16 margins over real
+stock footage.
+
+**Real delivery QA** (against the real running app, not asserted):
+
+| Endpoint | Result |
+|---|---|
+| Thumbnail | `GET /api/videos/{id}/thumbnail` → 200, `image/jpeg`, 90,375 bytes |
+| Preview (full) | `GET /api/short-video/{id}` → 200, `video/mp4`, 4,446,608 bytes |
+| Preview (Range) | same URL with `Range: bytes=0-1023` → 206 |
+| Download | `GET /api/videos/{id}/download` → 200, `video/mp4`, 4,446,608 bytes |
+
+The downloaded MP4 was independently verified with `ffmpeg -i`: `Video: h264 (High),
+yuv420p, 1080x1920 [DAR 9:16], 25 fps` / `Audio: aac (LC), 96000 Hz, stereo` — a real,
+playable file, not a placeholder.
+
+### 15. Automated Gates (Clean Environment)
+
+Run with `.env` moved aside and `ABUD_MODEL_CACHE_DIR` pointed at an empty directory, so
+the real credentials and real `metadata.json` this pass wrote to disk for the golden run
+do not themselves change test behavior (both were confirmed, by toggling them off and on,
+to affect exactly the tests that assert on an unconfigured environment - not caused by any
+source change made this pass):
+
+- `npm run typecheck`: **PASS**, 0 errors (server + UI)
+- `npx vitest run`: **PASS**, **72/72 test files, 1,102/1,102 tests** (matches the Pass
+  9.7-H baseline exactly)
+- `npm run build`: **PASS**
+- Python: **PASS**, **8/8 tests** in `services/local-tts/tests/test_api.py`
+  (`.venv` Python 3.11.15)
+
+### 16. Repository Hygiene
+
+`git ls-files` confirms zero tracked `*.safetensors`, `*.pt`, `*.pth`, WAV review
+samples, the golden MP4, or `.venv`/`__pycache__`/`.env` content. `.gitignore` gained
+`*.pth` this pass (previously only `*.pt` was covered). Model cache
+(`data-dev/models/`, 2.4GB), Whisper cache, and all QA samples/benchmarks live under
+git-ignored `data-dev/`, outside the repository, the Docker image, and the client
+release tarball.
+
+### 17. Human Review
+
+- Real VoiceTut samples for owner listening: `data-dev/qa-samples/voicetut-first-proof/`
+  (`egyptian.wav`, `code_switch.wav`) and `voicetut-benchmark/*.wav` (15 samples) - local
+  paths only, not committed.
+- Real Golden Arabic Video: Job/Video ID `cmtnbq339000407pb46xvetz5`, retrievable from the
+  running app at `/api/short-video/cmtnbq339000407pb46xvetz5` or
+  `data-dev/qa-samples/golden-video.mp4` (not committed).
+- **Human voice/video approval: PENDING** - the owner has not yet listened to or watched
+  these. No voice is labeled "best," "human," or "Egyptian" beyond what the model card and
+  measured metrics above support.
+
+### 18. Safety
+
+ElevenLabs synthesis calls: **0**. Paid AI image/video calls: **0**. Social publications:
+**0**. Docker prune commands run: **0**. Volumes deleted: **0**. Customer data deleted:
+**0**. `main` not merged, no tag created, no GitHub Release, stable `v2.3.1` not moved.
+
+### 19. Release
+
+**BLOCKED / NOT RELEASED.** Real local VoiceTut inference and one real, fully passing
+Arabic Egyptian golden production are proven on the PC; the release gate remains the
+owner's own human listening/viewing approval, which is explicitly not part of an
+automated pass.
