@@ -475,6 +475,18 @@ describe("V2.4 Professional Video Production Engine", () => {
     })).rejects.toThrow("Professional automatic video needs at least one visual source");
   });
 
+  it("fails closed with the canonical error when a configured Pexels provider explicitly returns null", async () => {
+    const registry = new StockProviderRegistry([]);
+    const legacyPexels = new PexelsVisualProvider({ findVideo: vi.fn().mockResolvedValue(null) } as any, "P".repeat(40));
+    const router = new AutoVisualRouter(legacyPexels, [], registry);
+
+    await expect(router.resolveSceneVisual(scene, spec, {
+      orientation: OrientationEnum.portrait,
+      tempDirPath: "/tmp",
+      targetDurationSeconds: 5,
+    })).rejects.toThrow("Professional automatic video needs at least one visual source");
+  });
+
   it("fails closed with the canonical error when the configured Pexels provider throws", async () => {
     const registry = new StockProviderRegistry([]);
     const legacyPexels = new PexelsVisualProvider(
