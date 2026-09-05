@@ -27,3 +27,4 @@ Updates:
   sudo abud-shorts update
 
 More detail: CLIENT_QUICK_START.md
+Day-to-day operations, backup/update/rollback, troubleshooting: CLIENT_OPERATIONS.md

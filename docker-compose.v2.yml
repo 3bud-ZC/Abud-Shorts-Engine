@@ -1,3 +1,18 @@
+# ==============================================================================
+# ABUD Shorts Engine V2 - DEVELOPMENT ONLY compose file
+# ==============================================================================
+# This file builds the application from local source (`build: context: .`) and
+# is for developers working on this repository. It is NEVER shipped in the
+# client package (see scripts/release/package-client.mjs's PACKAGE_INCLUDE
+# allow-list, which lists only docker-compose.prod.yml) and no customer
+# launcher, installer or documentation may reference it.
+#
+# A real client installation always runs docker-compose.prod.yml, which pulls
+# the published, immutable GA image by digest - it never builds application
+# source on the client's machine. If you are a customer reading this: use
+# install.ps1 / install.sh instead, not this file.
+# ==============================================================================
+
 services:
   abud-shorts-postgres:
     image: postgres:16-alpine

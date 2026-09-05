@@ -19,7 +19,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("status", "update", "backup", "diagnostics", "start", "stop", "restart", "rollback", "owner", "local-voice", "help")]
+    [ValidateSet("status", "update", "backup", "diagnostics", "doctor", "logs", "start", "stop", "restart", "rollback", "owner", "local-voice", "help")]
     [string]$Command = "status",
 
     [Parameter(Position = 1)]
@@ -771,6 +771,162 @@ function Invoke-Diagnostics {
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
 
+<#
+A concise, safe support tool: PASS/WARN/FAIL against the things a real support
+call actually needs (version, Docker, every service, Local Voice, disk, the
+port, and update-manifest reachability), reusing the exact same internal
+diagnostics bundle `diagnostics` already writes to a file - never a second,
+divergent implementation of "is this installation healthy." Never prints a
+password, token, API key, vault plaintext or session cookie: only booleans
+and status strings the bundle itself already redacted.
+#>
+function Write-DoctorLine {
+    param([string]$Result, [string]$Text)
+    $color = switch ($Result) { "PASS" { "Green" } "WARN" { "Yellow" } default { "Red" } }
+    Write-Host ("  [{0,-4}] {1}" -f $Result, $Text) -ForegroundColor $color
+    return $Result
+}
+
+function Invoke-Doctor {
+    Write-Step "ABUD Shorts Engine - Doctor"
+    $results = @()
+
+    $record = Read-InstallationRecord
+    if ($record) {
+        $results += Write-DoctorLine "PASS" "Installed version $($record.currentVersion), channel $($record.channel)"
+    } else {
+        $results += Write-DoctorLine "FAIL" "No installation record found (is this an installed system?)"
+    }
+
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        $results += Write-DoctorLine "FAIL" "Docker is not installed"
+    } else {
+        Invoke-Docker @("info") | Out-Null
+        if ($LASTEXITCODE -eq 0) { $results += Write-DoctorLine "PASS" "Docker Desktop is running" }
+        else { $results += Write-DoctorLine "FAIL" "Docker Desktop is installed but not running" }
+    }
+
+    foreach ($role in @("app", "render-worker", "postgres", "n8n")) {
+        $health = Get-ContainerHealth (Get-ContainerName $role)
+        $r = switch ($health) { "healthy" { "PASS" } "running" { "PASS" } "starting" { "WARN" } default { "FAIL" } }
+        $results += Write-DoctorLine $r "Container $role : $health"
+    }
+
+    $internalToken = Get-EnvValue "INTERNAL_SERVICE_TOKEN"
+    $bundle = $null
+    if ($internalToken) {
+        try {
+            $bundle = Invoke-RestMethod -Uri "$(Get-AppBaseUrl)/internal/v1/system/diagnostics/bundle" `
+                -Headers @{ "x-internal-token" = $internalToken } -TimeoutSec 15 -ErrorAction Stop
+        } catch { }
+    }
+    if ($bundle) {
+        $results += Write-DoctorLine "PASS" "Application diagnostics reachable (schema $($bundle.product.schemaVersion))"
+        $pg = $bundle.services.postgres
+        $results += Write-DoctorLine $(if ($pg.ok) { "PASS" } else { "FAIL" }) "Database connectivity: $($pg.message)"
+        if ($bundle.providers) {
+            $healthy = @($bundle.providers | Where-Object { $_.healthy }).Count
+            $configured = @($bundle.providers | Where-Object { $_.configured }).Count
+            $results += Write-DoctorLine "PASS" "Providers: $configured configured, $healthy healthy, $($bundle.providers.Count) total"
+        }
+        if ($null -ne $bundle.recentFailedJobs) {
+            $failedCount = @($bundle.recentFailedJobs).Count
+            $r = if ($failedCount -eq 0) { "PASS" } else { "WARN" }
+            $results += Write-DoctorLine $r "Recent failed jobs: $failedCount"
+        }
+    } else {
+        $results += Write-DoctorLine "WARN" "Could not reach application diagnostics (app may still be starting)"
+    }
+
+    $port = Get-HostPort
+    $portOpen = $false
+    try {
+        $probe = New-Object System.Net.Sockets.TcpClient
+        $probe.Connect("127.0.0.1", [int]$port)
+        $probe.Close()
+        $portOpen = $true
+    } catch { }
+    $results += Write-DoctorLine $(if ($portOpen) { "PASS" } else { "FAIL" }) "Port $port is reachable"
+
+    try {
+        $driveLetter = (Split-Path -Qualifier $AbudHome).TrimEnd(":")
+        $freeGb = [math]::Round((Get-PSDrive -Name $driveLetter).Free / 1GB, 1)
+        $r = if ($freeGb -ge 10) { "PASS" } elseif ($freeGb -ge 3) { "WARN" } else { "FAIL" }
+        $results += Write-DoctorLine $r "Disk free on $($driveLetter): $freeGb GB"
+    } catch {
+        $results += Write-DoctorLine "WARN" "Could not determine free disk space"
+    }
+
+    foreach ($dir in @($AbudDataDir, $AbudBackupDir)) {
+        $r = if (Test-Path $dir) { "PASS" } else { "FAIL" }
+        $results += Write-DoctorLine $r "Data path exists: $dir"
+    }
+
+    $lvMode = Get-EnvValue "LOCAL_VOICE_MODE" "SKIP"
+    if ($lvMode -eq "SKIP" -or -not $lvMode) {
+        $results += Write-DoctorLine "WARN" "Local Voice: setup skipped (Arabic jobs will report setup required)"
+    } else {
+        try {
+            $lvPort = [int](Get-EnvValue "LOCAL_TTS_PORT" "8765")
+            $lvPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $lvPort
+            $lvStatus = Get-LocalVoiceServiceStatus -Paths $lvPaths
+            $r = if ($lvStatus.healthy -and $lvStatus.modelsReady.Count -gt 0) { "PASS" } elseif ($lvStatus.running) { "WARN" } else { "FAIL" }
+            $modelsText = if ($lvStatus.modelsReady.Count -gt 0) { $lvStatus.modelsReady -join ", " } else { "none ready" }
+            $results += Write-DoctorLine $r "Local Voice ($lvMode): healthy=$($lvStatus.healthy), models=$modelsText"
+            $autoStart = Test-LocalVoiceAutoStartRegistered
+            $results += Write-DoctorLine $(if ($autoStart.any) { "PASS" } else { "WARN" }) "Local Voice auto-start: $($autoStart.mechanism)"
+        } catch {
+            $results += Write-DoctorLine "WARN" "Local Voice status could not be checked: $($_.Exception.Message)"
+        }
+    }
+
+    $manifestUrl = if ($env:ABUD_UPDATE_MANIFEST_URL) { $env:ABUD_UPDATE_MANIFEST_URL } else { $DefaultManifestUrl }
+    try {
+        Invoke-WebRequest -Uri $manifestUrl -Method Head -TimeoutSec 8 -UseBasicParsing -ErrorAction Stop | Out-Null
+        $results += Write-DoctorLine "PASS" "Update manifest reachable"
+    } catch {
+        $results += Write-DoctorLine "WARN" "Update manifest not reachable right now (offline, or no release published yet)"
+    }
+
+    $fail = @($results | Where-Object { $_ -eq "FAIL" }).Count
+    $warn = @($results | Where-Object { $_ -eq "WARN" }).Count
+    $pass = @($results | Where-Object { $_ -eq "PASS" }).Count
+    Write-Host ""
+    Write-Host "  Summary: $pass passed, $warn warnings, $fail failed" -ForegroundColor $(if ($fail -gt 0) { "Red" } elseif ($warn -gt 0) { "Yellow" } else { "Green" })
+    Write-Host ""
+    if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
+}
+
+<#
+One supported way to see recent logs, instead of an operator needing to know
+each container's own name or that Local Voice logs somewhere else entirely.
+Bounded by Docker's own configured log rotation (max-size/max-file, set on
+every production service) and, for Local Voice, by the same bounded/rotated
+file Start-LocalVoiceService already writes - this command never reads an
+unbounded log.
+#>
+function Invoke-Logs {
+    param([string]$Target = "", [int]$Lines = 200)
+    $targets = if ($Target) { @($Target) } else { @("app", "worker", "postgres", "n8n", "local-voice") }
+    foreach ($t in $targets) {
+        Write-Step "--- $t ---"
+        switch ($t) {
+            "worker" { Invoke-Docker @("logs", "--tail", "$Lines", (Get-ContainerName "render-worker")) | ForEach-Object { Write-Host $_ } }
+            "database" { Invoke-Docker @("logs", "--tail", "$Lines", (Get-ContainerName "postgres")) | ForEach-Object { Write-Host $_ } }
+            "postgres" { Invoke-Docker @("logs", "--tail", "$Lines", (Get-ContainerName "postgres")) | ForEach-Object { Write-Host $_ } }
+            "local-voice" {
+                $lvPort = [int](Get-EnvValue "LOCAL_TTS_PORT" "8765")
+                $lvPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $lvPort
+                if (Test-Path $lvPaths.LogFile) { Get-Content $lvPaths.LogFile -Tail $Lines }
+                else { Write-Host "      No Local Voice log yet." }
+            }
+            default { Invoke-Docker @("logs", "--tail", "$Lines", (Get-ContainerName $t)) | ForEach-Object { Write-Host $_ } }
+        }
+        Write-Host ""
+    }
+    if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
+}
+
 function Invoke-Rollback {
     Assert-Docker
     $record = Read-InstallationRecord
@@ -1153,6 +1309,8 @@ ABUD Shorts Engine
   abud-shorts.ps1 update -TargetVersion X.Y.Z  Install a specific published version
   abud-shorts.ps1 backup                     Create a database and configuration backup
   abud-shorts.ps1 diagnostics                Write a support bundle
+  abud-shorts.ps1 doctor                     PASS/WARN/FAIL health report for support
+  abud-shorts.ps1 logs [app|worker|postgres|n8n|local-voice]  Show recent logs (all, if none named)
   abud-shorts.ps1 start | stop | restart
   abud-shorts.ps1 rollback                   Return to the previous working version
   abud-shorts.ps1 owner reset-password       Recover a lost owner username/password locally
@@ -1168,6 +1326,8 @@ switch ($Command) {
     "update"      { Invoke-Update }
     "backup"      { Invoke-Backup }
     "diagnostics" { Invoke-Diagnostics }
+    "doctor"      { Invoke-Doctor }
+    "logs"        { Invoke-Logs $SubCommand }
     "start"       { Invoke-Start }
     "stop"        { Invoke-Stop }
     "restart"     { Invoke-Restart }

@@ -231,7 +231,13 @@ describe("Pass 9.7: Local Egyptian TTS & Arabic Error Localization", () => {
       return app;
     }
 
-    it("GET /api/v2/providers includes voicetut as default free Arabic provider and elevenlabs as non-default premium", async () => {
+    it("GET /api/v2/providers includes voicetut as default free Arabic provider and elevenlabs as non-default premium", { timeout: 20000 }, async () => {
+      // This route health-checks providers over a real local HTTP call, so
+      // its wall-clock time is sensitive to real system load (observed
+      // recurring timeouts at the vitest default 5000ms on a machine also
+      // running real Local Voice/Docker services - passes in well under 2s
+      // in isolation). A longer, explicit timeout is the correct fix here,
+      // not weakening what the test actually verifies.
       const request = (await import("supertest")).default;
       const app = await getApp();
       const res = await request(app).get("/api/v2/providers").set(AUTH_HEADER).expect(200);

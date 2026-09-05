@@ -55,6 +55,7 @@ export const PACKAGE_INCLUDE = [
   "nginx.conf.reference",
   "CLIENT_QUICK_START.md",
   "CLIENT_HANDOFF.md",
+  "CLIENT_OPERATIONS.md",
   "LICENSE",
   "THIRD_PARTY_NOTICES.md",
   "RELEASE_NOTES.md",
