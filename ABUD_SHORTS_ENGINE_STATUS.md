@@ -15,20 +15,19 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0** — Stage: **General Availability** (GA candidate; GA publication is
-in progress as of this section — see the V2.4-GA record below for the exact, real
-outcome once performed)
+Version: **2.4.0** — Stage: **General Availability**
 
-Release: **RC.2 QUALIFIED (Pass 9.11).** Both release blockers from Pass 9.9-9.10
-(Windows Local Voice installer automation; isolated fresh-install and v2.3.1→RC.2
-upgrade validation) are closed with real evidence — see Pass 9.11 Section 12.
+Release: **RELEASED.** V2.4.0 is the public General Availability release, published
+for real — see the V2.4-GA record below for the complete, verified evidence
+(merge/tag identity, GHCR promotion, GitHub Release, public updater verification, a
+real public-channel v2.3.1→2.4.0 isolated upgrade, and primary alignment).
 
 **Owner GA authorization:** **APPROVED.** The owner explicitly authorized V2.4 General
-Availability release. This supersedes the earlier "NOT APPROVED for V2.4" statement
-below, which described the state before RC.2 was qualified and reflected a real
-production incident that Pass 9.9 root-caused and closed (an owner login-username
-mismatch, not a product defect) — that incident is historical and resolved, not a
-current blocker.
+Availability release, and it has been published. This supersedes the earlier "NOT
+APPROVED for V2.4" statement below, which described the state before RC.2 was
+qualified and reflected a real production incident that Pass 9.9 root-caused and
+closed (an owner login-username mismatch, not a product defect) — that incident is
+historical and resolved, not a current blocker.
 
 **Local Voice (VoiceTut) human acceptance** (established in Pass 9.9 Section 1, restated
 here as current fact, not re-verified beyond confirming the underlying artifacts are
@@ -10907,3 +10906,234 @@ succeed on a machine where Task Scheduler does not deny it (only the fallback pa
 exercised, because that is this machine's real condition); n8n's container is recreated
 (data preserved via its volume) by a normal upgrade, which was verified benign but not
 previously documented as expected behavior.
+
+## V2.4-GA: General Availability Release Ceremony
+
+Executed on explicit owner authorization ("APPROVED FOR GA RELEASE," given directly, not
+re-requested). Followed the safe invariant: build the GA candidate once, verify it,
+promote that exact digest, never rebuild application bytes during promotion. Used
+`ghcr-candidate.yml` for both the build and the promotion; `release.yml` was never run.
+
+### 1. Pre-Flight Safety Check
+
+Verified before any change: local HEAD, `origin/v2.4-professional-video-engine`, and
+`origin/main` all matched the expected starting identities exactly. No `v2.4.0` git tag,
+no GitHub Release, no GHCR `:2.4.0` tag existed yet. `:stable` resolved to
+`sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` - the real,
+expected v2.3.1 digest.
+
+### 2. Source Promotion (RC → GA)
+
+`package.json` and `src/version.ts`: `2.4.0-rc.2` → `2.4.0`, stage `Release Candidate` →
+`General Availability`, build `2026.09.05.1` → `2026.09.05.2` (not reused). Schema stays
+`2.13.0` - no migration. `src/server/v2/v2_05.test.ts`'s `PRODUCT_VERSION` assertion
+updated to match; no other test assertions touched.
+
+`RELEASE_NOTES.md` rewritten for the real v2.4.0 product. Customer-facing docs
+(`README.md`, `CLIENT_QUICK_START.md`, `CLIENT_HANDOFF.md`, `docs/SERVER_INSTALL.md`,
+`START-HERE.txt`) corrected: several still claimed Arabic narration "is produced
+exclusively with ElevenLabs" / "requires" a key - stale copy from before VoiceTut became
+the default local route (Pass 9.9 had already fixed three in-app instances of this same
+claim; these were the remaining customer-facing copies). Now describe VoiceTut Local
+High Quality as the default, ElevenLabs as an explicit optional premium alternative.
+This file's own Current Product State header corrected to stop contradicting itself (the
+stale "NOT APPROVED for V2.4" statement, superseded and retained below for history).
+
+**GA_PRODUCT_SHA: `f39be46520ea93a593e036a47f46d1bf62ebcb64`** (commit
+`chore(release): prepare ABUD Shorts Engine v2.4.0 GA`, pushed to
+`v2.4-professional-video-engine`). Release diff audit: `git diff --check` and `git diff
+--stat` confirmed every changed file was release metadata/docs/one version-assertion
+test - 10 files, no production logic, no TTS logic, no providers, no renderer, no
+migrations touched. Secret audit: `git diff` scanned for password/key/token/secret
+patterns - only descriptive prose about security features, no real values.
+
+### 3. Final Local GA Gate
+
+- `npm run typecheck`: **PASS**, 0 errors.
+- `npx vitest run`: **73/73 files, 1116/1116 tests, 0 failures** (real, clean, twice -
+  one run hit a single test timeout under full-suite system load, reproduced as passing
+  in isolation in 1.4s and confirmed clean on an immediate full re-run; not a
+  regression, and nothing in this commit touches the code that test exercises).
+- Python: **8/8 PASS**.
+- Pester (Local Voice lifecycle, real against this machine): **21/21 PASS**.
+- `npm run build`: **PASS**.
+
+### 4. GA Candidate Build (real GHCR Candidate CI, mode=candidate)
+
+Dispatched with `--ref v2.4-professional-video-engine` (required - `gh workflow run`
+resolves the workflow *definition* from the default branch otherwise, a Pass 9.11
+finding). Run `33974029224`, **completed in 7m32s**: dependency install, quality
+runtime, the full `pnpm typecheck && pnpm vitest run && pnpm build` gate, and
+`docker buildx build --push` all passed for real in a fresh CI environment.
+
+Identity verified independently via a live registry query (`docker buildx imagetools
+inspect`, not trusting tag text):
+`org.opencontainers.image.revision = f39be46520ea93a593e036a47f46d1bf62ebcb64` (exact
+match), `org.opencontainers.image.version = 2.4.0`.
+
+**GA_CANDIDATE_DIGEST: `sha256:9988fd43b9296280152b6ee4c3e5a8a2627a09b2c6e88de372697fba84157b7c`**
+
+### 5. Isolated GA Upgrade Smoke (real, before touching anything public)
+
+Brought `abud-v24-rc2-upgrade` back to real `2.3.1` via the real `rollback` command;
+verified the seeded owner/brand/settings from Pass 9.10 were still present. Built a
+local GA package rehearsal (`ABUD-Shorts-Engine-2.4.0.tar.gz`, channel `stable` to match
+the installed instance, checksum
+`f240b24abe6d65e6ecc21bb10548294399454185dd526762339a25f121cdebb6`) against the real
+`GA_CANDIDATE_DIGEST`, served it from a local-only test manifest (never published), and
+ran the real `abud-shorts.ps1 update -Yes`:
+
+Manifest validated, version compared (`2.3.1 -> 2.4.0`), disk checked, package
+downloaded and **checksum verified**, **application image pulled by digest from the
+real GHCR registry and verified**, pre-upgrade backup created
+(`pre-upgrade-2.3.1-to-2.4.0-20260905154200.sql`), app/render-worker stopped and
+restarted on the new version, health confirmed. `GET /api/v2/system/info` →
+`version: "2.4.0"`, `schemaVersion: "2.13.0"`. Owner login, the `defaultDuration: 37`
+settings fingerprint, and the seeded brand record all intact. Postgres never recreated
+throughout (uptime unbroken). This was a rehearsal against a local-only manifest, not
+yet the public channel - see Section 8 for the real public-channel proof.
+
+### 6. Main Merge, Tag, and Promotion (real, public, irreversible-by-convention actions)
+
+- `git checkout main; git pull --ff-only origin main` → confirmed `main` unchanged at
+  the expected `cd3a0e0401229193b54513dd62c7a38ddf606f16` baseline.
+- `git merge --no-ff v2.4-professional-video-engine -m "release: ABUD Shorts Engine
+  v2.4.0"` → clean, **zero conflicts**.
+- **GA_MERGE_SHA: `9a62787cb69fb7dae231463cec286f2d923c35b9`**. Verified
+  `git diff f39be465...HEAD` between the product commit and the merge commit is
+  **exactly empty** - the merged tree is byte-for-byte the accepted GA source, no
+  incidental conflict-resolution drift. Pushed `origin/main`.
+- Annotated tag `v2.4.0` created pointing at `GA_MERGE_SHA`, pushed. Confirmed no
+  workflow was triggered by the tag/main push (`gh run list` showed no new run -
+  `release.yml` has no tag-push trigger, matching the existing test coverage for this).
+- **Promotion**: dispatched `ghcr-candidate.yml` with `mode=promote`,
+  `digest=GA_CANDIDATE_DIGEST`, `expected_sha=GA_PRODUCT_SHA`. Run `33975716533`,
+  **completed in 15s** (no rebuild - `imagetools create` only, exactly as designed).
+
+**Exact digest equality verified independently** (`docker buildx imagetools inspect`
+against the real registry, all four separately):
+- `ghcr.io/3bud-zc/abud-shorts-engine:2.4.0` → `sha256:9988fd43b9...`
+- `ghcr.io/3bud-zc/abud-shorts-engine:stable` → `sha256:9988fd43b9...`
+- `ghcr.io/3bud-zc/abud-shorts-engine:sha-f39be46` → `sha256:9988fd43b9...`
+- `ghcr.io/3bud-zc/abud-shorts-engine:2.3.1` → `sha256:5076022e68...` (**unchanged**,
+  matches the pre-flight baseline exactly - v2.3.1 was never touched).
+
+### 7. Final Public Package and GitHub Release
+
+Built `ABUD-Shorts-Engine-2.4.0.tar.gz` from the exact GA source referencing the now-
+promoted `ghcr.io/3bud-zc/abud-shorts-engine:2.4.0` tag + `GA_CANDIDATE_DIGEST`, channel
+`stable`. `verify-package.mjs`: **ok: no secrets, source, dependencies or developer
+data; ok: installer/updater/compose/docs present; ok: manifest matches**.
+
+**PACKAGE_NAME: `ABUD-Shorts-Engine-2.4.0.tar.gz`** · **PACKAGE_BYTES: `81,376`** ·
+**PACKAGE_SHA256: `e49ffaf0caae71bed79a86e5e20ab513e569fe5458bf5d3777e8e70a91551d2c`**
+
+`update-manifest.json` generated with real values throughout: `version: 2.4.0`,
+`channel: stable`, `schemaVersion: 2.13.0`, the real `imageDigest`, the real
+`packageSha256`, `minimumUpdaterVersion: 2.2.0` (the same value the real v2.3.1
+manifest already carried - preserved, not invented), `schemaBackwardsCompatible: true`.
+
+Created the real GitHub Release for tag `v2.4.0` (`gh release create`, never
+`release.yml`): title "ABUD Shorts Engine 2.4.0", body from the rewritten
+`RELEASE_NOTES.md`, three assets attached (`ABUD-Shorts-Engine-2.4.0.tar.gz`, its
+`.sha256`, `update-manifest.json`), `--latest`. Verified via `gh release view`:
+`draft: false`, `prerelease: false`; `repos/.../releases/latest` API resolves to
+`v2.4.0`.
+
+### 8. Public Verification (real, as an external consumer would see it)
+
+- Downloaded the real published package and `.sha256` from
+  `github.com/3bud-ZC/Abud-Shorts-Engine/releases/download/v2.4.0/...` - independently
+  recomputed SHA256 **matches `PACKAGE_SHA256` exactly**.
+- Downloaded the real published `update-manifest.json` from the same release and from
+  the canonical `releases/latest/download/update-manifest.json` URL - both serve
+  identical, correct `2.4.0` content.
+- **Real public updater discovery**, using the actual default manifest URL (no
+  override): a `2.4.0` install reported `"You are already running the latest
+  version."`; rolled back to `2.3.1` and re-checked - reported `"An update is available:
+  2.4.0."` No false update loop either direction.
+- **Real public-channel isolated upgrade**: with `abud-v24-rc2-upgrade` at real `2.3.1`
+  and no manifest override, ran `abud-shorts.ps1 update -Yes` against the **actual
+  public GitHub Release package and the actual public GHCR image** - not a local
+  rehearsal. Checksum verified, image pulled by digest and verified, pre-upgrade backup
+  created (`pre-upgrade-2.3.1-to-2.4.0-20260905154754.sql`), version confirmed `2.4.0`,
+  schema `2.13.0`, all containers healthy. Owner login, `defaultDuration: 37`, and the
+  seeded brand record all verified intact afterward. Postgres uptime unbroken across
+  the entire ceremony.
+
+### 9. Primary Installation Alignment
+
+Primary reported `2.4.0-rc.2` (below GA). Primary is **not** an `install.ps1`-managed
+customer installation - it is the developer's own `docker-compose.v2.yml` dev rig,
+built directly from source, with no `current.txt`/`installation.json` for the real
+customer updater to act on. Forcing the customer-facing updater onto it would not be a
+real operation; the correct, safe alignment for this specific rig is the same one
+already established and documented in Pass 9.9 ("Immutable RC.2 Build"): rebuild only
+`abud-shorts-app`/`abud-shorts-render-worker` from the exact accepted source, recreate
+only those two services, never touch Postgres/n8n.
+
+Before touching anything: took a real, safe backup - a direct `pg_dump` of primary's
+database (`pg_dump -U abud_shorts -d abud_shorts --no-owner --no-privileges`, 15.8 MB,
+saved locally, not committed, not shared). This is a full database dump made outside
+the app's own curated `config_db` backup code path, so it is described here as exactly
+that - a full database backup - not as carrying that feature's specific
+`includesSecrets: false` guarantee, which was not independently re-verified for this
+raw dump. No owner credentials were available in this session to authenticate to
+primary's API, and none were fabricated.
+
+`docker compose -f docker-compose.v2.yml build abud-shorts-render-worker` (real build
+from the exact `main`/`GA_MERGE_SHA` tree - verified identical, zero diff, before
+building) → `docker compose -f docker-compose.v2.yml up -d --no-deps abud-shorts-app
+abud-shorts-render-worker` → only those two containers were recreated (confirmed: no
+mention of postgres/n8n in the compose output at all). Result, verified for real:
+
+- `GET /api/v2/system/info` → `version: "2.4.0"`, `stage: "General Availability"`,
+  `schemaVersion: "2.13.0"`.
+- App, Worker, Postgres, n8n: all `Healthy`. `RestartCount: 0` on Postgres and n8n, with
+  their pre-alignment uptime unbroken - the strongest available proof that no customer
+  data was touched (owner accounts, jobs, videos and settings all live in that exact
+  untouched Postgres volume).
+- Local Voice base URL confirmed correctly configured
+  (`http://host.docker.internal:8765`, the Pass 9.10 default).
+- Golden video artifacts confirmed present on disk at the filesystem level (no
+  authenticated session was available to check via the API, so this was verified the
+  way that did not require one): `cmtnbq339000407pb46xvetz5.mp4`,
+  `.metadata.json` and `.thumb.jpg` all present, untouched, alongside 395 other video
+  files in the primary data directory.
+- No video was generated, no audio was synthesized, no `docker cp`, no manual container
+  patch, no volume deleted, no prune run.
+
+### 10. Safety (Final, Whole Ceremony)
+
+ElevenLabs calls: **0**. Paid AI calls: **0**. Social publications: **0**. New video
+productions: **0**. Docker prune (any kind): **0**. `docker compose down -v`: **0**.
+Primary volumes/customer data deleted: **0**. Provider Vault, VoiceTut model cache,
+backups: all untouched. `v2.3.1` tag/image: unchanged, verified by digest. GA
+publication used exactly the pre-authorized path (`ghcr-candidate.yml`
+candidate → promote; `gh release create` against the already-existing tag) - `release.yml`
+was never invoked.
+
+### 11. Final Public Identity Matrix
+
+| Field | Value |
+| --- | --- |
+| Source product | `f39be46520ea93a593e036a47f46d1bf62ebcb64` |
+| Main release (merge) | `9a62787cb69fb7dae231463cec286f2d923c35b9` |
+| Tag `v2.4.0` | → `9a62787cb69fb7dae231463cec286f2d923c35b9` |
+| Image revision label | `f39be46520ea93a593e036a47f46d1bf62ebcb64` |
+| `ghcr.io/.../abud-shorts-engine:2.4.0` | `sha256:9988fd43b9296280152b6ee4c3e5a8a2627a09b2c6e88de372697fba84157b7c` |
+| `ghcr.io/.../abud-shorts-engine:stable` | `sha256:9988fd43b9296280152b6ee4c3e5a8a2627a09b2c6e88de372697fba84157b7c` |
+| `ghcr.io/.../abud-shorts-engine:2.3.1` | `sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9` (unchanged) |
+| Package | `ABUD-Shorts-Engine-2.4.0.tar.gz`, `e49ffaf0caae71bed79a86e5e20ab513e569fe5458bf5d3777e8e70a91551d2c` |
+| Manifest | `version 2.4.0`, `channel stable`, digest and package SHA both match the table above |
+
+No ambiguity between any of these identities, each independently verified against a
+live source (registry query, downloaded file, or `git diff`), not trusted from text
+alone.
+
+### 12. Result
+
+**V2.4.0 GENERAL AVAILABILITY — RELEASED AND PUBLICLY VERIFIED.** Feature branch
+`v2.4-professional-video-engine` preserved (not deleted) for audit. Working tree clean
+on `main` at `GA_MERGE_SHA` (plus this docs-only status commit, which does not move the
+`v2.4.0` tag - the tag remains immutable at `GA_MERGE_SHA`).
