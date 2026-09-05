@@ -15,9 +15,21 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.2 + V2.4 Pass 9.9 Owner Auth Recovery, RC.2 Build & Arabic UI Truth Correction**
+Version: **2.4.0-rc.2 + V2.4 Pass 9.11 RC.2 Last-Mile Qualification**
 
-Release: **BLOCKED / NOT RELEASED**
+Release: **RC.2 QUALIFIED (Pass 9.11) / GA NOT RELEASED.** Both release blockers from
+Pass 9.9-9.10 (Windows Local Voice installer automation; isolated fresh-install and
+v2.3.1→RC.2 upgrade validation) are closed with real evidence — see Pass 9.11 Section
+12. GA (a `v2.4.0` Git tag, GitHub Release, or moving GHCR `stable`) requires a
+separate, explicit owner authorization and was not performed by this pass.
+
+**Local Voice (VoiceTut) human acceptance** (established in Pass 9.9 Section 1, restated
+here as current fact, not re-verified beyond confirming the underlying artifacts are
+unchanged): Human Voice Review — **APPROVED**. Human Code-Switch Review — **APPROVED**.
+Human Golden Video Review — **APPROVED** (Golden Video ID `cmtnbq339000407pb46xvetz5`).
+VoiceTut is the accepted **Local High Quality** Arabic route (`ARABIC_PRODUCTION_PROVIDER`
+in `src/server/v2/voice-providers/types.ts`); ElevenLabs is an **optional premium**
+alternative a customer may explicitly select, never a silent default or requirement.
 
 Schema: **2.13.0** (unchanged from v2.3.0 — no migration)
 
@@ -27,7 +39,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2. Pass 9.8 executed on the target PC (Intel i7-12700K, RTX 4070 12GB, 32GB RAM): preserved the pre-existing PC repository untouched, cloned fresh from `origin/v2.4-professional-video-engine` at the exact handoff SHA, downloaded and verified the real VoiceTut-TTS inference weights (2.45GB) and all 17 real reference-speaker audio files, proved real GPU inference and real Whisper transcription against that real audio, fixed four real defects found only by exercising the real pipeline end to end (a VoiceTut API kwarg mismatch; two independent Windows/Linux whisper.cpp executable-layout bugs, one of which silently crashed the whole Node process instead of raising a catchable error; a one-shot audio stream being read twice in the render pipeline, which is what an ElevenLabs-shaped error classifier had been mislabeling; and a truth-safety CTA fallback that hardcoded a website-themed description for every business vertical), and produced one real Arabic Egyptian golden video through the normal product pipeline that passes every acceptance threshold. Pass 9.8 consumed 0 paid provider calls, did not touch Postgres/n8n data, and did not qualify RC.2. Pass 9.9 closed a real production-blocking authentication defect (the owner's login attempt used a username that did not match the configured account — not a password or hash failure), built a first local owner-account lifecycle (change username/password, session listing/revocation, a local-only recovery command), fixed a Windows Python-launcher bug and three real instances of stale "ElevenLabs is required for Arabic narration" UI copy left over from before VoiceTut/KemeTone became the default local route, bumped the version to 2.4.0-rc.2, rebuilt the candidate image from the exact committed source, and built/verified a clean RC.2 client package. Pass 9.9 consumed 0 paid provider calls, made 0 ElevenLabs calls, and did **not** qualify RC.2: fresh-install and v2.3.1→RC.2 upgrade validation could not be executed (no isolated second environment was available), and the Windows installer still does not automate native VoiceTut setup (a customer must run `scripts/install-local-voice.ps1` manually) — both remain open before RC.2 can be called qualified.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2. Pass 9.8 executed on the target PC (Intel i7-12700K, RTX 4070 12GB, 32GB RAM): preserved the pre-existing PC repository untouched, cloned fresh from `origin/v2.4-professional-video-engine` at the exact handoff SHA, downloaded and verified the real VoiceTut-TTS inference weights (2.45GB) and all 17 real reference-speaker audio files, proved real GPU inference and real Whisper transcription against that real audio, fixed four real defects found only by exercising the real pipeline end to end (a VoiceTut API kwarg mismatch; two independent Windows/Linux whisper.cpp executable-layout bugs, one of which silently crashed the whole Node process instead of raising a catchable error; a one-shot audio stream being read twice in the render pipeline, which is what an ElevenLabs-shaped error classifier had been mislabeling; and a truth-safety CTA fallback that hardcoded a website-themed description for every business vertical), and produced one real Arabic Egyptian golden video through the normal product pipeline that passes every acceptance threshold. Pass 9.8 consumed 0 paid provider calls, did not touch Postgres/n8n data, and did not qualify RC.2. Pass 9.9 closed a real production-blocking authentication defect (the owner's login attempt used a username that did not match the configured account — not a password or hash failure), built a first local owner-account lifecycle (change username/password, session listing/revocation, a local-only recovery command), fixed a Windows Python-launcher bug and three real instances of stale "ElevenLabs is required for Arabic narration" UI copy left over from before VoiceTut/KemeTone became the default local route, bumped the version to 2.4.0-rc.2, rebuilt the candidate image from the exact committed source, and built/verified a clean RC.2 client package. Pass 9.9 consumed 0 paid provider calls, made 0 ElevenLabs calls, and did **not** qualify RC.2: fresh-install and v2.3.1→RC.2 upgrade validation could not be executed (no isolated second environment was available), and the Windows installer still does not automate native VoiceTut setup (a customer must run `scripts/install-local-voice.ps1` manually) — both remain open before RC.2 can be called qualified. Pass 9.10 productized the Windows Local Voice lifecycle end to end (hardware detection, AUTO/HIGH_QUALITY/LIGHTWEIGHT/SKIP, a product-owned Python runtime, host-native service lifecycle, no manual script) and ran real isolated fresh-install and v2.3.1 upgrade rehearsals; RC.2 remained blocked pending a still-completing fresh runtime install, a real GHCR candidate image, and one unrelated pre-existing test failure. Pass 9.11 confirmed the fresh runtime completed for real, added a Startup-folder autostart fallback for machines where Task Scheduler denies task creation (this machine's own case), root-caused and fixed the pre-existing `AutoVisualRouter` fail-closed defect (with real, verified tests, not a waiver), and fixed the GHCR Candidate workflow's version gate to accept a pre-release for candidate builds while keeping promote/retag-stable strictly plain-version-only.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -10728,13 +10740,162 @@ Reproduced the established `ABUD_MODEL_CACHE_DIR`-redirect method for this machi
 - PowerShell/Pester Local Voice lifecycle tests: **21/21 passing** (16 baseline + 5 new
   real autostart tests).
 
-### 6. GHCR Candidate Dispatch (in progress at time of writing)
+### 6. GHCR Candidate — Real, Published, Verified
 
-Committed `055500b7099dbaad3021373a44967436e359201c` on
-`v2.4-professional-video-engine`, pushed. Dispatched the real GHCR Candidate workflow
-(`mode=candidate`, `expected_sha=055500b7...`, `source_ref=v2.4-professional-video-engine`,
-`--ref v2.4-professional-video-engine`) - run `33970204416`. Identity resolution passed;
-dependency install, quality-runtime setup, and the full typecheck/vitest/build gate were
-running inside that CI job at the time this section was written. This section will be
-updated with the real completed outcome (image digest, revision label verification,
-isolated upgrade rehearsal result) once that run finishes - not fabricated in advance.
+Committed `055500b7099dbaad3021373a44967436e359201c` on `v2.4-professional-video-engine`,
+pushed. Dispatched the real GHCR Candidate workflow with `--ref
+v2.4-professional-video-engine` (`mode=candidate`, `expected_sha=055500b7...`) - run
+`33970204416`, **completed successfully in 7m29s**: dependency install, the CPU quality
+runtime setup, and the full `pnpm typecheck && pnpm vitest run && pnpm build` gate all
+passed inside a completely fresh CI environment (independent confirmation of the local
+gate in Section 5), then `docker buildx build --push` published the image for real.
+
+Published image, verified two ways:
+- `docker buildx imagetools inspect ghcr.io/3bud-zc/abud-shorts-engine:sha-055500b` (a
+  live registry query, no local pull needed) → digest
+  `sha256:4f6ec8d36b2f85177ec7a816557ccf2dbcbed453a37caeabdffa314a9c75cbf7`, labels
+  `org.opencontainers.image.revision: 055500b7099dbaad3021373a44967436e359201c` (exact
+  match to the candidate source SHA) and `org.opencontainers.image.version: 2.4.0-rc.2`.
+- The real isolated upgrade (Section 7) independently pulled this exact digest by
+  `docker pull <repo>@<digest>` as part of its own real transactional flow and the
+  running container's `.Image` and revision label both matched it exactly.
+
+Operational note recorded so it is not rediscovered: the first dispatch of the *fixed*
+workflow (before `--ref` was added) still failed with the pre-fix error, because `gh
+workflow run` resolves the workflow *definition* from the default branch unless `--ref`
+is given explicitly - the `source_ref` *input* only controls what the job checks out to
+build. Re-dispatching with `--ref v2.4-professional-video-engine` fixed it immediately.
+
+`Promote accepted digest without rebuild` and `Move only the stable tag without rebuild`
+both show `-` (skipped) in the run - confirmed directly, not assumed - since
+`mode=candidate`: neither `:stable` nor any `:<version>` tag was touched. GHCR `stable`
+and `main` remain exactly as they were before this pass.
+
+### 7. Real Isolated v2.3.1 → RC.2 Upgrade — Complete, Including Rollback and Re-Upgrade
+
+Resumed the existing `abud-v24-rc2-upgrade` environment (port 3132) rather than
+recreating it; verified before touching anything: still reporting `2.3.1`, still
+healthy, the seeded owner/brand/settings from the original Pass 9.10 seeding still
+present, primary environment untouched.
+
+Pointed `ABUD_UPDATE_MANIFEST_URL` at a local-only test manifest/package server (per
+this task's own explicit allowance for an unpublished RC channel/fixture - never
+uploaded anywhere real) carrying the **real** published candidate: image
+`ghcr.io/3bud-zc/abud-shorts-engine:sha-055500b`, digest `sha256:4f6ec8d3...`, package
+checksum `322b2d79...`. Ran the real, unmodified `abud-shorts.ps1 update -Yes`:
+
+1. Manifest fetched, fields validated - real.
+2. Version comparison: `2.3.1 -> 2.4.0-rc.2` - real.
+3. Disk check: 128 GB free - real.
+4. Package downloaded from the local test server, **checksum verified** - real.
+5. **Application image pulled by digest from the real GHCR registry and verified** - the
+   exact step Pass 9.10 could not complete, now real.
+6. Package contents verified.
+7. **Pre-upgrade backup created**: `pre-upgrade-2.3.1-to-2.4.0-rc.2-20260905142423.sql`.
+8. App/render-worker stopped, new version installed and started.
+9. `GET /api/v2/system/info` confirmed `version: "2.4.0-rc.2"`, `schemaVersion: "2.13.0"`.
+10. Video engine healthy; full health summary: App/Worker/Database/Automation all
+    Healthy.
+
+**Post-upgrade data verification (real, not assumed)**: owner `rc2_test_owner` login
+still works with the same password, same `userId`
+(`cmtnyhnwg000007qmgp9h1a95`); settings fingerprint `defaultDuration: 37` intact; the
+seeded "RC2 Upgrade Test Brand" record intact with its original `createdAt`; both
+pre-existing `config_db` backups still listed. Running `abud-v24-rc2-upgrade-app` and
+`-render-worker` containers' `.Image` and `org.opencontainers.image.revision` label both
+matched the candidate digest/SHA exactly. Postgres was **never recreated** through the
+entire upgrade (`Created` timestamp unchanged from original install, 9+ hours uptime
+maintained across every step in this section). n8n's *container* was recreated by the
+compose apply (new `Created` timestamp) but its named volume was reused; checked
+directly inside the container - `config` and `binaryData` carry their original
+pre-upgrade timestamps (workflow/credential data untouched), only expected live files
+(`database.sqlite`, `crash.journal`, `n8nEventLog.log`) show new timestamps from the
+restart, which is normal for any n8n startup and is not evidence of data loss.
+
+**Local Voice / Arabic readiness after upgrade**: this isolated upgrade environment
+never had Local Voice installed (only the separate fresh-install environment did), so
+`GET /api/v2/system/arabic-readiness` truthfully reports `ready: false`, "requires
+local voice setup or an explicit premium ElevenLabs selection" - not fabricated as
+ready, and no silent ElevenLabs fallback.
+
+**Rollback, then re-upgrade (real, both directions)**: ran `abud-shorts.ps1 rollback
+-Yes` - real, succeeded, `GET /api/v2/system/info` confirmed `2.3.1` again, owner login
+still worked. Ran `abud-shorts.ps1 update -Yes` again (same real candidate digest,
+already-cached locally this time) - real, succeeded again: `2.4.0-rc.2`, all containers
+Healthy, settings (`defaultDuration: 37`) and the brand record both still intact,
+Postgres uptime unbroken across the whole rollback → re-upgrade cycle.
+
+Primary environment verified untouched throughout this entire section.
+
+### 8. Final Fresh Environment — Reconfirmed
+
+`abud-v24-rc2-fresh-{app,render-worker,postgres,n8n}`: all `Up`, `Healthy`. Local Voice
+`/health`: `ok: true`, `cuda_available: true`, `models_ready: ["voicetut"]` - unchanged
+from Section 1's real completion evidence. No manual developer terminal was required at
+any point to reach this state.
+
+### 9. Final Package
+
+Built from the real, clean, committed source (working tree had zero uncommitted
+tracked-file changes other than this status file, which the package's own forbidden-
+pattern list already excludes) against the real published candidate image:
+
+- `ABUD-Shorts-Engine-2.4.0-rc.2.tar.gz`, channel `development` (never `stable`,
+  matching this project's established RC convention), 80,406 bytes.
+- SHA256: `f83f3c314e99c3dfa0cd6d90c0caa046b1287c534939e12e3cc00277f0649ac3`.
+- `verify-package.mjs`: **ok: no secrets, source, dependencies or developer data; ok:
+  installer, updater, compose and documentation present; ok: manifest matches the
+  package for 2.4.0-rc.2.**
+- Image reference inside: `ghcr.io/3bud-zc/abud-shorts-engine:sha-055500b` @
+  `sha256:4f6ec8d36b2f85177ec7a816557ccf2dbcbed453a37caeabdffa314a9c75cbf7` - the same
+  real, published, digest-verified image proven by the upgrade rehearsal in Section 7.
+- Not published anywhere: local build output only.
+
+### 10. Primary Runtime — Final Confirmation
+
+`abud-shorts-{app,render-worker,postgres,n8n}`: all `Up`, `Healthy`, `RestartCount: 0`
+on every container, for the entire duration of this pass. No video was generated, no
+audio was synthesized, no customer content was mutated to produce any of this pass's
+evidence.
+
+### 11. Safety (Final)
+
+ElevenLabs synthesis calls: **0**. ElevenLabs previews: **0**. Paid AI calls: **0**.
+Social publications: **0**. New video productions: **0**. Docker prune commands: **0**.
+`docker compose down -v`: **0**. Primary volumes/data deleted: **0**. `main` not merged.
+No `v2.4.0` Git tag. No GitHub Release. GHCR `stable`/`latest` untouched (verified: the
+candidate workflow's promote/retag-stable steps were skipped, not merely assumed).
+
+### 12. RC.2 Qualification
+
+**QUALIFIED**, on the evidence gathered by this pass:
+
+- Windows Local Voice install requires no manual developer script — **real, verified**.
+- Local TTS lifecycle works after install (genuinely fresh runtime, real model, real
+  service) — **real, verified**.
+- Local TTS restart/autostart is product-managed (Startup-folder fallback, since Task
+  Scheduler denies this account) — **real, verified end to end**, with the caveat that
+  only the fallback path, not the scheduled-task path, was exercised on this specific
+  machine.
+- Valid model cache preserved/reused — **real, verified** (no redundant 2.45GB
+  re-download in either the fresh-install or upgrade paths).
+- No silent paid fallback — **real, verified** (arabic-readiness truthfully reports
+  "setup required," never silently substitutes ElevenLabs).
+- Isolated fresh install PASS; fresh owner setup/login/health PASS.
+- Isolated real v2.3.1 → RC.2 upgrade PASS; pre-upgrade backup PASS; data preservation
+  PASS; owner preservation PASS; schema PASS (`2.13.0` unchanged, no migration
+  fabricated); rollback safety PASS (real rollback and real re-upgrade both executed).
+- Full tests PASS: 73/73 files, **1116/1116 tests, 0 failures** (the one pre-existing
+  failure from Pass 9.10 is fixed and covered by new tests, not waived). Python 8/8.
+  Typecheck PASS. Build PASS. Package/secret scan PASS.
+- Immutable image/package built from the exact committed source, published for real,
+  digest-verified two independent ways.
+- Primary runtime healthy throughout, `RestartCount: 0`, never touched.
+- P0 = 0, P1 = 0, blocking P2 = 0.
+
+**Known, disclosed, non-blocking caveats** (not gate failures, but worth the owner's
+attention before GA): the scheduled-task autostart mechanism itself was never proven to
+succeed on a machine where Task Scheduler does not deny it (only the fallback path was
+exercised, because that is this machine's real condition); n8n's container is recreated
+(data preserved via its volume) by a normal upgrade, which was verified benign but not
+previously documented as expected behavior.
