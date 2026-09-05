@@ -14,6 +14,7 @@ import { PublishingScheduler } from "./publishing/scheduler";
 import { PublishingProviderRegistry, publishingRegistry } from "./publishing/registry";
 import { UploadPostProvider } from "./publishing/providers/uploadPostProvider";
 import { TelegramPublishingProvider } from "./publishing/providers/telegramProvider";
+import { YouTubeDirectProvider } from "./publishing/providers/youtubeDirectProvider";
 import { aiMetadataGenerator } from "./publishing/aiMetadataGenerator";
 import { DEFAULT_PLATFORM_CAPABILITIES } from "./publishing/publishingProvider";
 
@@ -51,21 +52,52 @@ class FakePublishingDb {
     }
 
     // 1. Social Accounts
+    if (text.includes("SELECT id FROM social_accounts WHERE platform = $1 AND account_id = $2 LIMIT 1")) {
+      for (const row of this.accounts.values()) {
+        if (row.platform === values[0] && row.account_id === values[1]) {
+          return [{ id: row.id }];
+        }
+      }
+      return [];
+    }
+
     if (text.includes("INSERT INTO social_accounts")) {
-      const row = {
-        id: values[0],
-        platform: values[1],
-        account_name: values[2],
-        account_id: values[3],
-        provider: values[4],
-        connection_status: values[5],
-        capabilities: typeof values[6] === "string" ? JSON.parse(values[6]) : values[6] || {},
-        encrypted_credentials: values[7],
-        masked_token: values[8],
-        last_checked_at: new Date(),
-        created_at: new Date(),
-        updated_at: new Date(),
-      };
+      const isOAuthShape = text.includes("avatar_url") && text.includes("granted_scopes");
+      const row = isOAuthShape
+        ? {
+            id: values[0],
+            platform: values[1],
+            account_name: values[2],
+            account_id: values[3],
+            provider: values[4],
+            connection_status: "connected",
+            capabilities: typeof values[5] === "string" ? JSON.parse(values[5]) : values[5] || {},
+            encrypted_credentials: values[6],
+            avatar_url: values[7],
+            granted_scopes: values[8] || [],
+            oauth_provider: values[9] || null,
+            token_expires_at: values[10] ? new Date(values[10]) : null,
+            last_refresh_at: new Date(),
+            last_checked_at: new Date(),
+            created_at: new Date(),
+            updated_at: new Date(),
+          }
+        : {
+            id: values[0],
+            platform: values[1],
+            account_name: values[2],
+            account_id: values[3],
+            provider: values[4],
+            connection_status: values[5],
+            capabilities: typeof values[6] === "string" ? JSON.parse(values[6]) : values[6] || {},
+            encrypted_credentials: values[7],
+            masked_token: values[8],
+            oauth_provider: null,
+            token_expires_at: null,
+            last_checked_at: new Date(),
+            created_at: new Date(),
+            updated_at: new Date(),
+          };
       this.accounts.set(row.id, row);
       return [row];
     }
@@ -73,14 +105,6 @@ class FakePublishingDb {
     if (text.includes("FROM social_accounts WHERE id =") || (text.includes("FROM social_accounts") && text.includes("WHERE id = $1"))) {
       const row = this.accounts.get(values[0]);
       return row ? [row] : [];
-    }
-
-    if (text.includes("SELECT id, platform, account_name, account_id, provider, connection_status, capabilities, masked_token, last_checked_at, created_at, updated_at FROM social_accounts") || text.includes("FROM social_accounts")) {
-      if (text.includes("WHERE id =")) {
-        const row = this.accounts.get(values[0]);
-        return row ? [row] : [];
-      }
-      return Array.from(this.accounts.values());
     }
 
     if (text.includes("SELECT id FROM social_accounts WHERE platform =")) {
@@ -92,12 +116,28 @@ class FakePublishingDb {
       return [];
     }
 
+    if (text.includes("SELECT id, platform, account_name, account_id, provider, connection_status, capabilities, masked_token, last_checked_at, created_at, updated_at FROM social_accounts") || text.includes("FROM social_accounts")) {
+      if (text.includes("WHERE id =")) {
+        const row = this.accounts.get(values[0]);
+        return row ? [row] : [];
+      }
+      return Array.from(this.accounts.values());
+    }
+
     if (text.includes("UPDATE social_accounts")) {
-      const id = values[values.length - 1];
+      const id = text.includes("WHERE id = $1") ? values[0] : values[values.length - 1];
       const row = this.accounts.get(id);
       if (!row) return [];
-      if (text.includes("connection_status = $1") || text.includes("connection_status = $2")) {
+      if (text.includes("connection_status = 'disconnected'")) {
+        row.connection_status = "disconnected";
+        row.encrypted_credentials = null;
+        row.token_expires_at = null;
+      } else if (text.includes("connection_status = $1") || text.includes("connection_status = $2")) {
         row.connection_status = values[0] === id ? values[1] : values[0];
+      }
+      if (text.includes("account_name = COALESCE")) {
+        if (values[1]) row.account_name = values[1];
+        if (values[2]) row.connection_status = values[2];
       }
       row.last_checked_at = new Date();
       row.updated_at = new Date();
@@ -261,6 +301,19 @@ class FakePublishingDb {
         }
         return [];
       }
+      if (text.includes("FROM publications p") && text.includes("p.account_id = $1")) {
+        const accountId = values[0];
+        const flagged: any[] = [];
+        for (const s of this.scheduled.values()) {
+          const pub = this.publications.get(s.publication_id);
+          if (pub?.account_id === accountId && s.status === "pending") {
+            s.status = "needs_attention";
+            s.updated_at = new Date();
+            flagged.push({ id: s.id });
+          }
+        }
+        return flagged;
+      }
     }
 
     // 4. Publishing Attempts & Events
@@ -333,6 +386,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
 
     config.n8nBaseUrl = "";
     config.internalServiceToken = "test-internal-token-1234";
+    config.providerVaultMasterKey = "unit-test-social-account-vault-key";
 
     process.env.UPLOAD_POST_API_KEY = "mock-upload-post-key";
     process.env.TELEGRAM_BOT_TOKEN = "123456:ABC-DEF";
@@ -400,7 +454,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       const provider = new UploadPostProvider({ apiKey: "test-api-key" });
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(200, {
           id: "post_12345",
           status: "published",
@@ -427,7 +481,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       const provider = new UploadPostProvider({ apiKey: "test-api-key" });
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(429, { error: "Rate limit exceeded. Try again in 60s." });
 
       const result = await provider.publishVideo({
@@ -446,7 +500,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       const provider = new UploadPostProvider({ apiKey: "test-api-key" });
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(401, { error: "Invalid or expired API token" });
 
       const result = await provider.publishVideo({
@@ -458,6 +512,62 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       expect(result.success).toBe(false);
       expect(result.status).toBe("failed");
       expect(result.retryable).toBe(false);
+    });
+
+    it("does not fabricate a public URL when Upload-Post only accepts the job", async () => {
+      const provider = new UploadPostProvider({ apiKey: "test-api-key" });
+
+      nock("https://api.upload-post.com")
+        .post("/api/upload")
+        .reply(202, {
+          request_id: "up_request_123",
+          status: "in_progress",
+          message: "Queued",
+        });
+
+      const result = await provider.publishVideo({
+        publicationId: "pub_up_processing",
+        videoId: "vid_123",
+        videoFilePath: testVideoPath,
+        platform: "youtube",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe("processing");
+      expect(result.providerPostId).toBe("up_request_123");
+      expect(result.providerUrl).toBeUndefined();
+    });
+  });
+
+  describe("2b. YouTubeDirectProvider Confirmation Semantics", () => {
+    it("does not expose a final YouTube URL until processing is confirmed", async () => {
+      const provider = new YouTubeDirectProvider();
+
+      nock("https://www.googleapis.com")
+        .post("/upload/youtube/v3/videos")
+        .query(true)
+        .reply(200, "", {
+          Location: "https://upload.youtube.test/session/abc123",
+        });
+
+      nock("https://upload.youtube.test")
+        .put("/session/abc123")
+        .reply(200, { id: "YTVideo12345" });
+
+      const result = await provider.publishVideo({
+        publicationId: "pub_youtube_processing",
+        videoId: "vid_123",
+        videoFilePath: testVideoPath,
+        videoUrl: "http://127.0.0.1/video.mp4",
+        platform: "youtube",
+        title: "Awaiting processing",
+        metadata: { accessToken: "yt_access_token", privacy: "unlisted" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe("processing");
+      expect(result.providerPostId).toBe("YTVideo12345");
+      expect(result.providerUrl).toBeUndefined();
     });
   });
 
@@ -554,7 +664,8 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
 
       expect(account.id).toBeDefined();
       expect(account.platform).toBe("telegram");
-      expect(account.maskedToken).toBe("1234****OKEN");
+      expect(account.maskedToken).toBe("stored securely");
+      expect(fakeDb.accounts.get(account.id).encrypted_credentials).not.toContain("123456:TOKEN");
 
       const testResult = await publishingService.testAccountConnection(account.id);
       expect(testResult.healthy).toBe(true);
@@ -581,7 +692,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
 
     it("isolates partial failures when publishing across multiple platforms", async () => {
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(200, {
           id: "yt_100",
           status: "published",
@@ -589,7 +700,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
         });
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(401, {
           error: "TikTok authorization expired",
         });
@@ -622,7 +733,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       });
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(401, { error: "Temporary server error" });
 
       await publishingService.publishPublication(pub.id);
@@ -633,7 +744,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       expect(failedPub?.lastError).toContain("Temporary server error");
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(200, {
           id: "yt_retry_ok",
           status: "published",
@@ -671,7 +782,7 @@ describe("Milestone V2-04: Publishing, Scheduling & Distribution Engine", () => 
       expect(pub.status).toBe("scheduled");
 
       nock("https://api.upload-post.com")
-        .post("/v1/publish")
+        .post("/api/upload")
         .reply(200, {
           id: "yt_sched_done",
           status: "published",

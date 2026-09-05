@@ -34,6 +34,7 @@ import {
   TREATMENT_MOTION_TEMPLATE,
   TREATMENT_RUNTIME,
   sceneRendersAsMotion,
+  buildTreatmentAvailabilityPredicate,
   type VisualTreatment,
 } from "../server/v2/creative/visualTreatment";
 import { splitNarrationBeats } from "../server/v2/creative/visualIntentClassifier";
@@ -42,19 +43,25 @@ import {
   buildStockQueryFamilies,
   queryFamilyTerms,
 } from "../server/v2/creative/stockQueryFamilies";
+import { preprocessArabicSpeech } from "../server/v2/voice-providers/arabicSpeechPreprocessor";
 import {
   cropMetadata,
   planSmartCrop,
   probeVisualFocus,
   type SmartCropPlan,
 } from "../server/v2/media-intelligence/smartCrop";
+import {
+  analyzeVideoSemanticSimilarity,
+  arePerceptuallyNearDuplicate,
+} from "../server/v2/media-intelligence/semanticSimilarity";
 import { applyVisualIntentPolicy } from "../server/v2/media-intelligence/visualIntentPolicy";
+import { getSharedOpenClipWorkerPool } from "../server/v2/media-intelligence/openClipWorkerPool";
 import { detectShots, selectBestWindow } from "../server/v2/quality/sceneDetectionAdapter";
 import { FFMpeg } from "./libraries/FFmpeg";
 import { PexelsAPI } from "./libraries/Pexels";
 import { Config } from "../config";
 import { logger } from "../logger";
-import { MusicManager } from "./music";
+import { MusicManager, pickQuietestSafeMusicStart } from "./music";
 import {
   readMetadata,
   writeMetadata,
@@ -90,9 +97,11 @@ import { AutoVisualRouter } from "../server/v2/visual-providers/router";
 import { sceneSourceRouter } from "../server/v2/visual-providers/sceneSourceRouter";
 import { mediaIntelligenceService } from "../server/v2/media-intelligence/mediaIntelligenceService";
 import { mediaCache } from "../server/v2/media-cache/mediaCache";
+import { providerSecrets } from "../server/v2/provider-vault/providerSecrets";
 import { AudioMasteringService } from "./audioMasteringService";
 import { postProductionPipeline } from "../server/v2/post-production/postProductionPipeline";
 import { qualityEngine } from "../server/v2/quality/qualityEngine";
+import { calculateProfessionalVisualQualityReport } from "../server/v2/quality/professionalVisualQuality";
 import { motionEngine, type MotionTemplateType } from "../server/v2/motion/motionEngine";
 import { mediaUploadService } from "../server/v2/media/mediaUploadService";
 import { capabilityManager } from "../server/v2/capabilities/capabilityManager";
@@ -103,8 +112,12 @@ import {
   createMediaInputHash,
   createVoiceInputHash,
   filterReusableArtifacts,
+  sha256Text,
+  type RetryReuseManifest,
 } from "../server/v2/artifacts/durableArtifacts";
 import { assertStorageReady } from "../server/v2/storage/storagePolicy";
+import { decideRenderStrategy, type RenderStrategyDecision } from "../server/v2/rendering/renderStrategy";
+import { renderFfmpegFast, type FastRenderClip, type FastRenderVoice } from "../server/v2/rendering/ffmpegFastRenderer";
 
 type RenderProgressEvent = {
   status:
@@ -127,6 +140,139 @@ type RenderProgressEvent = {
 };
 
 type RenderProgressCallback = (event: RenderProgressEvent) => Promise<void> | void;
+
+export const RETRY_ARTIFACT_REUSE_INVALID = "RETRY_ARTIFACT_REUSE_INVALID";
+
+type ExplicitRetryReuseValidationInput = {
+  artifact: DurableSceneArtifact;
+  expectedType: DurableSceneArtifact["type"];
+  expectedSceneIndex: number;
+  expectedProvider?: string;
+  expectedModel?: string;
+  expectedVoiceId?: string;
+  canonicalSpokenContentFingerprint?: string;
+  displayContentFingerprint?: string;
+};
+
+export type ExplicitRetryReuseValidationResult = {
+  valid: boolean;
+  reason?: string;
+};
+
+function artifactVoiceId(artifact: DurableSceneArtifact): string | undefined {
+  const retryManifest = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  const reuseKey = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+  const voiceArtifact = (artifact.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+  return String(retryManifest.voiceId || reuseKey.voiceId || voiceArtifact.voiceId || "").trim() || undefined;
+}
+
+function artifactVoiceStrategy(artifact: DurableSceneArtifact): string | undefined {
+  const retryManifest = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  const reuseKey = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+  const voiceArtifact = (artifact.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+  return String(retryManifest.voiceStrategy || reuseKey.voiceStrategy || voiceArtifact.voiceStrategy || "").trim() || undefined;
+}
+
+export function retryContentFingerprint(input: {
+  text: string;
+  language?: string;
+  dialect?: string;
+}): string {
+  return sha256Text({
+    text: String(input.text || "").trim(),
+    language: input.language || "auto",
+    dialect: input.dialect || "none",
+  });
+}
+
+export function validateExplicitRetryReuseArtifact(
+  input: ExplicitRetryReuseValidationInput,
+): ExplicitRetryReuseValidationResult {
+  const { artifact } = input;
+  const manifest = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  if (!artifact.valid) return { valid: false, reason: "artifact is not valid" };
+  if (artifact.supersededAt) return { valid: false, reason: "artifact is superseded" };
+  if (artifact.type !== input.expectedType) return { valid: false, reason: `expected ${input.expectedType}, got ${artifact.type}` };
+  if (artifact.sceneIndex !== input.expectedSceneIndex) {
+    return { valid: false, reason: `expected scene ${input.expectedSceneIndex}, got ${artifact.sceneIndex}` };
+  }
+  if (!artifact.sourceJobId) return { valid: false, reason: "missing source job id" };
+  if (
+    !artifact.storageRef ||
+    !artifact.storageRef.replace(/\\/g, "/").startsWith("artifacts/scene/") ||
+    artifact.storageRef.includes("..") ||
+    artifact.storageRef.startsWith("/") ||
+    /^[a-zA-Z]:/.test(artifact.storageRef)
+  ) {
+    return { valid: false, reason: "unsafe storage ref" };
+  }
+  if (!/^[a-f0-9]{64}$/i.test(artifact.checksum || "")) {
+    return { valid: false, reason: "invalid checksum metadata" };
+  }
+  if (manifest.compatibilityDecision !== "planner_bound") {
+    return { valid: false, reason: "missing planner-bound retry reuse manifest" };
+  }
+  if (manifest.compatibilityVersion !== "retry-reuse-v1") {
+    return { valid: false, reason: "unsupported retry reuse manifest version" };
+  }
+  if (manifest.artifactId && manifest.artifactId !== artifact.artifactId) {
+    return { valid: false, reason: "manifest artifact id mismatch" };
+  }
+  if (manifest.artifactType && manifest.artifactType !== artifact.type) {
+    return { valid: false, reason: "manifest artifact type mismatch" };
+  }
+  if (typeof manifest.sceneIndex === "number" && manifest.sceneIndex !== artifact.sceneIndex) {
+    return { valid: false, reason: "manifest scene index mismatch" };
+  }
+  if (manifest.checksum && manifest.checksum !== artifact.checksum) {
+    return { valid: false, reason: "manifest checksum mismatch" };
+  }
+  if (
+    manifest.canonicalSpokenContentFingerprint &&
+    input.canonicalSpokenContentFingerprint &&
+    manifest.canonicalSpokenContentFingerprint !== input.canonicalSpokenContentFingerprint
+  ) {
+    return { valid: false, reason: "canonical spoken content changed" };
+  }
+  if (
+    manifest.displayContentFingerprint &&
+    input.displayContentFingerprint &&
+    manifest.displayContentFingerprint !== input.displayContentFingerprint
+  ) {
+    return { valid: false, reason: "display content changed" };
+  }
+  const artifactProvider = artifact.provider || manifest.provider;
+  if (input.expectedProvider && input.expectedProvider !== "auto" && artifactProvider && artifactProvider !== input.expectedProvider) {
+    return { valid: false, reason: `provider mismatch: ${artifactProvider}` };
+  }
+  const artifactModel = artifact.model || manifest.model;
+  if (input.expectedModel && artifactModel && artifactModel !== input.expectedModel) {
+    return { valid: false, reason: `model mismatch: ${artifactModel}` };
+  }
+  if (input.expectedType === "voice" && input.expectedVoiceId) {
+    const voiceId = artifactVoiceId(artifact);
+    if (!voiceId) return { valid: false, reason: "missing voice id metadata" };
+    if (voiceId !== input.expectedVoiceId) return { valid: false, reason: `voice mismatch: ${voiceId}` };
+  }
+  const voiceStrategy = artifactVoiceStrategy(artifact);
+  if (input.expectedType === "voice" && voiceStrategy && !["plain_tts", "timestamps"].includes(voiceStrategy)) {
+    return { valid: false, reason: `voice strategy mismatch: ${voiceStrategy}` };
+  }
+  return { valid: true };
+}
+
+function failExplicitRetryReuse(
+  artifact: DurableSceneArtifact,
+  expectedType: DurableSceneArtifact["type"],
+  sceneIndex: number,
+  reason: string,
+): never {
+  const error = new Error(
+    `${RETRY_ARTIFACT_REUSE_INVALID}: scene=${sceneIndex} type=${expectedType} artifact=${artifact.artifactId} reason=${reason}`,
+  );
+  (error as any).code = RETRY_ARTIFACT_REUSE_INVALID;
+  throw error;
+}
 
 /**
  * Bottom band of a 9:16 frame commonly covered by TikTok / Reels UI. Captions
@@ -366,24 +512,42 @@ export class ShortCreator {
       (spec.metadata as any)?.productImageId || spec.productionMode === "product_ad",
     );
     const motionRuntimeAvailable = capabilityManager.isPythonQualityVenvInstalled();
-    const stockRuntimeAvailable = Boolean(this.config.pexelsApiKey) || Boolean(process.env.PIXABAY_API_KEY);
+    const pexelsVaultKey = await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
+    const pixabayVaultKey = await providerSecrets.refresh("pixabay", "api_key").catch(() => undefined);
+    const stockRuntimeAvailable = Boolean(
+      this.config.pexelsApiKey ||
+        process.env.PIXABAY_API_KEY ||
+        pexelsVaultKey ||
+        pixabayVaultKey ||
+        providerSecrets.peek("pexels", "api_key") ||
+        providerSecrets.peek("pixabay", "api_key"),
+    );
 
     // An explicitly graphic production must not depend on stock footage: asking
     // for Motion Graphics and receiving four stock clips is not the mode the
     // customer chose. Auto Hybrid keeps every source available.
     const graphicOnlyMode =
       spec.productionMode === "motion_graphics" || spec.productionMode === "animated_explainer";
+    const requestedVisualSource = String(
+      (spec.metadata as any)?.uiContract?.visualSource ||
+        (spec as any).visualSource ||
+        "",
+    );
+    const forceStockFootage =
+      spec.visualMode === "stock" ||
+      requestedVisualSource === "stock" ||
+      requestedVisualSource === "auto_free";
 
-    const isTreatmentAvailable = (treatment: VisualTreatment): boolean => {
-      const runtime = TREATMENT_RUNTIME[treatment];
-      if (graphicOnlyMode) return runtime === "motion";
-      if (runtime === "motion") return motionRuntimeAvailable;
-      if (runtime === "stock") return stockRuntimeAvailable;
-      if (runtime === "upload") return hasUploadedMediaForProduction;
-      if (runtime === "product") return hasProductMediaForProduction;
-      // Mockups are rendered locally and always available.
-      return true;
-    };
+    // V2.4 Pass 4 true-visual-bed invariant - see buildTreatmentAvailabilityPredicate
+    // for why this must not simply key off `motionRuntimeAvailable`.
+    const isTreatmentAvailable = buildTreatmentAvailabilityPredicate({
+      graphicOnlyMode,
+      forceStockFootage,
+      motionRuntimeAvailable,
+      stockRuntimeAvailable,
+      hasUploadedMedia: hasUploadedMediaForProduction,
+      hasProductMedia: hasProductMediaForProduction,
+    });
 
     const creativePlan: CreativePlan = buildCreativePlan({
       productionMode: spec.productionMode,
@@ -464,7 +628,8 @@ export class ShortCreator {
     // video with no captions at all. Decided before the scene loop because
     // scene assembly must know which engine will draw the words.
     const captionStyleSpec = resolveCaptionStyle(spec.captionStyle as string);
-    const fontsDir = process.env.ABUD_FONT_DIR || "";
+    const bundledFontsDir = "/usr/share/fonts/truetype/abud";
+    const fontsDir = process.env.ABUD_FONT_DIR || (fs.existsSync(bundledFontsDir) ? bundledFontsDir : "");
     const burnCaptionsWithLibass =
       Boolean(fontsDir) && fs.existsSync(fontsDir) && spec.captionStyle !== "none";
 
@@ -474,6 +639,17 @@ export class ShortCreator {
     const excludeVideoIds: (string | number)[] = [];
     const previousVisualCandidates: any[] = [];
     const tempFiles: string[] = [];
+    // V2.4 Pass 5 wall-clock accounting (section 12): fine-grained timings
+    // the coarse per-stage `emitProgress` buckets could not see, e.g. the
+    // "media" stage swinging 6.8s-50.1s across otherwise-similar benchmarks
+    // in Pass 4 with no visibility into why. Populated by AutoVisualRouter's
+    // optional `onPerf` callback; purely additive instrumentation.
+    const perfAccumulatorMs: Record<string, number> = {};
+    const perfCounts: Record<string, number> = {};
+    const onVisualPerf = (event: { stage: string; ms: number }) => {
+      perfAccumulatorMs[event.stage] = (perfAccumulatorMs[event.stage] || 0) + event.ms;
+      perfCounts[event.stage] = (perfCounts[event.stage] || 0) + 1;
+    };
     const visualProvidersUsed = new Set<string>();
     const voiceProvidersUsed = new Set<string>();
     const captionTimingSources = new Set<string>();
@@ -498,9 +674,22 @@ export class ShortCreator {
     const artifactStore = new DurableArtifactStore(this.config);
     const revision = (spec.metadata?.revision || {}) as any;
     const reusableMediaAssets = Array.isArray(revision.reuseMediaAssets) ? revision.reuseMediaAssets : [];
+    const revisionReuseArtifacts = Array.isArray(revision.reuseArtifacts)
+      ? revision.reuseArtifacts as DurableSceneArtifact[]
+      : [];
     const reusableArtifacts = filterReusableArtifacts({
-      artifacts: Array.isArray(revision.reuseArtifacts) ? revision.reuseArtifacts as DurableSceneArtifact[] : [],
+      artifacts: revisionReuseArtifacts,
     });
+    const explicitRetryArtifactFor = (
+      type: DurableSceneArtifact["type"],
+      sceneIndex: number,
+    ) =>
+      String(revision.type || "") === "retry"
+        ? revisionReuseArtifacts.find((artifact) =>
+            artifact.type === type &&
+            artifact.sceneIndex === sceneIndex,
+          )
+        : undefined;
     const reusableArtifactFor = (
       type: DurableSceneArtifact["type"],
       sceneIndex: number,
@@ -589,6 +778,11 @@ export class ShortCreator {
       });
 
       const brandVoiceProfile = spec.brandKit?.voiceProfile as any;
+      const jobPronunciationOverrides =
+        (spec as any).pronunciationOverrides ||
+        (spec as any).metadata?.pronunciationOverrides ||
+        (spec as any).pronunciations ||
+        undefined;
       const requestedSpokenNarration = String((originalSceneSpec as any).spokenNarration || originalSceneSpec.narration || sceneTimeline.narration);
       let targetSceneDuration = sceneTimeline.durationSeconds;
       const requestedVoiceQuality = this.mapVoiceQuality(spec.quality);
@@ -599,6 +793,25 @@ export class ShortCreator {
       // cannot quietly drop back to the provider's "natural" default.
       const requestedVoicePreset = spec.voicePreset || undefined;
       const requestedVoiceModelId = spec.voiceModelId || undefined;
+      const requestedDialect = (brandVoiceProfile?.dialect || spec.dialect) as string | undefined;
+      const retryReuseSpokenNarration =
+        spec.language === "ar"
+          ? preprocessArabicSpeech(requestedSpokenNarration, {
+              dialect: requestedDialect as any,
+              pronunciationOverrides: jobPronunciationOverrides,
+              brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+            }).ttsNormalizedText
+          : requestedSpokenNarration.trim();
+      const canonicalSpokenContentFingerprint = retryContentFingerprint({
+        text: retryReuseSpokenNarration,
+        language: spec.language,
+        dialect: requestedDialect,
+      });
+      const displayContentFingerprint = retryContentFingerprint({
+        text: String(originalSceneSpec.narration || ""),
+        language: spec.language,
+        dialect: requestedDialect,
+      });
 
       const tempId = cuid();
       const tempWavFileName = `${tempId}.wav`;
@@ -617,7 +830,8 @@ export class ShortCreator {
       let voiceArtifact: DurableSceneArtifact | undefined;
       const revisionType = String(revision.type || "");
       const upstreamVoiceIsExplicitlyReusable = ["media", "caption", "display_text", "music"].includes(revisionType);
-      const reusableVoice = reusableArtifactFor("voice", index, (artifact) => {
+      const explicitRetryVoice = explicitRetryArtifactFor("voice", index);
+      const reusableVoice = explicitRetryVoice || reusableArtifactFor("voice", index, (artifact) => {
         if (upstreamVoiceIsExplicitlyReusable) return true;
         const key = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
         const artifactProvider = artifact.provider || key.provider;
@@ -635,8 +849,36 @@ export class ShortCreator {
         );
       });
 
+      if (explicitRetryVoice) {
+        const validation = validateExplicitRetryReuseArtifact({
+          artifact: explicitRetryVoice,
+          expectedType: "voice",
+          expectedSceneIndex: index,
+          expectedProvider: requestedVoiceProvider,
+          expectedModel: requestedVoiceModelId,
+          expectedVoiceId: requestedVoiceId,
+          canonicalSpokenContentFingerprint,
+          displayContentFingerprint,
+        });
+        if (!validation.valid) {
+          failExplicitRetryReuse(explicitRetryVoice, "voice", index, validation.reason || "invalid retry voice artifact");
+        }
+      }
+
       if (reusableVoice) {
-        artifactStore.copyToTemp(reusableVoice, tempMp3Path);
+        try {
+          artifactStore.copyToTemp(reusableVoice, tempMp3Path);
+        } catch (error: any) {
+          if (explicitRetryVoice) {
+            failExplicitRetryReuse(
+              explicitRetryVoice,
+              "voice",
+              index,
+              error?.message || "retry voice artifact could not be copied",
+            );
+          }
+          throw error;
+        }
         actualVoiceDuration = reusableVoice.duration || await this.ffmpeg.getMediaDuration(tempMp3Path);
         captionAudioPath = tempMp3Path;
         voiceArtifact = reusableVoice;
@@ -661,10 +903,13 @@ export class ShortCreator {
           voiceId: requestedVoiceId,
           voicePreset: requestedVoicePreset,
           modelId: requestedVoiceModelId,
-          // Native alignment rides along with the audio; no second billed call.
-          requestAlignment: true,
+          // Arabic ElevenLabs production defaults to Plain TTS + local Whisper timing for stability and single-call guarantee.
+          // Non-Arabic or explicit timestamp routes retain native alignment.
+          requestAlignment: spec.language === "ar" ? false : true,
+          voiceStrategy: spec.language === "ar" ? "plain_tts" : "timestamps",
           fallbackPolicy: "local",
           brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+          pronunciationOverrides: jobPronunciationOverrides,
         });
         pinnedVoiceId = voiceAudio.voiceId || voiceAudio.decision.voiceId || pinnedVoiceId;
         const firstProvider = voiceAudio.provider || voiceAudio.decision.providerId;
@@ -700,9 +945,11 @@ export class ShortCreator {
               voiceId: pinnedVoiceId || requestedVoiceId,
               voicePreset: requestedVoicePreset,
               modelId: requestedVoiceModelId,
-              requestAlignment: true,
+              requestAlignment: spec.language === "ar" ? false : true,
+              voiceStrategy: spec.language === "ar" ? "plain_tts" : "timestamps",
               fallbackPolicy: "local",
               brandPronunciations: brandVoiceProfile?.pronunciationDictionary,
+              pronunciationOverrides: jobPronunciationOverrides,
             });
             const retryProvider = voiceAudio.provider || voiceAudio.decision.providerId;
             if (retryProvider in artifactReuse.providerInvocations) {
@@ -767,6 +1014,8 @@ export class ShortCreator {
 
       if (!voiceArtifact && voiceAudio && voiceMastering) {
         voiceProvidersUsed.add(voiceAudio.provider || voiceAudio.decision.providerId);
+        const resolvedVoiceStrategy = (voiceAudio.decision as any)?.voiceStrategy || (spec.language === "ar" ? "plain_tts" : undefined);
+        const resolvedVoiceSynthesisStrategy = (voiceAudio.decision as any)?.voiceSynthesisStrategy || (spec.language === "ar" ? "elevenlabs_plain_tts_whisper" : "elevenlabs_timestamps_native");
         const voiceInputHash = createVoiceInputHash({
           spokenNarration: requestedSpokenNarration,
           provider: voiceAudio.provider || voiceAudio.decision.providerId,
@@ -778,6 +1027,7 @@ export class ShortCreator {
           qualityProfile: requestedVoiceQuality,
           pace: brandVoiceProfile?.pace,
           style: brandVoiceProfile?.style,
+          voiceStrategy: resolvedVoiceStrategy,
         });
         const voiceArtifactDetails = {
           sceneIndex: index,
@@ -793,9 +1043,12 @@ export class ShortCreator {
           modelId: voiceAudio.modelId,
           voicePreset: requestedVoicePreset,
           voiceSettings: voiceAudio.voiceSettings,
+          voiceStrategy: resolvedVoiceStrategy,
+          voiceSynthesisStrategy: resolvedVoiceSynthesisStrategy,
           generationMs: voiceAudio.generationMs,
           sampleRate: voiceAudio.sampleRate,
           processedText: voiceAudio.processedText,
+          textFingerprint: voiceAudio.textFingerprint,
           requestedSpokenNarration,
           displayText: (originalSceneSpec as any).displayText || originalSceneSpec.onScreenText,
           captionText: (originalSceneSpec as any).captionText || originalSceneSpec.narration,
@@ -833,6 +1086,7 @@ export class ShortCreator {
               pace: brandVoiceProfile?.pace || "normal",
               style: brandVoiceProfile?.style || "default",
               preprocessingVersion: "arabic-preprocessor-v2",
+              textFingerprint: voiceAudio.textFingerprint,
             },
           },
         });
@@ -883,12 +1137,46 @@ export class ShortCreator {
         whisperModel: this.config.whisperModel,
         language: spec.language,
       });
-      const reusableCaption = reusableArtifactFor("captions", index, (artifact) =>
+      const explicitRetryCaption = explicitRetryArtifactFor("captions", index);
+      const reusableCaption = explicitRetryCaption || reusableArtifactFor("captions", index, (artifact) =>
         artifact.inputHash === captionInputHash &&
         (artifact.metadata as any)?.voiceArtifactId === voiceArtifact?.artifactId,
       );
+      if (explicitRetryCaption) {
+        const validation = validateExplicitRetryReuseArtifact({
+          artifact: explicitRetryCaption,
+          expectedType: "captions",
+          expectedSceneIndex: index,
+          canonicalSpokenContentFingerprint,
+          displayContentFingerprint,
+        });
+        if (!validation.valid) {
+          failExplicitRetryReuse(explicitRetryCaption, "captions", index, validation.reason || "invalid retry caption artifact");
+        }
+        const captionVoiceArtifactId = String((explicitRetryCaption.metadata as any)?.voiceArtifactId || "");
+        if (captionVoiceArtifactId && captionVoiceArtifactId !== voiceArtifact?.artifactId) {
+          failExplicitRetryReuse(explicitRetryCaption, "captions", index, "caption voice artifact mismatch");
+        }
+        const captionVoiceChecksum = String((explicitRetryCaption.metadata as any)?.voiceChecksum || "");
+        if (captionVoiceChecksum && captionVoiceChecksum !== voiceArtifact?.checksum) {
+          failExplicitRetryReuse(explicitRetryCaption, "captions", index, "caption voice checksum mismatch");
+        }
+      }
       if (reusableCaption) {
-        const payload = artifactStore.readJsonArtifact<{ captions: Caption[]; timingSource?: typeof timingSource }>(reusableCaption);
+        let payload: { captions: Caption[]; timingSource?: typeof timingSource };
+        try {
+          payload = artifactStore.readJsonArtifact<{ captions: Caption[]; timingSource?: typeof timingSource }>(reusableCaption);
+        } catch (error: any) {
+          if (explicitRetryCaption) {
+            failExplicitRetryReuse(
+              explicitRetryCaption,
+              "captions",
+              index,
+              error?.message || "retry caption artifact could not be read",
+            );
+          }
+          throw error;
+        }
         rawCaptions = payload.captions || [];
         timingSource = payload.timingSource || "whisper";
         captionArtifact = reusableCaption;
@@ -1048,6 +1336,7 @@ export class ShortCreator {
           targetSceneDuration,
         );
         const renderedSegments: { video: string; duration: number; motion?: string }[] = [];
+        let segmentCursorSeconds = 0;
 
         for (const seg of normalizedSegments) {
           const segTempId = cuid();
@@ -1081,10 +1370,16 @@ export class ShortCreator {
                 tempDirPath: this.config.tempDirPath,
                 targetDurationSeconds: seg.durationSeconds,
                 previousCandidates: previousVisualCandidates,
+                onPerf: onVisualPerf,
               },
             );
             if (!reusedSeg && segAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
-            const cacheId = segAsset.metadata?.pexelsVideoId || segAsset.url;
+            const cacheId =
+              segAsset.metadata?.providerAssetId ||
+              segAsset.metadata?.stockAssetId ||
+              segAsset.metadata?.pexelsVideoId ||
+              segAsset.metadata?.pixabayVideoId ||
+              segAsset.url;
             const cached = cacheId ? mediaCache.getCachedAsset(segAsset.provider, cacheId as any) : null;
             if (cached) {
               fs.copySync(cached.filePath, segVideoPath);
@@ -1094,7 +1389,7 @@ export class ShortCreator {
             }
             const mediaInputHash = createMediaInputHash({
               provider: segAsset.provider,
-              sourceId: segAsset.metadata?.pexelsVideoId,
+              sourceId: segAsset.metadata?.providerAssetId || segAsset.metadata?.stockAssetId || segAsset.metadata?.pexelsVideoId || segAsset.metadata?.pixabayVideoId,
               url: segAsset.url,
               selectedClip: segAsset.metadata?.smartClip,
               crop: segAsset.metadata?.smartCrop,
@@ -1122,16 +1417,18 @@ export class ShortCreator {
 
           visualProvidersUsed.add(segAsset.provider || mediaArtifact?.provider || "reused");
 
-          if (segAsset.metadata?.pexelsVideoId) {
-            excludeVideoIds.push(segAsset.metadata.pexelsVideoId as string | number);
+          const segAssetId = segAsset.metadata?.providerAssetId || segAsset.metadata?.stockAssetId || segAsset.metadata?.pexelsVideoId || segAsset.metadata?.pixabayVideoId;
+          if (segAssetId) {
+            excludeVideoIds.push(segAssetId as string | number);
           }
           previousVisualCandidates.push({
-            id: segAsset.metadata?.pexelsVideoId || segAsset.url,
+            id: segAssetId || segAsset.url,
             url: segAsset.url,
             width: segAsset.metadata?.width || 0,
             height: segAsset.metadata?.height || 0,
             duration: segAsset.durationSeconds,
             tags: segAsset.metadata?.searchTermsUsed,
+            provider: segAsset.provider,
           });
           selectedVisuals.push({
             sceneIndex: index,
@@ -1144,6 +1441,48 @@ export class ShortCreator {
             durationSeconds: segAsset.durationSeconds,
             metadata: segAsset.metadata,
           });
+
+          // This segment-based multi-shot path (sceneMediaPlan.segments) is a
+          // second, older shot mechanism alongside the EDL/composeVisualBed
+          // path used below for scenes without pre-planned segments. It
+          // never recorded anything into `plannedShots` - the sole source of
+          // truth for `professionalVisualQuality`'s real-visual-coverage
+          // calculation - so any production that took this path (curiosity/
+          // "fast"-pacing content routes here more often) always measured
+          // realVisualCoveragePercent: 0% regardless of what actually
+          // rendered, and was wrongly rejected by the professionalReady gate
+          // even when built entirely from real stock footage (found via live
+          // benchmark cmteyemae000p07n19o5egdlw - real airplane/cabin footage
+          // throughout, independently verified, reported professionalReady:
+          // false). Recorded the same way the EDL path records its shots.
+          const segSourceType: "stock" | "mockup" | "motion" | "upload" | "image" =
+            segAsset.source === "motion"
+              ? "motion"
+              : segAsset.source === "uploaded"
+                ? "upload"
+                : segAsset.source === "ai" || segAsset.source === "local_ai"
+                  ? "image"
+                  : "stock";
+          const segIntent =
+            originalSceneSpec.purpose === "hook" ? "hook"
+              : originalSceneSpec.purpose === "cta" ? "cta"
+              : originalSceneSpec.purpose === "solution" ? "solution"
+              : "detail";
+          plannedShots.push({
+            shotId: `${index}-${seg.segmentIndex}`,
+            narrationSceneId: `scene${index}`,
+            narrationSceneIndex: index,
+            sceneIndex: index,
+            purpose: String(originalSceneSpec.purpose || ""),
+            intent: segIntent,
+            sourceType: segSourceType,
+            sourceId: segAssetId ? String(segAssetId) : undefined,
+            provider: segAsset.provider,
+            start: (sceneTimeline.startSeconds || 0) + segmentCursorSeconds,
+            duration: seg.durationSeconds,
+          });
+          shotSourceCounts[segSourceType] = (shotSourceCounts[segSourceType] || 0) + 1;
+          segmentCursorSeconds += seg.durationSeconds;
 
           renderedSegments.push({
             video: `http://localhost:${this.config.port}/api/tmp/${segVideoFileName}`,
@@ -1394,6 +1733,7 @@ export class ShortCreator {
               tempDirPath: this.config.tempDirPath,
               targetDurationSeconds: targetSceneDuration,
               previousCandidates: previousVisualCandidates,
+              onPerf: onVisualPerf,
             },
           );
           if (!reusedAsset && visualAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
@@ -1402,19 +1742,59 @@ export class ShortCreator {
             sceneQueryRecord.provider = visualAsset.provider;
             sceneQueryRecord.queryUsed = visualAsset.metadata?.searchTerm;
             sceneQueryRecord.candidateCount = visualAsset.metadata?.candidateCount;
-            sceneQueryRecord.winner = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+            sceneQueryRecord.winner =
+              visualAsset.metadata?.providerAssetId ||
+              visualAsset.metadata?.stockAssetId ||
+              visualAsset.metadata?.pexelsVideoId ||
+              visualAsset.metadata?.pixabayVideoId ||
+              visualAsset.url;
             sceneQueryRecord.fallbackReason = visualAsset.metadata?.fallback
               ? "provider_scoring_found_no_passing_candidate"
               : undefined;
           }
 
-          const cacheId = visualAsset.metadata?.pexelsVideoId || visualAsset.url;
+          const cacheId =
+            visualAsset.metadata?.providerAssetId ||
+            visualAsset.metadata?.stockAssetId ||
+            visualAsset.metadata?.pexelsVideoId ||
+            visualAsset.metadata?.pixabayVideoId ||
+            visualAsset.url;
           const cached = cacheId ? mediaCache.getCachedAsset(visualAsset.provider, cacheId as any) : null;
           if (cached) {
             fs.copySync(cached.filePath, tempVideoPath);
           } else {
             await this.downloadFile(visualAsset.url, tempVideoPath);
             if (cacheId) mediaCache.saveCachedAsset(visualAsset.provider, cacheId as any, tempVideoPath);
+          }
+
+          const semanticAssetId = String(cacheId || visualAsset.url);
+          const semanticAnalysis = await analyzeVideoSemanticSimilarity({
+            videoPath: tempVideoPath,
+            intentText: String(sceneMediaPlan.visualIntent || originalSceneSpec.purpose || ""),
+            provider: visualAsset.provider,
+            assetId: semanticAssetId,
+            cacheDir: path.join(this.config.dataDirPath, "semantic-cache"),
+          });
+          if (visualAsset.metadata) {
+            visualAsset.metadata.semanticAnalysis = semanticAnalysis;
+            visualAsset.metadata.perceptualHash = semanticAnalysis.perceptualHash;
+            visualAsset.metadata.frameSampleCount = semanticAnalysis.frameSampleCount;
+            visualAsset.metadata.semanticModelId = semanticAnalysis.modelId;
+            visualAsset.metadata.semanticRuntime = semanticAnalysis.runtime;
+            if (semanticAnalysis.semanticAvailable) {
+              visualAsset.metadata.visualSemanticScore = semanticAnalysis.visualSemanticScore;
+            }
+            const nearDuplicate = previousVisualCandidates.find((candidate) =>
+              arePerceptuallyNearDuplicate(
+                String(candidate.perceptualHash || ""),
+                semanticAnalysis.perceptualHash,
+              ),
+            );
+            if (nearDuplicate) {
+              visualAsset.metadata.perceptualDuplicateOf = nearDuplicate.id || nearDuplicate.url;
+              visualAsset.metadata.diversityPenalty = 35;
+              visualAsset.metadata.rejectedCandidateReason = "perceptual_near_duplicate_previous_shot";
+            }
           }
 
           if (capabilityManager.isPythonQualityVenvInstalled() && fs.existsSync(tempVideoPath) && fs.statSync(tempVideoPath).size > 1024) {
@@ -1436,7 +1816,7 @@ export class ShortCreator {
           const mediaDurationForArtifact = await this.ffmpeg.getMediaDuration(tempVideoPath).catch(() => undefined);
           const mediaInputHash = createMediaInputHash({
             provider: visualAsset.provider,
-            sourceId: visualAsset.metadata?.pexelsVideoId || visualAsset.source || visualAsset.url,
+            sourceId: visualAsset.metadata?.providerAssetId || visualAsset.metadata?.stockAssetId || visualAsset.metadata?.pexelsVideoId || visualAsset.metadata?.pixabayVideoId || visualAsset.source || visualAsset.url,
             url: visualAsset.url,
             selectedClip: visualAsset.metadata?.selectedClip,
             crop: visualAsset.metadata?.smartCrop,
@@ -1458,7 +1838,7 @@ export class ShortCreator {
               visualAsset,
               reuseKey: {
                 provider: visualAsset.provider,
-                sourceId: visualAsset.metadata?.pexelsVideoId || visualAsset.source || visualAsset.url,
+                sourceId: visualAsset.metadata?.providerAssetId || visualAsset.metadata?.stockAssetId || visualAsset.metadata?.pexelsVideoId || visualAsset.metadata?.pixabayVideoId || visualAsset.source || visualAsset.url,
                 selectedClip: visualAsset.metadata?.selectedClip,
                 crop: visualAsset.metadata?.smartCrop,
                 visualIntent: originalSceneSpec.visualIntent,
@@ -1470,16 +1850,19 @@ export class ShortCreator {
         }
 
         visualProvidersUsed.add(visualAsset.provider);
-        if (visualAsset.metadata?.pexelsVideoId) {
-          excludeVideoIds.push(visualAsset.metadata.pexelsVideoId as string | number);
+        const visualAssetId = visualAsset.metadata?.providerAssetId || visualAsset.metadata?.stockAssetId || visualAsset.metadata?.pexelsVideoId || visualAsset.metadata?.pixabayVideoId;
+        if (visualAssetId) {
+          excludeVideoIds.push(visualAssetId as string | number);
         }
         previousVisualCandidates.push({
-          id: visualAsset.metadata?.pexelsVideoId || visualAsset.url,
+          id: visualAssetId || visualAsset.url,
           url: visualAsset.url,
           width: visualAsset.width || 0,
           height: visualAsset.height || 0,
           duration: visualAsset.durationSeconds,
           tags: visualAsset.metadata?.searchTermsUsed,
+          provider: visualAsset.provider,
+          perceptualHash: visualAsset.metadata?.perceptualHash,
         });
         selectedVisuals.push({
           sceneIndex: index,
@@ -1525,6 +1908,7 @@ export class ShortCreator {
 
               if (
                 planned &&
+                !forceStockFootage &&
                 isMotionTreatment(planned.treatment) &&
                 (indexInScene === 0 || graphicOnlyMode || sceneResolvedToMotion)
               ) {
@@ -1535,7 +1919,7 @@ export class ShortCreator {
                 };
               }
 
-              if (planned && indexInScene === 0 && TREATMENT_RUNTIME[planned.treatment] === "mockup") {
+              if (!forceStockFootage && planned && indexInScene === 0 && TREATMENT_RUNTIME[planned.treatment] === "mockup") {
                 return {
                   sourceType: "mockup",
                   provider: "abud_mockup",
@@ -1547,7 +1931,7 @@ export class ShortCreator {
               // more generic footage, but only where the intent calls for it
               // and never for every shot in the scene.
               const template = websiteAdContext ? mockupForIntent(shot.intent) : null;
-              if (template && indexInScene > 0) {
+              if (!forceStockFootage && template && indexInScene > 0) {
                 return { sourceType: "mockup", provider: "abud_mockup", routingReason: `website_intent:${shot.intent}` };
               }
               return { sourceType: "stock", provider: visualAsset.provider, routingReason: "stock_footage_best_available" };
@@ -1567,7 +1951,9 @@ export class ShortCreator {
           const frameWidth = orientation === OrientationEnum.portrait ? 1080 : 1920;
           const frameHeight = orientation === OrientationEnum.portrait ? 1920 : 1080;
           let previousCropPlan: SmartCropPlan | null = null;
-          const shotInputs = await Promise.all(sceneEdl.shots.map(async (shot, shotIndex) => {
+          const shotInputs = [];
+          for (let shotIndex = 0; shotIndex < sceneEdl.shots.length; shotIndex += 1) {
+            const shot = sceneEdl.shots[shotIndex];
             // A motion-treated shot is rendered to its own short MP4 and then
             // handed to the composer as an ordinary clip, so graphic scenes and
             // footage go through exactly one compositing path.
@@ -1611,7 +1997,8 @@ export class ShortCreator {
                   language: spec.language,
                 });
                 if (fs.existsSync(motionScene.absolutePath)) {
-                  return { shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 };
+                  shotInputs.push({ shot, sourcePath: motionScene.absolutePath, sourceStartSeconds: 0 });
+                  continue;
                 }
               } catch (motionError) {
                 logger.warn(
@@ -1625,14 +2012,15 @@ export class ShortCreator {
                   // from the bed instead, and the scene keeps whatever other
                   // graphic shots rendered.
                   shot.routingReason = `${shot.routingReason || ""}|motion_failed_graphic_only`;
-                  return { shot };
+                  shotInputs.push({ shot });
+                  continue;
                 }
                 shot.routingReason = `${shot.routingReason || ""}|motion_fallback_to_stock`;
                 shot.sourceType = "stock";
               }
             }
             if (shot.sourceType === "mockup") {
-              return {
+              shotInputs.push({
                 shot,
                 mockupTemplate: mockupForIntent(shot.intent) || undefined,
                 // A mockup carries the customer's own brand when they supplied
@@ -1648,27 +2036,201 @@ export class ShortCreator {
                   subheadline: String((originalSceneSpec as any).displayText || ""),
                   ctaLabel: String(brandStyle.ctaText || spec.cta?.text || "ابدأ دلوقتي"),
                 },
-              };
+              });
+              continue;
             }
-            const window = selectBestWindow(detection, mediaDuration, shot.duration);
+            let selectedShotVisualAsset = visualAsset;
+            let selectedShotVideoPath = tempVideoPath;
+            let selectedShotMediaDuration = mediaDuration;
+
+            if (shot.sourceType === "stock" && !reusableMediaArtifact) {
+              const shotQueryFamilies = buildStockQueryFamilies({
+                narration: String(originalSceneSpec.narration || ""),
+                onScreenText: String(originalSceneSpec.onScreenText || ""),
+                purpose: String(originalSceneSpec.purpose || ""),
+                visualIntent: shot.visualIntent || sceneMediaPlan.visualIntent,
+                shotIntent: shot.intent,
+                industryHint: String((spec.metadata as any)?.creativeProfile?.industryHint || spec.title || ""),
+                mood: creativePlan.pacing,
+                providedTerms: [
+                  shot.searchQuery,
+                  ...(shot.alternativeQueries || []),
+                  ...(sceneMediaPlan.searchTerms || []),
+                ].filter(Boolean) as string[],
+                orientation: orientation === OrientationEnum.portrait ? "portrait" : "landscape",
+                maxQueries: 6,
+              });
+              const shotIntentPolicy = applyVisualIntentPolicy({
+                terms: queryFamilyTerms(shotQueryFamilies),
+                narration: String(originalSceneSpec.narration || ""),
+                isWebsiteAd: websiteAdContext,
+                sceneIndex: index,
+              });
+              shot.searchTerms = shotIntentPolicy.terms;
+              shot.searchQuery = shotIntentPolicy.terms[0] || shot.searchQuery;
+              shot.alternativeQueries = shotIntentPolicy.terms.slice(1);
+
+              if (shotIndex > 0) {
+                try {
+                  const shotAsset = await this.visualRouter.resolveSceneVisual(
+                    {
+                      ...originalSceneSpec,
+                      stockSearchTerms: shotIntentPolicy.terms,
+                      visualIntent: shot.visualIntent || sceneMediaPlan.visualIntent,
+                    } as any,
+                    spec,
+                    {
+                      excludeIds: excludeVideoIds,
+                      orientation,
+                      tempDirPath: this.config.tempDirPath,
+                      targetDurationSeconds: shot.duration,
+                      previousCandidates: previousVisualCandidates,
+                      onPerf: onVisualPerf,
+                    },
+                  );
+                  selectedShotVisualAsset = shotAsset;
+                  visualProvidersUsed.add(shotAsset.provider);
+                  if (shotAsset.provider === "pexels") artifactReuse.providerInvocations.pexels++;
+
+                  const shotAssetId =
+                    shotAsset.metadata?.providerAssetId ||
+                    shotAsset.metadata?.stockAssetId ||
+                    shotAsset.metadata?.pexelsVideoId ||
+                    shotAsset.metadata?.pixabayVideoId;
+                  const shotCacheId = shotAssetId || shotAsset.url;
+                  const shotPath = path.join(this.config.tempDirPath, `${tempId}.shot${shotIndex}.mp4`);
+                  tempFiles.push(shotPath);
+                  const cachedShot = shotCacheId ? mediaCache.getCachedAsset(shotAsset.provider, shotCacheId as any) : null;
+                  if (cachedShot) {
+                    fs.copySync(cachedShot.filePath, shotPath);
+                  } else {
+                    await this.downloadFile(shotAsset.url, shotPath);
+                    if (shotCacheId) mediaCache.saveCachedAsset(shotAsset.provider, shotCacheId as any, shotPath);
+                  }
+                  selectedShotVideoPath = shotPath;
+                  selectedShotMediaDuration = await this.ffmpeg.getMediaDuration(shotPath).catch(() => shot.duration);
+                  const shotSemanticAnalysis = await analyzeVideoSemanticSimilarity({
+                    videoPath: shotPath,
+                    intentText: String(shot.visualIntent || shot.intent || sceneMediaPlan.visualIntent || ""),
+                    provider: shotAsset.provider,
+                    assetId: String(shotCacheId || shotAsset.url),
+                    cacheDir: path.join(this.config.dataDirPath, "semantic-cache"),
+                  });
+                  const nearDuplicate = previousVisualCandidates.find((candidate) =>
+                    arePerceptuallyNearDuplicate(
+                      String(candidate.perceptualHash || ""),
+                      shotSemanticAnalysis.perceptualHash,
+                    ),
+                  );
+                  shot.sourceId = shotAssetId ? String(shotAssetId) : undefined;
+                  shot.provider = shotAsset.provider;
+                  shot.semanticScore = Number(
+                    shotSemanticAnalysis.visualSemanticScore ??
+                    shotAsset.metadata?.visualSemanticScore ??
+                    shotAsset.metadata?.semanticScore ??
+                    shotAsset.metadata?.selectedScore ??
+                    0,
+                  ) || undefined;
+                  shot.qualityScore = Number(shotAsset.metadata?.qualityScore ?? 0) || undefined;
+                  shot.decisionScore = Number(shotAsset.metadata?.selectedScore ?? 0) || undefined;
+                  shot.decisionBreakdown = {
+                    semantic: Number(shotAsset.metadata?.semanticScore ?? 0) || 0,
+                    technical: Number(shotAsset.metadata?.qualityScore ?? 0) || 0,
+                    durationFit: selectedShotMediaDuration >= shot.duration ? 100 : 60,
+                    diversityPenalty: nearDuplicate ? 35 : 0,
+                  };
+                  if (shotAsset.metadata) {
+                    shotAsset.metadata.semanticAnalysis = shotSemanticAnalysis;
+                    shotAsset.metadata.perceptualHash = shotSemanticAnalysis.perceptualHash;
+                    shotAsset.metadata.frameSampleCount = shotSemanticAnalysis.frameSampleCount;
+                    shotAsset.metadata.semanticModelId = shotSemanticAnalysis.modelId;
+                    shotAsset.metadata.semanticRuntime = shotSemanticAnalysis.runtime;
+                    if (shotSemanticAnalysis.semanticAvailable) {
+                      shotAsset.metadata.visualSemanticScore = shotSemanticAnalysis.visualSemanticScore;
+                    }
+                    if (nearDuplicate) {
+                      shotAsset.metadata.perceptualDuplicateOf = nearDuplicate.id || nearDuplicate.url;
+                      shotAsset.metadata.diversityPenalty = 35;
+                    }
+                  }
+                  if (nearDuplicate) {
+                    shot.rejectedCandidates = [
+                      ...(shot.rejectedCandidates || []),
+                      {
+                        provider: shotAsset.provider,
+                        assetId: shotAssetId ? String(shotAssetId) : shotAsset.url,
+                        reason: "perceptual_near_duplicate_previous_shot",
+                      },
+                    ];
+                  }
+                  if (shotAssetId) excludeVideoIds.push(shotAssetId as string | number);
+                  previousVisualCandidates.push({
+                    id: shotAssetId || shotAsset.url,
+                    url: shotAsset.url,
+                    width: shotAsset.metadata?.width || 0,
+                    height: shotAsset.metadata?.height || 0,
+                    duration: shotAsset.durationSeconds,
+                    tags: shotAsset.metadata?.searchTermsUsed,
+                    provider: shotAsset.provider,
+                    perceptualHash: shotAsset.metadata?.perceptualHash,
+                  });
+                  selectedVisuals.push({
+                    sceneIndex: index,
+                    shotId: shot.shotId,
+                    provider: shotAsset.provider,
+                    source: shotAsset.source,
+                    url: shotAsset.url,
+                    durationSeconds: shot.duration,
+                    metadata: {
+                      ...shotAsset.metadata,
+                      shotSearchQuery: shot.searchQuery,
+                      shotAlternativeQueries: shot.alternativeQueries,
+                    },
+                  });
+                } catch (shotAssetError) {
+                  shot.rejectedCandidates = [
+                    ...(shot.rejectedCandidates || []),
+                    {
+                      provider: "stock_mesh",
+                      assetId: shot.searchQuery || "unknown",
+                      reason: shotAssetError instanceof Error ? shotAssetError.message : String(shotAssetError),
+                    },
+                  ];
+                  shot.routingReason = `${shot.routingReason || ""}|shot_specific_asset_failed_reused_scene_asset`;
+                }
+              }
+            }
+
+            const detectionForShot =
+              selectedShotVideoPath === tempVideoPath
+                ? detection
+                : await detectShots(selectedShotVideoPath, { scriptDir: this.config.tempDirPath }).catch(() => detection);
+            const window = selectBestWindow(detectionForShot, selectedShotMediaDuration, shot.duration);
             // Different shots from the same clip must not repeat the same
             // seconds, so later shots step further into the source.
             const offset = Math.min(
-              Math.max(0, mediaDuration - shot.duration),
+              Math.max(0, selectedShotMediaDuration - shot.duration),
               window.startSeconds + shotIndex * shot.duration,
             );
             const cropPlan = planSmartCrop({
-              sourceWidth: Number(visualAsset?.width || visualAsset?.metadata?.width) || frameWidth,
-              sourceHeight: Number(visualAsset?.height || visualAsset?.metadata?.height) || frameHeight,
+              sourceWidth: Number(selectedShotVisualAsset?.width || selectedShotVisualAsset?.metadata?.width) || frameWidth,
+              sourceHeight: Number(selectedShotVisualAsset?.height || selectedShotVisualAsset?.metadata?.height) || frameHeight,
               targetWidth: frameWidth,
               targetHeight: frameHeight,
-              tags: visualAsset?.metadata?.searchTermsUsed || sceneMediaPlan.searchTerms,
-              visualIntent: sceneMediaPlan.visualIntent,
+              tags: selectedShotVisualAsset?.metadata?.searchTermsUsed || shot.searchTerms || sceneMediaPlan.searchTerms,
+              visualIntent: shot.visualIntent || sceneMediaPlan.visualIntent,
               manualFocalPoint: (originalSceneSpec as any).focalPoint,
               probe: focusProbe,
               previousPlan: previousCropPlan,
             });
             previousCropPlan = cropPlan;
+            shot.sourceId = shot.sourceId || String(selectedShotVisualAsset?.metadata?.providerAssetId || selectedShotVisualAsset?.metadata?.stockAssetId || selectedShotVisualAsset?.metadata?.pexelsVideoId || selectedShotVisualAsset?.metadata?.pixabayVideoId || "");
+            shot.provider = selectedShotVisualAsset?.provider || shot.provider;
+            shot.sourceStartSeconds = offset;
+            shot.sourceEndSeconds = Number((offset + shot.duration).toFixed(3));
+            shot.semanticScore = shot.semanticScore || Number(selectedShotVisualAsset?.metadata?.semanticScore ?? selectedShotVisualAsset?.metadata?.selectedScore ?? 0) || undefined;
+            shot.qualityScore = shot.qualityScore || Number(selectedShotVisualAsset?.metadata?.qualityScore ?? 0) || undefined;
+            shot.decisionScore = shot.decisionScore || Number(selectedShotVisualAsset?.metadata?.selectedScore ?? 0) || undefined;
             shot.crop = {
               mode: cropPlan.mode,
               xCenter: cropPlan.xCenter,
@@ -1676,8 +2238,8 @@ export class ShortCreator {
               safetyScore: Math.round(cropPlan.confidence * 100),
             };
             shot.routingReason = `${shot.routingReason || ""}|crop:${cropPlan.mode}`;
-            return { shot, sourcePath: tempVideoPath, sourceStartSeconds: offset, cropPlan };
-          }));
+            shotInputs.push({ shot, sourcePath: selectedShotVideoPath, sourceStartSeconds: offset, cropPlan });
+          }
 
           // Persist the reframing decision so a rejected video can be explained
           // rather than guessed at, and so a revision reuses the same framing.
@@ -1812,59 +2374,180 @@ export class ShortCreator {
     }
 
 
+    let captionRenderer: "libass" | "remotion" = "remotion";
+    let captionFontFamily: string | undefined;
+    let captionQaResult: any = null;
+    const hasProductComposition = scenes.some((scene) =>
+      Boolean((scene as any).productNobgUrl || (scene as any).productImageUrl || (scene as any).visualSource === "product_composition"),
+    );
+    const renderDecision: RenderStrategyDecision = decideRenderStrategy({
+      spec,
+      shots: plannedShots,
+      captionsNativeAvailable: burnCaptionsWithLibass || spec.captionStyle === "none",
+      hasProductComposition,
+      fps: 25,
+      durationSeconds: totalDurationSeconds,
+    });
+    let renderFallbackReason: string | undefined;
+    let renderEngineUsed: "ffmpeg_fast" | "hybrid_ffmpeg" | "remotion" | "remotion_fallback" =
+      renderDecision.strategy === "FFMPEG_FAST"
+        ? "ffmpeg_fast"
+        : renderDecision.strategy === "HYBRID"
+          ? "hybrid_ffmpeg"
+          : "remotion";
+    let compositionMs = 0;
+    let finalEncodeMs = 0;
+    let remotionFramesRendered = renderDecision.baseFootageFramesThroughChromium;
+
     await this.emitProgress(onProgress, {
       status: "rendering",
       progress: 82,
       currentStage: "Rendering",
-      message: burnCaptionsWithLibass
-        ? "Rendering visuals and motion graphics with Remotion."
-        : "Rendering video with Remotion Motion Design and Advanced Captions.",
+      message: renderDecision.customerStage === "Editing"
+        ? "Editing scenes, captions, and audio into the final video."
+        : "Rendering the final video.",
       stageKey: "render",
       checkpointStatus: "running",
-      inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds },
+      inputHashSource: { scenes: scenes.length, duration: totalDurationSeconds, strategy: renderDecision.strategy },
     });
     const renderStartedAt = Date.now();
 
-    await this.remotion.render(
-      {
-        music: selectedMusic,
-        scenes,
-        config: {
-          durationMs: Math.round(totalDurationSeconds * 1000),
-          paddingBack: 0,
-          captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
-          captionPosition: "bottom" as any,
-          // Remotion still draws motion graphics, CTA, titles and brand
-          // overlays. Spoken captions are burned afterwards by libass, which
-          // shapes Arabic correctly, so they are suppressed here to avoid two
-          // caption layers on the same frame.
-          captionPreset: burnCaptionsWithLibass ? ("none" as any) : (mediaPlan.captionPreset || spec.captionStyle || "bold"),
-          ctaLayout: mediaPlan.ctaLayout || "centered",
-          musicVolume: "medium" as any,
-          musicDuckingProfile: "balanced",
-          brandKit: spec.brandKit,
+    // Master a per-job excerpt of the selected music bed instead of streaming
+    // the shared catalog file as-is. The catalog file's own energy envelope
+    // can dip near-silent for a second or more (measured via `beatMap` above),
+    // and Remotion's per-frame volume is only ever a flat multiplier on top of
+    // whatever the source already contains - it cannot raise a passage that is
+    // already quiet. When a start offset can be chosen so the needed window
+    // avoids the quietest dips, and/or a real compressor can raise what
+    // remains, the final mixed track stops going near-silent during narration
+    // gaps (incident cmtehsptj000108ledzk3f3ji: ~4.5s/~5.3s/~4.8s runs below
+    // -35dB in exactly this situation).
+    let musicForRender: MusicForVideo = selectedMusic;
+    if (selectedMusic?.file && capabilityManager.isPythonQualityVenvInstalled()) {
+      try {
+        const sourceMusicPath = path.join(this.config.musicDirPath, selectedMusic.file);
+        const windowSeconds = totalDurationSeconds;
+        const bestStart = pickQuietestSafeMusicStart(
+          beatMap?.energyEnvelope as number[] | undefined,
+          selectedMusic.start,
+          selectedMusic.end,
+          windowSeconds,
+        );
+        const masteredFileName = `${cuid()}.music.mp3`;
+        const masteredMusicPath = path.join(this.config.tempDirPath, masteredFileName);
+        tempFiles.push(masteredMusicPath);
+        await this.ffmpeg.masterMusicBed(sourceMusicPath, masteredMusicPath, {
+          startSeconds: bestStart,
+          durationSeconds: windowSeconds,
+        });
+        musicForRender = {
+          ...selectedMusic,
+          url: `http://localhost:${this.config.port}/api/tmp/${masteredFileName}`,
+          start: 0,
+          end: windowSeconds + 1,
+        };
+      } catch (musicMasterErr) {
+        logger.warn(musicMasterErr, "Music-bed mastering failed; falling back to the raw catalog track");
+      }
+    }
+
+    const runRemotionRender = async () => {
+      remotionFramesRendered = Math.max(
+        remotionFramesRendered,
+        Math.round(totalDurationSeconds * 25),
+      );
+      await this.remotion.render(
+        {
+          music: musicForRender,
+          scenes,
+          config: {
+            durationMs: Math.round(totalDurationSeconds * 1000),
+            paddingBack: 0,
+            captionBackgroundColor: "rgba(11, 27, 31, 0.84)",
+            captionPosition: "bottom" as any,
+            // Remotion still draws motion graphics, CTA, titles and brand
+            // overlays. Spoken captions are burned afterwards by libass, which
+            // shapes Arabic correctly, so they are suppressed here to avoid two
+            // caption layers on the same frame.
+            captionPreset: burnCaptionsWithLibass ? ("none" as any) : (mediaPlan.captionPreset || spec.captionStyle || "bold"),
+            ctaLayout: mediaPlan.ctaLayout || "centered",
+            musicVolume: "medium" as any,
+            musicDuckingProfile: "balanced",
+            brandKit: spec.brandKit,
+          },
         },
-      },
-      videoId,
-      orientation,
-      spec.quality === "max_quality_local" ? "high" : spec.quality || "standard",
-    );
+        videoId,
+        orientation,
+        spec.quality === "max_quality_local" ? "high" : spec.quality || "standard",
+      );
+    };
+
+    if (renderDecision.fastPathEligible) {
+      try {
+        const fastCaptionAssPath = burnCaptionsWithLibass
+          ? this.createTimelineCaptionAss({
+              videoId,
+              scenes,
+              sceneCaptionWords,
+              captionStyleId: spec.captionStyle as string,
+              orientation,
+              captionStyleSpec,
+              fontsDir,
+              tempFiles,
+            })
+          : undefined;
+        if (fastCaptionAssPath) {
+          captionRenderer = "libass";
+          captionFontFamily = fastCaptionAssPath.fontFamily;
+          captionQaResult = fastCaptionAssPath.qa;
+        }
+        const fastResult = await renderFfmpegFast({
+          clips: this.fastRenderClipsFromScenes(scenes),
+          voices: this.fastRenderVoicesFromScenes(scenes),
+          outputPath: this.getVideoPath(videoId),
+          width: orientation === OrientationEnum.portrait ? 1080 : 1920,
+          height: orientation === OrientationEnum.portrait ? 1920 : 1080,
+          fps: 25,
+          totalDurationSeconds,
+          musicPath: this.localPathForMediaUrl(musicForRender.url) || path.join(this.config.musicDirPath, musicForRender.file),
+          captionsAssPath: fastCaptionAssPath?.path,
+          fontsDir,
+        });
+        compositionMs = fastResult.compositionMs;
+        finalEncodeMs = fastResult.finalEncodeMs;
+        remotionFramesRendered = 0;
+      } catch (fastErr) {
+        renderFallbackReason = fastErr instanceof Error ? fastErr.message : String(fastErr);
+        logger.warn({ err: renderFallbackReason, videoId }, "FFmpeg fast render failed; falling back to Remotion");
+        renderEngineUsed = "remotion_fallback";
+        await runRemotionRender();
+        compositionMs = Date.now() - renderStartedAt;
+        finalEncodeMs = compositionMs;
+      }
+    } else {
+      await runRemotionRender();
+      compositionMs = Date.now() - renderStartedAt;
+      finalEncodeMs = compositionMs;
+    }
     await this.emitProgress(onProgress, {
       status: "rendering",
       progress: 88,
       currentStage: "Rendered",
-      message: "Remotion render completed.",
+      message: "Final video render completed.",
       stageKey: "render",
       checkpointStatus: "completed",
-      provider: "remotion",
-      artifacts: { videoId, sceneCount: scenes.length },
+      provider: renderEngineUsed,
+      artifacts: {
+        videoId,
+        sceneCount: scenes.length,
+        renderStrategy: renderDecision.strategy,
+        fastPathEligible: renderDecision.fastPathEligible,
+        fallbackReason: renderFallbackReason,
+      },
       timingMs: Date.now() - renderStartedAt,
     });
 
-    let captionRenderer: "libass" | "remotion" = "remotion";
-    let captionFontFamily: string | undefined;
-    let captionQaResult: any = null;
-    if (burnCaptionsWithLibass) {
+    if (burnCaptionsWithLibass && renderEngineUsed !== "ffmpeg_fast" && renderEngineUsed !== "hybrid_ffmpeg") {
       const burnStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "rendering",
@@ -1959,6 +2642,10 @@ export class ShortCreator {
         videoPath,
         timeline.requestedDurationSeconds,
       );
+      const blackFrameReport = await this.ffmpeg.analyzeBlackFrames(
+        videoPath,
+        validationResult.durationSeconds || timeline.requestedDurationSeconds,
+      );
       const masteringStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "finalizing",
@@ -1986,6 +2673,14 @@ export class ShortCreator {
         },
         timingMs: Date.now() - masteringStartedAt,
       });
+
+      // Real final-mix silence gate (V2.4 Pass 4). `analyzeDeadAir` below only
+      // ever compares PLANNED speech windows against a PLANNED hold budget -
+      // a claim about what should happen. This measures the ACTUAL mixed
+      // track with ffmpeg's silencedetect, the same way an independent
+      // reviewer caught incident cmtehsptj000108ledzk3f3ji's ~4.5s/~5.3s/~4.8s
+      // near-silent runs that the planning-only check could not see.
+      const mixedSilenceGate = await this.audioMastering.analyzeMixedSilence(videoPath);
 
       const stats = fs.statSync(videoPath);
       const totalVoiceDuration = timeline.scenes.reduce(
@@ -2029,10 +2724,22 @@ export class ShortCreator {
         };
       });
       const deadAirReport = this.audioMastering.analyzeDeadAir(speechWindowsForDeadAir);
+      // The rendered-media measurement wins over planning metadata (same
+      // principle as the visual coverage gate below): whichever check found
+      // the worse gap is the one that gates the production.
+      const effectiveMaxSilenceMs = Math.max(deadAirReport.maxNarrationSilenceMs, mixedSilenceGate.longestSilenceRunMs);
+
+      const professionalVisualQuality = calculateProfessionalVisualQualityReport({
+        spec,
+        shots: plannedShots,
+        selectedVisuals,
+        totalDurationSeconds: validationResult.durationSeconds || totalDurationSeconds,
+        blackFramePercent: blackFrameReport.blackFramePercent,
+      });
 
       const creativeQualityResult = qualityEngine.calculateCreativeQualityScore({
         deadAirDurationMs: deadAirReport.totalNarrationSilenceMs,
-        maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
+        maxNarrationSilenceMs: effectiveMaxSilenceMs,
         totalDurationSeconds: validationResult.durationSeconds,
         sceneCount: scenes.length,
         distinctAssetCount: new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size,
@@ -2041,13 +2748,98 @@ export class ShortCreator {
         captionStyle: spec.captionStyle,
         hasCaptions: spec.captionStyle !== "none",
         mediaRelevanceScores: sceneQa.map((item) => Number(item.visualRelevanceScore) || 90),
+        realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+        textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
+        blackFramePercent: blackFrameReport.blackFramePercent,
+        duplicateAssetCount: professionalVisualQuality.repeatedAssetCount,
+        promptLeakCount: professionalVisualQuality.rawPromptLeakCount,
+        inventedClaimRiskCount: professionalVisualQuality.inventedClaimRiskCount,
       });
+      let mediaPlanScoreV24 = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(
+            professionalVisualQuality.realVisualCoveragePercent * 0.24 +
+            (100 - professionalVisualQuality.textOnlyTimelinePercent) * 0.16 +
+            (100 - Math.min(100, blackFrameReport.blackFramePercent * 25)) * 0.16 +
+            Math.min(100, professionalVisualQuality.averageSemanticScore || 70) * 0.18 +
+            (professionalVisualQuality.repeatedAssetCount === 0 ? 100 : Math.max(30, 100 - professionalVisualQuality.repeatedAssetCount * 25)) * 0.12 +
+            (selectedVisuals.filter((item) => item.metadata?.fallback || item.metadata?.fallbackReason).length === 0 ? 100 : 70) * 0.07 +
+            (plannedShots.length >= Math.max(4, Math.floor((validationResult.durationSeconds || totalDurationSeconds) / 4)) ? 100 : 65) * 0.07,
+          ),
+        ),
+      );
+      // An explicit graphics-led production (Motion Graphics / Animated
+      // Explainer) is not held to the real-visual-bed gate below, matching
+      // `professionalVisualQuality.ts`'s own exemption.
+      const isExplicitGraphicsMode =
+        spec.productionMode === "motion_graphics" ||
+        spec.productionMode === "animated_explainer" ||
+        spec.visualMode === "motion_graphics" ||
+        spec.visualMode === "animated_explainer";
+
+      // Hard cap (V2.4 Pass 4, section 58): a professional Auto production
+      // with ANY full-screen text/motion timeline in the rendered media
+      // cannot score as a passing Professional Visual Score, no matter how
+      // strong its other components are.
+      if (!isExplicitGraphicsMode && professionalVisualQuality.textOnlyTimelinePercent > 0) {
+        mediaPlanScoreV24 = Math.min(mediaPlanScoreV24, 59);
+      }
+
+      // V2.4 Pass 4 professional-ready gate (section 11): "ready" used to mean
+      // only "an audio stream exists and isn't clipping/silent" - a video
+      // could carry a full-screen CTA card and multi-second audio silence and
+      // still ship as `status: "ready"` (incident cmtehsptj000108ledzk3f3ji:
+      // `realVisualCoveragePercent: 26.1`, `readyForProfessionalAuto: false`,
+      // yet the job completed as "ready" because nothing consulted that
+      // report).
+      const visualQualityPass = isExplicitGraphicsMode || professionalVisualQuality.readyForProfessionalAuto;
+      const audioSilencePass = !mixedSilenceGate.criticalFailure;
+      const professionalReady = finalAudioQa.pass && audioSilencePass && visualQualityPass;
+      const readinessFailureReasons: string[] = [
+        ...(finalAudioQa.pass ? [] : ["Audio mastering did not pass quality checks."]),
+        ...(audioSilencePass ? [] : ["Audio timing needs another pass; a section of the video was unexpectedly quiet."]),
+        ...(visualQualityPass ? [] : ["One or more sections need better footage; a scene fell back to a graphic instead of real video."]),
+      ];
+
+      // V2.4 Pass 5 wall-clock accounting: the OpenCLIP pool's init cost is
+      // only paid once per render-worker process lifetime (it stays warm
+      // across renders), so it is read here rather than measured per-render.
+      const openClipPool = getSharedOpenClipWorkerPool();
+      if (openClipPool?.getInitMs() != null) {
+        perfAccumulatorMs.openClipPoolInitMs = openClipPool!.getInitMs()!;
+      }
+      perfAccumulatorMs.visualCompositionMs = compositionMs;
+      perfAccumulatorMs.finalEncodeMs = finalEncodeMs;
+      perfAccumulatorMs.remotionMs =
+        renderEngineUsed === "remotion" || renderEngineUsed === "remotion_fallback"
+          ? compositionMs
+          : 0;
+      perfAccumulatorMs.ffmpegMs =
+        renderEngineUsed === "ffmpeg_fast" || renderEngineUsed === "hybrid_ffmpeg"
+          ? compositionMs
+          : 0;
 
       const metadata: VideoMetadata = {
         videoId,
         filename: `${videoId}.mp4`,
         thumbnailUrl: `/api/videos/${videoId}/thumbnail`,
-        status: finalAudioQa.pass ? "ready" : "failed",
+        status: professionalReady ? "ready" : "failed",
+        error: professionalReady ? undefined : readinessFailureReasons.join(" "),
+        professionalReady,
+        mixedSilenceGate: mixedSilenceGate as unknown as Record<string, unknown>,
+        renderStrategy: renderDecision.strategy,
+        rendererVersion: "hybrid-fast-v1",
+        fastPathEligible: renderDecision.fastPathEligible,
+        fastPathUsed: renderEngineUsed === "ffmpeg_fast" || renderEngineUsed === "hybrid_ffmpeg",
+        renderFallbackReason,
+        compositionMs,
+        finalEncodeMs,
+        remotionFramesRendered,
+        baseFootageFramesThroughChromium: remotionFramesRendered,
+        detailedStageTimings: perfAccumulatorMs,
+        detailedStageCounts: perfCounts,
         creationMode: spec.creationMode,
         originalPrompt: spec.userPrompt,
         templateId: spec.templateId,
@@ -2126,6 +2918,24 @@ export class ShortCreator {
         sceneSourceDecisions,
         postProductionProcessors,
         selectedVisuals,
+        professionalVisualQuality,
+        realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+        providerMix: professionalVisualQuality.providerMix,
+        uniqueShotCount: professionalVisualQuality.uniqueShotCount,
+        uniqueAssetCount: professionalVisualQuality.uniqueAssetCount,
+        repeatedAssetCount: professionalVisualQuality.repeatedAssetCount,
+        averageSemanticScore: professionalVisualQuality.averageSemanticScore,
+        minimumSemanticScore: professionalVisualQuality.minimumSemanticScore,
+        blackFramePercent: professionalVisualQuality.blackFramePercent,
+        longestBlackRunMs: blackFrameReport.longestBlackRunMs,
+        blackFrameReport,
+        textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
+        generatedTimelinePercent: professionalVisualQuality.generatedTimelinePercent,
+        stockTimelinePercent: professionalVisualQuality.stockTimelinePercent,
+        uploadedTimelinePercent: professionalVisualQuality.uploadedTimelinePercent,
+        motionOverlayPercent: professionalVisualQuality.motionOverlayPercent,
+        rawPromptLeakCount: professionalVisualQuality.rawPromptLeakCount,
+        inventedClaimRiskCount: professionalVisualQuality.inventedClaimRiskCount,
         sceneQa,
         beatMap: beatMap || undefined,
         durableArtifacts,
@@ -2140,6 +2950,9 @@ export class ShortCreator {
         revisionMetadata: revision,
         stageTimings: {
           totalMs: Date.now() - totalStartedAt,
+          renderMs: compositionMs,
+          visualCompositionMs: compositionMs,
+          finalEncodeMs,
           validationMs: Date.now() - validationStartedAt,
         },
         qualityScore: validationResult.technicalScore,
@@ -2150,7 +2963,19 @@ export class ShortCreator {
         creativeWarnings: creativeQualityResult.warnings,
         maxNarrationSilenceMs: deadAirReport.maxNarrationSilenceMs,
         deadAirReport,
-        mediaPlanScore: mediaPlan.qualityReview?.overallScore || 90,
+        mediaPlanScore: mediaPlanScoreV24,
+        mediaPlanScoreV24: {
+          score: mediaPlanScoreV24,
+          previousPlannerScore: mediaPlan.qualityReview?.overallScore,
+          components: {
+            realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+            textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
+            blackFramePercent: blackFrameReport.blackFramePercent,
+            averageSemanticScore: professionalVisualQuality.averageSemanticScore,
+            repeatedAssetCount: professionalVisualQuality.repeatedAssetCount,
+            plannedShotCount: plannedShots.length,
+          },
+        },
         qualityScoreV2: {
           technical: validationResult.technicalScore,
           audioQa: finalAudioQa.pass ? 100 : 0,
@@ -2159,6 +2984,7 @@ export class ShortCreator {
           mediaTechnicalQuality: Math.round(sceneQa.reduce((sum, item) => sum + (item.assetReadable ? 90 : 30), 0) / Math.max(1, sceneQa.length)),
           mediaRelevance: Math.round(sceneQa.reduce((sum, item) => sum + (Number(item.visualRelevanceScore) || 70), 0) / Math.max(1, sceneQa.length)),
           mediaDiversity: selectedVisuals.length === new Set(selectedVisuals.map((item) => item.metadata?.pexelsVideoId || item.url)).size ? 95 : 65,
+          visualProfessionalReadiness: professionalVisualQuality.readyForProfessionalAuto ? 100 : 55,
           subjectiveQuality: "Human Review Required",
         },
         overallProductionScore: undefined,
@@ -2226,6 +3052,115 @@ export class ShortCreator {
     return videoId;
   }
 
+  private localPathForMediaUrl(url: string | undefined): string | undefined {
+    if (!url) return undefined;
+    if (url.startsWith("file://")) return url.replace("file://", "");
+    if (path.isAbsolute(url)) return url;
+
+    try {
+      const parsed = new URL(url);
+      if (parsed.pathname.startsWith("/api/tmp/")) {
+        return path.join(this.config.tempDirPath, decodeURIComponent(path.basename(parsed.pathname)));
+      }
+      if (parsed.pathname.startsWith("/api/music/")) {
+        return path.join(this.config.musicDirPath, decodeURIComponent(path.basename(parsed.pathname)));
+      }
+    } catch {
+      // Not a URL.
+    }
+    return undefined;
+  }
+
+  private fastRenderClipsFromScenes(scenes: any[]): FastRenderClip[] {
+    const clips: FastRenderClip[] = [];
+    scenes.forEach((scene) => {
+      if (Array.isArray(scene.segments) && scene.segments.length > 0) {
+        scene.segments.forEach((segment: any) => {
+          const segmentPath = this.localPathForMediaUrl(segment.video);
+          if (!segmentPath || !fs.existsSync(segmentPath)) {
+            throw new Error("A selected video segment is not available for fast rendering.");
+          }
+          clips.push({
+            path: segmentPath,
+            durationSeconds: Number(segment.duration) || Number(scene.audio?.duration) || 1,
+            transition: scene.transition,
+          });
+        });
+        return;
+      }
+
+      const scenePath = this.localPathForMediaUrl(scene.video);
+      if (!scenePath || !fs.existsSync(scenePath)) {
+        throw new Error("A selected scene video is not available for fast rendering.");
+      }
+      clips.push({
+        path: scenePath,
+        durationSeconds: Number(scene.audio?.duration) || 1,
+        transition: scene.transition,
+      });
+    });
+    return clips;
+  }
+
+  private fastRenderVoicesFromScenes(scenes: any[]): FastRenderVoice[] {
+    return scenes.map((scene) => {
+      const audioPath = this.localPathForMediaUrl(scene.audio?.url);
+      if (!audioPath || !fs.existsSync(audioPath)) {
+        throw new Error("A selected narration track is not available for fast rendering.");
+      }
+      return {
+        path: audioPath,
+        durationSeconds: Number(scene.audio?.duration) || 1,
+      };
+    });
+  }
+
+  private createTimelineCaptionAss(input: {
+    videoId: string;
+    scenes: any[];
+    sceneCaptionWords: Array<Array<{ text: string; startMs: number; endMs: number }>>;
+    captionStyleId: string;
+    orientation: OrientationEnum;
+    captionStyleSpec: unknown;
+    fontsDir: string;
+    tempFiles: string[];
+  }): { path: string; fontFamily: string; qa: any } | undefined {
+    const sceneStartMs = input.scenes.map((_s, i) =>
+      input.scenes.slice(0, i).reduce((acc, curr) => acc + (curr.audio?.duration || 0) * 1000, 0),
+    );
+    const timelineWords = input.sceneCaptionWords.flatMap((words, sceneIndex) => {
+      const offsetMs = Math.round(sceneStartMs[sceneIndex] || 0);
+      return (words || [])
+        .map((word) => ({
+          text: word.text.trim(),
+          startMs: offsetMs + word.startMs,
+          endMs: offsetMs + word.endMs,
+        }))
+        .filter((word) => word.text.length > 0);
+    });
+
+    if (timelineWords.length === 0) return undefined;
+    const frame = {
+      width: input.orientation === OrientationEnum.portrait ? 1080 : 1920,
+      height: input.orientation === OrientationEnum.portrait ? 1920 : 1080,
+    };
+    const built = renderArabicCaptions(
+      timelineWords,
+      input.captionStyleId,
+      frame,
+      PLATFORM_SAFE_BOTTOM_RATIO,
+    );
+    const qa = runCaptionQa(built, {
+      style: input.captionStyleSpec as any,
+      frame,
+      platformSafeBottomRatio: PLATFORM_SAFE_BOTTOM_RATIO,
+    });
+    const assPath = path.join(this.config.tempDirPath, `${input.videoId}.captions.ass`);
+    fs.writeFileSync(assPath, built.content, "utf8");
+    input.tempFiles.push(assPath);
+    return { path: assPath, fontFamily: built.fontFamily, qa };
+  }
+
   private async downloadFile(url: string, destPath: string, maxRetries = 3): Promise<void> {
     if (url.startsWith("file://") || url.startsWith("/")) {
       fs.copySync(url.replace("file://", ""), destPath);
@@ -2245,6 +3180,17 @@ export class ShortCreator {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
           },
         });
+        const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+        const expectsVideo = path.extname(destPath).toLowerCase() === ".mp4";
+        if (
+          expectsVideo &&
+          contentType &&
+          !contentType.includes("video/") &&
+          !contentType.includes("octet-stream") &&
+          !contentType.includes("application/mp4")
+        ) {
+          throw new Error(`Provider returned non-video content type: ${contentType}`);
+        }
 
         await new Promise<void>((resolve, reject) => {
           const writer = fs.createWriteStream(destPath);
@@ -2258,6 +3204,14 @@ export class ShortCreator {
             reject(err);
           });
         });
+
+        if (expectsVideo) {
+          const validation = await this.ffmpeg.validateDownloadedVideoAsset(destPath);
+          if (!validation.valid) {
+            fs.removeSync(destPath);
+            throw new Error(`Downloaded provider video failed validation: ${validation.issues.join("; ")}`);
+          }
+        }
 
         return;
       } catch (err: any) {

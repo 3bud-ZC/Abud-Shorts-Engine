@@ -273,7 +273,7 @@ function costLabel(costEstimate: CostEstimateData | null): string {
 const VideoCreator: React.FC = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const ui = creatorCopy[locale === "ar" ? "ar" : "en"];
 
   // Mode Selection: "prompt" vs "template"
@@ -316,7 +316,9 @@ const VideoCreator: React.FC = () => {
     if (entry.suggestedCaptionStyle) setCaptionStyle(entry.suggestedCaptionStyle as any);
   }
   const [visualMode, setVisualMode] = useState("auto");
-  const [visualSource, setVisualSource] = useState<"auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
+  const [visualSource, setVisualSource] = useState<"auto_free" | "auto_best" | "auto_budget" | "stock" | "uploaded_media" | "ai_generated" | "mixed">("auto_best");
+  const [budgetMode, setBudgetMode] = useState<"free_only" | "smart_budget" | "best_available">("free_only");
+  const [maxExternalSpendUsd, setMaxExternalSpendUsd] = useState(1);
   const [stockProvider, setStockProvider] = useState<"auto_stock" | "pexels" | "pixabay">("auto_stock");
   const [mediaPolicy, setMediaPolicy] = useState<"auto_use_selected" | "only_selected">("auto_use_selected");
   const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
@@ -329,6 +331,7 @@ const VideoCreator: React.FC = () => {
   const [resolvedVoiceProvider, setResolvedVoiceProvider] = useState<string>("auto");
   const [voiceWarnings, setVoiceWarnings] = useState<string[]>([]);
   const [arabicVoiceBlocked, setArabicVoiceBlocked] = useState(false);
+  const [arabicVoiceBlockedReasonCode, setArabicVoiceBlockedReasonCode] = useState<string | null>(null);
   const [captionEnabled, setCaptionEnabled] = useState(true);
   const [captionStyle, setCaptionStyle] = useState<string>("social_ad");
 
@@ -521,6 +524,7 @@ const VideoCreator: React.FC = () => {
         setResolvedVoiceProvider(response.data.resolvedProvider || voiceProvider);
         setVoiceWarnings(response.data.warnings || []);
         setArabicVoiceBlocked(Boolean(response.data.blocked));
+        setArabicVoiceBlockedReasonCode(response.data.blockedReasonCode || null);
         // Auto-select deliberately stays empty. An empty voice ID is what lets
         // the server apply the persisted human default from the Voice Lab;
         // pinning the first voice in the account list would send an explicit
@@ -673,7 +677,7 @@ const VideoCreator: React.FC = () => {
     [providers],
   );
   const aiVideoProviders = useMemo(
-    () => providers.filter((provider) => provider.category === "Visuals" && provider.tier === "ai_video"),
+    () => providers.filter((provider) => provider.category === "Visuals" && (provider.tier === "ai_video" || provider.id === "comfyui")),
     [providers],
   );
   const configuredAiVideoProviders = useMemo(
@@ -700,11 +704,11 @@ const VideoCreator: React.FC = () => {
   }
 
   function readinessMessage(): string | null {
-    if (!prompt.trim()) return "Write a prompt to create a video.";
-    if (arabicBlocked) return "Arabic narration requires ElevenLabs. Configure ElevenLabs before creating.";
-    if (selectedProviderUnavailable) return "The selected voice provider is not configured.";
+    if (!prompt.trim()) return t("create.readiness.writePrompt");
+    if (arabicBlocked) return t("create.readiness.arabicLocalVoiceRequired");
+    if (selectedProviderUnavailable) return t("create.readiness.providerNotConfigured");
     if (modeReadiness && !modeReadiness.ready) {
-      return modeReadiness.missingRequirements?.[0] || "The selected production setup is not runnable yet.";
+      return modeReadiness.missingRequirements?.[0] || t("create.readiness.setupNotRunnable");
     }
     return null;
   }
@@ -727,20 +731,28 @@ const VideoCreator: React.FC = () => {
   const isArabicMode = language === "ar" || (language === "auto" && dialect !== "none");
   const selectedVoice = voiceOptions.find((voice) => voice.id === voiceId);
 
-  const elevenLabsProvider = useMemo(
-    () => providers.find((provider) => provider.id === "elevenlabs" || provider.name === "ElevenLabs"),
-    [providers],
-  );
-  const elevenLabsConfigured = elevenLabsProvider?.configured !== false;
+  // Arabic / Egyptian / MSA narration is local-first (VoiceTut, then KemeTone);
+  // `arabicVoiceBlocked` mirrors the server's real routing decision (which already
+  // accounts for local voice readiness and an explicit ElevenLabs premium
+  // selection), so it alone determines whether the form blocks submission -
+  // ElevenLabs configuration is never required on its own.
+  const arabicBlocked = Boolean(isArabicMode && arabicVoiceBlocked);
 
-  // Arabic / Egyptian / MSA narration is served by ElevenLabs only. Without a
-  // configured credential the job would fail during render, so the form blocks
-  // submission up front and offers the configure action instead.
-  const arabicBlocked = Boolean(isArabicMode && (arabicVoiceBlocked || !elevenLabsConfigured));
+  function arabicBlockedMessage(): string {
+    return arabicVoiceBlockedReasonCode === "elevenlabs_not_configured"
+      ? t("create.voiceGuidance.elevenlabsNotConfigured")
+      : t("create.voiceGuidance.localVoiceSetupRequired");
+  }
+
+  function arabicBlockedActionLabel(): string {
+    return arabicVoiceBlockedReasonCode === "elevenlabs_not_configured"
+      ? t("create.voiceGuidance.configureElevenlabs")
+      : t("create.voiceGuidance.openLocalVoiceSetup");
+  }
 
   function voiceProviderGuidance(): string {
     if (isArabicMode) {
-      return "Arabic, Egyptian Arabic and MSA narration is produced with ElevenLabs. Voice quality is judged by you in Providers - Voice Lab; the engine does not label any voice as Egyptian on its own.";
+      return t("create.voiceGuidance.arabic");
     }
     if (voiceProvider === "piper") return "Piper is legacy only. It stays available so historical videos remain readable and is not used for new production.";
     if (voiceProvider === "edge_tts") return "Edge TTS is experimental, online, and disabled by default. It is never a production Arabic route.";
@@ -793,6 +805,8 @@ const VideoCreator: React.FC = () => {
         contentStyle,
         visualMode,
         visualSource,
+        budgetMode,
+        maxExternalSpendUsd: budgetMode === "smart_budget" ? maxExternalSpendUsd : undefined,
         stockProvider,
         mediaPolicy,
         selectedMediaIds,
@@ -847,7 +861,7 @@ const VideoCreator: React.FC = () => {
       return;
     }
     if (arabicBlocked) {
-      setError("ElevenLabs is required for Arabic narration. Configure ElevenLabs in Providers before creating an Arabic video.");
+      setError(arabicBlockedMessage());
       return;
     }
     if (selectedProviderUnavailable) {
@@ -879,6 +893,8 @@ const VideoCreator: React.FC = () => {
           animationIntensity,
           visualMode,
           visualSource,
+          budgetMode,
+          maxExternalSpendUsd: budgetMode === "smart_budget" ? maxExternalSpendUsd : undefined,
           stockProvider,
           mediaPolicy,
           selectedMediaIds,
@@ -903,6 +919,8 @@ const VideoCreator: React.FC = () => {
             mediaPolicy,
             stockProvider,
             aiVisualProvider,
+            budgetMode,
+            maxExternalSpendUsd: budgetMode === "smart_budget" ? maxExternalSpendUsd : undefined,
           },
         },
         {
@@ -1356,9 +1374,14 @@ const VideoCreator: React.FC = () => {
                         else if (next === "ai_generated") setVisualMode("ai");
                         else if (next === "mixed") setVisualMode("hybrid");
                         else setVisualMode("auto");
+                        if (next === "auto_free" || next === "stock" || next === "uploaded_media") setBudgetMode("free_only");
+                        if (next === "auto_budget") setBudgetMode("smart_budget");
+                        if (next === "ai_generated" || next === "mixed") setBudgetMode("best_available");
                       }}
                     >
                       <MenuItem value="auto_best">Auto Best</MenuItem>
+                      <MenuItem value="auto_free">Auto Free</MenuItem>
+                      <MenuItem value="auto_budget">Auto Budget</MenuItem>
                       <MenuItem value="stock">Stock</MenuItem>
                       <MenuItem value="uploaded_media">Uploaded Media</MenuItem>
                       <MenuItem value="ai_generated" disabled={configuredAiVideoProviders.length === 0}>
@@ -1368,6 +1391,46 @@ const VideoCreator: React.FC = () => {
                     </Select>
                   </FormControl>
                 </Grid>
+
+                {/* Budget */}
+                <Grid item xs={12} sm={6} md={3}>
+                  <FormControl fullWidth>
+                    <InputLabel id="budget-mode-select-label">Budget</InputLabel>
+                    <Select
+                      labelId="budget-mode-select-label"
+                      id="budget-mode-select"
+                      label="Budget"
+                      value={budgetMode}
+                      onChange={(e) => {
+                        const next = e.target.value as typeof budgetMode;
+                        setBudgetMode(next);
+                        if (next === "free_only") setVisualSource("auto_free");
+                        if (next === "smart_budget") setVisualSource("auto_budget");
+                        if (next === "best_available" && visualSource === "auto_free") setVisualSource("auto_best");
+                      }}
+                    >
+                      <MenuItem value="free_only">Free Only</MenuItem>
+                      <MenuItem value="smart_budget">Smart Budget</MenuItem>
+                      <MenuItem value="best_available">Best Available</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                {budgetMode === "smart_budget" && (
+                  <Grid item xs={12} sm={6} md={3}>
+                    <TextField
+                      fullWidth
+                      type="number"
+                      label="Max external spend"
+                      value={maxExternalSpendUsd}
+                      onChange={(event) => setMaxExternalSpendUsd(Math.max(0, Number(event.target.value) || 0))}
+                      inputProps={{ min: 0, max: 1000, step: 0.5 }}
+                      InputProps={{
+                        startAdornment: <InputAdornment position="start">$</InputAdornment>,
+                      }}
+                    />
+                  </Grid>
+                )}
 
                 {/* Production Mode */}
                 {uiMode === "advanced" && (
@@ -1505,7 +1568,7 @@ const VideoCreator: React.FC = () => {
                 </Grid>
                 )}
 
-                {uiMode === "advanced" && (visualSource === "stock" || visualSource === "auto_best") && (
+                {uiMode === "advanced" && ["stock", "auto_best", "auto_free", "auto_budget"].includes(visualSource) && (
                   <Grid item xs={12} sm={6} md={3}>
                     <FormControl fullWidth>
                       <InputLabel id="stock-provider-select-label">Stock Provider</InputLabel>
@@ -1585,7 +1648,7 @@ const VideoCreator: React.FC = () => {
                       }}
                     >
                       <MenuItem value="auto">
-                        {isArabicMode ? "Auto - ElevenLabs (Arabic production)" : "Auto - safest local provider"}
+                        {isArabicMode ? "Auto - VoiceTut/KemeTone local voice" : "Auto - safest local provider"}
                       </MenuItem>
                       <MenuItem value="elevenlabs">ElevenLabs - Arabic production / multilingual</MenuItem>
                       <MenuItem value="kokoro" disabled={isArabicMode}>Kokoro - English local / free</MenuItem>
@@ -1875,11 +1938,11 @@ const VideoCreator: React.FC = () => {
               severity="error"
               action={
                 <Button size="small" variant="contained" onClick={() => navigate("/providers")}>
-                  Configure ElevenLabs
+                  {arabicBlockedActionLabel()}
                 </Button>
               }
             >
-              ElevenLabs is required for Arabic narration. Arabic production is blocked until an ElevenLabs API key is configured in Providers.
+              {arabicBlockedMessage()}
             </Alert>
           )}
           <Alert severity={selectedProviderUnavailable && !arabicBlocked ? "warning" : "info"}>

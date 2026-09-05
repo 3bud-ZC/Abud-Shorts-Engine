@@ -212,3 +212,52 @@ export class MusicManager {
     }
   }
 }
+
+/**
+ * Picks the start offset (seconds, into the source file) whose next
+ * `windowSeconds` never dips as quietly as some other candidate start would,
+ * using the same RMS energy envelope `qualityEngine.analyzeBeats` already
+ * computes for beat-alignment (sampled every 100ms). The catalog's
+ * `[start, end]` window is still honoured as the search range - this only
+ * chooses WHERE inside that window to begin, rather than picking new bounds.
+ *
+ * Falls back to `catalogStart` when no envelope is available (Python quality
+ * runtime not installed) or the track is too short to search, in which case
+ * the render behaves exactly as before this function existed.
+ */
+export function pickQuietestSafeMusicStart(
+  energyEnvelope: number[] | undefined,
+  catalogStart: number,
+  catalogEnd: number,
+  windowSeconds: number,
+): number {
+  const fallback = Math.max(0, catalogStart || 0);
+  if (!energyEnvelope || energyEnvelope.length === 0 || windowSeconds <= 0) return fallback;
+
+  const sampleIntervalSeconds = 0.1; // librosa RMS hop in analyzeBeats
+  const windowSamples = Math.max(1, Math.round(windowSeconds / sampleIntervalSeconds));
+  const maxStartSample = energyEnvelope.length - windowSamples;
+  if (maxStartSample <= 0) return fallback;
+
+  const searchEndSample = Math.min(
+    maxStartSample,
+    Math.max(0, Math.round((catalogEnd - windowSeconds) / sampleIntervalSeconds)),
+  );
+  let searchStartSample = Math.max(0, Math.round(catalogStart / sampleIntervalSeconds));
+  if (searchStartSample > searchEndSample) searchStartSample = searchEndSample;
+
+  let bestStartSample = searchStartSample;
+  let bestMinEnergy = -Infinity;
+  for (let s = searchStartSample; s <= searchEndSample; s++) {
+    let minEnergy = Infinity;
+    for (let i = s; i < s + windowSamples; i++) {
+      const value = energyEnvelope[i];
+      if (value < minEnergy) minEnergy = value;
+    }
+    if (minEnergy > bestMinEnergy) {
+      bestMinEnergy = minEnergy;
+      bestStartSample = s;
+    }
+  }
+  return Math.round(bestStartSample * sampleIntervalSeconds * 100) / 100;
+}

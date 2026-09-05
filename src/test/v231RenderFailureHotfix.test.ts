@@ -134,6 +134,17 @@ describe("V2.3.1: an Auto production with no stock provider renders through moti
       }),
     ).toBe(false);
   });
+
+  it("does not let a motion creative treatment override explicit stock mode", () => {
+    expect(
+      sceneRendersAsMotion({
+        productionMode: "auto_hybrid",
+        visualMode: "stock",
+        sceneVisualSource: "stock",
+        plannedTreatmentRuntime: "motion",
+      }),
+    ).toBe(false);
+  });
 });
 
 /**
@@ -239,22 +250,22 @@ describe("V2.3.1: customer-safe render failure classification", () => {
     const raw =
       "Pexels search exhausted 8 terms (timeouts=0, noResults=0, rejected=0); attempted: cinematic hero shot, modern lifestyle";
     const result = classifyRenderFailure(raw);
-    expect(result.category).toBe("visuals_unavailable");
+    expect(result.category).toBe("STOCK_COVERAGE_FAILURE");
     expect(result.message).not.toContain("Pexels search exhausted");
     expect(result.message).not.toMatch(/timeouts=|attempted:/);
   });
 
   it("classifies resource, asset and composition failures into their own recoverable categories", () => {
-    expect(classifyRenderFailure("spawn ffmpeg ENOMEM").category).toBe("resources");
-    expect(classifyRenderFailure("Chromium process was killed (SIGKILL)").category).toBe("resources");
+    expect(classifyRenderFailure("spawn ffmpeg ENOMEM").category).toBe("RESOURCE_EXHAUSTION");
+    expect(classifyRenderFailure("Chromium process was killed (SIGKILL)").category).toBe("RESOURCE_EXHAUSTION");
     expect(classifyRenderFailure("ENOENT: no such file /app/data/temp/scene_0.mp4").category).toBe(
-      "asset_unreadable",
+      "FINAL_MEDIA_VALIDATION",
     );
-    expect(classifyRenderFailure("moov atom not found").category).toBe("asset_unreadable");
+    expect(classifyRenderFailure("moov atom not found").category).toBe("FINAL_MEDIA_VALIDATION");
     expect(classifyRenderFailure("ffmpeg exited with code 1 during concat").category).toBe(
-      "composition",
+      "FFMPEG_FAILURE",
     );
-    expect(classifyRenderFailure("something entirely unexpected").category).toBe("unknown");
+    expect(classifyRenderFailure("something entirely unexpected").category).toBe("UNKNOWN");
   });
 
   it("never returns a message containing a path, an env var name or a command line", () => {

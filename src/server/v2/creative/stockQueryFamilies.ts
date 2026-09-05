@@ -125,8 +125,18 @@ const CONCEPTS: Concept[] = [
     industry: "retail ecommerce",
   },
   {
+    id: "coffee",
+    match: /قهوة|كافيه|بن|كوفي|coffee|cafe|barista|espresso|latte|roast/i,
+    subject: ["barista espresso close up", "fresh roasted coffee beans", "coffee bag packaging"],
+    action: ["barista pouring latte", "coffee beans grinding", "espresso machine extraction"],
+    environment: ["modern cafe counter", "warm cafe interior"],
+    audience: ["person enjoying morning coffee", "friends drinking coffee cafe"],
+    support: ["coffee cup steam close up", "coffee delivery package"],
+    industry: "coffee cafe",
+  },
+  {
     id: "restaurant",
-    match: /مطعم|أكل|طعام|وجبة|بيتزا|برجر|مشويات|قهوة|كافيه|restaurant|food|meal|pizza|burger|coffee|cafe|dish/i,
+    match: /مطعم|أكل|طعام|وجبة|بيتزا|برجر|مشويات|restaurant|food|meal|pizza|burger|dish/i,
     subject: ["signature dish close up plating", "hot food served on plate"],
     action: ["chef cooking in kitchen", "pouring sauce over dish"],
     environment: ["cozy restaurant interior evening", "busy restaurant kitchen"],
@@ -307,8 +317,16 @@ export function buildStockQueryFamilies(input: QueryFamilyInput): QueryFamilyRes
 
   // The rotation offset makes each scene of a production ask a different member
   // of the same family, rather than every scene asking for the first entry.
+  //
+  // This must increment by exactly 1 per scene, not a fixed step like 3: most
+  // rotation lists in this lexicon (see `subject`/`support` above) have
+  // exactly 3 entries, and `pick()` selects via `rotation % list.length`. A
+  // step of 3 is congruent to 0 mod 3, so scene 0 and scene 1 landed on the
+  // identical index for any 3-entry list (e.g. "coffee".subject) - the
+  // rotation silently did nothing for the most common list length. A step of
+  // 1 guarantees adjacent scenes differ for every list length greater than 1.
   const sceneIdx = input.sceneIndex ?? 0;
-  const offset = concepts.length + text.length + sceneIdx * 3;
+  const offset = concepts.length + text.length + sceneIdx;
 
   const queries: StockQuery[] = [];
   const addQuery = (

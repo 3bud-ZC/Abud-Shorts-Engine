@@ -1,6 +1,7 @@
 import { PexelsAPI } from "../../../short-creator/libraries/Pexels";
 import { OrientationEnum } from "../../../types/shorts";
 import type { ProductionSceneSpec } from "../../../types/productionSpec";
+import { providerSecrets } from "../provider-vault/providerSecrets";
 import type {
   SceneCostEstimate,
   VisualAssetResult,
@@ -16,8 +17,12 @@ export class PexelsVisualProvider implements VisualProvider {
 
   constructor(private pexelsApi: PexelsAPI, private apiKey?: string) {}
 
+  private getApiKey(): string | undefined {
+    return providerSecrets.peek("pexels", "api_key") || this.apiKey || process.env.PEXELS_API_KEY;
+  }
+
   public isConfigured(): boolean {
-    const key = this.apiKey || process.env.PEXELS_API_KEY;
+    const key = this.getApiKey();
     return Boolean(key && key !== "dummy-key" && !key.includes("your_pexels"));
   }
 
@@ -48,6 +53,15 @@ export class PexelsVisualProvider implements VisualProvider {
       excludeIds: (options.excludeIds || []).map((id) => String(id)),
       orientation: options.orientation || OrientationEnum.portrait,
     });
+
+    // findVideo's own contract can go unmet (a bare test double, an
+    // unexpected empty/malformed response) without throwing on its own.
+    // Never let that surface as a raw property-access crash further up -
+    // the caller (AutoVisualRouter) treats a thrown error here as "this
+    // provider could not supply a scene" and falls through accordingly.
+    if (!video || typeof video.url !== "string" || !video.url) {
+      throw new Error("Pexels did not return a usable video for this scene.");
+    }
 
     return {
       provider: "pexels",

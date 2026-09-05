@@ -46,6 +46,12 @@ type VoiceLabConfig = {
   presets: Array<{ id: string; settings: Record<string, unknown> }>;
   note: string;
   defaultArabicVoice?: { voiceId: string; voiceName?: string; preset?: string; selectedAt?: string } | null;
+  defaultArabicVoiceConfigured?: boolean;
+  defaultArabicVoiceAvailable?: boolean;
+  defaultArabicVoiceName?: string;
+  arabicProductionReady?: boolean;
+  setupRequiredReason?: string;
+  previewSynthesisAllowed?: boolean;
 };
 
 /** Backend provider category → i18n key stems (heading + description). */
@@ -90,11 +96,39 @@ const ProvidersPage: React.FC = () => {
   const [voiceLabGenerating, setVoiceLabGenerating] = useState(false);
   const [defaultArabicVoiceId, setDefaultArabicVoiceId] = useState("");
   const [browseOnly, setBrowseOnly] = useState(false);
+  const [voiceLabSearch, setVoiceLabSearch] = useState("");
 
   const categoryLabel = (category: string) =>
     CATEGORY_KEY[category] ? tr(CATEGORY_KEY[category].label) : category;
   const categoryDescription = (category: string) =>
     tr(CATEGORY_KEY[category]?.desc || "providers.categoryDesc.default");
+
+  const billingLabel = (value?: string) => {
+    switch (value) {
+      case "LOCAL_FREE":
+        return "Local / Free";
+      case "FREE_API":
+        return "Free API";
+      case "FREE_TIER":
+        return "Free Tier";
+      case "USAGE_BASED":
+        return "Usage Based";
+      case "SUBSCRIPTION":
+        return "Subscription";
+      default:
+        return "Unknown Cost";
+    }
+  };
+
+  const credentialTypeLabel = (type: string) => {
+    if (type === "api_key") return "API key";
+    if (type === "service_account_json") return "Service account";
+    if (type === "bot_token") return "Bot token";
+    if (type === "chat_config") return "Chat settings";
+    if (type === "oauth_token") return "Account connection";
+    if (type === "app_config") return "App settings";
+    return type.replaceAll("_", " ");
+  };
 
   /**
    * The provider description line. The `/api/v2/providers` endpoint emits raw
@@ -103,6 +137,15 @@ const ProvidersPage: React.FC = () => {
    * the status the same endpoint reports instead.
    */
   const providerDescription = (provider: ProviderItem): string => {
+    if (provider.canonical?.customerStatus) {
+      if (provider.canonical.customerStatus === "Built In") return tr("providers.msg.builtIn");
+      if (provider.canonical.customerStatus === "Ready") return tr("providers.msg.connected");
+      if (provider.canonical.customerStatus === "Configured") return tr("providers.msg.configured");
+      if (provider.canonical.customerStatus === "Temporarily Unavailable") return tr("providers.msg.unavailable");
+      if (provider.canonical.customerStatus === "Ready to Connect" || provider.canonical.customerStatus === "Not Configured") {
+        return tr("providers.msg.notConfigured");
+      }
+    }
     const builtIn = ["local_ai", "kokoro", "piper", "whisper_cpp", "remotion", "ffmpeg", "n8n", "postgres"].includes(
       provider.id || "",
     );
@@ -191,16 +234,16 @@ const ProvidersPage: React.FC = () => {
       ]);
       const config: VoiceLabConfig = configResponse.data;
       setVoiceLabConfig(config);
-      if (config.defaultArabicVoice?.voiceId) {
-        setDefaultArabicVoiceId(config.defaultArabicVoice.voiceId);
-        setVoiceLabVoiceId((current) => current || config.defaultArabicVoice!.voiceId);
-      }
+      setDefaultArabicVoiceId(config.defaultArabicVoice?.voiceId || "");
+      setVoiceLabVoiceId(config.defaultArabicVoice?.voiceId || "");
       if (!voiceLabText) setVoiceLabText(config.referenceScript || "");
       const voices: DiscoveredVoice[] = voicesResponse.data.voices || [];
       setVoiceLabVoices(voices);
-      const warnings: string[] = voicesResponse.data.warnings || [];
+      const warnings: string[] = [
+        ...(voicesResponse.data.warnings || []),
+        ...(config.setupRequiredReason ? [config.setupRequiredReason] : []),
+      ];
       if (warnings.length) setVoiceLabError(warnings.join(" "));
-      if (!voiceLabVoiceId && voices.length) setVoiceLabVoiceId(voices[0].id);
     } catch (err: any) {
       setVoiceLabError(err?.response?.data?.message || tr("providers.voiceLab.loadFailed"));
     } finally {
@@ -219,9 +262,11 @@ const ProvidersPage: React.FC = () => {
         voiceId: voiceLabVoiceId,
         voiceName: voiceLabVoices.find((voice) => voice.id === voiceLabVoiceId)?.name,
         preset: voiceLabPreset,
+        modelId: voiceLabConfig?.model,
       });
       setDefaultArabicVoiceId(voiceLabVoiceId);
       setVoiceLabError(null);
+      await load();
     } catch (err) {
       setVoiceLabError(
         (err as any)?.response?.data?.message || tr("providers.voiceLab.saveDefaultFailed"),
@@ -283,6 +328,18 @@ const ProvidersPage: React.FC = () => {
     }
   };
 
+  const filteredVoiceLabVoices = useMemo(() => {
+    const needle = voiceLabSearch.trim().toLowerCase();
+    if (!needle) return voiceLabVoices;
+    return voiceLabVoices.filter((voice) =>
+      [voice.name, voice.accent, voice.gender, voice.category, voice.language, voice.dialect]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [voiceLabSearch, voiceLabVoices]);
+
   if (loading) return <LoadingState label={tr("providers.loading")} />;
 
   return (
@@ -320,12 +377,18 @@ const ProvidersPage: React.FC = () => {
                       <Stack spacing={1.5}>
                         <Stack direction="row" justifyContent="space-between" alignItems="center">
                           <Typography variant="h6" fontWeight={800}>{provider.name}</Typography>
-                          <StatusBadge status={provider.status} />
+                          <StatusBadge status={provider.status} label={provider.canonical?.customerStatus} />
                         </Stack>
                         <Typography variant="body2" color="text.secondary">
                           {providerDescription(provider)}
                         </Typography>
                         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                          {provider.canonical?.category && (
+                            <Chip size="small" variant="outlined" label={provider.canonical.category} />
+                          )}
+                          {provider.canonical?.billingClass && (
+                            <Chip size="small" variant="outlined" label={billingLabel(provider.canonical.billingClass)} />
+                          )}
                           {provider.isDefault && (
                             <Chip size="small" color="primary" label={tr("providers.badge.default")} />
                           )}
@@ -382,12 +445,29 @@ const ProvidersPage: React.FC = () => {
                               })}
                             />
                           )}
+                          {provider.canonical?.lastVerifiedAt && (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Last verified ${format.dateTime(provider.canonical.lastVerifiedAt)}`}
+                            />
+                          )}
                         </Stack>
+                        {provider.canonical?.capabilities?.length ? (
+                          <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                            {provider.canonical.capabilities.slice(0, 6).map((capability) => (
+                              <Chip key={capability} size="small" label={capability} />
+                            ))}
+                          </Stack>
+                        ) : null}
+                        {provider.canonical?.blockerReason && (
+                          <Alert severity="warning">{provider.canonical.blockerReason}</Alert>
+                        )}
                         {provider.vault?.length ? (
                           <Stack spacing={0.5}>
                             {provider.vault.map((credential) => (
                               <Typography key={credential.credentialType} variant="caption" color="text.secondary">
-                                <Box component="span" dir="ltr">{credential.credentialType}</Box>:{" "}
+                                <Box component="span">{credentialTypeLabel(credential.credentialType)}</Box>:{" "}
                                 {credential.maskedHint || "••••"} · {tr(localizedStatus(credential.health).key)}
                               </Typography>
                             ))}
@@ -516,6 +596,16 @@ const ProvidersPage: React.FC = () => {
                                   }
                                   color={provider.details.liveVerified ? "success" : "default"}
                                 />
+                                <Chip
+                                  size="small"
+                                  variant={provider.details.arabicProductionReady ? "filled" : "outlined"}
+                                  label={
+                                    provider.details.arabicProductionReady
+                                      ? tr("providers.badge.arabicReady")
+                                      : tr("providers.badge.arabicSetupRequired")
+                                  }
+                                  color={provider.details.arabicProductionReady ? "success" : "warning"}
+                                />
                               </Stack>
                             )}
                             {provider.id === "elevenlabs" && provider.details.errorDetail && (() => {
@@ -559,6 +649,9 @@ const ProvidersPage: React.FC = () => {
                               : validatingProvider === provider.name
                                 ? tr("providers.testing")
                                 : tr("common.testConnection")}
+                          </Button>
+                          <Button size="small" variant="outlined" disabled>
+                            {provider.canonical?.enabled === false ? "Enable" : "Disable"}
                           </Button>
                           {provider.id === "elevenlabs" && (
                             <>
@@ -604,7 +697,17 @@ const ProvidersPage: React.FC = () => {
                   <Chip size="small" variant="outlined" label={tr("providers.voiceLab.model", { model: voiceLabConfig?.model || "—" })} />
                   <Chip size="small" variant="outlined" label={tr("providers.voiceLab.voicesDiscovered", { count: voiceLabVoices.length })} />
                   <Chip size="small" variant="outlined" label={tr("providers.voiceLab.usageBased")} />
+                  {voiceLabConfig?.arabicProductionReady && (
+                    <Chip size="small" color="success" label={tr("providers.badge.arabicReady")} />
+                  )}
                 </Stack>
+
+                <TextField
+                  label={tr("providers.voiceLab.search")}
+                  value={voiceLabSearch}
+                  onChange={(e) => setVoiceLabSearch(e.target.value)}
+                  fullWidth
+                />
 
                 <TextField
                   select
@@ -616,7 +719,7 @@ const ProvidersPage: React.FC = () => {
                   InputLabelProps={{ shrink: true }}
                 >
                   <option value="">{tr("providers.voiceLab.selectVoice")}</option>
-                  {voiceLabVoices.map((voice) => (
+                  {filteredVoiceLabVoices.map((voice) => (
                     <option key={voice.id} value={voice.id}>
                       {[voice.name, voice.accent, voice.gender, voice.category].filter(Boolean).join(" · ")}
                     </option>
@@ -679,7 +782,12 @@ const ProvidersPage: React.FC = () => {
                     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
                       <Button
                         variant="contained"
-                        disabled={voiceLabGenerating || !voiceLabVoiceId || !voiceLabText.trim()}
+                        disabled={
+                          voiceLabGenerating ||
+                          !voiceLabConfig?.previewSynthesisAllowed ||
+                          !voiceLabVoiceId ||
+                          !voiceLabText.trim()
+                        }
                         onClick={generateVoiceLabPreview}
                       >
                         {voiceLabGenerating
@@ -694,6 +802,9 @@ const ProvidersPage: React.FC = () => {
                       >
                         {tr("providers.voiceLab.setDefaultArabic")}
                       </Button>
+                      {!voiceLabConfig?.previewSynthesisAllowed && (
+                        <Chip size="small" variant="outlined" label={tr("providers.voiceLab.previewPendingAuth")} />
+                      )}
                     </Stack>
 
                     {voiceLabAudio && (

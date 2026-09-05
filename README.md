@@ -1,7 +1,7 @@
 # ABUD Shorts Engine V2
 
 **Product:** ABUD Shorts Engine V2  
-**Version:** 2.1.0 (General Availability; V2.2 development is tracked in `ABUD_SHORTS_ENGINE_STATUS.md`)  
+**Version:** 2.4.0 (General Availability; full history is tracked in `ABUD_SHORTS_ENGINE_STATUS.md`)  
 **Canonical Dashboard:** http://localhost:3130  
 **License:** MIT  
 
@@ -37,7 +37,7 @@ ABUD Shorts Engine V2 transforms text ideas and brand assets into high-engagemen
   - **Template Studio**: 6 pre-built business templates (Product Ad, Restaurant Promo, Real Estate Showcase, Viral Hook, Educational Explainer, Event Promo) with custom brand injection.
 - **Production Spec Engine**: Exact duration guarantees, multi-scene timeline assembly, animated text overlays, ArabicCaptionEngine V2 RTL typography, and motion presets.
 - **Free/Local English Core**: Generate high-definition vertical videos using local AI planning, Pexels media, Kokoro English TTS, Whisper small captions, Remotion, FFmpeg, and Audio Mastering.
-- **Arabic Narration via ElevenLabs**: Arabic, Egyptian Arabic, and MSA narration is produced exclusively with ElevenLabs. Configure the API key once in **Providers -> ElevenLabs**; Arabic jobs are blocked with an actionable message until it is configured. Cost is usage based on your ElevenLabs plan.
+- **Local Egyptian Arabic Voice**: Arabic narration defaults to the built-in Local Voice engine - VoiceTut (Local High Quality, GPU-accelerated, human-reviewed and approved) with a lightweight local fallback - no provider key, no cloud call, no per-video cost. ElevenLabs (`eleven_multilingual_v2`) is available as an optional premium alternative a customer may configure and select explicitly in **Providers -> ElevenLabs**.
 - **Revision Studio**: Create voice, media, and caption-style revisions with durable artifact reuse so cheap edits avoid unnecessary voice/caption regeneration where possible.
 - **Publishing & Scheduling Automation**: Unified scheduling, atomic publication state machine, retry policies, dead-letter isolation, and live SSE event streams.
 - **Security & Reliability**: Salted password authentication, zero secret leakage, role-based Docker isolation, automated pre-upgrade safety snapshots, and one-click diagnostic bundles.
@@ -115,8 +115,9 @@ ABUD Shorts Engine V2 is engineered so that you do **not** need paid third-party
 | --- | --- | --- |
 | **Creative Direction** | Local Rule-Based Creative Director | Generates complete scene blueprints, hooks, visual search queries, and narration lines deterministically. |
 | **Visual Assets** | Pexels API Integration | Fetches HD vertical background videos based on semantic tags and scene themes. |
-| **Arabic Voice Synthesis** | ElevenLabs (`eleven_multilingual_v2`) | Canonical Arabic / Egyptian Arabic / MSA narration. Cloud, usage based, and required for Arabic production. Voice selection is made by a human in Providers -> ElevenLabs -> Voice Lab. |
-| **Legacy Arabic Voice** | Piper (`ar_JO-kareem-medium`) | Retained for historical jobs only so existing videos and metadata stay readable. Not installed in the V2.2 image and never used for new production. |
+| **Arabic Voice Synthesis** | VoiceTut - Local High Quality | Local, GPU-accelerated Egyptian Arabic narration, human-reviewed and approved, no per-video cost. KemeTone provides a lightweight local fallback. Auto-installed and hardware-detected by the Windows installer. |
+| **Premium Arabic Voice (optional)** | ElevenLabs (`eleven_multilingual_v2`) | Cloud, usage-based premium alternative a customer may configure and select explicitly in Providers -> ElevenLabs -> Voice Lab. Never a silent default. |
+| **Legacy Arabic Voice** | Piper (`ar_JO-kareem-medium`) | Retained for historical jobs only so existing videos and metadata stay readable. Not installed in the current image and never used for new production. |
 | **English Voice Synthesis** | Kokoro TTS (`q4` precision) | Local English narration path inside the worker container. |
 | **Captions & Subtitles** | Whisper.cpp (`small`, multilingual) | Generates subtitle timings with custom font styling and RTL Arabic formatting. |
 | **Composition & Render** | Remotion + FFmpeg 4.4 | Assembles video scenes, transitions, balanced music ducking, Audio Mastering, and final MP4 encoding. |

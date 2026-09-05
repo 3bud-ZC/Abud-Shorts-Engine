@@ -2,9 +2,6 @@ import { useNavigate } from "react-router-dom";
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Alert,
   Box,
   Button,
@@ -30,7 +27,6 @@ import {
 import AddIcon from "@mui/icons-material/Add";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ScheduleIcon from "@mui/icons-material/Schedule";
@@ -79,6 +75,14 @@ const PLATFORM_LABEL: Record<string, string> = {
   twitter: "X / Twitter",
 };
 
+const PROVIDER_LABEL: Record<string, string> = {
+  youtube_direct: "YouTube",
+  meta_direct: "Meta",
+  tiktok_direct: "TikTok",
+  telegram_bot: "Telegram Bot",
+  upload_post: "Upload-Post",
+};
+
 export const PublishingPage: React.FC = () => {
   const navigate = useNavigate();
   const { t: tr, format } = useI18n();
@@ -96,6 +100,7 @@ export const PublishingPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>("");
 
   const platformName = (platform: string) => PLATFORM_LABEL[platform] || platform;
+  const providerName = (provider: string) => PROVIDER_LABEL[provider] || provider;
 
   const fetchData = async (isManual = false) => {
     if (isManual) setRefreshing(true);
@@ -645,20 +650,9 @@ export const PublishingPage: React.FC = () => {
                       {pub.lastError || tr("publishing.failedTab.unknownError")}
                     </Alert>
 
-                    {pub.technicalError && (
-                      <Accordion variant="outlined">
-                        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                          <Typography variant="caption" fontWeight={700}>
-                            {tr("publishing.failedTab.technicalDetails")}
-                          </Typography>
-                        </AccordionSummary>
-                        <AccordionDetails>
-                          <pre style={{ margin: 0, fontSize: 11, whiteSpace: "pre-wrap", direction: "ltr", textAlign: "start" }}>
-                            {pub.technicalError}
-                          </pre>
-                        </AccordionDetails>
-                      </Accordion>
-                    )}
+                    <Typography variant="caption" color="text.secondary">
+                      {tr("publishing.failedTab.supportNote")}
+                    </Typography>
                   </Stack>
                 </Card>
               ))}
@@ -718,9 +712,30 @@ export const PublishingPage: React.FC = () => {
                           {acc.accountName}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" dir="ltr" sx={{ textAlign: "start", display: "block" }}>
-                          {tr("publishing.accounts.idProvider", { id: acc.accountId, provider: acc.provider })}
+                          {tr("publishing.accounts.identityProvider", {
+                            identity: acc.accountIdentitySafeLabel || acc.accountName || acc.accountId,
+                            provider: providerName(acc.provider),
+                          })}
                         </Typography>
                       </Box>
+
+                      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                        {acc.connectionVerified && (
+                          <Chip
+                            size="small"
+                            color="success"
+                            variant="outlined"
+                            label={tr("publishing.accounts.connectionVerified")}
+                          />
+                        )}
+                        {!acc.publicationVerified && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={tr("publishing.accounts.publicationNotVerified")}
+                          />
+                        )}
+                      </Stack>
 
                       <Typography variant="caption" color="text.secondary">
                         {tr("publishing.accounts.lastChecked", { time: format.dateTime(acc.lastCheckedAt) })}

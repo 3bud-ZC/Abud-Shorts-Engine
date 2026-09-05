@@ -4,9 +4,9 @@
  * that is actually running - not the newest version that exists.
  */
 export const PRODUCT_NAME = "ABUD Shorts Engine V2";
-export const PRODUCT_VERSION = "2.3.1";
+export const PRODUCT_VERSION = "2.4.0";
 export const PRODUCT_STAGE = "General Availability";
-export const PRODUCT_BUILD = "2026.08.28.1";
+export const PRODUCT_BUILD = "2026.09.05.2";
 /**
  * The highest migration in `MIGRATIONS`. `verifySchemaVersion()` in the
  * migration runner fails the build if the two drift apart: a stale constant here

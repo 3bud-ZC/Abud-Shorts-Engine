@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { LocalContentAIProvider } from "./content-ai/localProvider";
 import { ContentAIRegistry } from "./content-ai/registry";
+import { providerSecrets } from "./provider-vault/providerSecrets";
 
 describe("Content AI Providers & Creative Director", () => {
   it("Local AI creates valid Egyptian Arabic production spec from prompt", async () => {
@@ -34,6 +35,36 @@ describe("Content AI Providers & Creative Director", () => {
     expect(spec.scenes[0].stockSearchTerms).toContain("server room blinking");
   });
 
+  it("Local AI creates topic-specific English coffee subscription scenes", async () => {
+    const provider = new LocalContentAIProvider();
+    const spec = await provider.generateProductionSpec({
+      prompt: "Create a 20-second vertical Short for a modern coffee subscription with real cafe preparation footage",
+      language: "en",
+      durationSeconds: 20,
+    });
+
+    expect(spec.language).toBe("en");
+    expect(spec.scenes).toHaveLength(3);
+    expect(spec.scenes[0].stockSearchTerms.join(" ")).toContain("coffee");
+    expect(spec.scenes[1].stockSearchTerms.join(" ")).toContain("coffee");
+    expect(spec.scenes[0].onScreenText).toBe("Cafe Quality At Home");
+  });
+
+  it("Local AI creates topic-specific English boutique fitness scenes", async () => {
+    const provider = new LocalContentAIProvider();
+    const spec = await provider.generateProductionSpec({
+      prompt: "Create a 20-second vertical Short for a boutique fitness studio with real people training",
+      language: "en",
+      durationSeconds: 20,
+    });
+
+    expect(spec.language).toBe("en");
+    expect(spec.scenes).toHaveLength(3);
+    expect(spec.scenes[0].stockSearchTerms.join(" ")).toContain("fitness");
+    expect(spec.scenes[1].stockSearchTerms.join(" ")).toContain("trainer");
+    expect(spec.scenes[0].onScreenText).toBe("Train With Purpose");
+  });
+
   it("Local AI enhances prompts with structured guidance without replacing original", async () => {
     const provider = new LocalContentAIProvider();
     const result = await provider.rewritePrompt("اعمل اعلان لكافيه");
@@ -48,5 +79,20 @@ describe("Content AI Providers & Creative Director", () => {
     const registry = new ContentAIRegistry();
     const provider = registry.getProvider();
     expect(provider.id).toBe("local_ai");
+  });
+
+  it("ContentAIRegistry prefers a Gemini credential resolved from Provider Vault over environment fallback", async () => {
+    providerSecrets.registerResolver(async (providerId, credentialType) =>
+      providerId === "gemini" && credentialType === "api_key" ? "vault-gemini-key-123" : null,
+    );
+    await providerSecrets.refresh("gemini", "api_key");
+
+    try {
+      const registry = new ContentAIRegistry();
+      expect(registry.getProvider("gemini").id).toBe("gemini");
+      expect(registry.getProvider().id).toBe("gemini");
+    } finally {
+      providerSecrets.unregisterResolver();
+    }
   });
 });

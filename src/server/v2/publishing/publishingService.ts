@@ -48,6 +48,40 @@ export function maskSecret(secret?: string): string {
   return `${secret.slice(0, 4)}****${secret.slice(-4)}`;
 }
 
+const SENSITIVE_PROVIDER_KEY =
+  /(access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|authorization|credential|encrypted[_-]?credentials|password|secret|client[_-]?secret|code[_-]?verifier)/i;
+
+function sanitizeProviderValue(value: unknown, depth = 0): unknown {
+  if (depth > 6) return "[redacted]";
+  if (Array.isArray(value)) return value.map((entry) => sanitizeProviderValue(entry, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+        key,
+        SENSITIVE_PROVIDER_KEY.test(key) ? "[redacted]" : sanitizeProviderValue(entry, depth + 1),
+      ]),
+    );
+  }
+  if (typeof value === "string") {
+    if (/^(Bearer|Apikey)\s+/i.test(value)) return "[redacted]";
+    if (/^sk-[A-Za-z0-9_-]{20,}/.test(value)) return "[redacted]";
+    if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)) return "[redacted]";
+  }
+  return value;
+}
+
+function sanitizeProviderPayload(payload?: Record<string, unknown>): Record<string, unknown> | undefined {
+  return payload ? (sanitizeProviderValue(payload) as Record<string, unknown>) : undefined;
+}
+
+function safePublishingEvent(event: PublishingEventRecord): PublishingEventRecord {
+  return {
+    ...event,
+    technicalMessage: undefined,
+    payload: undefined,
+  };
+}
+
 export function isRetryablePublishError(error: unknown, result?: PublishResult): boolean {
   if (result?.retryable !== undefined) return result.retryable;
   if (!error) return false;
@@ -118,7 +152,7 @@ export class PublishingService {
 
   public async listAccounts(): Promise<SocialAccountRecord[]> {
     const rows = await this.db.query(
-      `SELECT * FROM social_accounts ORDER BY created_at DESC`,
+      `SELECT * FROM social_accounts WHERE platform <> 'meta_pending' ORDER BY created_at DESC`,
     );
     return rows.map((r) => this.mapAccountRow(r));
   }
@@ -133,10 +167,38 @@ export class PublishingService {
   }
 
   public async createAccount(input: CreateSocialAccountInput & { token?: string }): Promise<SocialAccountRecord> {
-    const id = cuid();
     const token = input.token || (input.credentials?.token as string) || (input.credentials?.apiKey as string);
-    const masked = maskSecret(token);
     const capabilities = this.registry.getPlatformCapabilities(input.platform as PublishingPlatform, input.provider as PublishingProviderId);
+
+    if (token) {
+      const account = await this.accounts.upsertAccount({
+        platform: input.platform,
+        provider: input.provider,
+        accountId: input.accountId,
+        accountName: input.accountName,
+        tokens: {
+          accessToken: token,
+          scopes: [],
+        },
+        capabilities,
+      });
+      logger.info({ accountId: account.id, platform: input.platform, provider: input.provider }, "Social account connected");
+      return (await this.getAccount(account.id)) || {
+        id: account.id,
+        platform: input.platform,
+        accountName: input.accountName,
+        accountId: input.accountId,
+        provider: input.provider,
+        connectionStatus: "connected",
+        capabilities,
+        maskedToken: "stored securely",
+        lastCheckedAt: new Date(account.lastCheckedAt),
+        createdAt: new Date(account.connectedAt),
+        updatedAt: new Date(account.lastCheckedAt),
+      };
+    }
+
+    const id = cuid();
 
     const rows = await this.db.query(
       `INSERT INTO social_accounts (
@@ -152,7 +214,7 @@ export class PublishingService {
         input.provider,
         "connected",
         JSON.stringify(capabilities),
-        token || "",
+        "",
       ],
     );
 
@@ -169,26 +231,54 @@ export class PublishingService {
     if (!existing) return null;
 
     const token = input.token;
+    if (token) {
+      const account = await this.accounts.upsertAccount({
+        platform: existing.platform,
+        provider: existing.provider,
+        accountId: existing.accountId,
+        accountName: input.accountName || existing.accountName,
+        tokens: { accessToken: token, scopes: [] },
+        capabilities: existing.capabilities as PlatformCapabilities,
+      });
+      if (input.connectionStatus && input.connectionStatus !== "connected") {
+        await this.db.query(
+          `UPDATE social_accounts SET connection_status = $2, updated_at = now() WHERE id = $1`,
+          [account.id, input.connectionStatus],
+        );
+      }
+      return this.getAccount(account.id);
+    }
+
     const rows = await this.db.query(
       `UPDATE social_accounts SET
         account_name = COALESCE($2, account_name),
         connection_status = COALESCE($3, connection_status),
-        encrypted_credentials = CASE WHEN $4::text IS NOT NULL THEN $4 ELSE encrypted_credentials END,
         updated_at = now()
       WHERE id = $1
       RETURNING *`,
-      [id, input.accountName || null, input.connectionStatus || null, token || null],
+      [id, input.accountName || null, input.connectionStatus || null],
     );
     if (!rows.length) return null;
     return this.mapAccountRow(rows[0]);
   }
 
+  public async disconnectAccount(id: string): Promise<{
+    disconnected: boolean;
+    revoked: boolean;
+    scheduledNeedingAttention: number;
+  }> {
+    const existing = await this.getAccount(id);
+    if (!existing) return { disconnected: false, revoked: false, scheduledNeedingAttention: 0 };
+    const result = await this.accounts.disconnect(id);
+    return {
+      disconnected: true,
+      revoked: result.revoked,
+      scheduledNeedingAttention: result.scheduledNeedingAttention,
+    };
+  }
+
   public async deleteAccount(id: string): Promise<boolean> {
-    const rows = await this.db.query(
-      `DELETE FROM social_accounts WHERE id = $1 RETURNING id`,
-      [id],
-    );
-    return rows.length > 0;
+    return (await this.disconnectAccount(id)).disconnected;
   }
 
   public async testAccountConnection(id: string): Promise<{
@@ -200,11 +290,16 @@ export class PublishingService {
     const account = await this.getAccount(id);
     if (!account) throw new Error("Account not found.");
 
-    const rawRows = await this.db.query<{ encrypted_credentials?: string }>(
-      `SELECT encrypted_credentials FROM social_accounts WHERE id = $1`,
-      [id],
-    );
-    const token = rawRows[0]?.encrypted_credentials;
+    const credentialsResult = await this.accounts.getUsableCredentials(id);
+    const token = credentialsResult.ok
+      ? String(
+          credentialsResult.credentials.accessToken ||
+          credentialsResult.credentials.apiKey ||
+          credentialsResult.credentials.botToken ||
+          credentialsResult.credentials.token ||
+          "",
+        )
+      : "";
 
     const provider = this.registry.getProvider(account.provider);
     if (!provider) {
@@ -611,9 +706,9 @@ export class PublishingService {
     // publish that needs none.
     const needsAccountToken = OAUTH_BACKED_PROVIDERS.includes(provider.id);
 
-    if (account && needsAccountToken) {
+    if (account) {
       const resolved = await this.accounts.getUsableCredentials(account.id);
-      if (!resolved.ok) {
+      if (!resolved.ok && needsAccountToken) {
         await this.failPublication(
           pub.id,
           resolved.error.userMessage,
@@ -622,7 +717,7 @@ export class PublishingService {
         );
         return (await this.getPublication(publicationId)) || pub;
       }
-      accountCredentials = resolved.credentials;
+      accountCredentials = resolved.ok ? resolved.credentials : {};
     }
 
     // Resolve Video Files & URLs
@@ -638,43 +733,43 @@ export class PublishingService {
     // no quota to protect: running media checks against it would only couple the
     // engine's deterministic tests to fixture files on disk.
     if (!isInternalProvider(provider.id)) {
-    await this.recordEvent(pub.id, "queued", "preflight", "Checking the video against the platform's requirements.");
-    const capabilities = (account?.capabilities || {}) as Record<string, unknown>;
-    const preflight = await runPreflight({
-      platform: pub.platform,
-      videoFilePath,
-      probe: this.mediaProbe,
-      account: {
-        // The aggregator and the Telegram bot publish with their own
-        // credentials, so "no ABUD account row" is not a blocker for them; only
-        // the direct OAuth adapters genuinely need a connected account.
-        connected: needsAccountToken ? Boolean(account) : true,
-        missingScopes: Array.isArray(capabilities.missingScopes)
-          ? (capabilities.missingScopes as string[])
-          : undefined,
-        accountLimits: {
-          maxDurationSeconds: Number(capabilities.maxVideoPostDurationSeconds) || undefined,
-          privacyOptions: Array.isArray(capabilities.privacyLevelOptions)
-            ? (capabilities.privacyLevelOptions as string[])
+      await this.recordEvent(pub.id, "queued", "preflight", "Checking the video against the platform's requirements.");
+      const capabilities = (account?.capabilities || {}) as Record<string, unknown>;
+      const preflight = await runPreflight({
+        platform: pub.platform,
+        videoFilePath,
+        probe: this.mediaProbe,
+        account: {
+          // The aggregator and the Telegram bot publish with their own
+          // credentials, so "no ABUD account row" is not a blocker for them; only
+          // the direct OAuth adapters genuinely need a connected account.
+          connected: needsAccountToken ? Boolean(account) : true,
+          missingScopes: Array.isArray(capabilities.missingScopes)
+            ? (capabilities.missingScopes as string[])
             : undefined,
+          accountLimits: {
+            maxDurationSeconds: Number(capabilities.maxVideoPostDurationSeconds) || undefined,
+            privacyOptions: Array.isArray(capabilities.privacyLevelOptions)
+              ? (capabilities.privacyLevelOptions as string[])
+              : undefined,
+          },
         },
-      },
-      title: pub.title,
-      caption: pub.caption,
-      hashtags: pub.hashtags,
-      requestedPrivacy: pub.metadata?.tiktok?.privacyLevel || pub.metadata?.privacy,
-    });
+        title: pub.title,
+        caption: pub.caption,
+        hashtags: pub.hashtags,
+        requestedPrivacy: pub.metadata?.tiktok?.privacyLevel || pub.metadata?.privacy,
+      });
 
-    if (!preflight.ok) {
-      const blocking = preflight.issues.filter((issue) => issue.severity === "error");
-      await this.failPublication(
-        pub.id,
-        blocking.map((issue) => issue.message).join(" "),
-        `preflight:${blocking[0]?.code || "failed"}`,
-        false,
-      );
-      return (await this.getPublication(publicationId)) || pub;
-    }
+      if (!preflight.ok) {
+        const blocking = preflight.issues.filter((issue) => issue.severity === "error");
+        await this.failPublication(
+          pub.id,
+          blocking.map((issue) => issue.message).join(" "),
+          `preflight:${blocking[0]?.code || "failed"}`,
+          false,
+        );
+        return (await this.getPublication(publicationId)) || pub;
+      }
     }
 
     const attemptNumber = pub.attemptCount + 1;
@@ -694,7 +789,18 @@ export class PublishingService {
         thumbnailFilePath: fs.existsSync(thumbnailFilePath) ? thumbnailFilePath : undefined,
         thumbnailUrl,
         platform: pub.platform,
-        account: account || undefined,
+        account: account
+          ? {
+              ...account,
+              encryptedCredentials: String(
+                accountCredentials.accessToken ||
+                accountCredentials.apiKey ||
+                accountCredentials.botToken ||
+                accountCredentials.token ||
+                "",
+              ),
+            }
+          : undefined,
         title: pub.title,
         caption: pub.caption,
         description: pub.description,
@@ -761,12 +867,16 @@ export class PublishingService {
         );
 
         const finalPub = await this.getPublication(pub.id);
+        const visibleStatus = publishResult.status === "processing" ? "processing" : "published";
         this.broadcastEvent({
           id: String(Date.now()),
           publicationId: pub.id,
-          status: publishResult.status === "processing" ? "processing" : "published",
-          stage: "published",
-          message: `Published to ${pub.platform}`,
+          status: visibleStatus,
+          stage: visibleStatus,
+          message:
+            visibleStatus === "published"
+              ? `Published to ${pub.platform}.`
+              : `${pub.platform} accepted the upload and is processing it.`,
           createdAt: new Date(),
         });
         return finalPub || pub;
@@ -891,37 +1001,30 @@ export class PublishingService {
   }> {
     const capabilities = this.registry.getPlatformCapabilities(platform);
     const meta = readMetadata(this.config.videosDirPath, videoId);
-    const warnings: string[] = [];
-    const errors: string[] = [];
-
-    const duration = meta?.durationSeconds ?? meta?.requestedDurationSeconds ?? 30;
-    const aspect = meta?.aspectRatio || "9:16";
-    const size = meta?.sizeBytes || 0;
-    const resolution = meta?.resolution || "1080p";
-
-    if (duration > capabilities.maxDurationSeconds) {
-      errors.push(
-        `Video duration (${duration}s) exceeds ${capabilities.displayName} max limit (${capabilities.maxDurationSeconds}s).`,
-      );
-    }
-    if (duration < capabilities.minDurationSeconds) {
-      errors.push(
-        `Video duration (${duration}s) is shorter than ${capabilities.displayName} minimum (${capabilities.minDurationSeconds}s).`,
-      );
-    }
-
-    if (!capabilities.supportedAspectRatios.includes(aspect)) {
-      warnings.push(
-        `Aspect ratio ${aspect} is not optimal for ${capabilities.displayName} (recommended: ${capabilities.supportedAspectRatios.join(", ")}).`,
-      );
-    }
-
-    const sizeMB = size / (1024 * 1024);
-    if (sizeMB > capabilities.maxFileSizeMB) {
-      errors.push(
-        `File size (${sizeMB.toFixed(1)}MB) exceeds ${capabilities.displayName} limit of ${capabilities.maxFileSizeMB}MB.`,
-      );
-    }
+    const metaRecord = (meta || {}) as Record<string, unknown>;
+    const videoFilePath = path.join(this.config.videosDirPath, `${videoId}.mp4`);
+    const preflight = await runPreflight({
+      platform,
+      videoFilePath,
+      probe: this.mediaProbe,
+      account: { connected: true },
+      title: typeof metaRecord.title === "string" ? metaRecord.title : undefined,
+      caption:
+        typeof metaRecord.description === "string"
+          ? metaRecord.description
+          : typeof metaRecord.caption === "string"
+            ? metaRecord.caption
+            : undefined,
+      hashtags: Array.isArray(metaRecord.hashtags) ? (metaRecord.hashtags as string[]) : undefined,
+      requestedPrivacy: typeof metaRecord.privacy === "string" ? metaRecord.privacy : undefined,
+    });
+    const warnings = preflight.issues
+      .filter((issue) => issue.severity === "warning")
+      .map((issue) => issue.message);
+    const errors = preflight.issues
+      .filter((issue) => issue.severity === "error")
+      .map((issue) => issue.message);
+    const media = preflight.media;
 
     return {
       valid: errors.length === 0,
@@ -929,10 +1032,10 @@ export class PublishingService {
       errors,
       capabilities,
       videoStats: {
-        durationSeconds: duration,
-        aspectRatio: aspect,
-        sizeBytes: size,
-        resolution,
+        durationSeconds: media?.durationSeconds,
+        aspectRatio: media?.width && media.height ? `${media.width}:${media.height}` : undefined,
+        sizeBytes: media?.sizeBytes,
+        resolution: media?.width && media.height ? `${media.width}x${media.height}` : undefined,
       },
     };
   }
@@ -980,8 +1083,8 @@ export class PublishingService {
       status: r.status as PublishingStatus,
       stage: r.stage,
       message: r.message,
-      technicalMessage: r.technical_message,
-      payload: r.payload,
+      technicalMessage: undefined,
+      payload: undefined,
       createdAt: new Date(r.created_at),
     }));
   }
@@ -989,7 +1092,7 @@ export class PublishingService {
   public subscribe(res: ExpressResponse): () => void {
     const handler = (event: PublishingEventRecord) => {
       res.write(`event: publishing-event\n`);
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      res.write(`data: ${JSON.stringify(safePublishingEvent(event))}\n\n`);
     };
 
     this.events.on("publishing-event", handler);
@@ -1070,7 +1173,6 @@ export class PublishingService {
       status: "failed",
       stage: "failed",
       message: error,
-      technicalMessage: technicalError,
       createdAt: new Date(),
     });
   }
@@ -1093,7 +1195,7 @@ export class PublishingService {
         stage,
         message,
         technicalMessage || null,
-        payload ? JSON.stringify(payload) : null,
+        payload ? JSON.stringify(sanitizeProviderPayload(payload)) : null,
       ],
     );
   }
@@ -1129,7 +1231,7 @@ export class PublishingService {
       [
         attemptId,
         status,
-        providerResponse ? JSON.stringify(providerResponse) : null,
+        providerResponse ? JSON.stringify(sanitizeProviderPayload(providerResponse)) : null,
         error || null,
         technicalError || null,
       ],
@@ -1137,19 +1239,35 @@ export class PublishingService {
   }
 
   private broadcastEvent(event: PublishingEventRecord): void {
-    this.events.emit("publishing-event", event);
+    this.events.emit("publishing-event", safePublishingEvent(event));
   }
 
   private mapAccountRow(r: any): SocialAccountRecord {
+    const provider = r.provider as PublishingProviderId;
+    const connectionStatus = r.connection_status || "connected";
+    const capabilities = typeof r.capabilities === "string" ? JSON.parse(r.capabilities) : r.capabilities || {};
+    const blocker =
+      connectionStatus === "expired"
+        ? "Reconnect this account."
+        : connectionStatus === "disconnected"
+          ? "This account is disconnected."
+          : connectionStatus === "error"
+            ? "Test or reconnect this account."
+            : undefined;
     return {
       id: r.id,
       platform: r.platform,
       accountName: r.account_name,
       accountId: r.account_id,
-      provider: r.provider,
-      connectionStatus: r.connection_status,
-      capabilities: typeof r.capabilities === "string" ? JSON.parse(r.capabilities) : r.capabilities || {},
-      maskedToken: maskSecret(r.encrypted_credentials),
+      provider,
+      connectionStatus,
+      capabilities,
+      maskedToken: r.encrypted_credentials ? "stored securely" : undefined,
+      accountIdentitySafeLabel: r.account_name || r.account_id,
+      authenticated: connectionStatus === "connected",
+      connectionVerified: connectionStatus === "connected" && Boolean(r.last_checked_at),
+      publicationVerified: false,
+      blocker,
       lastCheckedAt: new Date(r.last_checked_at || r.created_at),
       createdAt: new Date(r.created_at),
       updatedAt: new Date(r.updated_at),
@@ -1177,7 +1295,7 @@ export class PublishingService {
       providerUrl: r.provider_url,
       attemptCount: r.attempt_count || 0,
       lastError: r.last_error,
-      technicalError: r.technical_error,
+      technicalError: undefined,
       idempotencyKey: r.idempotency_key,
       createdAt: new Date(r.created_at),
       updatedAt: new Date(r.updated_at),

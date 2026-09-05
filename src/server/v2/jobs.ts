@@ -14,12 +14,19 @@ import type { ProductionSpec } from "../../types/productionSpec";
 import { estimateProductionCost } from "./cost-estimator";
 import {
   type CheckpointStage,
+  checkpointStages,
   completeStage,
   failStage,
   beginStage,
   invalidateFromStage,
   reusableStages,
 } from "./checkpoints";
+import {
+  attachRetryReuseManifest,
+  sha256Text,
+  type DurableSceneArtifact,
+} from "./artifacts/durableArtifacts";
+import { preprocessArabicSpeech } from "./voice-providers/arabicSpeechPreprocessor";
 
 const allowedTransitions: Record<JobStatus, JobStatus[]> = {
   queued: ["preparing", "canceled", "failed"],
@@ -87,6 +94,39 @@ type DbJobEventRow = {
   technical_message?: string;
   created_at: Date;
 };
+
+function retrySceneTextFingerprints(spec: ProductionSpec | undefined, artifact: DurableSceneArtifact): {
+  canonicalSpokenContentFingerprint?: string;
+  displayContentFingerprint?: string;
+} {
+  const scene = spec?.scenes?.[artifact.sceneIndex] as any;
+  if (!scene) return {};
+  const displayText = String(scene.narration || "");
+  const spokenText = String(scene.spokenNarration || scene.narration || "");
+  const normalizedSpoken =
+    spec?.language === "ar"
+      ? preprocessArabicSpeech(spokenText, {
+          dialect: spec.dialect,
+          pronunciationOverrides:
+            (spec as any).pronunciationOverrides ||
+            (spec as any).metadata?.pronunciationOverrides ||
+            (spec as any).pronunciations,
+          brandPronunciations: (spec.brandKit?.voiceProfile as any)?.pronunciationDictionary,
+        }).ttsNormalizedText
+      : spokenText.trim();
+  return {
+    canonicalSpokenContentFingerprint: sha256Text({
+      text: normalizedSpoken,
+      language: spec?.language || "auto",
+      dialect: spec?.dialect || "none",
+    }),
+    displayContentFingerprint: sha256Text({
+      text: displayText.trim(),
+      language: spec?.language || "auto",
+      dialect: spec?.dialect || "none",
+    }),
+  };
+}
 
 export function isValidJobTransition(current: JobStatus, next: JobStatus): boolean {
   if (current === next) return true;
@@ -392,9 +432,21 @@ export class JobService {
     } else {
       checkpoint = failStage(current.checkpoint, stage, options.error || "Stage failed.");
     }
+    // V2.4 Pass 5 wall-clock accounting fix: a stage like "media"/"voice"/
+    // "captions" fires once PER SCENE in the main render loop, and this used
+    // to overwrite stage_timings[`${stage}Ms`] on every call - so only the
+    // LAST scene's individual duration survived, silently discarding every
+    // earlier scene's time. A real production (job cmtewtb4p000107l29fxzfggb)
+    // measured 491s wall clock against only 147s of "accounted" stage time -
+    // the other 344s was earlier scenes' media/caption time this overwrite
+    // had already thrown away. Summing instead of replacing makes the stored
+    // total genuinely cumulative across the whole production.
+    const previousStageTimings = (current.stageTimings || {}) as Record<string, number>;
     const stageTimings = {
-      ...(current.stageTimings || {}),
-      ...(typeof options.timingMs === "number" ? { [`${stage}Ms`]: Math.round(options.timingMs) } : {}),
+      ...previousStageTimings,
+      ...(typeof options.timingMs === "number"
+        ? { [`${stage}Ms`]: Math.round((previousStageTimings[`${stage}Ms`] || 0) + options.timingMs) }
+        : {}),
     };
     const rows = await this.db.query<DbJobRow>(
       `UPDATE jobs
@@ -482,7 +534,13 @@ export class JobService {
     );
   }
 
-  public async retryJob(id: string): Promise<JobRecord> {
+  public async retryJob(
+    id: string,
+    options: {
+      idempotencyKey?: string;
+      reuseArtifacts?: DurableSceneArtifact[];
+    } = {},
+  ): Promise<JobRecord> {
     const current = await this.getJob(id);
     if (!current) {
       throw new Error("Job not found.");
@@ -490,20 +548,72 @@ export class JobService {
     if (current.status !== "failed" && current.status !== "canceled") {
       throw new Error("Only failed or canceled jobs can be retried.");
     }
+    const priorLineage = Array.isArray((current.input as any)?.__retryLineage)
+      ? (current.input as any).__retryLineage.filter((item: unknown) => typeof item === "string")
+      : [];
+    const originalJobId = (current.input as any)?.__originalJobId || priorLineage[0] || current.id;
+    const retryNumber = priorLineage.length + 1;
+    const safeReuseArtifacts = (options.reuseArtifacts || [])
+      .filter((artifact) => artifact.valid === true)
+      .map((artifact) =>
+        attachRetryReuseManifest(artifact, retrySceneTextFingerprints(current.productionSpec, artifact)),
+      );
+    const reusedStageSet = new Set<string>(reusableStages(current.checkpoint));
+    for (const artifact of safeReuseArtifacts) {
+      if (artifact.type === "voice") reusedStageSet.add("voice");
+      if (artifact.type === "captions") reusedStageSet.add("captions");
+      if (artifact.type === "media") reusedStageSet.add("media");
+      if (artifact.type === "mastered_voice") reusedStageSet.add("mastering");
+    }
+    reusedStageSet.add("planning");
+    const reusedStageList = checkpointStages.filter((stage) => reusedStageSet.has(stage));
+    const regeneratedStages = checkpointStages.filter(
+      (stage) => !reusedStageSet.has(stage) || stage === "render" || stage === "validation",
+    );
+    const retryIdempotencyKey =
+      sanitizeIdempotencyKey(options.idempotencyKey) ||
+      sanitizeIdempotencyKey(`retry:${current.id}:${current.completedAt || current.updatedAt}:${retryNumber}`);
+
+    const productionSpec = current.productionSpec
+      ? {
+          ...current.productionSpec,
+          metadata: {
+            ...((current.productionSpec as any).metadata || {}),
+            revision: {
+              ...(((current.productionSpec as any).metadata || {}).revision || {}),
+              type: "retry",
+              originalJobId,
+              retryOf: current.id,
+              retryNumber,
+              reuseStages: reusedStageList,
+              regeneratedStages,
+              reuseArtifacts: safeReuseArtifacts,
+            },
+          },
+        }
+      : undefined;
+
     // Historical truth is preserved: the failed record is untouched and the new
-    // attempt records its lineage. Idempotency keys are not carried across so the
-    // retry is a genuinely new production, not a dedupe hit.
-    const { idempotencyKey, ...carried } = (current.input || {}) as Record<string, unknown>;
+    // attempt records its lineage. The retry gets its own idempotency key so a
+    // double-click cannot create parallel retries for the same failed attempt.
+    const carried = { ...((current.input || {}) as Record<string, unknown>) };
+    delete carried.idempotencyKey;
     return this.createVideoJob({
       ...carried,
+      ...(productionSpec ? { productionSpec } : {}),
       title: current.title ? `${current.title} retry` : undefined,
+      idempotencyKey: retryIdempotencyKey,
+      __originalJobId: originalJobId,
       __retryOf: current.id,
       __retryLineage: [
-        ...(Array.isArray((current.input as any)?.__retryLineage)
-          ? (current.input as any).__retryLineage
-          : []),
+        ...priorLineage,
         current.id,
       ],
+      __retryReuse: {
+        reusedStages: reusedStageList,
+        regeneratedStages,
+        reusedArtifactIds: safeReuseArtifacts.map((artifact) => artifact.artifactId),
+      },
     });
   }
 

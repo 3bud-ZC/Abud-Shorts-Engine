@@ -54,7 +54,7 @@ export class PexelsAPI {
     const headers = new Headers();
     headers.append("Authorization", this.API_KEY);
     const response = await fetch(
-      `https://api.pexels.com/videos/search?orientation=${orientation}&size=medium&per_page=80&query=${encodeURIComponent(searchTerm)}`,
+      `https://api.pexels.com/v1/videos/search?orientation=${orientation}&size=medium&per_page=80&query=${encodeURIComponent(searchTerm)}`,
       {
         method: "GET",
         headers,

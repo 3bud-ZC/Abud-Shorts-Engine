@@ -70,6 +70,43 @@ services:
         aliases:
           - n8n
 
+  abud-shorts-local-tts:
+    container_name: abud-shorts-local-tts
+    build:
+      context: ./services/local-tts
+      dockerfile: Dockerfile
+    image: abud-shorts-local-tts:v2
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      PORT: 8765
+      DOCKER: "true"
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-change-me-v2-internal-token}
+      ABUD_MODEL_CACHE_DIR: /models
+      LOCAL_TTS_IDLE_UNLOAD_SECONDS: ${LOCAL_TTS_IDLE_UNLOAD_SECONDS:-600}
+    volumes:
+      - ${ABUD_MODEL_CACHE_DIR:-./data-dev/models}:/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks:
+      abud-shorts-v2:
+        aliases:
+          - local-tts
+
   abud-shorts-render-worker:
     container_name: abud-shorts-render-worker
     build:
@@ -82,9 +119,31 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    # V2.4 Pass 5: optional NVIDIA GPU passthrough for h264_nvenc hardware
+    # encoding (Remotion's `hardwareAcceleration: "if-possible"`, gated by
+    # ABUD_HARDWARE_ACCELERATION below - off by default). Compose only
+    # attempts this reservation when the driver is actually present; on a
+    # host with no NVIDIA Container Toolkit installed this section is simply
+    # never satisfied and the container still starts CPU-only, because
+    # nothing in the app or render path requires the GPU to exist.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
+      # The base image is a plain node:22-bookworm-slim, not an
+      # nvidia/cuda-branded one, so the NVIDIA Container Toolkit does not
+      # mount libnvidia-encode.so.1 (the NVENC user-mode library) unless the
+      # "video" capability is explicitly requested here - "compute,utility"
+      # alone (the toolkit's default) is enough for nvidia-smi/CUDA but not
+      # for hardware video encoding.
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
       SERVICE_ROLE: render-worker
       V2_ENABLED: "true"
+      ABUD_HARDWARE_ACCELERATION: ${ABUD_HARDWARE_ACCELERATION:-disable}
       PORT: 3125
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
@@ -92,6 +151,7 @@ services:
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
       PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-45000}
       WEBHOOK_TIMEOUT_MS: ${WEBHOOK_TIMEOUT_MS:-10000}
+      REMOTION_RENDER_TIMEOUT_MS: ${REMOTION_RENDER_TIMEOUT_MS:-420000}
       MIN_FREE_DISK_BYTES: ${MIN_FREE_DISK_BYTES:-536870912}
       TEMP_MAX_AGE_MS: ${TEMP_MAX_AGE_MS:-86400000}
       HEALTH_CACHE_TTL_MS: ${HEALTH_CACHE_TTL_MS:-10000}
@@ -107,6 +167,7 @@ services:
       KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
       # Arabic production voice. Normally configured from the app UI and stored
       # encrypted in the provider vault; the env var is only an override.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://local-tts:8765}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       # Legacy Piper runtime for historical jobs only - unset by default.
@@ -114,11 +175,20 @@ services:
       PIPER_AR_MODEL_PATH: ${PIPER_AR_MODEL_PATH:-}
       PIPER_AR_MODEL_CONFIG_PATH: ${PIPER_AR_MODEL_CONFIG_PATH:-}
       PIPER_AR_VOICE_ID: ${PIPER_AR_VOICE_ID:-ar_JO-kareem-medium}
+      ABUD_ENABLE_OPENCLIP_SEMANTICS: ${ABUD_ENABLE_OPENCLIP_SEMANTICS:-false}
+      ABUD_OPENCLIP_LOCAL_WEIGHTS: ${ABUD_OPENCLIP_LOCAL_WEIGHTS:-}
+      ABUD_OPENCLIP_MODEL_NAME: ${ABUD_OPENCLIP_MODEL_NAME:-ViT-B-32}
+      ABUD_OPENCLIP_PYTHON_BIN: ${ABUD_OPENCLIP_PYTHON_BIN:-}
+      PYTHONPATH: ${ABUD_OPENCLIP_PYTHONPATH:-}
       CONCURRENCY: ${CONCURRENCY:-1}
       VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
       WHISPER_VERBOSE: ${WHISPER_VERBOSE:-false}
     volumes:
       - C:/abud-shorts-engine/data-dev:/app/data
+      # Local TTS model readiness (LocalModelManager) is checked from this
+      # filesystem view, not from a live call to local-tts, so app and
+      # render-worker need the same model cache mount local-tts uses.
+      - ${ABUD_MODEL_CACHE_DIR:-./data-dev/models}:/models
     entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3125/health >/dev/null || exit 1"]
@@ -156,6 +226,7 @@ services:
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
       PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-45000}
       WEBHOOK_TIMEOUT_MS: ${WEBHOOK_TIMEOUT_MS:-10000}
+      REMOTION_RENDER_TIMEOUT_MS: ${REMOTION_RENDER_TIMEOUT_MS:-420000}
       MIN_FREE_DISK_BYTES: ${MIN_FREE_DISK_BYTES:-536870912}
       TEMP_MAX_AGE_MS: ${TEMP_MAX_AGE_MS:-86400000}
       HEALTH_CACHE_TTL_MS: ${HEALTH_CACHE_TTL_MS:-10000}
@@ -178,6 +249,7 @@ services:
       KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
       # Arabic production voice. Normally configured from the app UI and stored
       # encrypted in the provider vault; the env var is only an override.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://local-tts:8765}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       # Legacy Piper runtime for historical jobs only - unset by default.
@@ -185,6 +257,11 @@ services:
       PIPER_AR_MODEL_PATH: ${PIPER_AR_MODEL_PATH:-}
       PIPER_AR_MODEL_CONFIG_PATH: ${PIPER_AR_MODEL_CONFIG_PATH:-}
       PIPER_AR_VOICE_ID: ${PIPER_AR_VOICE_ID:-ar_JO-kareem-medium}
+      ABUD_ENABLE_OPENCLIP_SEMANTICS: ${ABUD_ENABLE_OPENCLIP_SEMANTICS:-false}
+      ABUD_OPENCLIP_LOCAL_WEIGHTS: ${ABUD_OPENCLIP_LOCAL_WEIGHTS:-}
+      ABUD_OPENCLIP_MODEL_NAME: ${ABUD_OPENCLIP_MODEL_NAME:-ViT-B-32}
+      ABUD_OPENCLIP_PYTHON_BIN: ${ABUD_OPENCLIP_PYTHON_BIN:-}
+      PYTHONPATH: ${ABUD_OPENCLIP_PYTHONPATH:-}
       CONCURRENCY: ${CONCURRENCY:-1}
       VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
       WHISPER_VERBOSE: ${WHISPER_VERBOSE:-false}
@@ -192,6 +269,7 @@ services:
       - "3130:3123"
     volumes:
       - C:/abud-shorts-engine/data-dev:/app/data
+      - ${ABUD_MODEL_CACHE_DIR:-./data-dev/models}:/models
     entrypoint: [ "sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js" ]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3123/health >/dev/null || exit 1"]

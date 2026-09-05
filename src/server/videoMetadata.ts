@@ -64,6 +64,24 @@ export interface VideoMetadata {
   sceneSourceDecisions?: Array<Record<string, unknown>>;
   postProductionProcessors?: Array<Record<string, unknown>>;
   selectedVisuals?: Array<Record<string, unknown>>;
+  professionalVisualQuality?: Record<string, unknown>;
+  realVisualCoveragePercent?: number;
+  providerMix?: Record<string, number>;
+  uniqueShotCount?: number;
+  uniqueAssetCount?: number;
+  repeatedAssetCount?: number;
+  averageSemanticScore?: number;
+  minimumSemanticScore?: number;
+  blackFramePercent?: number;
+  longestBlackRunMs?: number;
+  blackFrameReport?: Record<string, unknown>;
+  textOnlyTimelinePercent?: number;
+  generatedTimelinePercent?: number;
+  stockTimelinePercent?: number;
+  uploadedTimelinePercent?: number;
+  motionOverlayPercent?: number;
+  rawPromptLeakCount?: number;
+  inventedClaimRiskCount?: number;
   sceneQa?: Array<Record<string, unknown>>;
   durableArtifacts?: Array<Record<string, unknown>>;
   artifactReuse?: Record<string, unknown>;
@@ -79,6 +97,7 @@ export interface VideoMetadata {
   maxNarrationSilenceMs?: number;
   deadAirReport?: Record<string, unknown>;
   mediaPlanScore?: number;
+  mediaPlanScoreV24?: Record<string, unknown>;
   overallProductionScore?: number;
   qualityScoreV2?: Record<string, unknown>;
   validationResult?: Record<string, unknown>;
@@ -103,6 +122,33 @@ export interface VideoMetadata {
   hostPathHint?: string;
   beatMap?: Record<string, unknown>;
   error?: string;
+  /**
+   * V2.4 Pass 4: true only when BOTH the final rendered media's real-visual
+   * coverage gate AND its mixed-audio silence gate passed - not merely
+   * whether an audio stream exists. A production that fails either gate for
+   * a professional Auto mode is never marked `status: "ready"`; see
+   * `professionalVisualQuality.readyForProfessionalAuto` and
+   * `mixedSilenceGate` for which check failed.
+   */
+  professionalReady?: boolean;
+  mixedSilenceGate?: Record<string, unknown>;
+  renderStrategy?: string;
+  rendererVersion?: string;
+  fastPathEligible?: boolean;
+  fastPathUsed?: boolean;
+  renderFallbackReason?: string;
+  compositionMs?: number;
+  finalEncodeMs?: number;
+  remotionFramesRendered?: number;
+  baseFootageFramesThroughChromium?: number;
+  /**
+   * V2.4 Pass 5 wall-clock accounting: fine-grained timings the coarse
+   * per-stage progress buckets (see `stageTimings` in the jobs table) could
+   * not see - providerSearchMs, providerDownloadMs, openClipInferenceMs,
+   * openClipFreshProcessMs, openClipPoolInitMs, openClipCacheHitCount.
+   */
+  detailedStageTimings?: Record<string, number>;
+  detailedStageCounts?: Record<string, number>;
 }
 
 export function getMetadataPath(videosDir: string, videoId: string): string {

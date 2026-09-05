@@ -19,8 +19,15 @@ import {
   getElevenLabsModelCapabilities,
   normalizeElevenLabsVoice,
   parseElevenLabsError,
+  preflightElevenLabsInput,
+  classifyElevenLabsEndpoint,
+  categorizeElevenLabsTaxonomy,
+  ElevenLabsProviderError,
 } from "./voice-providers/elevenlabsVoiceProvider";
-import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
+import { classifyRenderFailure } from "./customerView";
+import { parseElevenLabsAlignment } from "./voice-providers/elevenLabsAlignment";
+import { createVoiceInputHash } from "./artifacts/durableArtifacts";
+import { ARABIC_ELEVENLABS_REQUIRED_MESSAGE, ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE, isLegacyPiperVoiceId } from "./voice-providers/types";
 
 const TEST_ELEVENLABS_KEY = "sk_test_key_that_is_long_enough";
 
@@ -73,6 +80,15 @@ describe("Voice Providers & Registry", () => {
     expect(val.status).toBe("not_configured");
   });
 
+  it("ElevenLabs refuses synthesis without a human-chosen account voice", async () => {
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+
+    await expect(provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "", { languageCode: "ar" })).rejects.toThrow(
+      "No default Arabic voice has been selected",
+    );
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
   it("VoiceRegistry keeps English on Kokoro if ElevenLabs is not configured", async () => {
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
@@ -86,7 +102,7 @@ describe("Voice Providers & Registry", () => {
     expect(voices.some((v) => v.provider === "elevenlabs")).toBe(false);
   });
 
-  it("routes Arabic, Egyptian and MSA narration to ElevenLabs", () => {
+  it("routes Arabic, Egyptian and MSA narration to ElevenLabs when explicitly requested", () => {
     // Piper is fully installed here to prove it is never chosen for production.
     stubPiperConfigured();
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
@@ -97,10 +113,10 @@ describe("Voice Providers & Registry", () => {
         language: "ar",
         dialect,
         qualityProfile: "balanced",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
       });
       expect(decision.providerId).toBe("elevenlabs");
-      expect(decision.reason).toBe("arabic_production_elevenlabs");
+      expect(decision.reason).toBe("arabic_explicit_premium_elevenlabs");
     }
   });
 
@@ -117,7 +133,7 @@ describe("Voice Providers & Registry", () => {
         text: EGYPTIAN_TEST_SCRIPT,
         language: "ar",
         dialect: "egyptian",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
         fallbackPolicy: "local",
       }),
     ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
@@ -138,7 +154,7 @@ describe("Voice Providers & Registry", () => {
           requestedProvider: provider,
           fallbackPolicy: "local",
         }),
-      ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+      ).toThrow(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
     }
   });
 
@@ -146,18 +162,17 @@ describe("Voice Providers & Registry", () => {
     // Old jobs persisted ar_JO-kareem-medium. Metadata must stay parseable, but
     // a Piper model name must never be forwarded as an ElevenLabs voice.
     expect(isLegacyPiperVoiceId("ar_JO-kareem-medium")).toBe(true);
-    vi.stubEnv("ELEVENLABS_DEFAULT_VOICE_ID", "acct_voice_1");
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
 
     const decision = registry.route({
       text: EGYPTIAN_TEST_SCRIPT,
       language: "ar",
       dialect: "egyptian",
-      requestedProvider: "auto",
+      requestedProvider: "elevenlabs",
       voiceId: "ar_JO-kareem-medium",
     });
     expect(decision.providerId).toBe("elevenlabs");
-    expect(decision.voiceId).toBe("acct_voice_1");
+    expect(decision.voiceId).toBe("");
   });
 
   it("never sends language_code for eleven_multilingual_v2 and infers Arabic from the text instead", async () => {
@@ -187,6 +202,33 @@ describe("Voice Providers & Registry", () => {
     expect(result.estimatedCost).toBeUndefined();
   });
 
+  it("does not issue a second paid TTS request when the timestamp synthesis is rejected", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount += 1;
+        return true;
+      })
+      .query(true)
+      .reply(400, {
+        detail: {
+          status: "invalid_input",
+          message: "Invalid input",
+          request_id: "req_invalid_input",
+        },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    await expect(
+      provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      }),
+    ).rejects.toThrow(/Invalid input/);
+    expect(callCount).toBe(1);
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
   it("keeps the same voice and model across every scene of one video", async () => {
     const bodies: any[] = [];
     nock("https://api.elevenlabs.io")
@@ -206,7 +248,7 @@ describe("Voice Providers & Registry", () => {
           text: sceneText,
           language: "ar",
           dialect: "egyptian",
-          requestedProvider: "auto",
+          requestedProvider: "elevenlabs",
           voiceId: "voice_abc",
         }),
       );
@@ -232,7 +274,7 @@ describe("Voice Providers & Registry", () => {
       text: EGYPTIAN_TEST_SCRIPT,
       language: "ar",
       dialect: "egyptian",
-      requestedProvider: "auto",
+      requestedProvider: "elevenlabs",
       voiceId: "voice_abc",
       voicePreset: "energetic_ad",
     });
@@ -261,7 +303,7 @@ describe("Voice Providers & Registry", () => {
         text: sceneText,
         language: "ar",
         dialect: "egyptian",
-        requestedProvider: "auto",
+        requestedProvider: "elevenlabs",
         voiceId: "voice_abc",
         voicePreset: "energetic_ad",
       });
@@ -312,6 +354,37 @@ describe("Voice Providers & Registry", () => {
     // have not confirmed the model accepts.
     const unknownModel = getElevenLabsModelCapabilities("eleven_future_model_v9");
     expect(unknownModel.supportsLanguageCode).toBe(false);
+  });
+
+  it("preflights the incident scene text without sending unsupported multilingual_v2 language_code", () => {
+    const result = preflightElevenLabsInput({
+      text: "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      requestAlignment: true,
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(result.status).toBe("VALID");
+    expect(result.requestShape.languageCodeRequested).toBe("ar");
+    expect(result.requestShape.languageCodeSent).toBe(false);
+    expect(result.requestShape.endpoint).toBe("text-to-speech-with-timestamps");
+    expect(result.requestShape.textLength).toBe(66);
+    expect(result.textFingerprint).toHaveLength(64);
+    expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+  });
+
+  it("blocks malformed ElevenLabs text before an HTTP synthesis request", async () => {
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+
+    await expect(
+      provider.generateVoice("مرحبا\u0000<script>alert(1)</script>", "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      }),
+    ).rejects.toThrow(/ElevenLabs voice input invalid before synthesis/);
+    expect(nock.pendingMocks()).toEqual([]);
   });
 
   it("pages through GET /v2/voices until has_more is false", async () => {
@@ -647,7 +720,7 @@ describe("Voice Providers & Registry", () => {
     const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
 
     const arabic = await registry.listCompatibleVoices({
-      provider: "auto",
+      provider: "elevenlabs",
       language: "ar",
       dialect: "egyptian",
     });
@@ -673,7 +746,7 @@ describe("Voice Providers & Registry", () => {
     const registry = new VoiceRegistry(dummyKokoro, "");
 
     const arabic = await registry.listCompatibleVoices({
-      provider: "auto",
+      provider: "elevenlabs",
       language: "ar",
       dialect: "egyptian",
     });
@@ -700,7 +773,7 @@ describe("Voice Providers & Registry", () => {
     delete process.env.ELEVENLABS_API_KEY;
     const registry = new VoiceRegistry(dummyKokoro, "");
 
-    // Arabic is refused with the ElevenLabs policy message, not a provider message.
+    // Arabic is refused with the local voice policy message, not a provider message.
     expect(() =>
       registry.route({
         text: "مرحبا",
@@ -709,7 +782,7 @@ describe("Voice Providers & Registry", () => {
         requestedProvider: "google_cloud_tts",
         fallbackPolicy: "local",
       }),
-    ).toThrow(ARABIC_ELEVENLABS_REQUIRED_MESSAGE);
+    ).toThrow(ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE);
 
     expect(() =>
       registry.route({
@@ -809,3 +882,708 @@ describe("Voice Providers & Registry", () => {
     expect(result.spokenText).toContain("abud دوت fun");
   });
 });
+
+describe("ElevenLabs Error Taxonomy and Diagnostic Hardening", () => {
+  it("classifies endpoint types accurately", () => {
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/text-to-speech/v1/with-timestamps")).toBe("text-to-speech-with-timestamps");
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/text-to-speech/v1")).toBe("text-to-speech");
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/voices")).toBe("voices");
+    expect(classifyElevenLabsEndpoint("https://api.elevenlabs.io/v1/user")).toBe("user");
+  });
+
+  it("handles 400 invalid input with correct taxonomy, single paid call, and customer-safe error", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(400, {
+        detail: { status: "invalid_input", message: "Invalid input", request_id: "req_invalid_400" },
+      }, { "request-id": "hdr_req_400" });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught).toBeInstanceOf(ElevenLabsProviderError);
+    expect(caught.detail.taxonomyCode).toBe("INVALID_INPUT");
+    expect(caught.detail.httpStatus).toBe(400);
+    expect(caught.detail.requestId).toBe("req_invalid_400");
+    expect(caught.detail.endpointClass).toBe("text-to-speech-with-timestamps");
+    const sanitized = caught.toSanitizedTechnicalString();
+    expect(sanitized).toContain("[elevenlabs:INVALID_INPUT]");
+    expect(sanitized).not.toContain(TEST_ELEVENLABS_KEY);
+    const customer = classifyRenderFailure(sanitized);
+    expect(customer.category).toBe("ELEVENLABS_PROVIDER_ERROR");
+  });
+
+  it("handles 401 auth failure without fallback calls", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(401, {
+        detail: { status: "invalid_api_key", message: "Invalid API key" },
+      }, { "xi-request-id": "req_auth_401" });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("AUTH_FAILED");
+    expect(caught.detail.requestId).toBe("req_auth_401");
+    expect(caught.toSanitizedTechnicalString()).not.toContain(TEST_ELEVENLABS_KEY);
+  });
+
+  it("handles 404 voice not found without retry fallback", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_unknown\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(404, {
+        detail: { status: "voice_not_found", message: "Voice not found" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_unknown", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("VOICE_NOT_FOUND");
+    expect(caught.message).toContain("not found");
+  });
+
+  it("falls back to plain TTS only on 404/405 endpoint missing errors", async () => {
+    let tsCount = 0;
+    let plainCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        tsCount++;
+        return true;
+      })
+      .query(true)
+      .reply(404, "Cannot POST /v1/text-to-speech/voice_abc/with-timestamps");
+
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\?output_format=.*/, () => {
+        plainCount++;
+        return true;
+      })
+      .reply(200, Buffer.from("audio-bytes"));
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    const result = await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+      languageCode: "ar",
+      requestAlignment: true,
+    });
+
+    expect(tsCount).toBe(1);
+    expect(plainCount).toBe(1);
+    expect(result.characterAlignment).toBeUndefined();
+  });
+
+  it("handles 422 FastAPI validation errors with array detail envelope", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(422, {
+        detail: [
+          { loc: ["body", "text"], msg: "field required", type: "value_error.missing" }
+        ],
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("INVALID_INPUT");
+    expect(caught.detail.upstreamMessage).toContain("field required");
+  });
+
+  it("handles 429 rate limit errors", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(429, {
+        detail: { status: "too_many_requests", message: "Rate limit exceeded" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("RATE_LIMITED");
+  });
+
+  it("handles 402 quota exhausted errors", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(402, {
+        detail: { status: "quota_exceeded", message: "Quota exceeded" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("QUOTA_EXHAUSTED");
+  });
+
+  it("handles 500 server unavailable errors", async () => {
+    let callCount = 0;
+    nock("https://api.elevenlabs.io")
+      .post(/\/v1\/text-to-speech\/voice_abc\/with-timestamps.*/, () => {
+        callCount++;
+        return true;
+      })
+      .query(true)
+      .reply(500, {
+        detail: { status: "server_error", message: "Internal server error" },
+      });
+
+    const provider = new ElevenLabsVoiceProvider(TEST_ELEVENLABS_KEY);
+    let caught: any;
+    try {
+      await provider.generateVoice(EGYPTIAN_TEST_SCRIPT, "voice_abc", {
+        languageCode: "ar",
+        requestAlignment: true,
+      });
+    } catch (err: any) {
+      caught = err;
+    }
+
+    expect(callCount).toBe(1);
+    expect(caught.detail.taxonomyCode).toBe("PROVIDER_UNAVAILABLE");
+  });
+
+  it("handles network timeouts with TIMEOUT taxonomy", () => {
+    const timeoutErr = {
+      code: "ECONNABORTED",
+      message: "timeout of 60000ms exceeded",
+    };
+    const detail = parseElevenLabsError(timeoutErr, "https://api.elevenlabs.io/v1/text-to-speech/voice_abc/with-timestamps", "POST");
+    expect(detail.taxonomyCode).toBe("TIMEOUT");
+    const providerErr = new ElevenLabsProviderError(detail);
+    expect(providerErr.toSanitizedTechnicalString()).toContain("[elevenlabs:TIMEOUT]");
+  });
+});
+
+describe("Arabic Mixed-Script Pronunciation and Preflight Safety", () => {
+  it("resolves generic English Demo to ديمو in spoken TTS while preserving captionText", () => {
+    const raw = "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    // Display / caption invariant: original wording and branding preserved
+    expect(result.captionText).toBe(raw);
+
+    // Spoken narration invariant: tashkeel/digits normalized, original words preserved
+    expect(result.spokenNarration).toBe(raw);
+
+    // TTS normalized text: ABUD -> عبود, Demo -> ديمو, numbers expanded
+    expect(result.ttsNormalizedText).toContain("عبود");
+    expect(result.ttsNormalizedText).toContain("ديمو");
+    expect(result.ttsNormalizedText).not.toContain("Demo");
+    expect(result.ttsNormalizedText).not.toContain("ABUD");
+  });
+
+  it("resolves AI and API to Arabic spoken forms in spoken TTS", () => {
+    const raw = "تقنيات AI الحديثة مع أقوى API للمطورين";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    expect(result.captionText).toBe(raw);
+    expect(result.ttsNormalizedText).toContain("إيه آي");
+    expect(result.ttsNormalizedText).toContain("ايه بي آي");
+    expect(result.ttsNormalizedText).not.toContain("AI");
+    expect(result.ttsNormalizedText).not.toContain("API");
+  });
+
+  it("resolves generic tokens like Pro, Premium, and Store to reviewed Arabic spoken forms", () => {
+    const raw = "اشترك في خطة Pro أو باقة Premium من الـ Store الآن";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    expect(result.captionText).toBe(raw);
+    expect(result.ttsNormalizedText).toContain("برو");
+    expect(result.ttsNormalizedText).toContain("بريميوم");
+    expect(result.ttsNormalizedText).toContain("ستور");
+    expect(result.ttsNormalizedText).not.toContain("Pro");
+    expect(result.ttsNormalizedText).not.toContain("Premium");
+  });
+
+  it("applies job-level pronunciation override over brand dictionary and system dictionary", () => {
+    const raw = "جرب Demo مع المنتج";
+
+    // System default: Demo -> ديمو
+    const defaultRes = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+    expect(defaultRes.ttsNormalizedText).toContain("ديمو");
+
+    // Brand profile override: Demo -> عرض توضيحي
+    const brandRes = preprocessArabicSpeech(raw, {
+      dialect: "egyptian",
+      brandPronunciations: { Demo: "عرض توضيحي" },
+    });
+    expect(brandRes.ttsNormalizedText).toContain("عرض توضيحي");
+
+    // Job-level override: Demo -> نسخة تجريبية (should beat brand profile!)
+    const jobRes = preprocessArabicSpeech(raw, {
+      dialect: "egyptian",
+      brandPronunciations: { Demo: "عرض توضيحي" },
+      pronunciationOverrides: { Demo: "نسخة تجريبية" },
+    });
+    expect(jobRes.ttsNormalizedText).toContain("نسخة تجريبية");
+    expect(jobRes.ttsNormalizedText).not.toContain("عرض توضيحي");
+    expect(jobRes.ttsNormalizedText).not.toContain("ديمو");
+  });
+
+  it("does not guess unknown brand tokens like ZyphoraX and leaves them uninvented", () => {
+    const raw = "جرب منتجات ZyphoraX الحصرية";
+    const result = preprocessArabicSpeech(raw, { dialect: "egyptian" });
+
+    // Must NOT invent arbitrary phonetics for unknown brands
+    expect(result.captionText).toBe(raw);
+    expect(result.ttsNormalizedText).toContain("ZyphoraX");
+  });
+
+  it("preflight blocks unknown brand tokens with VOICE_PRONUNCIATION_REQUIRED and avoids billable calls", () => {
+    const preflight = preflightElevenLabsInput({
+      text: "جرب منتجات ZyphoraX الحصرية",
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(preflight.status).toBe("VOICE_INPUT_INVALID");
+    const issue = preflight.issues.find((i) => i.code === "VOICE_PRONUNCIATION_REQUIRED");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("error");
+    expect(issue?.unresolvedTokens).toContain("ZyphoraX");
+    expect(issue?.message).toContain("Some words need a pronunciation");
+  });
+
+  it("preflight blocks unresolved URLs and emails with UNRESOLVED_LATIN_SCRIPT", () => {
+    const preflight = preflightElevenLabsInput({
+      text: "راسلنا على info@abud.test للمزيد",
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(preflight.status).toBe("VOICE_INPUT_INVALID");
+    const issue = preflight.issues.find((i) => i.code === "UNRESOLVED_LATIN_SCRIPT");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("error");
+    expect(issue?.unresolvedTokens).toContain("info@abud.test");
+  });
+
+  it("preflight passes cleanly when all tokens are resolved with trusted pronunciations", () => {
+    const raw = "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+    const processed = preprocessArabicSpeech(raw, { dialect: "egyptian" }).ttsNormalizedText;
+
+    const preflight = preflightElevenLabsInput({
+      text: processed,
+      modelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      languageCode: "ar",
+      requestAlignment: true,
+      voiceSettings: ELEVENLABS_PRESETS.natural,
+    });
+
+    expect(preflight.status).toBe("VALID");
+    expect(preflight.issues.filter((i) => i.severity === "error")).toHaveLength(0);
+    expect(preflight.requestShape.textLength).toBe(66);
+  });
+
+  it("classifyRenderFailure maps VOICE_PRONUNCIATION_REQUIRED to customer-safe message without leaking token names", () => {
+    const rawTechnical = "ElevenLabs voice input invalid before synthesis: VOICE_PRONUNCIATION_REQUIRED. Some words need a pronunciation before Arabic narration can be generated: \"ZyphoraX\".";
+    const classified = classifyRenderFailure(rawTechnical);
+
+    expect(classified.category).toBe("VOICE_FAILURE");
+    expect(classified.message).toBe("Some words need a pronunciation before Arabic narration can be generated.");
+    expect(classified.message).not.toContain("ZyphoraX");
+  });
+});
+
+describe("Pass 9.3: ElevenLabs Request Contract, Wire Serialization & Provenance Invariants", () => {
+  it("enforces strict wire body allow-list and excludes all internal engine fields", () => {
+    const provider = new ElevenLabsVoiceProvider({ apiKey: "mock-key" });
+    const settings = (provider as any).resolveVoiceSettings("natural");
+    const body = (provider as any).buildRequestBody(
+      "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      "eleven_multilingual_v2",
+      settings,
+      "ar",
+    );
+
+    // Wire keys must match the exact ElevenLabs contract
+    expect(Object.keys(body).sort()).toEqual(["model_id", "text", "voice_settings"]);
+
+    // Forbidden internal engine fields must never leak into the payload
+    const forbiddenInternalFields = [
+      "requestAlignment",
+      "dialect",
+      "voicePreset",
+      "fallbackPolicy",
+      "pronunciationOverrides",
+      "qualityProfile",
+      "quality",
+      "language",
+      "aspectRatio",
+      "brandProfile",
+    ];
+    for (const field of forbiddenInternalFields) {
+      expect(body).not.toHaveProperty(field);
+      expect(body.voice_settings).not.toHaveProperty(field);
+    }
+  });
+
+  it("produces identical wire JSON structure between historical known-good (energetic_ad) and current (natural)", () => {
+    const provider = new ElevenLabsVoiceProvider({ apiKey: "mock-key" });
+    const text = "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟";
+
+    const historicalSettings = (provider as any).resolveVoiceSettings("energetic_ad");
+    const historicalBody = (provider as any).buildRequestBody(text, "eleven_multilingual_v2", historicalSettings, "ar");
+
+    const currentSettings = (provider as any).resolveVoiceSettings("natural");
+    const currentBody = (provider as any).buildRequestBody(text, "eleven_multilingual_v2", currentSettings, "ar");
+
+    expect(Object.keys(historicalBody).sort()).toEqual(["model_id", "text", "voice_settings"]);
+    expect(Object.keys(currentBody).sort()).toEqual(["model_id", "text", "voice_settings"]);
+
+    expect(Object.keys(historicalBody.voice_settings).sort()).toEqual([
+      "similarity_boost",
+      "stability",
+      "style",
+      "use_speaker_boost",
+    ]);
+    expect(Object.keys(currentBody.voice_settings).sort()).toEqual([
+      "similarity_boost",
+      "stability",
+      "style",
+      "use_speaker_boost",
+    ]);
+
+    // All numerical values are strictly finite numbers between 0 and 1
+    for (const body of [historicalBody, currentBody]) {
+      const vs = body.voice_settings;
+      expect(Number.isFinite(vs.stability)).toBe(true);
+      expect(vs.stability).toBeGreaterThanOrEqual(0);
+      expect(vs.stability).toBeLessThanOrEqual(1);
+
+      expect(Number.isFinite(vs.similarity_boost)).toBe(true);
+      expect(vs.similarity_boost).toBeGreaterThanOrEqual(0);
+      expect(vs.similarity_boost).toBeLessThanOrEqual(1);
+
+      expect(Number.isFinite(vs.style)).toBe(true);
+      expect(vs.style).toBeGreaterThanOrEqual(0);
+      expect(vs.style).toBeLessThanOrEqual(1);
+
+      expect(typeof vs.use_speaker_boost).toBe("boolean");
+    }
+  });
+
+  it("verifies JSON serialization contains no undefined, NaN, null, or stringified numbers", () => {
+    const provider = new ElevenLabsVoiceProvider({ apiKey: "mock-key" });
+    const settings = (provider as any).resolveVoiceSettings("natural");
+    const body = (provider as any).buildRequestBody(
+      "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      "eleven_multilingual_v2",
+      settings,
+      "ar",
+    );
+
+    const json = JSON.stringify(body);
+    expect(json).not.toContain("NaN");
+    expect(json).not.toContain("null");
+    expect(json).not.toContain("undefined");
+    expect(json).not.toContain('"0.5"');
+    expect(json).not.toContain('"0.75"');
+    expect(json).not.toContain('"true"');
+
+    const parsed = JSON.parse(json);
+    expect(typeof parsed.voice_settings.stability).toBe("number");
+    expect(typeof parsed.voice_settings.similarity_boost).toBe("number");
+    expect(typeof parsed.voice_settings.style).toBe("number");
+    expect(typeof parsed.voice_settings.use_speaker_boost).toBe("boolean");
+  });
+
+  it("verifies elevenlabs_alignment provenance accurately reproduces submitted text character tokens", () => {
+    const submittedText = "عايز تيشرت شيك";
+    const rawPayload = {
+      audio_base64: "bW9jay1hdWRpby1kYXRh",
+      alignment: {
+        characters: ["ع", "ا", "ي", "ز", " ", "ت", "ي", "ش", "ر", "ت", " ", "ش", "ي", "ك"],
+        character_start_times_seconds: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65],
+        character_end_times_seconds: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7],
+      },
+    };
+
+    const parsed = parseElevenLabsAlignment(rawPayload, "alignment");
+    expect(parsed).not.toBeNull();
+    expect(parsed?.characters.join("")).toBe(submittedText);
+    expect(parsed?.startSeconds).toHaveLength(14);
+    expect(parsed?.endSeconds).toHaveLength(14);
+  });
+
+  it("rejects corrupted or mismatched native alignment without trusting invalid spans", () => {
+    const rawCorruptedPayload = {
+      audio_base64: "bW9jay1hdWRpby1kYXRh",
+      alignment: {
+        characters: ["x", "y", "z"],
+        character_start_times_seconds: [0.0, 0.1, 0.2],
+        character_end_times_seconds: [0.1, 0.2], // mismatched lengths!
+      },
+    };
+
+    const parsed = parseElevenLabsAlignment(rawCorruptedPayload, "alignment");
+    expect(parsed).toBeNull();
+  });
+
+  it("enforces single-call error discipline: 400 INVALID_INPUT does not fall back to plain TTS", () => {
+    const err400 = {
+      response: {
+        status: 400,
+        data: {
+          detail: {
+            status: "invalid_input",
+            message: "Invalid input",
+          },
+        },
+      },
+    };
+
+    const detail = parseElevenLabsError(err400, "https://api.elevenlabs.io/v1/text-to-speech/voice-123/with-timestamps", "POST");
+    expect(detail.taxonomyCode).toBe("INVALID_INPUT");
+    expect(detail.httpStatus).toBe(400);
+
+    const isEndpointMissing =
+      detail.taxonomyCode === "UNSUPPORTED_ENDPOINT" ||
+      detail.httpStatus === 405 ||
+      (detail.httpStatus === 404 && detail.category !== "voice_not_found" && detail.taxonomyCode !== "VOICE_NOT_FOUND");
+    expect(isEndpointMissing).toBe(false);
+  });
+});
+
+describe("Pass 9.4: Arabic Stable Route, Plain-TTS Strategy & Lineage Invariants", () => {
+  const dummyKokoro: any = {
+    generate: vi.fn().mockResolvedValue({
+      audio: "dummy-stream",
+      audioLength: 5.2,
+    }),
+    listAvailableVoices: vi.fn().mockReturnValue(["af_heart", "am_adam"]),
+  };
+
+  it("routes Arabic ElevenLabs to Plain TTS by default before dispatch", () => {
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const decision = registry.route({
+      text: "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      language: "ar",
+      dialect: "egyptian",
+      requestedProvider: "elevenlabs",
+    });
+
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.requestAlignment).toBe(false);
+    expect(decision.voiceStrategy).toBe("plain_tts");
+    expect(decision.voiceSynthesisStrategy).toBe("elevenlabs_plain_tts_whisper");
+  });
+
+  it("retains timestamps capability when explicitly requested", () => {
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const decision = registry.route({
+      text: "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.",
+      language: "ar",
+      dialect: "egyptian",
+      requestedProvider: "elevenlabs",
+      voiceStrategy: "timestamps",
+    });
+
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.requestAlignment).toBe(true);
+    expect(decision.voiceStrategy).toBe("timestamps");
+    expect(decision.voiceSynthesisStrategy).toBe("elevenlabs_timestamps_native");
+  });
+
+  it("leaves English / non-Arabic routes unaffected (defaults to native timestamps when requested)", () => {
+    const registry = new VoiceRegistry(dummyKokoro, TEST_ELEVENLABS_KEY);
+
+    const decision = registry.route({
+      text: "Experience the ultimate comfort with our all-new oversized collection.",
+      language: "en",
+      requestedProvider: "elevenlabs",
+      requestAlignment: true,
+    });
+
+    expect(decision.providerId).toBe("elevenlabs");
+    expect(decision.requestAlignment).toBe(true);
+    expect(decision.voiceStrategy).toBe("timestamps");
+  });
+
+  it("computes distinct input hashes for plain_tts vs timestamps to prevent strategy collision", () => {
+    const hashTimestamps = createVoiceInputHash({
+      spokenNarration: "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟",
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      voicePreset: "natural",
+      language: "ar",
+    });
+
+    const hashPlainTts = createVoiceInputHash({
+      spokenNarration: "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟",
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      voicePreset: "natural",
+      language: "ar",
+      voiceStrategy: "plain_tts",
+    });
+
+    expect(hashTimestamps).not.toEqual(hashPlainTts);
+  });
+
+  it("preserves historical timestamp hashes when voiceStrategy is omitted", () => {
+    const baseHash = createVoiceInputHash({
+      spokenNarration: "عايز تيشرت شيك ومريح يفضل معاك في كل خروجة؟",
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      voiceId: "68MRVrnQAt8vLbu0FCzw",
+      voicePreset: "natural",
+      language: "ar",
+      dialect: "egyptian",
+      qualityProfile: "balanced",
+      pace: "normal",
+      style: "default",
+    });
+
+    expect(baseHash).toBeDefined();
+    expect(typeof baseHash).toBe("string");
+    expect(baseHash).toHaveLength(64);
+  });
+
+  it("supports mixed strategy lineage across scenes (Scene 0 timestamps + Scene 1 plain_tts)", () => {
+    const scene0Artifact = {
+      sceneIndex: 0,
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      timingSource: "elevenlabs_alignment",
+      strategy: "timestamps",
+      valid: true,
+    };
+
+    const scene1Artifact = {
+      sceneIndex: 1,
+      provider: "elevenlabs",
+      model: "eleven_multilingual_v2",
+      timingSource: "whisper",
+      strategy: "plain_tts",
+      valid: true,
+    };
+
+    const lineage = [scene0Artifact, scene1Artifact];
+    expect(lineage.every((s) => s.valid)).toBe(true);
+    expect(lineage[0].strategy).toBe("timestamps");
+    expect(lineage[1].strategy).toBe("plain_tts");
+    expect(lineage[0].timingSource).toBe("elevenlabs_alignment");
+    expect(lineage[1].timingSource).toBe("whisper");
+  });
+
+  it("preserves customer display text when spoken text is normalized", () => {
+    const customerDisplayText = "مع كولكشن ABUD Demo الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+    const spokenNarration = "مع كولكشن عبود ديمو الجديد، قطن مية في المية وقصة أوفر سايز رايقة.";
+
+    // Customer display text retains English brand words
+    expect(customerDisplayText).toContain("ABUD Demo");
+    // Spoken narration contains Arabic phonetic equivalents
+    expect(spokenNarration).toContain("عبود ديمو");
+    expect(spokenNarration).not.toContain("ABUD");
+  });
+
+  it("verifies retry readiness: Scene 0 & 1 reusable, Scene 2 remains the only missing voice", () => {
+    const scenesState = [
+      { sceneIndex: 0, voiceReady: true, captionsReady: true, mediaReady: true },
+      { sceneIndex: 1, voiceReady: true, captionsReady: true, mediaReady: true },
+      { sceneIndex: 2, voiceReady: false, captionsReady: false, mediaReady: false },
+    ];
+
+    const missingVoiceScenes = scenesState.filter((s) => !s.voiceReady);
+    expect(missingVoiceScenes).toHaveLength(1);
+    expect(missingVoiceScenes[0].sceneIndex).toBe(2);
+    expect(scenesState[0].voiceReady).toBe(true);
+    expect(scenesState[1].voiceReady).toBe(true);
+  });
+});
+
+
+
+

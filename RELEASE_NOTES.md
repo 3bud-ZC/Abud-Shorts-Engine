@@ -1,72 +1,111 @@
-# ABUD Shorts Engine v2.3.1
+# ABUD Shorts Engine v2.4.0
 
 **Product:** ABUD Shorts Engine
-**Release Version:** `2.3.1`
+**Release Version:** `2.4.0`
 **Release Channel:** stable
-**Database Schema:** `2.13.0` (unchanged from v2.3.0)
-**Previous Stable:** `2.3.0`
+**Database Schema:** `2.13.0` (unchanged from v2.3.1 - no migration required)
+**Previous Stable:** `2.3.1`
 
-v2.3.1 is a patch release. It fixes production rendering and duration issues
-found on v2.3.0 and completes the Arabic localization of the Production Details
-screen. There are no new features and no interface changes beyond the fixed
-labels.
+This is the public General Availability release of V2.4.
 
 ---
 
-## What's Fixed
+## What's New
 
-### Auto Video Rendering
+### Professional Video Engine
 
-- Auto productions now correctly fall back to the built-in Motion engine when
-  stock footage providers are unavailable. Previously an Auto production whose
-  creative plan had already selected a Motion treatment could still try to fetch
-  stock footage and fail during media generation.
-- On installations with no stock provider configured, an Auto production that
-  reaches the Motion path now completes locally instead of stopping with a
-  "Video render failed" error.
+- Auto Professional now prioritizes real, relevant stock footage for normal
+  business and educational shorts.
+- The fast FFmpeg render path is used when a stock-heavy production qualifies,
+  with Motion rendering kept for intentional graphic and animated explainer
+  videos.
+- Final-media QA checks coverage, black frames, text-only fallback, duration,
+  audio continuity, captions and professional readiness before a video is
+  accepted. A visual provider that fails or returns nothing usable now always
+  fails closed with a clear, actionable message instead of an internal error.
 
-### Duration Accuracy
+### Smarter Creative Planning
 
-- Longer videos with short narration now keep the requested duration. A Motion
-  scene deliberately continues its animation and music for the scene's planned
-  length instead of ending as soon as the narration finishes.
-- 30-second productions no longer collapse to roughly half their requested
-  length. Speech is never sped up beyond its existing limits or clipped, and the
-  held time is not counted as dead air.
+- Prompt Compiler turns user prompts into safer production specs with clearer
+  facts, scene intent and customer-friendly decisions.
+- Content safety keeps claims grounded and prevents invented contact channels.
+- CTA handling preserves provenance, so customer-supplied contact details stay
+  explicit and generated videos do not invent phone numbers, websites or social
+  handles.
 
-Verification examples from this release (single runs, not a guarantee for every
-video):
+### Local Egyptian Arabic Voice
 
-| Requested | Produced | Technical validation |
-| --- | --- | --- |
-| 30 seconds | 30.06 seconds | passed (score 100) |
-| 12 seconds | 12.05 seconds | passed (score 100) |
+- **VoiceTut (Local High Quality)** is the default Arabic production voice: a
+  local, GPU-accelerated Egyptian Arabic engine with 17 built-in speakers,
+  code-switching support, and no per-video cost. Human-reviewed and approved,
+  including a full Egyptian sample, an Arabic-English code-switch sample, and
+  a complete golden production.
+- **KemeTone (Local Lightweight)** provides a CPU fallback for machines
+  without a compatible GPU.
+- **ElevenLabs** remains available as an optional premium cloud alternative -
+  a customer may configure and select it explicitly - but it is never a
+  silent default and never required for Arabic production.
+- **Windows installation is now fully automated.** The installer detects
+  hardware (NVIDIA GPU, VRAM, disk), recommends the best supported Local
+  Voice mode automatically, installs a product-owned Python runtime and the
+  pinned model weights, and starts the local voice service - no manual
+  script, no developer terminal. The model cache and runtime persist across
+  updates.
+- Windows auto-start is product-managed: a per-user scheduled task by
+  default, with an automatic Startup-folder fallback on machines where Task
+  Scheduler denies task creation for that account - neither path requires
+  administrator rights or a stored password.
 
-### Better Error Messages
+### Providers and Voice
 
-- When a render fails, the customer now sees a clearer, safer category (for
-  example: rendering service needs another attempt, generated media could not be
-  composed, a generated asset could not be read, or the system was low on
-  resources) instead of a single generic message.
-- The detailed technical reason is still recorded for support and is not shown
-  on the normal customer screen.
+- Free Only, Smart Budget and Best Available routing make provider selection
+  more predictable.
+- Paid video providers are gated: credentials alone do not authorize a paid
+  generation.
+- Kokoro remains the local/free English voice path.
+- The Provider Vault stores configured provider credentials encrypted and shows
+  only safe status and masked hints in the interface.
 
-### Arabic Interface
+### Publishing
 
-- The Production Details / Job Details screen is now fully localized in Arabic,
-  including the execution progress labels, the production specification labels
-  and the render-error heading.
+- Publishing now has a clearer provider lifecycle: implemented, configured,
+  authenticated, healthy and live verified are reported separately.
+- Manual publishing credentials are encrypted.
+- OAuth setup shows browser-friendly callback URLs.
+- Upload-Post, YouTube processing states, retry, idempotency, scheduler
+  persistence, partial failure handling and safe Server-Sent Events have all
+  been hardened.
+
+### Owner Account & Recovery
+
+- A full local owner-account lifecycle: change username/password (revokes
+  every other session on success), session listing and revocation, and a
+  local-only recovery command (`abud-shorts owner reset-password`) for a lost
+  username or password - no email, token or predictable secret involved.
+
+### Security and Operations
+
+- Protected APIs require admin session or scoped API token access.
+- Video preview/download routes support authenticated browser playback and byte
+  ranges.
+- Diagnostics, provider responses and logs are designed to avoid plaintext
+  secrets, session tokens and raw OAuth values.
+- Updates continue to use the host updater: checksum verification, digest-
+  pinned image pull, pre-update backup, health checks and rollback - verified
+  in this release through a real isolated v2.3.1 -> 2.4.0 upgrade rehearsal,
+  including a real rollback and re-upgrade cycle with zero data loss.
 
 ---
 
 ## Upgrade
 
-Existing v2.3.0 installations upgrade in place with the normal ABUD Shorts
-updater. The update takes a pre-upgrade backup, verifies the download and rolls
-back automatically if anything fails.
+Existing v2.3.1 installations upgrade through the normal ABUD Shorts updater:
+double-click **ABUD Shorts - Update** on Windows, or `sudo abud-shorts update`
+on Linux/VPS. No Git, source code, manual SQL or hand-edited Docker Compose
+files are required.
 
-The database schema stays at `2.13.0`. **No database migration is required for
-v2.3.1.** Existing productions, videos, media, settings and account data are
-untouched.
-
-v2.3.0 remains available and unchanged.
+The database schema remains `2.13.0`. No new migration is required beyond the
+schema already carried by v2.3.1. Existing videos, jobs, media, brands,
+settings, Provider Vault rows and publication history are all preserved. A
+pre-upgrade backup is taken automatically before anything changes, and the
+previous version is kept in place for rollback.

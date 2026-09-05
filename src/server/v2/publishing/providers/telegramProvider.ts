@@ -151,7 +151,6 @@ export class TelegramPublishingProvider implements PublishingProvider {
   public async publishVideo(params: PublishVideoParams): Promise<PublishResult> {
     const token =
       (params.account?.encryptedCredentials as string) ||
-      (params.account?.maskedToken as string) ||
       this.botToken;
 
     if (!token) {

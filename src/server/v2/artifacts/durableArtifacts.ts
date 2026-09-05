@@ -24,6 +24,25 @@ export type DurableSceneArtifact = {
   supersededAt?: string;
 };
 
+export type RetryReuseManifest = {
+  sceneIndex: number;
+  artifactType: DurableArtifactType;
+  artifactId: string;
+  sourceJobId: string;
+  sourceRevisionId?: string;
+  inputHash: string;
+  inputHashVersion: string;
+  checksum: string;
+  provider?: string;
+  model?: string;
+  voiceId?: string;
+  voiceStrategy?: string;
+  compatibilityDecision: "planner_bound";
+  compatibilityVersion: "retry-reuse-v1";
+  canonicalSpokenContentFingerprint?: string;
+  displayContentFingerprint?: string;
+};
+
 export type ReusePlan = {
   artifacts: DurableSceneArtifact[];
   reusedStages: string[];
@@ -43,6 +62,43 @@ export function sha256Text(value: unknown): string {
   return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
 }
 
+export function attachRetryReuseManifest(
+  artifact: DurableSceneArtifact,
+  manifest: Omit<RetryReuseManifest, "sceneIndex" | "artifactType" | "artifactId" | "sourceJobId" | "sourceRevisionId" | "inputHash" | "checksum" | "provider" | "model" | "inputHashVersion" | "compatibilityDecision" | "compatibilityVersion"> & {
+    inputHashVersion?: string;
+  } = {},
+): DurableSceneArtifact {
+  const existing = (artifact.metadata?.retryReuseManifest || {}) as Partial<RetryReuseManifest>;
+  const voiceArtifact = (artifact.metadata?.voiceArtifact || {}) as Record<string, unknown>;
+  const reuseKey = (artifact.metadata?.reuseKey || {}) as Record<string, unknown>;
+  return {
+    ...artifact,
+    metadata: {
+      ...artifact.metadata,
+      retryReuseManifest: {
+        sceneIndex: artifact.sceneIndex,
+        artifactType: artifact.type,
+        artifactId: artifact.artifactId,
+        sourceJobId: artifact.sourceJobId,
+        sourceRevisionId: artifact.sourceRevisionId,
+        inputHash: artifact.inputHash,
+        inputHashVersion: manifest.inputHashVersion || existing.inputHashVersion || "legacy",
+        checksum: artifact.checksum,
+        provider: artifact.provider,
+        model: artifact.model,
+        voiceId: manifest.voiceId || existing.voiceId || String(reuseKey.voiceId || voiceArtifact.voiceId || ""),
+        voiceStrategy: manifest.voiceStrategy || existing.voiceStrategy || String(reuseKey.voiceStrategy || voiceArtifact.voiceStrategy || ""),
+        compatibilityDecision: "planner_bound",
+        compatibilityVersion: "retry-reuse-v1",
+        canonicalSpokenContentFingerprint:
+          manifest.canonicalSpokenContentFingerprint || existing.canonicalSpokenContentFingerprint,
+        displayContentFingerprint:
+          manifest.displayContentFingerprint || existing.displayContentFingerprint,
+      } satisfies RetryReuseManifest,
+    },
+  };
+}
+
 export function sha256File(filePath: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
@@ -60,6 +116,7 @@ export function createVoiceInputHash(input: {
   /** ElevenLabs delivery preset, when one was selected. */
   voicePreset?: string;
   preprocessingVersion?: string;
+  voiceStrategy?: string;
 }): string {
   return sha256Text({
     type: "voice",
@@ -76,6 +133,7 @@ export function createVoiceInputHash(input: {
     // Only hashed when a preset is actually in play, so hashes recorded before
     // presets existed keep matching and historical artifacts stay reusable.
     ...(input.voicePreset ? { voicePreset: input.voicePreset } : {}),
+    ...(input.voiceStrategy ? { voiceStrategy: input.voiceStrategy } : {}),
   });
 }
 
@@ -257,6 +315,69 @@ export class DurableArtifactStore {
   private manifestPath(artifact: DurableSceneArtifact): string {
     return path.join(this.artifactRoot, safeTypeDir(artifact.type), `${artifact.artifactId}.manifest.json`);
   }
+}
+
+function manifestTypeFromArtifactId(artifactId: string): DurableArtifactType | null {
+  if (artifactId.startsWith("voice_")) return "voice";
+  if (artifactId.startsWith("captions_")) return "captions";
+  if (artifactId.startsWith("media_")) return "media";
+  if (artifactId.startsWith("mastered_voice_")) return "mastered_voice";
+  return null;
+}
+
+export function readDurableArtifactsForSourceJob(config: Config, sourceJobId: string): DurableSceneArtifact[] {
+  const root = path.join(config.dataDirPath, "artifacts", "scene");
+  if (!sourceJobId || !fs.existsSync(root)) return [];
+  const found: DurableSceneArtifact[] = [];
+  const scan = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scan(fullPath);
+        continue;
+      }
+      if (!entry.name.endsWith(".manifest.json")) continue;
+      try {
+        const artifact = fs.readJsonSync(fullPath) as DurableSceneArtifact;
+        if (artifact?.sourceJobId === sourceJobId && filterReusableArtifacts({ artifacts: [artifact] }).length === 1) {
+          found.push(artifact);
+        }
+      } catch {
+        // Ignore malformed historical manifests; retry can still proceed with
+        // the artifacts that validate.
+      }
+    }
+  };
+  scan(root);
+  return found.sort((a, b) => {
+    if (a.sceneIndex !== b.sceneIndex) return a.sceneIndex - b.sceneIndex;
+    return a.type.localeCompare(b.type);
+  });
+}
+
+export function readDurableArtifactsById(config: Config, artifactIds: string[]): DurableSceneArtifact[] {
+  const store = new DurableArtifactStore(config);
+  const unique = Array.from(new Set(artifactIds.filter(Boolean)));
+  const found: DurableSceneArtifact[] = [];
+  for (const artifactId of unique) {
+    const type = manifestTypeFromArtifactId(artifactId);
+    if (!type) continue;
+    const relative = path.posix.join(
+      "artifacts",
+      "scene",
+      type === "mastered_voice" ? "mastered_voice" : type,
+      `${artifactId}.manifest.json`,
+    );
+    try {
+      const manifestPath = store.resolveStorageRef(relative);
+      if (!fs.existsSync(manifestPath)) continue;
+      const artifact = fs.readJsonSync(manifestPath) as DurableSceneArtifact;
+      if (filterReusableArtifacts({ artifacts: [artifact] }).length === 1) found.push(artifact);
+    } catch {
+      // Invalid IDs or missing manifests are ignored; retry remains bounded.
+    }
+  }
+  return found;
 }
 
 export function filterReusableArtifacts(input: {

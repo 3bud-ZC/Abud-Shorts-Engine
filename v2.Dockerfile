@@ -27,6 +27,7 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 
 FROM base AS deps
+ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
 COPY package.json pnpm-lock.yaml* /app/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store bash -lc "set -euxo pipefail; pnpm config set fetch-timeout 600000; pnpm install --frozen-lockfile || true; pnpm approve-builds --all"
 

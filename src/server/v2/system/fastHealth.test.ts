@@ -9,6 +9,7 @@ import {
   resetFastHealthCache,
   type ProviderConfigurationSnapshot,
 } from "./fastHealth";
+import { PRODUCT_VERSION } from "../../../version";
 
 // Fast health is defined by what it does *not* reach out to, so the HTTP client
 // is mocked and the calls it makes are asserted directly.
@@ -214,7 +215,8 @@ describe("fast health", () => {
 
   it("carries the product version from the canonical contract", async () => {
     const report = await getFastHealth(makeConfig(), makeDb(), CONFIGURED);
-    expect(report.product.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(report.product.version).toBe(PRODUCT_VERSION);
+    expect(report.product.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     expect(report.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

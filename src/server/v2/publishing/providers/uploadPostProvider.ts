@@ -14,6 +14,33 @@ import {
 } from "../publishingProvider";
 import type { PublishingPlatform, PublishingProviderId } from "../types";
 
+type UploadPostStatus = "processing" | "published" | "failed";
+
+function pickUploadPostId(data: Record<string, unknown>): string | undefined {
+  const id = data.request_id || data.job_id || data.id || data.postId;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
+
+function pickUploadPostUrl(data: Record<string, unknown>): string | undefined {
+  const resultUrl = Array.isArray(data.results)
+    ? (data.results.find((entry) => typeof entry === "object" && entry && "post_url" in entry) as Record<string, unknown> | undefined)?.post_url
+    : undefined;
+  const url = data.publishedUrl || data.published_url || data.url || data.post_url || resultUrl;
+  return typeof url === "string" && /^https:\/\//i.test(url) ? url : undefined;
+}
+
+function mapUploadPostStatus(data: Record<string, unknown>): UploadPostStatus {
+  if (Array.isArray(data.results) && data.results.length > 0) {
+    const resultRows = data.results.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && Boolean(entry));
+    if (resultRows.some((entry) => entry.success === false)) return "failed";
+    if (resultRows.every((entry) => entry.success === true)) return "published";
+  }
+  const status = String(data.status || data.state || "").toLowerCase();
+  if (["published", "success", "completed", "posted"].includes(status)) return "published";
+  if (["failed", "error", "cancelled", "canceled"].includes(status)) return "failed";
+  return "processing";
+}
+
 export class UploadPostProvider implements PublishingProvider {
   public readonly id: PublishingProviderId = "upload_post";
   public readonly displayName = "Upload-Post (Multi-Platform)";
@@ -25,6 +52,14 @@ export class UploadPostProvider implements PublishingProvider {
   constructor(options: { apiKey?: string; baseUrl?: string } = {}) {
     this.apiKey = options.apiKey || process.env.UPLOAD_POST_API_KEY;
     this.baseUrl = options.baseUrl || process.env.UPLOAD_POST_BASE_URL || "https://api.upload-post.com";
+  }
+
+  private endpoint(pathname: string): string {
+    const base = this.baseUrl.replace(/\/+$/, "");
+    if (base.endsWith("/api") && pathname.startsWith("/api/")) {
+      return `${base}${pathname.slice(4)}`;
+    }
+    return `${base}${pathname}`;
   }
 
   public getSupportedPlatforms(): PublishingPlatform[] {
@@ -61,9 +96,9 @@ export class UploadPostProvider implements PublishingProvider {
     }
 
     try {
-      const response = await axios.get(`${this.baseUrl}/v1/user/profile`, {
+      const response = await axios.get(this.endpoint("/api/uploadposts/me"), {
         headers: {
-          Authorization: `Bearer ${key}`,
+          Authorization: `Apikey ${key}`,
           "x-api-key": key,
         },
         timeout: 10000,
@@ -143,7 +178,6 @@ export class UploadPostProvider implements PublishingProvider {
   public async publishVideo(params: PublishVideoParams): Promise<PublishResult> {
     const key =
       (params.account?.encryptedCredentials as string) ||
-      (params.account?.maskedToken as string) ||
       this.apiKey;
 
     if (!key) {
@@ -157,13 +191,13 @@ export class UploadPostProvider implements PublishingProvider {
     }
 
     try {
-      // Build form data or payload
       const form = new FormData();
-      form.append("platform", params.platform);
-      form.append("publicationId", params.publicationId);
+      form.append("user", params.account?.accountId || params.account?.accountName || "abud-shorts");
+      form.append("platform[]", params.platform);
       form.append("title", params.title || "");
-      form.append("caption", params.caption || params.description || "");
+      form.append("caption", params.caption || "");
       form.append("description", params.description || "");
+      if (params.publicationId) form.append("external_id", params.publicationId);
 
       if (params.hashtags && params.hashtags.length > 0) {
         form.append("hashtags", JSON.stringify(params.hashtags));
@@ -203,12 +237,12 @@ export class UploadPostProvider implements PublishingProvider {
       }
 
       const headers = {
-        Authorization: `Bearer ${key}`,
+        Authorization: `Apikey ${key}`,
         "x-api-key": key,
         ...(params.idempotencyKey ? { "Idempotency-Key": params.idempotencyKey } : {}),
       };
 
-      const response = await axios.post(`${this.baseUrl}/v1/publish`, form, {
+      const response = await axios.post(this.endpoint("/api/upload"), form, {
         headers,
         timeout: 60000,
         maxBodyLength: Infinity,
@@ -217,19 +251,31 @@ export class UploadPostProvider implements PublishingProvider {
       });
 
       if (response.status >= 200 && response.status < 300) {
-        const data = response.data;
-        const providerPostId = data.postId || data.id || `up_${Date.now()}`;
-        const providerUrl =
-          data.publishedUrl ||
-          data.url ||
-          this.getPublishedUrl(providerPostId, { platform: params.platform });
+        const data = response.data || {};
+        const providerPostId = pickUploadPostId(data);
+        const providerUrl = pickUploadPostUrl(data);
+        const status = mapUploadPostStatus(data);
+        if (status === "failed") {
+          return {
+            success: false,
+            status: "failed",
+            error: String(data.error || data.message || "Upload-Post could not publish this video."),
+            technicalError: "upload_post:accepted_failed",
+            rawResponse: data,
+            retryable: false,
+          };
+        }
 
         return {
           success: true,
-          status: data.status === "processing" ? "processing" : "published",
+          status,
           providerPostId,
           providerUrl,
-          message: data.message || "Video published via Upload-Post.",
+          message:
+            data.message ||
+            (status === "published"
+              ? "Upload-Post confirmed the post is published."
+              : "Upload-Post accepted the upload and is processing it."),
           rawResponse: data,
         };
       }
@@ -265,7 +311,6 @@ export class UploadPostProvider implements PublishingProvider {
   public async scheduleVideo(params: ScheduleVideoParams): Promise<PublishResult> {
     const key =
       (params.account?.encryptedCredentials as string) ||
-      (params.account?.maskedToken as string) ||
       this.apiKey;
 
     if (!key) {
@@ -279,40 +324,53 @@ export class UploadPostProvider implements PublishingProvider {
     }
 
     try {
-      const response = await axios.post(
-        `${this.baseUrl}/v1/schedule`,
-        {
-          platform: params.platform,
-          publicationId: params.publicationId,
-          title: params.title,
-          caption: params.caption || params.description,
-          description: params.description,
-          hashtags: params.hashtags,
-          metadata: params.metadata,
-          accountId: params.account?.accountId,
-          scheduledAt: params.scheduledAt.toISOString(),
-          timezone: params.sourceTimezone,
-          videoUrl: params.videoUrl,
-          thumbnailUrl: params.thumbnailUrl,
-          idempotencyKey: params.idempotencyKey,
+      const form = new FormData();
+      form.append("user", params.account?.accountId || params.account?.accountName || "abud-shorts");
+      form.append("platform[]", params.platform);
+      form.append("title", params.title || "");
+      form.append("caption", params.caption || params.description || "");
+      form.append("description", params.description || "");
+      if (params.publicationId) form.append("external_id", params.publicationId);
+      form.append("scheduled_date", params.scheduledAt.toISOString());
+      form.append("timezone", params.sourceTimezone);
+      if (params.hashtags && params.hashtags.length > 0) {
+        form.append("hashtags", JSON.stringify(params.hashtags));
+      }
+      if (fs.existsSync(params.videoFilePath)) {
+        const fileBuf = fs.readFileSync(params.videoFilePath);
+        const blob = new Blob([fileBuf], { type: "video/mp4" });
+        form.append("video", blob, path.basename(params.videoFilePath));
+      } else if (params.videoUrl) {
+        form.append("video", params.videoUrl);
+      }
+
+      const response = await axios.post(this.endpoint("/api/upload"), form, {
+        headers: {
+          Authorization: `Apikey ${key}`,
+          "x-api-key": key,
+          ...(params.idempotencyKey ? { "Idempotency-Key": params.idempotencyKey } : {}),
         },
-        {
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "x-api-key": key,
-            ...(params.idempotencyKey ? { "Idempotency-Key": params.idempotencyKey } : {}),
-          },
-          timeout: 15000,
-          validateStatus: () => true,
-        },
-      );
+        timeout: 15000,
+        validateStatus: () => true,
+      });
 
       if (response.status >= 200 && response.status < 300) {
         const data = response.data;
+        const providerPostId = pickUploadPostId(data);
+        if (!providerPostId) {
+          return {
+            success: false,
+            status: "failed",
+            error: "Upload-Post accepted the schedule request without a trackable job id.",
+            technicalError: "upload_post:no_schedule_id",
+            rawResponse: data,
+            retryable: true,
+          };
+        }
         return {
           success: true,
           status: "scheduled",
-          providerPostId: data.scheduleId || data.id || `sch_${Date.now()}`,
+          providerPostId,
           message: "Publication scheduled successfully with Upload-Post.",
           rawResponse: data,
         };
@@ -351,22 +409,29 @@ export class UploadPostProvider implements PublishingProvider {
     }
 
     try {
-      const response = await axios.get(`${this.baseUrl}/v1/posts/${providerPostId}/status`, {
-        headers: { Authorization: `Bearer ${key}`, "x-api-key": key },
+      let response = await axios.get(this.endpoint("/api/uploadposts/status"), {
+        headers: { Authorization: `Apikey ${key}`, "x-api-key": key },
+        params: { request_id: providerPostId },
         timeout: 10000,
         validateStatus: () => true,
       });
+      if (response.status === 400 || response.status === 404) {
+        response = await axios.get(this.endpoint("/api/uploadposts/status"), {
+          headers: { Authorization: `Apikey ${key}`, "x-api-key": key },
+          params: { job_id: providerPostId },
+          timeout: 10000,
+          validateStatus: () => true,
+        });
+      }
 
       if (response.status >= 200 && response.status < 300) {
-        const data = response.data;
-        let status: "processing" | "published" | "failed" = "processing";
-        if (data.status === "published" || data.status === "success") status = "published";
-        if (data.status === "failed" || data.status === "error") status = "failed";
+        const data = response.data || {};
+        const status = mapUploadPostStatus(data);
 
         return {
           status,
           providerPostId,
-          providerUrl: data.publishedUrl || data.url,
+          providerUrl: pickUploadPostUrl(data),
           progressPercent: data.progress,
           message: data.message,
           rawResponse: data,
@@ -395,11 +460,10 @@ export class UploadPostProvider implements PublishingProvider {
     if (!key) return false;
 
     try {
-      const response = await axios.post(
-        `${this.baseUrl}/v1/posts/${providerPostId}/cancel`,
-        {},
+      const response = await axios.delete(
+        this.endpoint(`/api/uploadposts/schedule/${encodeURIComponent(providerPostId)}`),
         {
-          headers: { Authorization: `Bearer ${key}`, "x-api-key": key },
+          headers: { Authorization: `Apikey ${key}`, "x-api-key": key },
           timeout: 10000,
           validateStatus: () => true,
         },
@@ -414,22 +478,6 @@ export class UploadPostProvider implements PublishingProvider {
     providerPostId: string,
     data?: Record<string, unknown>,
   ): string | undefined {
-    if (data?.url) return String(data.url);
-    if (data?.publishedUrl) return String(data.publishedUrl);
-
-    const platform = data?.platform as string;
-    if (platform === "youtube") {
-      return `https://youtube.com/shorts/${providerPostId}`;
-    }
-    if (platform === "tiktok") {
-      return `https://www.tiktok.com/@user/video/${providerPostId}`;
-    }
-    if (platform === "instagram") {
-      return `https://www.instagram.com/reel/${providerPostId}/`;
-    }
-    if (platform === "facebook") {
-      return `https://www.facebook.com/reel/${providerPostId}`;
-    }
-    return undefined;
+    return pickUploadPostUrl({ ...(data || {}), providerPostId });
   }
 }

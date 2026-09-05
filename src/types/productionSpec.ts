@@ -71,7 +71,16 @@ export const visualModeEnum = z.enum([
 ]);
 export type VisualMode = z.infer<typeof visualModeEnum>;
 
-export const voiceProviderEnum = z.enum(["auto", "kokoro", "piper", "edge_tts", "google_cloud_tts", "elevenlabs"]);
+export const voiceProviderEnum = z.enum([
+  "auto",
+  "kokoro",
+  "voicetut",
+  "kemetone",
+  "piper",
+  "edge_tts",
+  "google_cloud_tts",
+  "elevenlabs",
+]);
 export type VoiceProvider = z.infer<typeof voiceProviderEnum>;
 
 /**
@@ -176,6 +185,8 @@ export const costEstimateBreakdownSchema = z.object({
     aiCount: z.number().int().min(0).default(0),
     cost: z.number().min(0).default(0),
     provider: z.string().default("pexels"),
+    usageBased: z.boolean().optional(),
+    costLabel: z.string().optional(),
   }),
   voice: z.object({
     provider: z.string().default("kokoro"),

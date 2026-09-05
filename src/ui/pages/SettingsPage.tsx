@@ -377,6 +377,15 @@ const SettingsPage: React.FC = () => {
           </SectionCard>
         </Grid>
 
+        <Grid item xs={12}>
+          <SectionCard
+            title={tr("settings.account.title")}
+            description={tr("settings.account.description")}
+          >
+            <AccountSecurityManager />
+          </SectionCard>
+        </Grid>
+
         {/* Updates. Client-facing: version, channel, status, release notes and
             the one action that installs an update on this platform. */}
         <Grid item xs={12}>
@@ -712,6 +721,201 @@ const BackupManager: React.FC = () => {
           ))}
         </Stack>
       )}
+    </Stack>
+  );
+};
+
+const AccountSecurityManager: React.FC = () => {
+  const { t: tr } = useI18n();
+  const [me, setMe] = useState<{ username: string } | null>(null);
+  const [sessionCount, setSessionCount] = useState(0);
+  const [newUsername, setNewUsername] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [usernameBusy, setUsernameBusy] = useState(false);
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [sessionsBusy, setSessionsBusy] = useState(false);
+  const [usernameMsg, setUsernameMsg] = useState<{ text: string; severity: "success" | "error" } | null>(null);
+  const [passwordMsg, setPasswordMsg] = useState<{ text: string; severity: "success" | "error" } | null>(null);
+  const [sessionsMsg, setSessionsMsg] = useState<{ text: string; severity: "success" | "error" } | null>(null);
+
+  const load = async () => {
+    try {
+      const [meRes, sessionsRes] = await Promise.all([
+        axios.get("/api/v2/auth/me"),
+        axios.get("/api/v2/auth/sessions"),
+      ]);
+      setMe(meRes.data.user);
+      setSessionCount((sessionsRes.data.sessions || []).length);
+    } catch {
+      // The page's own auth redirect handles a missing/expired session.
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const handleChangeUsername = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUsernameMsg(null);
+    setUsernameBusy(true);
+    try {
+      const res = await axios.post("/api/v2/auth/change-username", { username: newUsername });
+      setNewUsername("");
+      setUsernameMsg({ text: tr("settings.account.usernameUpdated"), severity: "success" });
+      setMe({ username: res.data.username });
+    } catch (err: any) {
+      setUsernameMsg({
+        text: err.response?.data?.error || tr("settings.account.updateFailed"),
+        severity: "error",
+      });
+    } finally {
+      setUsernameBusy(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordMsg(null);
+    if (newPassword !== confirmPassword) {
+      setPasswordMsg({ text: tr("settings.account.passwordMismatch"), severity: "error" });
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      await axios.post("/api/v2/auth/change-password", { currentPassword, newPassword });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordMsg({ text: tr("settings.account.passwordUpdated"), severity: "success" });
+    } catch (err: any) {
+      setPasswordMsg({
+        text: err.response?.data?.error || tr("settings.account.updateFailed"),
+        severity: "error",
+      });
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
+  const handleSignOutOtherSessions = async () => {
+    setSessionsBusy(true);
+    setSessionsMsg(null);
+    try {
+      const res = await axios.post("/api/v2/auth/sessions/revoke-others");
+      setSessionsMsg({
+        text: tr("settings.account.otherSessionsRevoked", { count: res.data.revoked ?? 0 }),
+        severity: "success",
+      });
+      load();
+    } catch {
+      setSessionsMsg({ text: tr("settings.account.updateFailed"), severity: "error" });
+    } finally {
+      setSessionsBusy(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await axios.post("/api/v2/auth/logout");
+    } finally {
+      localStorage.removeItem("abud_session_token");
+      window.location.assign("/login");
+    }
+  };
+
+  return (
+    <Stack spacing={3}>
+      {me && (
+        <Typography variant="body2" color="text.secondary">
+          {tr("settings.account.currentUsername", { username: me.username })}
+        </Typography>
+      )}
+
+      <Box component="form" onSubmit={handleChangeUsername}>
+        <Stack spacing={1.5}>
+          <Typography variant="subtitle2" fontWeight={700}>
+            {tr("settings.account.changeUsername")}
+          </Typography>
+          {usernameMsg && <Alert severity={usernameMsg.severity}>{usernameMsg.text}</Alert>}
+          <Stack direction="row" spacing={1.5} flexWrap="wrap" gap={1}>
+            <TextField
+              label={tr("settings.account.newUsername")}
+              size="small"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              autoComplete="username"
+            />
+            <Button type="submit" variant="outlined" size="small" disabled={usernameBusy || !newUsername}>
+              {tr("settings.account.changeUsername")}
+            </Button>
+          </Stack>
+        </Stack>
+      </Box>
+
+      <Divider />
+
+      <Box component="form" onSubmit={handleChangePassword}>
+        <Stack spacing={1.5}>
+          <Typography variant="subtitle2" fontWeight={700}>
+            {tr("settings.account.changePassword")}
+          </Typography>
+          {passwordMsg && <Alert severity={passwordMsg.severity}>{passwordMsg.text}</Alert>}
+          <Stack direction="row" spacing={1.5} flexWrap="wrap" gap={1}>
+            <TextField
+              label={tr("settings.account.currentPassword")}
+              type="password"
+              size="small"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+            <TextField
+              label={tr("settings.account.newPassword")}
+              type="password"
+              size="small"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <TextField
+              label={tr("settings.account.confirmPassword")}
+              type="password"
+              size="small"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+            <Button
+              type="submit"
+              variant="outlined"
+              size="small"
+              disabled={passwordBusy || !currentPassword || !newPassword || !confirmPassword}
+            >
+              {tr("settings.account.changePassword")}
+            </Button>
+          </Stack>
+        </Stack>
+      </Box>
+
+      <Divider />
+
+      <Stack spacing={1.5}>
+        <Typography variant="subtitle2" fontWeight={700}>
+          {tr("settings.account.sessions", { count: sessionCount })}
+        </Typography>
+        {sessionsMsg && <Alert severity={sessionsMsg.severity}>{sessionsMsg.text}</Alert>}
+        <Stack direction="row" spacing={1.5} flexWrap="wrap" gap={1}>
+          <Button variant="outlined" size="small" disabled={sessionsBusy} onClick={handleSignOutOtherSessions}>
+            {tr("settings.account.signOutOtherSessions")}
+          </Button>
+          <Button variant="text" color="error" size="small" onClick={handleSignOut}>
+            {tr("settings.account.signOut")}
+          </Button>
+        </Stack>
+      </Stack>
     </Stack>
   );
 };

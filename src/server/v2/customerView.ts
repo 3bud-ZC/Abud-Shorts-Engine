@@ -155,12 +155,73 @@ export function scrubInternal<T>(value: T, depth = 0): T {
 
 export type CustomerFailure = {
   message: string;
+  messageAr?: string;
   supportCode: string;
   recoverable: boolean;
+  category: FailureCategory;
+  stage?: string;
   action?: { label: string; href: string };
 };
 
 const READINESS_ACTION_RE = /provider|configure|connect|api key|credential|not configured|not runnable/i;
+export type FailureCategory =
+  | "CONTENT_GATE"
+  | "VOICE_FAILURE"
+  | "ELEVENLABS_PROVIDER_ERROR"
+  | "MEDIA_ACQUISITION_FAILURE"
+  | "STOCK_COVERAGE_FAILURE"
+  | "CAPTION_FAILURE"
+  | "FFMPEG_FAILURE"
+  | "REMOTION_FAILURE"
+  | "AUDIO_MASTERING_FAILURE"
+  | "PROFESSIONAL_READINESS_FAILURE"
+  | "FINAL_MEDIA_VALIDATION"
+  | "COMPLETE_CALLBACK_FAILURE"
+  | "WORKER_CRASH"
+  | "TIMEOUT"
+  | "RESOURCE_EXHAUSTION"
+  | "STATE_MACHINE_DEFECT"
+  | "UNKNOWN";
+
+export const CATEGORY_MESSAGES: Record<FailureCategory, string> = {
+  CONTENT_GATE: "The content request needs a safer or clearer prompt before production can continue.",
+  VOICE_FAILURE: "The narration could not be generated. Please check the selected voice and try again.",
+  ELEVENLABS_PROVIDER_ERROR: "ElevenLabs could not generate the Arabic narration. Check the selected voice, then try again.",
+  MEDIA_ACQUISITION_FAILURE: "The production could not prepare the required media. Try again or choose a different visual source.",
+  STOCK_COVERAGE_FAILURE: "Could not find enough suitable real footage. Try again with a clearer subject or configure another stock provider.",
+  CAPTION_FAILURE: "Caption timing could not be prepared. Please try again.",
+  FFMPEG_FAILURE: "The final video could not be encoded. Please try again.",
+  REMOTION_FAILURE: "The video composition step could not finish. Please try again.",
+  AUDIO_MASTERING_FAILURE: "The final audio mix did not pass quality checks. Please try again.",
+  PROFESSIONAL_READINESS_FAILURE: "Final video quality checks did not pass. Retry will reuse valid saved assets where possible.",
+  FINAL_MEDIA_VALIDATION: "The finished video did not pass final media validation. Please try again.",
+  COMPLETE_CALLBACK_FAILURE: "The worker finished, but the completion callback could not be accepted. Please try again.",
+  WORKER_CRASH: "The production worker stopped unexpectedly. Please retry when the system is healthy.",
+  TIMEOUT: "One production step took too long and timed out. Please try again shortly.",
+  RESOURCE_EXHAUSTION: "Production stopped because the server was low on resources. Please try again after freeing capacity.",
+  STATE_MACHINE_DEFECT: "The production reached an inconsistent state. Please contact support with the reference code.",
+  UNKNOWN: "This production could not be completed. Please try again.",
+};
+
+export const CATEGORY_MESSAGES_AR: Record<FailureCategory, string> = {
+  CONTENT_GATE: "يتطلب المحتوى صياغة أوضح وأكثر ملاءمة لمواصلة إنتاج الفيديو.",
+  VOICE_FAILURE: "تعذر توليد التعليق الصوتي. يرجى التحقق من الصوت المختار والمحاولة مرة أخرى.",
+  ELEVENLABS_PROVIDER_ERROR: "تعذر توليد التعليق الصوتي عبر إيلفن لابس. يرجى التحقق من مفتاح الحساب أو رصيده ثم المحاولة مجدداً.",
+  MEDIA_ACQUISITION_FAILURE: "تعذر تجهيز الوسائط المطلوبة للفيديو. يرجى المحاولة مرة أخرى أو اختيار مصدر مرئي بديل.",
+  STOCK_COVERAGE_FAILURE: "لم يتم العثور على مشاهد فيديو ملائمة كافية. جرب صياغة موضوع أوضح أو تفعيل مزود وسائط آخر.",
+  CAPTION_FAILURE: "تعذر إعداد مزامنة النصوص التوضيحية (الترجمة). يرجى المحاولة مجدداً.",
+  FFMPEG_FAILURE: "تعذر ترميز الفيديو النهائي. يرجى المحاولة مرة أخرى.",
+  REMOTION_FAILURE: "تعذرت مرحلة تركيب عناصر الفيديو. يرجى إعادة المحاولة.",
+  AUDIO_MASTERING_FAILURE: "فشل المزيج الصوتي النهائي في اجتياز فحوصات الجودة الصوتية. يرجى إعادة المحاولة.",
+  PROFESSIONAL_READINESS_FAILURE: "لم يجتز الفيديو النهائي فحوصات الجودة الاحترافية. عند إعادة المحاولة سيتم استخدام الأصول الصالحة المحفوظة.",
+  FINAL_MEDIA_VALIDATION: "لم يجتز الملف النهائي التحقق من سلامة الفيديو. يرجى المحاولة مجدداً.",
+  COMPLETE_CALLBACK_FAILURE: "اكتملت المعالجة ولكن تعذر تسجيل إشعار الانتهاء بنجاح. يرجى إعادة المحاولة.",
+  WORKER_CRASH: "توقف خادم المعالجة بشكل غير متوقع. يرجى المحاولة عند استقرار النظام.",
+  TIMEOUT: "استغرقت إحدى مراحل الإنتاج وقتاً أطول من المسموح به. يرجى المحاولة بعد قليل.",
+  RESOURCE_EXHAUSTION: "توقف الإنتاج مؤقتاً بسبب انخفاض موارد الخادم. يرجى المحاولة مجدداً.",
+  STATE_MACHINE_DEFECT: "حدث تعارض غير متوقع في حالة الإنتاج. يرجى التواصل مع الدعم الفني.",
+  UNKNOWN: "تعذر إكمال إنتاج هذا الفيديو. يرجى المحاولة مرة أخرى.",
+};
 
 /**
  * Turn a raw internal render error into one customer-safe sentence.
@@ -173,43 +234,73 @@ const READINESS_ACTION_RE = /provider|configure|connect|api key|credential|not c
  */
 export function classifyRenderFailure(rawTechnicalMessage: string): {
   message: string;
-  category:
-    | "resources"
-    | "asset_unreadable"
-    | "composition"
-    | "visuals_unavailable"
-    | "unknown";
+  category: FailureCategory;
 } {
   const raw = (rawTechnicalMessage || "").toLowerCase();
 
+  if (/voice_pronunciation_required|pronunciation required|need a pronunciation|تحتاج بعض الكلمات إلى تحديد طريقة النطق/.test(raw)) {
+    return {
+      category: "VOICE_FAILURE",
+      message: "Some words need a pronunciation before Arabic narration can be generated.",
+    };
+  }
   if (/enospc|enomem|out of memory|\boom\b|killed|sigkill|no space left|cannot allocate|resource temporarily unavailable/.test(raw)) {
     return {
-      category: "resources",
-      message: "Rendering stopped because the system was low on resources. Please try again in a few minutes.",
+      category: "RESOURCE_EXHAUSTION",
+      message: CATEGORY_MESSAGES.RESOURCE_EXHAUSTION,
+    };
+  }
+  if (/elevenlabs|text-to-speech|tts|voice|narration|arabic narration|selected voice|api key|quota|credit|rate limit|invalid input/.test(raw)) {
+    return {
+      category: raw.includes("elevenlabs") || raw.includes("invalid input")
+        ? "ELEVENLABS_PROVIDER_ERROR"
+        : "VOICE_FAILURE",
+      message: raw.includes("elevenlabs") || raw.includes("invalid input")
+        ? CATEGORY_MESSAGES.ELEVENLABS_PROVIDER_ERROR
+        : CATEGORY_MESSAGES.VOICE_FAILURE,
     };
   }
   if (/enoent|no such file|cannot read|unreadable|corrupt|moov atom not found|invalid data found|unexpected end of file/.test(raw)) {
     return {
-      category: "asset_unreadable",
-      message: "A generated asset could not be read while assembling the video. Please try again.",
+      category: "FINAL_MEDIA_VALIDATION",
+      message: CATEGORY_MESSAGES.FINAL_MEDIA_VALIDATION,
     };
   }
   if (/pexels|pixabay|stock|exhausted \d+ terms|no acceptable videos|no videos found|api key not set|invalid pexels/.test(raw)) {
     return {
-      category: "visuals_unavailable",
-      message:
-        "The production could not be matched with stock footage. Try again, or configure a stock provider under Providers.",
+      category: "STOCK_COVERAGE_FAILURE",
+      message: CATEGORY_MESSAGES.STOCK_COVERAGE_FAILURE,
+    };
+  }
+  if (/professional|quality readiness|readiness|quality checks|real footage|graphic instead of real video|visual coverage/.test(raw)) {
+    return {
+      category: "PROFESSIONAL_READINESS_FAILURE",
+      message: CATEGORY_MESSAGES.PROFESSIONAL_READINESS_FAILURE,
+    };
+  }
+  if (/audio qa|audio mastering|final mix|silence|quiet|clipping|loudness/.test(raw)) {
+    return {
+      category: "AUDIO_MASTERING_FAILURE",
+      message: CATEGORY_MESSAGES.AUDIO_MASTERING_FAILURE,
+    };
+  }
+  if (/timeout|timed out|etimedout|econnaborted/.test(raw)) {
+    return {
+      category: "TIMEOUT",
+      message: CATEGORY_MESSAGES.TIMEOUT,
     };
   }
   if (/ffmpeg|remotion|chromium|compose|composition|mux|concat|encoder|render pipeline/.test(raw)) {
     return {
-      category: "composition",
-      message: "The generated media could not be composed into a finished video. Please try again.",
+      category: raw.includes("remotion") || raw.includes("chromium") ? "REMOTION_FAILURE" : "FFMPEG_FAILURE",
+      message: raw.includes("remotion") || raw.includes("chromium")
+        ? CATEGORY_MESSAGES.REMOTION_FAILURE
+        : CATEGORY_MESSAGES.FFMPEG_FAILURE,
     };
   }
   return {
-    category: "unknown",
-    message: "The video render did not finish. Please try again.",
+    category: "UNKNOWN",
+    message: CATEGORY_MESSAGES.UNKNOWN,
   };
 }
 
@@ -228,19 +319,28 @@ export function supportCode(seed: string): string {
 /** Build the customer-safe failure story for a failed job. Never leaks the raw stack. */
 export function sanitizeJobFailure(job: JobRecord): CustomerFailure | undefined {
   if (job.status !== "failed") return undefined;
-  const rawMessage = (job.error || "").trim();
-  const message = rawMessage && !looksLikePath(rawMessage)
-    ? rawMessage.slice(0, 280)
-    : "This production could not be completed. You can try again.";
+  const rawMessage = `${job.error || ""} ${job.technicalError || ""} ${job.currentStage || ""}`.trim();
+  const classified = classifyRenderFailure(rawMessage);
+  const message = classified.message;
   const needsConfig = READINESS_ACTION_RE.test(rawMessage);
+  const isArabic = job.language === "ar" || (job.productionSpec as any)?.language === "ar";
   return {
     message,
-    supportCode: supportCode(`${job.id}:${job.currentStage}:${rawMessage.slice(0, 40)}`),
+    messageAr: isArabic ? CATEGORY_MESSAGES_AR[classified.category] : undefined,
+    supportCode: supportCode(`${job.id}:${job.currentStage}:${classified.category}:${rawMessage.slice(0, 40)}`),
     recoverable: true,
+    category: classified.category,
+    stage: job.currentStage,
     action: needsConfig
-      ? { label: "Open Providers", href: "/providers" }
-      : { label: "Retry production", href: `/jobs/${job.id}` },
+      ? { label: isArabic ? "فتح إعدادات المزودات" : "Open Providers", href: "/providers" }
+      : { label: isArabic ? "إعادة المحاولة" : "Retry production", href: `/jobs/${job.id}` },
   };
+}
+
+export function customerDisplayProgress(job: JobRecord): number {
+  if (job.status === "ready") return 100;
+  if (job.status === "failed" || job.status === "canceled") return Math.min(99, Math.max(0, Math.round(job.progress || 0)));
+  return Math.min(99, Math.max(0, Math.round(job.progress || 0)));
 }
 
 /* -------------------------------------------------------------------- timeline */
@@ -384,7 +484,7 @@ export function serializeJobForCustomer(job: JobRecord, options: SerializeOption
     creationMode: job.creationMode || "template",
     status: job.status,
     customerStatus,
-    progress: job.progress,
+    progress: customerDisplayProgress(job),
     currentStage: job.currentStage,
     createdAt: job.createdAt,
     startedAt: job.startedAt,

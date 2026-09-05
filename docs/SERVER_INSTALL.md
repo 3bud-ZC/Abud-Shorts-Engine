@@ -16,8 +16,8 @@ For a Linux VPS reached at a real domain. For a Windows workstation, see
 ## Install
 
 ```bash
-tar -xzf ABUD-Shorts-Engine-2.2.0.tar.gz
-cd ABUD-Shorts-Engine-2.2.0
+tar -xzf ABUD-Shorts-Engine-2.4.0.tar.gz
+cd ABUD-Shorts-Engine-2.4.0
 sudo ./install.sh --url https://shorts.example.com --behind-proxy
 ```
 
@@ -44,8 +44,8 @@ Options:
 
 ```
 /opt/abud-shorts/
-  current -> releases/2.2.0
-  releases/2.2.0/          this release
+  current -> releases/2.4.0
+  releases/2.4.0/     this release
   shared/                  everything you own
     data/                  videos, uploads, media, models
     config/.env            this machine's secrets

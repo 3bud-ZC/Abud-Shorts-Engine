@@ -7,7 +7,7 @@ export type PronunciationEntry = {
   dialects?: ArabicDialect[];
 };
 
-const SYSTEM_PRONUNCIATIONS: PronunciationEntry[] = [
+export const SYSTEM_PRONUNCIATIONS: PronunciationEntry[] = [
   { written: "API", spoken: "ايه بي آي" },
   { written: "AI", spoken: "إيه آي" },
   { written: "SEO", spoken: "إس إي أو" },
@@ -15,6 +15,19 @@ const SYSTEM_PRONUNCIATIONS: PronunciationEntry[] = [
   { written: "n8n", spoken: "إن إيت إن" },
   { written: "ChatGPT", spoken: "شات جي بي تي" },
   { written: "ABUD", spoken: "عبود" },
+  { written: "Demo", spoken: "ديمو" },
+  { written: "Pro", spoken: "برو" },
+  { written: "Premium", spoken: "بريميوم" },
+  { written: "Store", spoken: "ستور" },
+  { written: "App", spoken: "آب" },
+  { written: "Online", spoken: "أونلاين" },
+  { written: "Brand", spoken: "براند" },
+  { written: "Reel", spoken: "ريل" },
+  { written: "Post", spoken: "بوست" },
+  { written: "Link", spoken: "لينك" },
+  { written: "Discount", spoken: "ديسكاونت" },
+  { written: "Offer", spoken: "أوفر" },
+  { written: "Free", spoken: "فري" },
   { written: "HTML", spoken: "إتش تي إم إل" },
   { written: "CSS", spoken: "سي إس إس" },
   { written: "JavaScript", spoken: "جافا سكريبت" },
@@ -140,6 +153,53 @@ function entryApplies(entry: PronunciationEntry, dialect?: ArabicDialect): boole
     return false;
   }
   return true;
+}
+
+export function deduplicateEntries(entries: PronunciationEntry[]): PronunciationEntry[] {
+  const seen = new Set<string>();
+  const result: PronunciationEntry[] = [];
+  for (const entry of entries) {
+    const key = (entry.written || "").trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(entry);
+  }
+  return result;
+}
+
+export type LatinTokenType = "word" | "url" | "email" | "code";
+
+export type UnresolvedLatinToken = {
+  token: string;
+  type: LatinTokenType;
+  index: number;
+};
+
+export function findUnresolvedLatinTokens(text: string): UnresolvedLatinToken[] {
+  if (!text || !/[a-zA-Z]/.test(text)) return [];
+
+  const tokens: UnresolvedLatinToken[] = [];
+  const tokenRegex = /(?:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})|(?:(?:https?:\/\/|www\.)\S+)|(?:\b[a-zA-Z0-9-]+\.(?:com|net|org|fun|io|ai|co|app|me|tech|shop|store)\b)|(?:\b[a-zA-Z][a-zA-Z0-9'_#-]*\b)/gu;
+
+  let match: RegExpExecArray | null;
+  while ((match = tokenRegex.exec(text)) !== null) {
+    const raw = match[0];
+    const index = match.index;
+
+    if (!/[a-zA-Z]/.test(raw)) continue;
+
+    if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(raw)) {
+      tokens.push({ token: raw, type: "email", index });
+    } else if (/^(?:https?:\/\/|www\.)|[a-zA-Z0-9-]+\.(?:com|net|org|fun|io|ai|co|app|me|tech|shop|store)$/i.test(raw)) {
+      tokens.push({ token: raw, type: "url", index });
+    } else if (/[_/#\\]|[a-z]+[A-Z0-9]+[a-z]+/i.test(raw) && /\d/.test(raw)) {
+      tokens.push({ token: raw, type: "code", index });
+    } else {
+      tokens.push({ token: raw, type: "word", index });
+    }
+  }
+
+  return tokens;
 }
 
 function toEntries(input?: Record<string, string> | PronunciationEntry[]): PronunciationEntry[] {
@@ -308,6 +368,7 @@ export function preprocessArabicSpeech(
     pronunciationOverrides?: Record<string, string> | PronunciationEntry[];
     brandPronunciations?: Record<string, string> | PronunciationEntry[];
     systemPronunciations?: Record<string, string> | PronunciationEntry[];
+    preserveSafeCodeSwitching?: boolean;
   } = {},
 ): ArabicSpeechPreprocessResult {
   const sourceText = rawText || "";
@@ -329,13 +390,17 @@ export function preprocessArabicSpeech(
   //    number/date/currency expansion applied. This is the string sent to TTS.
   let text = normalizeUrls(spokenNarration);
 
+  const systemEntries = options.preserveSafeCodeSwitching
+    ? SYSTEM_PRONUNCIATIONS.filter((entry) => !/^[A-Za-z][A-Za-z0-9 ._-]*$/.test(entry.written))
+    : SYSTEM_PRONUNCIATIONS;
+
   const dictionary = sanitizeEntries(
-    [
-      ...SYSTEM_PRONUNCIATIONS,
-      ...toEntries(options.systemPronunciations),
-      ...toEntries(options.brandPronunciations),
+    deduplicateEntries([
       ...toEntries(options.pronunciationOverrides),
-    ],
+      ...toEntries(options.brandPronunciations),
+      ...toEntries(options.systemPronunciations),
+      ...systemEntries,
+    ]),
     options.dialect,
   );
 

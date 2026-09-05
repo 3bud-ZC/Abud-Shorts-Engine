@@ -77,6 +77,8 @@ export type CustomerFailure = {
   message: string;
   supportCode: string;
   recoverable: boolean;
+  category?: string;
+  stage?: string;
   action?: { label: string; href: string };
 };
 
@@ -432,6 +434,22 @@ export type ProviderItem = {
   message: string;
   checkedAt?: string;
   details?: ProviderDetails;
+  canonical?: {
+    implemented: boolean;
+    category: string;
+    configured: boolean;
+    authenticated: boolean | null;
+    healthy: boolean | null;
+    liveVerified: boolean | null;
+    enabled: boolean;
+    billingClass: string;
+    capabilities: string[];
+    latencyClass: string;
+    qualityClass: string;
+    lastVerifiedAt?: string;
+    customerStatus: string;
+    blockerReason?: string;
+  };
   credentialTypes?: string[];
   vaultConfigured?: boolean;
   vault?: Array<{
@@ -493,6 +511,7 @@ export type PublishingStatus =
   | "processing"
   | "published"
   | "failed"
+  | "needs_attention"
   | "canceled";
 
 export type OverallDistributionStatus =
@@ -528,6 +547,11 @@ export type SocialAccount = {
   connectionStatus: "connected" | "disconnected" | "expired" | "error";
   capabilities: any;
   maskedToken?: string;
+  accountIdentitySafeLabel?: string;
+  authenticated?: boolean;
+  connectionVerified?: boolean;
+  publicationVerified?: boolean;
+  blocker?: string;
   lastCheckedAt: string;
   createdAt: string;
   updatedAt: string;

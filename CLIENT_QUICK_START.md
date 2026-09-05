@@ -59,9 +59,11 @@ That is it. You are on the dashboard.
 Progress appears live. The finished video lands in **Video Library**, where you
 can play it, download it or send it to **Publishing**.
 
-Arabic narration is produced by ElevenLabs. Add your ElevenLabs key in
-**Integrations → ElevenLabs → Configure** before creating an Arabic video; the
-key is stored encrypted and never written to a file you have to manage.
+Arabic narration uses the built-in Local Voice engine by default - no setup, no
+key, no per-video cost. Prefer a premium cloud voice instead? Add your
+ElevenLabs key in **Integrations → ElevenLabs → Configure** and select it
+explicitly for a video; the key is stored encrypted and never written to a
+file you have to manage.
 
 ---
 

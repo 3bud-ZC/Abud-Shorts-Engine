@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import nock from "nock";
 import request from "supertest";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Config } from "../../config";
 import { ShortCreator } from "../../short-creator/ShortCreator";
 import { Server } from "../server";
@@ -445,6 +445,132 @@ describe("V2 jobs", () => {
     expect(second.idempotencyKey).toBe("job-retry-001");
     expect(sanitizeIdempotencyKey("../../bad")).toBeUndefined();
   });
+
+  it("creates checkpoint-aware idempotent full retries with reusable billable voice artifacts", async () => {
+    const db = new FakeDb();
+    const service = new JobService(db as any);
+    const original = await service.createVideoJob({
+      type: "video",
+      creationMode: "prompt",
+      productionSpec: {
+        id: "original",
+        title: "إنتاج إعلان مدته 10",
+        userPrompt: "اعمل Reel سريع مدته 20 ثانية",
+        language: "ar",
+        dialect: "egyptian",
+        durationSeconds: 10,
+        aspectRatio: "16:9",
+        resolution: "1080p",
+        quality: "standard",
+        productionMode: "studio",
+        visualMode: "auto",
+        voiceProvider: "elevenlabs",
+        voiceId: "voice_abc",
+        captionStyle: "bold",
+        scenes: [
+          {
+            sceneIndex: 0,
+            purpose: "hook",
+            durationSeconds: 3,
+            narration: "مشهد أول",
+            stockSearchTerms: ["fashion"],
+            visualSource: "stock",
+          },
+        ],
+      },
+    } as any);
+    const row = db.jobs.get(original.id)! as any;
+    row.status = "failed";
+    row.progress = 100;
+    row.current_stage = "Generating voice";
+    row.completed_at = new Date();
+    row.checkpoint = {
+      planning: { status: "completed", attempt: 1 },
+      media: { status: "completed", attempt: 1 },
+      voice: { status: "running", attempt: 2 },
+    };
+
+    const voiceArtifact: any = {
+      artifactId: "voice_abc1234567890abc_deadbeef0000",
+      type: "voice",
+      sceneIndex: 0,
+      sourceJobId: original.id,
+      provider: "elevenlabs",
+      inputHash: "abc",
+      storageRef: "artifacts/scene/voice/voice_abc1234567890abc_deadbeef0000.mp3",
+      checksum: "d".repeat(64),
+      createdAt: new Date().toISOString(),
+      metadata: { reuseKey: { voiceId: "voice_abc" } },
+      valid: true,
+    };
+    const captionArtifact: any = {
+      artifactId: "captions_def1234567890def_feedface0000",
+      type: "captions",
+      sceneIndex: 0,
+      sourceJobId: original.id,
+      provider: "elevenlabs",
+      inputHash: "def",
+      storageRef: "artifacts/scene/captions/captions_def1234567890def_feedface0000.json",
+      checksum: "f".repeat(64),
+      createdAt: new Date().toISOString(),
+      valid: true,
+    };
+    const mediaArtifact: any = {
+      artifactId: "media_ghi1234567890ghi_cafebabe0000",
+      type: "media",
+      sceneIndex: 0,
+      sourceJobId: original.id,
+      provider: "pexels",
+      inputHash: "ghi",
+      storageRef: "artifacts/scene/media/media_ghi1234567890ghi_cafebabe0000.mp4",
+      checksum: "c".repeat(64),
+      createdAt: new Date().toISOString(),
+      valid: true,
+    };
+    const artifacts = [voiceArtifact, captionArtifact, mediaArtifact];
+    const retry = await service.retryJob(original.id, { reuseArtifacts: artifacts });
+    const duplicate = await service.retryJob(original.id, { reuseArtifacts: artifacts });
+    const retryMeta = (retry.productionSpec as any).metadata.revision;
+
+    expect(duplicate.id).toBe(retry.id);
+    expect(retry.input.__retryOf).toBe(original.id);
+    expect(retry.input.__retryReuse.reusedArtifactIds).toEqual([
+      voiceArtifact.artifactId,
+      captionArtifact.artifactId,
+      mediaArtifact.artifactId,
+    ]);
+    expect(retryMeta.retryOf).toBe(original.id);
+    expect(retryMeta.retryNumber).toBe(1);
+    expect(retryMeta.reuseStages).toContain("planning");
+    expect(retryMeta.reuseStages).toContain("voice");
+    expect(retryMeta.reuseStages).toContain("captions");
+    expect(retryMeta.reuseStages).toContain("media");
+    expect(retryMeta.regeneratedStages).toContain("render");
+    expect(retryMeta.regeneratedStages).toContain("validation");
+    expect(retryMeta.regeneratedStages).not.toContain("planning");
+    expect(retryMeta.regeneratedStages).not.toContain("voice");
+    expect(retryMeta.regeneratedStages).not.toContain("captions");
+    expect(retryMeta.regeneratedStages).not.toContain("media");
+    expect(retryMeta.reuseArtifacts).toHaveLength(3);
+    expect(retryMeta.reuseArtifacts[0].provider).toBe("elevenlabs");
+    expect(retryMeta.reuseArtifacts[1].type).toBe("captions");
+    expect(retryMeta.reuseArtifacts[2].provider).toBe("pexels");
+    expect(retryMeta.reuseArtifacts[0].metadata.retryReuseManifest).toMatchObject({
+      sceneIndex: 0,
+      artifactType: "voice",
+      artifactId: voiceArtifact.artifactId,
+      sourceJobId: original.id,
+      inputHash: "abc",
+      inputHashVersion: "legacy",
+      checksum: "d".repeat(64),
+      provider: "elevenlabs",
+      voiceId: "voice_abc",
+      compatibilityDecision: "planner_bound",
+      compatibilityVersion: "retry-reuse-v1",
+    });
+    expect(retryMeta.reuseArtifacts[0].metadata.retryReuseManifest.canonicalSpokenContentFingerprint).toHaveLength(64);
+    expect(retryMeta.reuseArtifacts[0].metadata.retryReuseManifest.displayContentFingerprint).toHaveLength(64);
+  });
 });
 
 describe("V2 storage policy", () => {
@@ -527,6 +653,59 @@ describe("V2 routes", () => {
     const app = express();
     app.use("/internal/v1", createV2InternalRouter(makeConfig(), {} as ShortCreator));
     await request(app).post("/internal/v1/render/jobs/test/start").send({}).expect(401);
+  });
+
+  it("rejects internal completion when final metadata failed professional readiness", async () => {
+    const config = makeConfig();
+    const videosDir = fs.mkdtempSync(path.join(os.tmpdir(), "abud-v2-complete-"));
+    config.videosDirPath = videosDir;
+    writeMetadata(videosDir, {
+      videoId: "vid_failed_gate",
+      filename: "vid_failed_gate.mp4",
+      status: "failed",
+      error: "One or more sections need better footage; a scene fell back to a graphic instead of real video.",
+      professionalReady: false,
+    } as any);
+    const jobs = {
+      completeJob: vi.fn(),
+      updateJob: vi.fn(async (_id: string, status: string, progress: number, stage: string, message: string, options: any) => ({
+        id: "job_failed_gate",
+        status,
+        progress,
+        currentStage: stage,
+        error: options.error,
+        output: options.output,
+        message,
+      })),
+    };
+
+    const app = express();
+    app.use("/internal/v1", createV2InternalRouter(config, {} as ShortCreator, jobs as any));
+
+    const res = await request(app)
+      .post("/internal/v1/jobs/job_failed_gate/complete")
+      .set("x-internal-token", config.internalServiceToken)
+      .send({ videoId: "vid_failed_gate", output: { path: "/app/data/videos/vid_failed_gate.mp4" } })
+      .expect(200);
+
+    expect(jobs.completeJob).not.toHaveBeenCalled();
+    expect(jobs.updateJob).toHaveBeenCalledWith(
+      "job_failed_gate",
+      "failed",
+      99,
+      "Quality review failed",
+      expect.stringContaining("Final video quality checks"),
+      expect.objectContaining({
+        error: expect.stringContaining("Final video quality checks"),
+        technicalError: expect.stringContaining("better footage"),
+        output: expect.objectContaining({
+          videoId: "vid_failed_gate",
+          professionalReady: false,
+          validationStatus: "failed",
+        }),
+      }),
+    );
+    expect(res.body.job.status).toBe("failed");
   });
 
   it("keeps media API responses free of internal storage details", () => {
@@ -680,6 +859,145 @@ describe("V2 routes", () => {
     expect(res.body.job.productionSpec.visualMode).toBe("auto");
     expect(res.body.job.productionSpec.voiceProvider).toBe("kokoro");
     expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_best");
+  });
+
+  it("preserves direct ProductionSpec visual contract metadata on job creation", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/jobs")
+      .set(authHeader)
+      .send({
+        type: "video",
+        title: "Direct free-stock contract",
+        creationMode: "prompt",
+        prompt: "Create a short coffee shop video with free stock visuals.",
+        productionSpec: {
+          id: "direct_free_stock_contract",
+          title: "Direct free-stock contract",
+          language: "en",
+          durationSeconds: 20,
+          visualMode: "auto",
+          metadata: {
+            visualSource: "auto_free",
+            budgetMode: "free_only",
+            stockProvider: "auto_stock",
+            uiContract: {
+              visualSource: "auto_free",
+              budgetMode: "free_only",
+              stockProvider: "auto_stock",
+              paidCallsAllowed: false,
+            },
+          },
+          scenes: [
+            {
+              sceneIndex: 0,
+              purpose: "hook",
+              durationSeconds: 5,
+              narration: "Start the morning with a simple cup of coffee.",
+              displayText: "Morning coffee",
+              visualSource: "stock",
+              stockSearchTerms: ["coffee shop morning"],
+            },
+          ],
+        },
+      })
+      .expect(201);
+
+    expect(res.body.job.productionSpec.metadata.uiContract.visualSource).toBe("auto_free");
+    expect(res.body.job.productionSpec.metadata.uiContract.sourceStrategy).toBe("Auto Free");
+    expect(res.body.job.productionSpec.metadata.uiContract.budgetMode).toBe("free_only");
+    expect(res.body.job.productionSpec.metadata.uiContract.paidCallsAllowed).toBe(false);
+  });
+
+  it("accepts production job Free Only visual routing controls", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/production/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Create a 20-second vertical Reel with real stock footage.",
+        language: "en",
+        durationSeconds: 20,
+        visualMode: "auto",
+        visualSource: "auto_free",
+        stockProvider: "auto_stock",
+        qualityProfile: "balanced",
+      })
+      .expect(202);
+
+    const job = await db.jobs.get(res.body.jobId);
+    expect(job?.production_spec?.metadata?.uiContract?.visualSource).toBe("auto_free");
+    expect(job?.production_spec?.metadata?.uiContract?.sourceStrategy).toBe("Auto Free");
+    expect(job?.production_spec?.metadata?.uiContract?.stockProvider).toBe("auto_stock");
+  });
+
+  it("V2.4 Pass 5.1: refuses an unknown factual topic with a customer-safe block instead of low-content filler", async () => {
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/production/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Why does bread become stale?",
+        language: "en",
+        durationSeconds: 20,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("content_confidence_low");
+    expect(res.body.message).toBe(
+      "Better content generation is needed for this topic. Connect a Content AI provider or adjust the prompt.",
+    );
+    // Customer-safe: no internal provider/model terminology leaked to Simple mode.
+    const surface = JSON.stringify(res.body).toLowerCase();
+    expect(surface).not.toContain("ollama");
+    expect(surface).not.toContain("gemini");
+    expect(surface).not.toContain("local_ai");
+  });
+
+  it("V2.4 Pass 5.1: still creates the job normally for a curated-fact-pack curiosity topic", async () => {
+    nock("http://127.0.0.1:1")
+      .post("/webhook/abud-v2/jobs/start")
+      .reply(202, { accepted: true });
+
+    const config = makeConfig();
+    const db = new FakeDb();
+    const app = express();
+    app.use("/api/v2", createV2PublicRouter(config, db as any, new JobService(db as any)));
+
+    const res = await request(app)
+      .post("/api/v2/production/jobs")
+      .set(authHeader)
+      .send({
+        prompt: "Why do phone batteries charge much slower after about 80%?",
+        language: "en",
+        durationSeconds: 20,
+      });
+
+    expect(res.status).toBe(202);
+    const job = await db.jobs.get(res.body.jobId);
+    expect(job?.production_spec?.metadata?.contentProvenance).toBe("DETERMINISTIC");
+    expect(job?.production_spec?.metadata?.factPackId).toBe("phone_battery_slow_after_80");
+    expect(job?.production_spec?.cta?.contact).toBeUndefined();
   });
 
   it("supports captions off without requiring caption artifacts", async () => {
@@ -860,7 +1178,7 @@ describe("V2 routes", () => {
   it("lists categorized providers and tests connection endpoints", async () => {
     nock("http://127.0.0.1:1").get("/healthz").reply(200, { ok: true });
     nock("http://127.0.0.1:1").get("/health").reply(200, { ok: true });
-    nock("https://api.pexels.com").get("/videos/search").query(true).reply(200, { videos: [] });
+    nock("https://api.pexels.com").get("/v1/videos/search").query(true).reply(200, { videos: [] });
     const config = makeConfig();
     const db = new FakeDb();
     const app = express();
@@ -886,7 +1204,7 @@ describe("V2 routes", () => {
 
   it("aggregates health without exposing provider secrets", async () => {
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(200, { videos: [] });
     const config = makeConfig();
@@ -901,7 +1219,7 @@ describe("V2 routes", () => {
 
   it("validates healthy Pexels provider state without returning the secret", async () => {
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(200, { videos: [] });
     const config = makeConfig();
@@ -918,7 +1236,7 @@ describe("V2 routes", () => {
 
   it("validates invalid Pexels credentials without returning the secret", async () => {
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(401, { error: "invalid" });
     const config = makeConfig();
@@ -947,7 +1265,7 @@ describe("V2 routes", () => {
     expect(malformedResult.componentStatus).toBe("unhealthy");
 
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(429, { error: "rate limited" });
     const limited = makeConfig();
@@ -957,7 +1275,7 @@ describe("V2 routes", () => {
     expect(limitedResult.componentStatus).toBe("degraded");
 
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
       .reply(503, { error: "down" });
     const unavailable = makeConfig();
@@ -967,10 +1285,9 @@ describe("V2 routes", () => {
     expect(unavailableResult.componentStatus).toBe("degraded");
 
     nock("https://api.pexels.com")
-      .get("/videos/search")
+      .get("/v1/videos/search")
       .query(true)
-      .delayConnection(50)
-      .reply(200, { videos: [] });
+      .replyWithError(Object.assign(new Error("timeout"), { code: "ECONNABORTED" }));
     const timeout = makeConfig();
     timeout.pexelsApiKey = "D".repeat(56);
     const timeoutResult = await validatePexelsProvider(timeout, { bypassCache: true, timeoutMs: 5 });

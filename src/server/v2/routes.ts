@@ -46,6 +46,12 @@ import {
 import { convertTemplateToProductionSpec } from "./templateToSpec";
 import { VeoVisualProvider } from "./visual-providers/veoVisualProvider";
 import { FalVisualProvider } from "./visual-providers/falVisualProvider";
+import { RunwayVisualProvider } from "./visual-providers/runwayVisualProvider";
+import { ReplicateVisualProvider } from "./visual-providers/replicateVisualProvider";
+import { ComfyUIProvider } from "./visual-providers/comfyUIProvider";
+import { LumaVisualProvider } from "./visual-providers/lumaVisualProvider";
+import { PixabayProvider } from "./stock-providers/pixabayProvider";
+import { PexelsStockProvider } from "./stock-providers/pexelsProvider";
 import { ElevenLabsVoiceProvider } from "./voice-providers/elevenlabsVoiceProvider";
 import { GoogleCloudTtsProvider } from "./voice-providers/googleCloudTtsProvider";
 import { EdgeTtsProvider } from "./voice-providers/edgeTtsProvider";
@@ -70,13 +76,18 @@ import {
 import { resolveTrustedProxy } from "./system/trustedProxy";
 import { AuthService } from "./auth/authService";
 import { ApiTokenService, type ApiTokenScope } from "./auth/apiTokenService";
-import type { VoiceProviderId } from "./voice-providers/types";
 import {
   ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+  ARABIC_LIGHTWEIGHT_PROVIDER,
+  ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+  ARABIC_PREMIUM_CLOUD_PROVIDER,
   ARABIC_PRODUCTION_PROVIDER,
   isArabicLanguage,
   isLegacyPiperVoiceId,
+  type VoiceProviderId,
 } from "./voice-providers/types";
+import { LOCAL_TTS_MODELS } from "./voice-providers/localTtsModels";
+import { LocalModelManager } from "./voice-providers/localModelManager";
 import {
   ELEVENLABS_DEFAULT_MODEL_ID,
   ELEVENLABS_PRESETS,
@@ -99,6 +110,18 @@ import { RevisionService } from "./revisions/revisionService";
 import { WorkerLeaseService } from "./workers/workerLeaseService";
 import { ProviderCredentialsVault, allowedCredentialTypes, type CredentialType } from "./provider-vault/providerCredentialsVault";
 import { providerSecrets } from "./provider-vault/providerSecrets";
+import {
+  normalizeProviderServiceState,
+  statusFromCanonicalProvider,
+  tierFromBillingClass,
+  type CanonicalProviderStateInput,
+  type ProviderBillingClass,
+} from "./providers/canonicalProviderState";
+import {
+  allocateHeroShots,
+  resolveProviderBudgetPolicy,
+  type ProviderBudgetPolicy,
+} from "./providers/providerServicePolicy";
 import { createOAuthRouter } from "./integrations/oauthRoutes";
 import { checkpointStages } from "./checkpoints";
 import {
@@ -107,6 +130,7 @@ import {
   buildCustomerTimeline,
   sanitizeJobFailure,
   classifyRenderFailure,
+  customerDisplayProgress,
   scrubInternal,
   STATUS_GROUPS,
   type JobListFilters,
@@ -114,6 +138,7 @@ import {
 import {
   buildRevisionReusePlan,
   filterReusableArtifacts,
+  readDurableArtifactsForSourceJob,
   type DurableSceneArtifact,
 } from "./artifacts/durableArtifacts";
 import { capabilityManager } from "./capabilities/capabilityManager";
@@ -185,6 +210,30 @@ type SettingRow = {
   value: Record<string, unknown>;
   updated_at: Date;
 };
+
+function brandArabicVoiceDefault(brand: ReturnType<typeof mapBrand> | null | undefined): {
+  voiceId?: string;
+  voiceName?: string;
+  preset?: VoicePreset;
+  settings?: Record<string, unknown>;
+  modelId?: string;
+} | null {
+  const profile = brand?.voiceProfile || {};
+  if (profile.provider && profile.provider !== "elevenlabs") return null;
+  const voiceId = typeof profile.voiceId === "string" ? profile.voiceId.trim() : "";
+  if (!voiceId || isLegacyPiperVoiceId(voiceId)) return null;
+  const preset = coerceRequestedPreset(profile.style);
+  return {
+    voiceId,
+    voiceName: typeof profile.voiceName === "string" && profile.voiceName.trim() ? profile.voiceName.trim() : undefined,
+    preset,
+    settings:
+      profile.settings && typeof profile.settings === "object" && !Array.isArray(profile.settings)
+        ? profile.settings as Record<string, unknown>
+        : undefined,
+    modelId: typeof profile.modelId === "string" && profile.modelId.trim() ? profile.modelId.trim() : undefined,
+  };
+}
 
 function mapBrand(row: BrandRow) {
   const kit = (row.kit || {}) as Record<string, any>;
@@ -655,7 +704,11 @@ function inferResolvedVoiceProvider(input: {
   const isArabic =
     input.language === "ar" ||
     (input.language === "auto" && Boolean(input.dialect) && input.dialect !== "none");
-  if (isArabic) return ARABIC_PRODUCTION_PROVIDER;
+  if (isArabic) {
+    if (input.voiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER) return ARABIC_PREMIUM_CLOUD_PROVIDER;
+    if (input.voiceProvider === "kemetone") return "kemetone";
+    return ARABIC_PRODUCTION_PROVIDER;
+  }
   if (input.voiceProvider && input.voiceProvider !== "auto") {
     return input.voiceProvider as VoiceProviderId;
   }
@@ -663,8 +716,10 @@ function inferResolvedVoiceProvider(input: {
 }
 
 function defaultVoiceForResolvedProvider(provider: VoiceProviderId): string {
-  // ElevenLabs is deliberately absent here: an Arabic voice is a human decision
-  // resolved through resolveArabicVoiceSelection, never an environment guess.
+  if (provider === "voicetut") return process.env.VOICETUT_DEFAULT_SPEAKER || LOCAL_TTS_MODELS.voicetut.defaultSpeakerId;
+  if (provider === "kemetone") return LOCAL_TTS_MODELS.kemetone.defaultSpeakerId;
+  // ElevenLabs is deliberately absent here: a premium cloud Arabic voice is a
+  // human decision resolved through resolveArabicVoiceSelection.
   if (provider === "piper") return process.env.PIPER_AR_VOICE_ID || "ar_JO-kareem-medium";
   if (provider === "edge_tts") return process.env.EDGE_TTS_DEFAULT_VOICE || "ar-EG-SalmaNeural";
   if (provider === "google_cloud_tts") return process.env.GOOGLE_CLOUD_TTS_DEFAULT_VOICE || "";
@@ -679,9 +734,10 @@ function defaultVoiceForResolvedProvider(provider: VoiceProviderId): string {
  */
 export type ProductionSpecDefaults = {
   arabicVoice?: PersistedArabicVoiceDefault | null;
+  brandArabicVoice?: ReturnType<typeof brandArabicVoiceDefault>;
 };
 
-type CreateVisualSource = "auto_best" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
+type CreateVisualSource = "auto_free" | "auto_best" | "auto_budget" | "stock" | "uploaded_media" | "ai_generated" | "mixed";
 type StockProviderChoice = "auto_stock" | "pexels" | "pixabay";
 type MediaPolicyChoice = "auto_use_selected" | "only_selected";
 
@@ -715,6 +771,8 @@ function visualModeForSource(source?: string): string | undefined {
       return "ai";
     case "mixed":
       return "hybrid";
+    case "auto_free":
+    case "auto_budget":
     case "auto_best":
     default:
       return undefined;
@@ -739,6 +797,30 @@ function coerceRequestedPreset(value: unknown): VoicePreset | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function normalizeTitleDuration(title: string | undefined, durationSeconds: number): string | undefined {
+  if (!title) return title;
+  const duration = String(Math.round(durationSeconds * 10) / 10).replace(/\.0$/, "");
+  return title
+    .replace(/(مدته\s*)\d+(?:\.\d+)?/gi, `$1${duration}`)
+    .replace(/\d+(?:\.\d+)?\s*(ثانية|ثواني|ثوان)/gi, `${duration} ثانية`)
+    .replace(/\b\d+(?:\.\d+)?\s*(-?\s*)?(second|seconds|sec|secs|s)\b/gi, `${duration}s`);
+}
+
+function budgetControlsFrom(controls: any) {
+  const metadata = controls.metadata || {};
+  const contract = metadata.uiContract || {};
+  return resolveProviderBudgetPolicy({
+    visualSource: controls.visualSource || metadata.visualSource || contract.visualSource,
+    budgetMode: controls.budgetMode || metadata.budgetMode || contract.budgetMode,
+    maxExternalSpendUsd: controls.maxExternalSpendUsd ?? metadata.maxExternalSpendUsd ?? contract.maxExternalSpendUsd,
+    paidCallsAllowed:
+      controls.paidCallsAllowed === true ||
+      metadata.paidCallsAllowed === true ||
+      contract.paidCallsAllowed === true ||
+      process.env.ABUD_ALLOW_PAID_VIDEO_CALLS === "true",
+  });
+}
+
 export function canonicalizeProductionSpecContract(
   spec: any,
   controls: any,
@@ -761,14 +843,14 @@ export function canonicalizeProductionSpecContract(
   // Historical Arabic jobs carry Piper model names. Never forward one to
   // ElevenLabs; resolveArabicVoiceSelection discards them for us.
   const arabicVoice: ResolvedArabicVoice | null =
-    resolvedVoiceProvider === ARABIC_PRODUCTION_PROVIDER
+    resolvedVoiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER
       ? resolveArabicVoiceSelection({
           requestedVoiceId,
           requestedPreset:
             coerceRequestedPreset(controls.voicePreset) ??
             (canReuseSpecVoice ? coerceRequestedPreset(spec.voicePreset) : undefined),
+          brandVoice: defaults.brandArabicVoice,
           persisted: defaults.arabicVoice,
-          envVoiceId: process.env.ELEVENLABS_DEFAULT_VOICE_ID,
           defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
         })
       : null;
@@ -776,18 +858,71 @@ export function canonicalizeProductionSpecContract(
     ? arabicVoice.voiceId
     : requestedVoiceId || defaultVoiceForResolvedProvider(resolvedVoiceProvider);
   const voicePreset = arabicVoice ? arabicVoice.preset : coerceRequestedPreset(controls.voicePreset);
-  const voiceModelId = arabicVoice ? arabicVoice.modelId : undefined;
+  const voiceModelId = arabicVoice
+    ? arabicVoice.modelId
+    : resolvedVoiceProvider === "voicetut" || resolvedVoiceProvider === "kemetone"
+      ? LOCAL_TTS_MODELS[resolvedVoiceProvider].providerModelId
+      : undefined;
   const captionEnabled = controls.captionEnabled !== false && controls.captions !== false;
-  const visualSource = (controls.visualSource || "auto_best") as CreateVisualSource;
+  const specMetadata = spec.metadata || {};
+  const specContract = specMetadata.uiContract || {};
+  const controlsMetadata = controls.metadata || {};
+  const controlsContract = controlsMetadata.uiContract || {};
+  const visualSource = (
+    controls.visualSource ||
+    controlsMetadata.visualSource ||
+    controlsContract.visualSource ||
+    spec.visualSource ||
+    specMetadata.visualSource ||
+    specContract.visualSource ||
+    "auto_best"
+  ) as CreateVisualSource;
   const selectedMediaIds = selectedMediaIdsFromControls(controls);
   const sourceVisualMode = visualModeForSource(visualSource);
   const resolvedVisualMode = sourceVisualMode || controls.visualMode || spec.visualMode;
-  const stockProvider = (controls.stockProvider || controls.metadata?.stockProvider || "auto_stock") as StockProviderChoice;
-  const mediaPolicy = (controls.mediaPolicy || controls.metadata?.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
-  const aiVisualProvider = controls.aiVisualProvider || controls.metadata?.aiVisualProvider || "auto";
+  const stockProvider = (
+    controls.stockProvider ||
+    controlsMetadata.stockProvider ||
+    controlsContract.stockProvider ||
+    specMetadata.stockProvider ||
+    specContract.stockProvider ||
+    "auto_stock"
+  ) as StockProviderChoice;
+  const mediaPolicy = (
+    controls.mediaPolicy ||
+    controlsMetadata.mediaPolicy ||
+    controlsContract.mediaPolicy ||
+    specMetadata.mediaPolicy ||
+    specContract.mediaPolicy ||
+    "auto_use_selected"
+  ) as MediaPolicyChoice;
+  const aiVisualProvider =
+    controls.aiVisualProvider ||
+    controlsMetadata.aiVisualProvider ||
+    controlsContract.aiVisualProvider ||
+    specMetadata.aiVisualProvider ||
+    specContract.aiVisualProvider ||
+    "auto";
+  const budgetPolicy = budgetControlsFrom({
+    ...controls,
+    visualSource,
+    metadata: {
+      ...specMetadata,
+      ...controlsMetadata,
+      uiContract: {
+        ...specContract,
+        ...controlsContract,
+      },
+    },
+  });
   const productImageId = controls.metadata?.productImageId || controls.productImageId;
   const characterProfileId = characterProfileIdFromControls(controls);
-  return validateProductionSpec({
+  const heroShotAllocation = allocateHeroShots(
+    { scenes: spec.scenes || [] },
+    budgetPolicy,
+    { maxGeneratedShots: visualSource === "ai_generated" ? spec.scenes?.length || 1 : 1 },
+  );
+  const canonical = validateProductionSpec({
     ...spec,
     language: language === "auto" && dialect !== "none" ? "ar" : language,
     dialect,
@@ -826,7 +961,11 @@ export function canonicalizeProductionSpecContract(
         sourceStrategy:
           visualSource === "auto_best"
             ? "Auto Best"
-            : visualSource === "stock"
+            : visualSource === "auto_free"
+              ? "Auto Free"
+              : visualSource === "auto_budget"
+                ? "Auto Budget"
+                : visualSource === "stock"
               ? "Stock"
               : visualSource === "uploaded_media"
                 ? "Uploaded Media"
@@ -837,6 +976,16 @@ export function canonicalizeProductionSpecContract(
         mediaPolicy,
         selectedMediaIds,
         aiVisualProvider,
+        budgetMode: budgetPolicy.mode,
+        maxExternalSpendUsd: budgetPolicy.maxExternalSpendUsd,
+        paidCallsAllowed: budgetPolicy.paidCallsAllowed,
+        preflightExternalUsage:
+          budgetPolicy.mode === "free_only"
+            ? "Free"
+            : budgetPolicy.maxExternalSpendUsd != null
+              ? `Up to configured budget ($${budgetPolicy.maxExternalSpendUsd})`
+              : "Usage Based - estimate unavailable",
+        heroShotAllocation,
         characterProfileId,
         characterConsistencyMode: characterProfileId ? "Provider capability required" : "None",
         captionEnabled,
@@ -845,13 +994,18 @@ export function canonicalizeProductionSpecContract(
         voiceId,
         voicePreset,
         voiceModelId,
+        voiceSettings: arabicVoice?.settings,
         // How the voice was chosen, so the UI and job metadata can prove the
-        // persisted human selection - not an environment value - was used.
+        // persisted human or brand-profile selection was used.
         voiceSource: arabicVoice?.source,
         voiceName: arabicVoice?.voiceName,
       },
     },
   });
+  return {
+    ...canonical,
+    title: normalizeTitleDuration(canonical.title, canonical.durationSeconds) || canonical.title,
+  };
 }
 
 /**
@@ -866,12 +1020,15 @@ async function canonicalizeProductionSpecForRequest(
   spec: any,
   controls: any,
 ) {
-  const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
-  const canonical = canonicalizeProductionSpecContract(spec, controls, { arabicVoice });
-  const brandId = String(controls.brandId || canonical.brandId || "").trim();
-  const templateId = String(controls.templateId || controls.businessTemplateId || canonical.templateId || "").trim();
+  const brandId = String(controls.brandId || spec.brandId || "").trim();
+  const templateId = String(controls.templateId || controls.businessTemplateId || spec.templateId || "").trim();
   const brand = await getBrandById(db, brandId).catch(() => null);
   const template = await getTemplateForSnapshot(db, templateId).catch(() => null);
+  const arabicVoice = await readArabicVoiceDefault(db).catch(() => null);
+  const canonical = canonicalizeProductionSpecContract(spec, controls, {
+    arabicVoice,
+    brandArabicVoice: brandArabicVoiceDefault(brand),
+  });
   const brandSnapshot = brand ? createBrandSnapshot(brand) : undefined;
   const baseMetadata = {
     ...(canonical.metadata || {}),
@@ -940,7 +1097,7 @@ async function canonicalizeProductionSpecForRequest(
     supportsReferenceImages: referenceProviders.length > 0,
   });
   if (!snapshot) return withSnapshots;
-  return validateProductionSpec({
+  const withCharacterSnapshot = validateProductionSpec({
     ...withSnapshots,
     metadata: {
       ...(withSnapshots.metadata || {}),
@@ -958,6 +1115,12 @@ async function canonicalizeProductionSpecForRequest(
       },
     },
   });
+  return {
+    ...withCharacterSnapshot,
+    title:
+      normalizeTitleDuration(withCharacterSnapshot.title, withCharacterSnapshot.durationSeconds) ||
+      withCharacterSnapshot.title,
+  };
 }
 
 /**
@@ -972,28 +1135,72 @@ async function arabicProductionBlocker(spec: {
   language?: string;
   dialect?: string;
   voiceId?: string;
+  voiceProvider?: string;
 }): Promise<{ error: string; message: string; action: { label: string; href: string } } | null> {
   if (!isArabicLanguage(spec.language, spec.dialect as any)) return null;
-  await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
-  if (!new ElevenLabsVoiceProvider().isConfigured()) {
+  if (spec.voiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER) {
+    await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
+    if (!new ElevenLabsVoiceProvider().isConfigured()) {
+      return {
+        error: "elevenlabs_not_configured",
+        message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+        action: { label: "Configure ElevenLabs", href: "/providers" },
+      };
+    }
+    if (!spec.voiceId) {
+      return {
+        error: "arabic_default_voice_not_selected",
+        message:
+          "No premium Arabic cloud voice has been selected. Open Voice Lab, audition the account voices and save a default.",
+        action: { label: "Open Voice Lab", href: "/voice-lab" },
+      };
+    }
+    return null;
+  }
+
+  if (!new VoiceRegistry({} as any).isArabicProductionConfigured()) {
     return {
-      error: "elevenlabs_not_configured",
-      message: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
-      action: { label: "Configure ElevenLabs", href: "/providers" },
+      error: "local_voice_setup_required",
+      message: ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+      action: { label: "Open Local Voice Setup", href: "/providers" },
     };
   }
-  // Nothing resolved a speaker: no explicit voice, no persisted human default
-  // and no legacy environment value. Refuse rather than narrate the job with an
-  // arbitrary account voice nobody chose.
   if (!spec.voiceId) {
     return {
-      error: "arabic_default_voice_not_selected",
-      message:
-        "No default Arabic voice has been selected. Open Voice Lab, audition the account voices and save a default.",
-      action: { label: "Open Voice Lab", href: "/voice-lab" },
+      error: "local_voice_speaker_not_selected",
+      message: "No local Arabic voice speaker has been selected.",
+      action: { label: "Open Local Voice Setup", href: "/providers" },
     };
   }
   return null;
+}
+
+/**
+ * Unknown-factual-topic gate (V2.4 Pass 5.1).
+ *
+ * `LocalContentAIProvider` marks a generated spec `contentProvenance:
+ * "SAFE_GENERIC"` exactly when a curiosity/educational prompt matched no
+ * curated fact pack AND no configured Content AI provider (Ollama/Gemini)
+ * was available to actually explain the topic - i.e. the only options were
+ * "invent a plausible-sounding explanation" (forbidden) or "render safe but
+ * content-free filler" (not useful). Rather than ship that filler, refuse at
+ * creation time with a customer-safe, provider-agnostic message so the
+ * customer can add a Content AI provider or adjust the prompt instead of
+ * receiving a video with no real informational content. This single check
+ * correctly reflects the whole Ollama -> Gemini -> deterministic fact-pack
+ * precedence chain: both LLM providers build their own deterministic
+ * baseline first and only override `contentProvenance` away from
+ * "SAFE_GENERIC" when they actually succeeded.
+ */
+function contentConfidenceBlocker(spec: {
+  metadata?: { contentProvenance?: string } | null;
+}): { error: string; message: string; action: { label: string; href: string } } | null {
+  if (spec.metadata?.contentProvenance !== "SAFE_GENERIC") return null;
+  return {
+    error: "content_confidence_low",
+    message: "Better content generation is needed for this topic. Connect a Content AI provider or adjust the prompt.",
+    action: { label: "Connect a Content AI Provider", href: "/providers" },
+  };
 }
 
 function hasCommandHint(envKey: string): boolean {
@@ -1153,6 +1360,125 @@ function buildV22CapabilityProviders() {
       },
     },
   ];
+}
+
+function providerBillingClass(id: string): ProviderBillingClass {
+  if (["local_ai", "kokoro", "piper", "whisper_cpp", "remotion", "ffmpeg", "motion_canvas", "n8n", "postgres"].includes(id)) {
+    return "LOCAL_FREE";
+  }
+  if (["pexels", "pixabay"].includes(id)) return "FREE_API";
+  if (["gemini", "google_cloud_tts", "edge_tts"].includes(id)) return "FREE_TIER";
+  if (["elevenlabs", "veo", "fal", "runway", "replicate", "luma", "upload_post"].includes(id)) return "USAGE_BASED";
+  if (id === "comfyui") return "LOCAL_FREE";
+  return "UNKNOWN";
+}
+
+function canonicalCategoryForProvider(provider: any): string {
+  if (provider.category === "Content AI") return "Content AI";
+  if (provider.category === "Voice") return "Voice";
+  if (provider.category === "Captions") return "Captions";
+  if (provider.category === "Publishing") return "Publishing";
+  if (provider.category === "Renderer") return "Renderer";
+  if (provider.category === "Infrastructure") return "Infrastructure";
+  if (provider.id === "pexels" || provider.id === "pixabay") return "Stock Video";
+  if (provider.id === "comfyui") return "Local Generated Video";
+  if (["veo", "fal", "runway", "replicate", "luma"].includes(provider.id)) return "Generated Video";
+  return provider.category || "Infrastructure";
+}
+
+function capabilitiesForProvider(provider: any): string[] {
+  const visual = provider.details?.visualCapabilities || {};
+  const flags: Array<[string, string]> = [
+    ["textToVideo", "Text to video"],
+    ["imageToVideo", "Image to video"],
+    ["referenceImage", "Reference image"],
+    ["portrait", "Portrait"],
+    ["landscape", "Landscape"],
+    ["seed", "Seed"],
+    ["audio", "Native audio"],
+  ];
+  const fromVisual = flags.filter(([key]) => visual[key] === true).map(([, label]) => label);
+  const languages = Array.isArray(provider.details?.languages)
+    ? provider.details.languages.map((language: string) => `Language: ${language}`)
+    : [];
+  if (provider.id === "local_ai") return ["Deterministic planning", "Trusted fact packs", "CTA provenance"];
+  if (provider.id === "gemini") return ["Structured JSON planning", "Claim provenance", "Script generation"];
+  if (provider.id === "ollama") return ["Local structured planning", "Script generation"];
+  if (provider.id === "whisper_cpp") return ["Captions", "Timing baseline"];
+  if (provider.category === "Publishing") return ["Connect account", "Pre-flight", "Schedule", "Retry"];
+  return [...fromVisual, ...languages];
+}
+
+function canonicalizeProviderPayload(provider: any) {
+  const status = String(provider.status || "").toLowerCase();
+  const vaultHealth = Array.isArray(provider.vault) ? provider.vault.find((credential: any) => credential?.health)?.health : undefined;
+  const healthy =
+    provider.details?.healthy ??
+    (["healthy", "ready", "connected", "live_verified"].includes(status)
+      ? true
+      : ["not_configured", "disabled"].includes(status)
+        ? null
+        : false);
+  const liveVerified =
+    provider.details?.liveVerified === true ||
+    vaultHealth === "live_verified" ||
+    status === "live_verified";
+  const authenticated =
+    provider.details?.authenticated ??
+    (["invalid_credentials"].includes(status)
+      ? false
+      : ["healthy", "connected", "live_verified"].includes(status) || vaultHealth === "healthy" || liveVerified
+        ? true
+        : null);
+  const billingClass = providerBillingClass(provider.id);
+  const canonical = normalizeProviderServiceState({
+    id: provider.id,
+    name: provider.name,
+    category: canonicalCategoryForProvider(provider),
+    implemented: provider.details?.implemented !== false,
+    configured: provider.configured === true,
+    authenticated,
+    healthy,
+    liveVerified,
+    enabled: provider.details?.enabled !== false,
+    billingClass,
+    capabilities: capabilitiesForProvider(provider),
+    latencyClass:
+      provider.details?.visualCapabilities?.latencyTier ||
+      (["veo", "fal", "runway", "replicate", "luma", "comfyui"].includes(provider.id) ? "long" : "interactive"),
+    qualityClass:
+      provider.details?.visualCapabilities?.qualityTier ||
+      (["veo", "runway"].includes(provider.id) ? "premium" : ["fal", "replicate", "luma", "comfyui"].includes(provider.id) ? "professional" : "standard"),
+    lastVerifiedAt: provider.checkedAt,
+    blockerReason:
+      status === "invalid_credentials"
+        ? "Credentials were rejected. Replace them and test the connection again."
+        : status === "rate_limited"
+          ? "Provider rate limit reached. Try again later."
+          : status === "timeout" || status === "provider_unavailable"
+            ? "Provider did not respond during the latest check."
+            : provider.details?.blockerReason,
+    optional: !["local_ai", "kokoro", "whisper_cpp", "remotion", "ffmpeg", "postgres"].includes(provider.id),
+    builtIn: billingClass === "LOCAL_FREE" && provider.configured === true,
+  } as CanonicalProviderStateInput);
+  return {
+    ...provider,
+    tier: provider.tier || tierFromBillingClass(billingClass),
+    status: statusFromCanonicalProvider(canonical),
+    providerStatus: canonical.customerStatus,
+    message: providerCustomerMessage(canonical),
+    canonical,
+  };
+}
+
+function providerCustomerMessage(provider: ReturnType<typeof normalizeProviderServiceState>): string {
+  if (provider.customerStatus === "Built In") return "Built-in service is available in this installation.";
+  if (provider.customerStatus === "Ready") return "Connected and live verified.";
+  if (provider.customerStatus === "Configured") return "Credentials are saved. Run Test Connection for live verification.";
+  if (provider.customerStatus === "Disabled") return "Provider is disabled.";
+  if (provider.customerStatus === "Temporarily Unavailable") return provider.blockerReason || "Provider is temporarily unavailable.";
+  if (provider.customerStatus === "Needs Attention") return provider.blockerReason || "Provider needs attention.";
+  return "Optional provider is not configured. You can connect it from this page.";
 }
 
 async function persistSceneArtifacts(db: V2Database, projectId: string, artifacts: DurableSceneArtifact[]) {
@@ -1335,6 +1661,10 @@ export function createV2PublicRouter(
     if (process.env.PIXABAY_API_KEY) ids.add("pixabay");
     if (process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("veo");
     if (process.env.FAL_KEY) ids.add("fal");
+    if (process.env.RUNWAY_API_KEY) ids.add("runway");
+    if (process.env.REPLICATE_API_TOKEN) ids.add("replicate");
+    if (process.env.LUMA_API_KEY) ids.add("luma");
+    if (process.env.COMFYUI_BASE_URL) ids.add("comfyui");
     if (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY) ids.add("gemini");
     if (new ElevenLabsVoiceProvider().isConfigured()) ids.add("elevenlabs");
     if (providerVault.isAvailable()) {
@@ -1364,6 +1694,7 @@ export function createV2PublicRouter(
     const stockProvider = (controls.stockProvider || contract.stockProvider || "auto_stock") as StockProviderChoice;
     const mediaPolicy = (controls.mediaPolicy || contract.mediaPolicy || "auto_use_selected") as MediaPolicyChoice;
     const aiVisualProvider = String(controls.aiVisualProvider || contract.aiVisualProvider || "auto");
+    const budgetPolicy = budgetControlsFrom({ ...controls, metadata: { ...(controls.metadata || {}), uiContract: contract } });
     const characterProfileId = characterProfileIdFromControls({
       ...controls,
       metadata: {
@@ -1387,6 +1718,35 @@ export function createV2PublicRouter(
     };
 
     const anyStock = providerIds.has("pexels") || providerIds.has("pixabay");
+    const anyPaidGenerated =
+      providerIds.has("veo") ||
+      providerIds.has("fal") ||
+      providerIds.has("runway") ||
+      providerIds.has("replicate") ||
+      providerIds.has("luma");
+    const anyLocalGenerated = providerIds.has("comfyui");
+    const hasSelectedUploadedMedia = selectedMediaIds.length > 0;
+    const hasAnyProfessionalVisualSource =
+      anyStock || anyPaidGenerated || anyLocalGenerated || hasSelectedUploadedMedia;
+    const explicitVisualSourceControl = Boolean(controls.visualSource || controls.visualMode);
+    const requiresProfessionalAuto =
+      explicitVisualSourceControl &&
+      (
+        visualSource === "auto_best" ||
+        visualSource === "auto_free" ||
+        visualSource === "auto_budget" ||
+        visualSource === "mixed"
+      );
+    if (requiresProfessionalAuto) {
+      add(
+        "professional_visual_source",
+        "Professional visual source",
+        hasAnyProfessionalVisualSource,
+        true,
+        "Professional automatic video needs at least one visual source. Configure a free stock provider, connect an AI video provider, or upload media.",
+        { label: "Configure Visual Source", href: "/providers" },
+      );
+    }
     if (visualSource === "stock") {
       if (stockProvider === "pexels") {
         add("pexels", "Pexels", providerIds.has("pexels"), true, "Stock provider required: configure Pexels.", { label: "Configure Stock Provider", href: "/providers" });
@@ -1400,7 +1760,7 @@ export function createV2PublicRouter(
     }
 
     if (visualSource === "ai_generated") {
-      const aiProviders = ["veo", "fal"].filter((id) => providerIds.has(id));
+      const aiProviders = ["veo", "fal", "runway", "replicate", "luma", "comfyui"].filter((id) => providerIds.has(id));
       const ready = aiVisualProvider === "auto" ? aiProviders.length > 0 : providerIds.has(aiVisualProvider);
       add(
         "ai_video",
@@ -1410,6 +1770,19 @@ export function createV2PublicRouter(
         "Connect an AI video provider to use AI Generated visuals.",
         { label: "Configure an AI Video Provider", href: "/providers" },
       );
+      const selectedProviderIsLocal = aiVisualProvider === "comfyui" || (aiVisualProvider === "auto" && aiProviders.length === 1 && aiProviders[0] === "comfyui");
+      if (!selectedProviderIsLocal) {
+        add(
+          "paid_video_gate",
+          "Paid video safety gate",
+          budgetPolicy.paidCallsAllowed,
+          true,
+          budgetPolicy.mode === "free_only"
+            ? "AI Generated visuals require Best Available or Smart Budget plus paid-generation authorization."
+            : "Paid video generation requires explicit operator authorization before queueing.",
+          { label: "Review Budget", href: "/create" },
+        );
+      }
     }
 
     if (characterProfileId) {
@@ -1510,6 +1883,7 @@ export function createV2PublicRouter(
         aiVisualProvider,
         voiceProvider: spec?.voiceProvider || controls.voiceProvider,
         contentAIProvider: String(controls.contentAIProvider || "auto"),
+        budgetPolicy,
       }),
     };
   }
@@ -1521,10 +1895,16 @@ export function createV2PublicRouter(
     aiVisualProvider: string;
     voiceProvider?: string;
     contentAIProvider: string;
+    budgetPolicy: ProviderBudgetPolicy;
   }): string[] {
     const usage: string[] = [];
     if (input.voiceProvider === "elevenlabs") usage.push("ElevenLabs · Usage Based");
     if (input.contentAIProvider === "gemini") usage.push("Gemini · Usage Based");
+    if (input.visualSource === "auto_free") {
+      if (input.providerIds.has("pexels") || input.providerIds.has("pixabay")) usage.push("Pexels/Pixabay · Free Stock API");
+      if (input.providerIds.has("comfyui")) usage.push("ComfyUI · Local Compute");
+      return usage.length ? usage : ["No professional visual source configured"];
+    }
     if (input.visualSource === "ai_generated") {
       const ai = input.aiVisualProvider !== "auto"
         ? input.aiVisualProvider
@@ -1532,8 +1912,23 @@ export function createV2PublicRouter(
           ? "Google Veo"
           : input.providerIds.has("fal")
             ? "fal.ai"
-            : "AI Video Provider";
-      usage.push(`${ai} · Usage Based`);
+            : input.providerIds.has("runway")
+              ? "Runway"
+              : input.providerIds.has("replicate")
+                ? "Replicate"
+                : input.providerIds.has("luma")
+                  ? "Luma"
+                  : input.providerIds.has("comfyui")
+                    ? "ComfyUI"
+                    : "AI Video Provider";
+      usage.push(ai === "ComfyUI" ? "ComfyUI · Local Compute" : `${ai} · Usage Based`);
+    }
+    if (input.budgetPolicy.mode === "smart_budget") {
+      usage.push(
+        input.budgetPolicy.maxExternalSpendUsd != null
+          ? `Budget ceiling · $${input.budgetPolicy.maxExternalSpendUsd}`
+          : "Budget ceiling · estimate unavailable",
+      );
     }
     if (input.visualSource === "stock") {
       usage.push(input.stockProvider === "pixabay" ? "Pixabay · Stock API" : input.stockProvider === "pexels" ? "Pexels · Stock API" : "Stock provider · API");
@@ -1837,6 +2232,9 @@ export function createV2PublicRouter(
     }
 
     try {
+      if (providerVault.isAvailable()) {
+        await providerSecrets.refresh("gemini", "api_key").catch(() => undefined);
+      }
       const provider = contentAIRegistry.getProvider();
       const generatedSpec = await provider.generateProductionSpec(parsed.data);
       const spec = await canonicalizeProductionSpecForRequest(db, generatedSpec, parsed.data);
@@ -1851,6 +2249,7 @@ export function createV2PublicRouter(
         captionPreset: (resolvedSpec.captionStyle as any) || "bold",
       });
       const readiness = await checkCreateReadiness(parsed.data, resolvedSpec);
+      const confidenceBlock = contentConfidenceBlocker(resolvedSpec);
 
       res.status(200).json({
         spec: resolvedSpec,
@@ -1858,6 +2257,7 @@ export function createV2PublicRouter(
         quality,
         mediaPlan,
         readiness,
+        contentConfidenceWarning: confidenceBlock?.message,
       });
     } catch (error) {
       res.status(500).json({
@@ -1879,6 +2279,9 @@ export function createV2PublicRouter(
     }
 
     try {
+      if (providerVault.isAvailable()) {
+        await providerSecrets.refresh("gemini", "api_key").catch(() => undefined);
+      }
       const provider = contentAIRegistry.getProvider();
       const result = await provider.rewritePrompt(parsed.data.prompt, {
         language: parsed.data.language,
@@ -1993,6 +2396,11 @@ export function createV2PublicRouter(
       const arabicBlock = await arabicProductionBlocker(canonicalSpec);
       if (arabicBlock) {
         res.status(409).json(arabicBlock);
+        return;
+      }
+      const confidenceBlock = contentConfidenceBlocker(canonicalSpec);
+      if (confidenceBlock) {
+        res.status(409).json(confidenceBlock);
         return;
       }
       const readiness = await checkCreateReadiness(parsed.data, canonicalSpec);
@@ -2121,6 +2529,11 @@ export function createV2PublicRouter(
         const arabicBlock = await arabicProductionBlocker(canonicalSpec);
         if (arabicBlock) {
           res.status(409).json(arabicBlock);
+          return;
+        }
+        const confidenceBlock = contentConfidenceBlocker(canonicalSpec);
+        if (confidenceBlock) {
+          res.status(409).json(confidenceBlock);
           return;
         }
         const readiness = await checkCreateReadiness(rawPayload, canonicalSpec);
@@ -2286,6 +2699,7 @@ export function createV2PublicRouter(
     res.status(200).json({
       job: {
         ...scrubInternal(safeJob),
+        progress: customerDisplayProgress(job),
         technicalError:
           job.technicalError && !/(file:\/\/|\/(app|root|home|data|var)\/|[A-Za-z]:[\\/])/.test(job.technicalError)
             ? job.technicalError.slice(0, 400)
@@ -2364,7 +2778,31 @@ export function createV2PublicRouter(
 
   router.post("/jobs/:id/retry", async (req, res) => {
     try {
-      const job = await jobs.retryJob(req.params.id);
+      const headerIdempotencyKey =
+        typeof req.headers["idempotency-key"] === "string"
+          ? req.headers["idempotency-key"]
+          : undefined;
+      const targetJob = await jobs.getJob(req.params.id);
+      const originalJobId =
+        (targetJob?.input as any)?.__originalJobId ||
+        ((targetJob?.productionSpec as any)?.metadata?.revision?.originalJobId) ||
+        req.params.id;
+      const directArtifacts = readDurableArtifactsForSourceJob(config, req.params.id);
+      const lineageArtifacts =
+        originalJobId && originalJobId !== req.params.id
+          ? readDurableArtifactsForSourceJob(config, originalJobId)
+          : [];
+      const priorReused =
+        (((targetJob?.productionSpec as any)?.metadata?.revision?.reuseArtifacts as DurableSceneArtifact[]) || []);
+      const allArtifactsMap = new Map<string, DurableSceneArtifact>();
+      for (const a of [...lineageArtifacts, ...priorReused, ...directArtifacts]) {
+        if (a?.artifactId) allArtifactsMap.set(a.artifactId, a);
+      }
+      const reuseArtifacts = Array.from(allArtifactsMap.values());
+      const job = await jobs.retryJob(req.params.id, {
+        idempotencyKey: headerIdempotencyKey,
+        reuseArtifacts,
+      });
       try {
         await orchestrator.enqueue(job);
       } catch {
@@ -2375,7 +2813,13 @@ export function createV2PublicRouter(
         });
         return;
       }
-      res.status(201).json({ job });
+      const retryMeta = ((job.productionSpec as any)?.metadata || {}).revision || {};
+      res.status(201).json({
+        job,
+        reusedStages: retryMeta.reuseStages || [],
+        regeneratedStages: retryMeta.regeneratedStages || [],
+        reusedArtifactIds: reuseArtifacts.map((artifact) => artifact.artifactId),
+      });
     } catch (error) {
       res.status(400).json({
         error: error instanceof Error ? error.message : "Retry failed.",
@@ -2384,6 +2828,7 @@ export function createV2PublicRouter(
   });
 
   const sendHealth = async (_req: express.Request, res: express.Response) => {
+    await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
     const health = await getV2Health(config, db);
     res.status(200).json(health);
   };
@@ -2415,12 +2860,17 @@ export function createV2PublicRouter(
       }
 
       const aiProvider = contentAIRegistry.getProvider();
+      const vaultCredentials = providerVault.isAvailable()
+        ? await providerVault.list().catch(() => [])
+        : [];
+      const vaultByProvider = new Map(vaultCredentials.map((credential) => [credential.providerId, credential]));
       const snapshot: ProviderConfigurationSnapshot = {
         elevenLabsConfigured: new ElevenLabsVoiceProvider().isConfigured(),
         pexelsConfigured: Boolean(
-          config.pexelsApiKey &&
+          vaultByProvider.has("pexels") ||
+          (config.pexelsApiKey &&
             config.pexelsApiKey !== "dummy-key" &&
-            !config.pexelsApiKey.includes("your_pexels"),
+            !config.pexelsApiKey.includes("your_pexels")),
         ),
         aiConfigured: aiProvider.id !== "local_ai",
         publishingAccountCount,
@@ -2709,25 +3159,87 @@ export function createV2PublicRouter(
     }
   });
 
-  // Egyptian Arabic reference script used for like-for-like voice auditions.
-  // The same text is reused for every voice so comparisons stay meaningful.
-  const VOICE_LAB_REFERENCE_SCRIPT = [
-    "\u0644\u0648 \u0639\u0646\u062F\u0643 \u0628\u064A\u0632\u0646\u0633 \u0648\u0644\u0633\u0647 \u0645\u0648\u0642\u0639\u0643 \u0634\u0643\u0644\u0647 \u0642\u062F\u064A\u0645 \u0623\u0648 \u0645\u0634 \u0645\u0648\u062C\u0648\u062F \u0623\u0635\u0644\u0627\u064B\u060C",
-    "\u0641\u0625\u0646\u062A \u063A\u0627\u0644\u0628\u0627\u064B \u0628\u062A\u0633\u064A\u0628 \u0639\u0645\u0644\u0627\u0621 \u064A\u0631\u0648\u062D\u0648\u0627 \u0644\u0645\u0646\u0627\u0641\u0633\u0643 \u0645\u0646 \u063A\u064A\u0631 \u0645\u0627 \u062A\u062D\u0633.",
-    "\u0645\u0648\u0642\u0639 \u0633\u0631\u064A\u0639 \u0648\u0634\u0643\u0644\u0647 \u0627\u062D\u062A\u0631\u0627\u0641\u064A \u0645\u0645\u0643\u0646 \u064A\u0641\u0631\u0642 \u0645\u0639\u0627\u0643 \u062C\u062F\u0627\u064B.",
-    "\u0627\u0628\u062F\u0623 \u062F\u0644\u0648\u0642\u062A\u064A \u0648\u062E\u0644\u064A \u0634\u063A\u0644\u0643 \u064A\u0638\u0647\u0631 \u0628\u0627\u0644\u0634\u0643\u0644 \u0627\u0644\u0644\u064A \u064A\u0633\u062A\u062D\u0642\u0647.",
-  ].join("\n");
+  // Short Arabic audition text. It is reused for every voice so comparisons
+  // stay meaningful, but synthesis is still gated by the paid-usage policy.
+  const VOICE_LAB_REFERENCE_SCRIPT =
+    "\u0623\u0647\u0644\u0627\u064B \u0628\u064A\u0643\u060C \u062F\u0647 \u0627\u062E\u062A\u0628\u0627\u0631 \u0644\u0644\u0635\u0648\u062A \u0627\u0644\u0639\u0631\u0628\u064A \u0641\u064A \u0641\u064A\u062F\u064A\u0648\u0647\u0627\u062A ABUD Shorts.";
 
   const VOICE_LAB_MAX_CHARS = 600;
+
+  async function voiceLabPreviewAllowed(): Promise<boolean> {
+    if (process.env.ABUD_ALLOW_ELEVENLABS_PREVIEW_SYNTHESIS === "true") return true;
+    const rows = await db.query<SettingRow>(
+      "SELECT key, value, updated_at FROM app_settings WHERE key = $1",
+      ["elevenlabs_voice_lab_policy"],
+    ).catch(() => []);
+    return rows[0]?.value?.allowPreviewSynthesis === true;
+  }
+
+  async function elevenLabsVoiceDefaultState(
+    provider: ElevenLabsVoiceProvider,
+    storedDefault: PersistedArabicVoiceDefault | null,
+  ) {
+    const state: {
+      defaultArabicVoiceConfigured: boolean;
+      defaultArabicVoiceAvailable?: boolean;
+      defaultArabicVoiceName?: string;
+      voiceCatalogueAvailable?: boolean;
+      arabicProductionReady: boolean;
+      setupRequiredReason?: string;
+      voices?: any[];
+      warnings: string[];
+    } = {
+      defaultArabicVoiceConfigured: Boolean(storedDefault?.voiceId),
+      arabicProductionReady: false,
+      warnings: [],
+    };
+    if (!provider.isConfigured()) {
+      state.setupRequiredReason = "credentials_not_connected";
+      return state;
+    }
+    try {
+      const voices = await provider.listVoices("ar");
+      state.voices = voices;
+      state.voiceCatalogueAvailable = true;
+      if (!storedDefault?.voiceId) {
+        state.defaultArabicVoiceAvailable = false;
+        state.setupRequiredReason = "default_arabic_voice_not_selected";
+        return state;
+      }
+      const match = voices.find((voice) => voice.id === storedDefault.voiceId);
+      state.defaultArabicVoiceAvailable = Boolean(match);
+      state.defaultArabicVoiceName = match?.name || storedDefault.voiceName;
+      state.arabicProductionReady = Boolean(match);
+      if (!match) {
+        state.setupRequiredReason = "saved_default_voice_unavailable";
+        state.warnings.push("The saved default Arabic voice is not available in the connected ElevenLabs account.");
+      }
+      return state;
+    } catch (error) {
+      state.voiceCatalogueAvailable = false;
+      state.setupRequiredReason = "voice_catalogue_unavailable";
+      state.warnings.push(error instanceof Error ? error.message : String(error));
+      return state;
+    }
+  }
 
   router.get("/voice-lab/config", async (req, res) => {
     await providerSecrets.refreshElevenLabsApiKey();
     const provider = new ElevenLabsVoiceProvider();
     const storedDefault = await readArabicVoiceDefault(db).catch(() => null);
+    const defaultState = await elevenLabsVoiceDefaultState(provider, storedDefault);
+    const previewAllowed = await voiceLabPreviewAllowed();
     res.status(200).json({
       provider: "elevenlabs",
       configured: provider.isConfigured(),
       defaultArabicVoice: storedDefault,
+      defaultArabicVoiceConfigured: defaultState.defaultArabicVoiceConfigured,
+      defaultArabicVoiceAvailable: defaultState.defaultArabicVoiceAvailable,
+      defaultArabicVoiceName: defaultState.defaultArabicVoiceName,
+      voiceCatalogueAvailable: defaultState.voiceCatalogueAvailable,
+      arabicProductionReady: defaultState.arabicProductionReady,
+      setupRequiredReason: defaultState.setupRequiredReason,
+      previewSynthesisAllowed: previewAllowed,
       model: ELEVENLABS_DEFAULT_MODEL_ID,
       referenceScript: VOICE_LAB_REFERENCE_SCRIPT,
       maxCharacters: VOICE_LAB_MAX_CHARS,
@@ -2763,6 +3275,13 @@ export function createV2PublicRouter(
       const voiceId = typeof req.body?.voiceId === "string" ? req.body.voiceId.trim() : "";
       const preset = ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : "natural";
       const language = req.body?.language === "en" ? "en" : "ar";
+      if (!(await voiceLabPreviewAllowed())) {
+        res.status(402).json({
+          error: "preview_synthesis_not_authorized",
+          message: "LIVE AUDIO PREVIEW PENDING PAID-USAGE AUTHORIZATION.",
+        });
+        return;
+      }
 
       const preview = await provider.generatePreview(rawText, voiceId || undefined, {
         preset,
@@ -2808,10 +3327,26 @@ export function createV2PublicRouter(
       return;
     }
     try {
+      await providerSecrets.refreshElevenLabsApiKey().catch(() => undefined);
+      const provider = new ElevenLabsVoiceProvider();
+      if (provider.isConfigured() && process.env.VITEST !== "true") {
+        const voices = await provider.listVoices("ar");
+        if (!voices.some((voice) => voice.id === voiceId)) {
+          res.status(409).json({
+            error: "voice_unavailable",
+            message: "That ElevenLabs voice is not available in the connected account. Choose another voice from Voice Lab.",
+          });
+          return;
+        }
+      }
+      const preset: VoicePreset | undefined = ELEVENLABS_PRESET_IDS.includes(req.body?.preset)
+        ? req.body.preset
+        : undefined;
       const saved = await writeArabicVoiceDefault(db, {
         voiceId,
         voiceName: typeof req.body?.voiceName === "string" ? req.body.voiceName : undefined,
-        preset: ELEVENLABS_PRESET_IDS.includes(req.body?.preset) ? req.body.preset : undefined,
+        preset,
+        settings: preset ? ELEVENLABS_PRESETS[preset] : undefined,
         // The model the preset was auditioned under travels with the selection
         // so a later model default cannot silently change the approved voice.
         modelId:
@@ -2852,6 +3387,8 @@ export function createV2PublicRouter(
   });
 
   router.get("/providers", async (req, res) => {
+    await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
+    await providerSecrets.refresh("pixabay", "api_key").catch(() => undefined);
     const health = await getV2Health(config, db);
     const shouldValidateLocalVoiceModels = process.env.NODE_ENV !== "test" && process.env.VITEST !== "true";
     const voiceResults = shouldValidateLocalVoiceModels
@@ -2860,7 +3397,11 @@ export function createV2PublicRouter(
 
     const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY);
     const hasVeoKey = Boolean(process.env.VEO_API_KEY || process.env.GOOGLE_AI_API_KEY);
-    const hasFalKey = Boolean(process.env.FAL_KEY);
+    const hasFalKey = Boolean(process.env.FAL_KEY || process.env.FAL_API_KEY);
+    const hasRunwayKey = Boolean(process.env.RUNWAY_API_KEY);
+    const hasReplicateKey = Boolean(process.env.REPLICATE_API_TOKEN);
+    const hasLumaKey = Boolean(process.env.LUMA_AGENTS_API_KEY || process.env.LUMA_API_KEY);
+    const hasComfyUiUrl = Boolean(process.env.COMFYUI_BASE_URL);
     const hasElevenLabsKey = Boolean(process.env.ELEVENLABS_API_KEY);
     await providerSecrets.refreshElevenLabsApiKey();
     const elevenLabsProvider = new ElevenLabsVoiceProvider();
@@ -2871,6 +3412,19 @@ export function createV2PublicRouter(
       elevenLabsConfigured && shouldValidateLocalVoiceModels
         ? await elevenLabsProvider.validate().catch(() => undefined)
         : undefined;
+    const storedArabicVoiceDefault = await readArabicVoiceDefault(db).catch(() => null);
+    const elevenLabsDefaultState =
+      elevenLabsConfigured && shouldValidateLocalVoiceModels
+        ? await elevenLabsVoiceDefaultState(elevenLabsProvider, storedArabicVoiceDefault)
+        : {
+            defaultArabicVoiceConfigured: Boolean(storedArabicVoiceDefault?.voiceId),
+            defaultArabicVoiceAvailable: undefined,
+            defaultArabicVoiceName: storedArabicVoiceDefault?.voiceName,
+            voiceCatalogueAvailable: undefined,
+            arabicProductionReady: false,
+            setupRequiredReason: storedArabicVoiceDefault?.voiceId ? undefined : "default_arabic_voice_not_selected",
+            warnings: [],
+          };
     const googleTts = new GoogleCloudTtsProvider();
     const googleTtsValidation = voiceResults.find((provider) => provider.provider === "Google Cloud TTS");
     const googleTtsConfigured = googleTts.isConfigured();
@@ -2892,6 +3446,9 @@ export function createV2PublicRouter(
       ? await providerVault.list().catch(() => [])
       : [];
     const vaultByProvider = new Map(vaultCredentials.map((credential) => [credential.providerId, credential]));
+    const localModelManager = new LocalModelManager();
+    const voicetutRecord = localModelManager.read("voicetut");
+    const kemetoneRecord = localModelManager.read("kemetone");
 
     const providers = [
       // Content AI
@@ -2925,19 +3482,26 @@ export function createV2PublicRouter(
         name: "Pexels",
         category: "Visuals",
         tier: "stock",
-        status: pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "not_configured"),
+        status: vaultByProvider.has("pexels")
+          ? pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "configured")
+          : pexelsComp?.details?.providerStatus || (pexelsComp?.status === "healthy" ? "healthy" : "not_configured"),
         configured: (pexelsComp?.details?.configured ?? false) || vaultByProvider.has("pexels"),
         isDefault: true,
         message: pexelsComp?.message || "Pexels stock footage integration.",
         checkedAt: pexelsComp?.checkedAt || new Date().toISOString(),
         details: {
           visualCapabilities: {
+            providerClass: "STOCK_VIDEO",
+            freeOrPaid: "free",
+            billingModel: "free_api_key",
             textToImage: false,
             imageToImage: false,
             textToVideo: false,
             imageToVideo: false,
             referenceImage: false,
             multipleReferenceImages: false,
+            portrait: true,
+            landscape: true,
             seed: false,
             nativeCharacterIdentity: false,
           },
@@ -2950,23 +3514,40 @@ export function createV2PublicRouter(
         name: "Pixabay",
         category: "Visuals",
         tier: "stock",
-        status: vaultByProvider.has("pixabay") || process.env.PIXABAY_API_KEY ? "healthy" : "not_configured",
+        status: vaultByProvider.has("pixabay") || process.env.PIXABAY_API_KEY ? "configured" : "not_configured",
         configured: vaultByProvider.has("pixabay") || Boolean(process.env.PIXABAY_API_KEY),
         isDefault: false,
         message:
           "Optional second free stock library. Adding it gives the shot planner more footage to choose between.",
         checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: {
+            providerClass: "STOCK_VIDEO",
+            freeOrPaid: "free",
+            billingModel: "free_api_key",
+            textToImage: false,
+            imageToImage: false,
+            textToVideo: false,
+            imageToVideo: false,
+            referenceImage: false,
+            multipleReferenceImages: false,
+            portrait: true,
+            landscape: true,
+            seed: false,
+            nativeCharacterIdentity: false,
+          },
+        },
       },
       {
         id: "veo",
         name: "Google Veo",
         category: "Visuals",
         tier: "ai_video",
-        status: hasVeoKey ? "healthy" : "not_configured",
-        configured: hasVeoKey,
+        status: hasVeoKey || vaultByProvider.has("veo") ? "configured" : "not_configured",
+        configured: hasVeoKey || vaultByProvider.has("veo"),
         isDefault: false,
-        message: hasVeoKey
-          ? "Google Veo AI video generation configured."
+        message: hasVeoKey || vaultByProvider.has("veo")
+          ? "Google Veo AI video generation configured. Paid generation requires explicit product authorization."
           : "VEO_API_KEY is not configured.",
         checkedAt: new Date().toISOString(),
         details: {
@@ -2978,18 +3559,151 @@ export function createV2PublicRouter(
         name: "fal.ai (Kling / Wan / Seedance)",
         category: "Visuals",
         tier: "ai_video",
-        status: hasFalKey ? "healthy" : "not_configured",
-        configured: hasFalKey,
+        status: hasFalKey || vaultByProvider.has("fal") ? "configured" : "not_configured",
+        configured: hasFalKey || vaultByProvider.has("fal"),
         isDefault: false,
-        message: hasFalKey
-          ? "fal.ai multi-model video generation configured."
+        message: hasFalKey || vaultByProvider.has("fal")
+          ? "fal.ai multi-model video generation configured. Paid generation requires explicit product authorization."
           : "FAL_KEY is not configured.",
         checkedAt: new Date().toISOString(),
         details: {
           visualCapabilities: new FalVisualProvider().getCapabilities(),
         },
       },
+      {
+        id: "runway",
+        name: "Runway",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasRunwayKey || vaultByProvider.has("runway") ? "configured" : "not_configured",
+        configured: hasRunwayKey || vaultByProvider.has("runway"),
+        isDefault: false,
+        message: hasRunwayKey || vaultByProvider.has("runway")
+          ? "Runway key stored. Paid generation requires explicit product authorization."
+          : "RUNWAY_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new RunwayVisualProvider().getCapabilities(),
+          liveVerified: false,
+        },
+      },
+      {
+        id: "replicate",
+        name: "Replicate",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasReplicateKey || vaultByProvider.has("replicate") ? "configured" : "not_configured",
+        configured: hasReplicateKey || vaultByProvider.has("replicate"),
+        isDefault: false,
+        message: hasReplicateKey || vaultByProvider.has("replicate")
+          ? "Replicate token stored. Paid generation requires explicit product authorization."
+          : "REPLICATE_API_TOKEN is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new ReplicateVisualProvider().getCapabilities(),
+          liveVerified: false,
+        },
+      },
+      {
+        id: "comfyui",
+        name: "Local ComfyUI",
+        category: "Visuals",
+        tier: "local",
+        status: hasComfyUiUrl ? "configured" : "not_configured",
+        configured: hasComfyUiUrl,
+        isDefault: false,
+        message: hasComfyUiUrl
+          ? "ComfyUI sidecar URL configured. Video workflow/model installation still requires local verification."
+          : "COMFYUI_BASE_URL is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new ComfyUIProvider().getCapabilities(),
+          installed: false,
+          model: process.env.COMFYUI_VIDEO_WORKFLOW_PROFILE || "REQUIRES MODEL INSTALLATION",
+          liveVerified: false,
+        },
+      },
+      {
+        id: "luma",
+        name: "Luma Agents API",
+        category: "Visuals",
+        tier: "ai_video",
+        status: hasLumaKey || vaultByProvider.has("luma") ? "configured" : "not_configured",
+        configured: hasLumaKey || vaultByProvider.has("luma"),
+        isDefault: false,
+        message: hasLumaKey || vaultByProvider.has("luma")
+          ? "Luma key stored. Paid generation requires explicit product authorization."
+          : "LUMA_AGENTS_API_KEY or LUMA_API_KEY is not configured.",
+        checkedAt: new Date().toISOString(),
+        details: {
+          visualCapabilities: new LumaVisualProvider().getCapabilities(),
+          liveVerified: false,
+        },
+      },
       // Voice
+      {
+        id: "voicetut",
+        name: "VoiceTut Local High Quality",
+        category: "Voice",
+        tier: "free",
+        status: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy" ? "healthy" : (voicetutRecord.state === "downloading" ? "configuring" : "not_configured"),
+        configured: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy",
+        isDefault: true,
+        message: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy"
+          ? "VoiceTut local high-quality Egyptian Arabic engine is ready with 17 native voices."
+          : (voicetutRecord.lastError || "VoiceTut model is not installed. Install it from the Models tab."),
+        checkedAt: voicetutRecord.lastVerifiedAt || voicetutRecord.installedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy",
+          healthy: voicetutRecord.state === "ready" || voicetutRecord.state === "healthy",
+          liveVerified: voicetutRecord.state === "ready",
+          languages: ["ar", "ar-EG", "en"],
+          dialect: "egyptian",
+          speakersCount: 17,
+          modelId: "voicetut",
+          repoId: "mohammedaly22/VoiceTut-TTS",
+          revision: "41c1a79ab2eb872ecfb2ad56ab40a94cff28d8c3",
+          sampleRate: 24000,
+          local: true,
+          costTier: "free",
+          license: "Apache-2.0",
+          downloadedBytes: voicetutRecord.downloadedBytes,
+          state: voicetutRecord.state,
+        },
+      },
+      {
+        id: "kemetone",
+        name: "KemeTone Local Lightweight",
+        category: "Voice",
+        tier: "free",
+        status: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy" ? "healthy" : (kemetoneRecord.state === "downloading" ? "configuring" : "not_configured"),
+        configured: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy",
+        isDefault: false,
+        message: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy"
+          ? "KemeTone local lightweight CPU-capable Cairene voice engine is ready."
+          : (kemetoneRecord.lastError || "KemeTone model is not installed."),
+        checkedAt: kemetoneRecord.lastVerifiedAt || kemetoneRecord.installedAt || new Date().toISOString(),
+        details: {
+          implemented: true,
+          configured: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy",
+          healthy: kemetoneRecord.state === "ready" || kemetoneRecord.state === "healthy",
+          liveVerified: kemetoneRecord.state === "ready",
+          languages: ["ar", "ar-EG"],
+          dialect: "egyptian",
+          speakersCount: 1,
+          modelId: "kemetone",
+          repoId: "Rabe3/kemetone",
+          revision: "9d65fab8cd71bc31a248e53bd18fe94941753aa6",
+          sampleRate: 24000,
+          local: true,
+          cpuCapable: true,
+          costTier: "free",
+          license: "Apache-2.0",
+          downloadedBytes: kemetoneRecord.downloadedBytes,
+          state: kemetoneRecord.state,
+        },
+      },
       {
         id: "kokoro",
         name: "Kokoro TTS",
@@ -3116,7 +3830,7 @@ export function createV2PublicRouter(
         tier: "premium",
         status: elevenLabsValidation?.status || (elevenLabsConfigured ? "configured" : "not_configured"),
         configured: elevenLabsConfigured,
-        isDefault: true,
+        isDefault: false,
         message: elevenLabsValidation?.message ||
           (elevenLabsConfigured
             ? "ElevenLabs is configured. Run Test Connection to verify it live."
@@ -3139,6 +3853,11 @@ export function createV2PublicRouter(
           voiceDiscoveryAvailable: elevenLabsValidation?.voiceDiscoveryAvailable,
           ttsReady: elevenLabsValidation?.ttsReady,
           voicesDiscovered: elevenLabsValidation?.voicesDiscovered,
+          defaultArabicVoiceConfigured: elevenLabsDefaultState.defaultArabicVoiceConfigured,
+          defaultArabicVoiceAvailable: elevenLabsDefaultState.defaultArabicVoiceAvailable,
+          defaultArabicVoiceName: elevenLabsDefaultState.defaultArabicVoiceName,
+          arabicProductionReady: elevenLabsDefaultState.arabicProductionReady,
+          arabicSetupRequiredReason: elevenLabsDefaultState.setupRequiredReason,
           errorDetail: elevenLabsValidation?.errorDetail,
           lastTestedAt: vaultByProvider.get("elevenlabs")?.lastTestedAt || undefined,
           accountTier: elevenLabsValidation?.accountTier,
@@ -3290,22 +4009,25 @@ export function createV2PublicRouter(
     ];
 
     res.status(200).json({
-      providers: providers.map((provider: any) => ({
-        ...provider,
-        credentialTypes: provider.id ? allowedCredentialTypes(provider.id) : [],
-        vaultConfigured: provider.id ? vaultCredentials.some((credential) => credential.providerId === provider.id) : false,
-        vault: provider.id
-          ? vaultCredentials
-              .filter((credential) => credential.providerId === provider.id)
-              .map((credential) => ({
-                credentialType: credential.credentialType,
-                maskedHint: credential.maskedHint,
-                health: credential.health,
-                configuredAt: credential.configuredAt,
-                lastTestedAt: credential.lastTestedAt,
-              }))
-          : [],
-      })),
+      providers: providers.map((provider: any) => {
+        const enriched = {
+          ...provider,
+          credentialTypes: provider.id ? allowedCredentialTypes(provider.id) : [],
+          vaultConfigured: provider.id ? vaultCredentials.some((credential) => credential.providerId === provider.id) : false,
+          vault: provider.id
+            ? vaultCredentials
+                .filter((credential) => credential.providerId === provider.id)
+                .map((credential) => ({
+                  credentialType: credential.credentialType,
+                  maskedHint: credential.maskedHint,
+                  health: credential.health,
+                  configuredAt: credential.configuredAt,
+                  lastTestedAt: credential.lastTestedAt,
+                }))
+            : [],
+        };
+        return canonicalizeProviderPayload(enriched);
+      }),
       categories: [
         "Content AI",
         "Visuals",
@@ -3365,7 +4087,73 @@ export function createV2PublicRouter(
     }
   });
 
+  router.get("/providers/local-voice/status", async (_req, res) => {
+    try {
+      const manager = new LocalModelManager();
+      const models = manager.list();
+      res.status(200).json({ models });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to read local voice model status.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/providers/local-voice/install", async (req, res) => {
+    try {
+      const modelId = req.body?.modelId;
+      if (modelId !== "voicetut" && modelId !== "kemetone") {
+        res.status(400).json({ error: "Invalid modelId. Must be 'voicetut' or 'kemetone'." });
+        return;
+      }
+      const manager = new LocalModelManager();
+      const record = manager.verify(modelId);
+      res.status(200).json({ record });
+    } catch (error) {
+      res.status(500).json({ error: "Model install/verify failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.delete("/providers/local-voice/:modelId", async (req, res) => {
+    try {
+      const modelId = req.params.modelId;
+      if (modelId !== "voicetut" && modelId !== "kemetone") {
+        res.status(400).json({ error: "Invalid modelId. Must be 'voicetut' or 'kemetone'." });
+        return;
+      }
+      const manager = new LocalModelManager();
+      const result = manager.removeModel(modelId as any);
+      res.status(200).json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Model removal failed.", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   router.post("/providers/pexels/validate", async (req, res) => {
+    if (providerVault.isAvailable()) {
+      await providerSecrets.refresh("pexels", "api_key").catch(() => undefined);
+    }
+    if (!config.pexelsApiKey && providerSecrets.peek("pexels", "api_key")) {
+      const pexels = new PexelsStockProvider();
+      const results = await pexels.search({
+        query: "business",
+        orientation: "portrait",
+        kind: "video",
+        perPage: 3,
+      });
+      const healthy = results.length > 0;
+      if (providerVault.isAvailable()) {
+        await providerVault.markTested("pexels", healthy ? "healthy" : "provider_unavailable").catch(() => undefined);
+      }
+      res.status(200).json({
+        provider: "Pexels",
+        category: "Visuals",
+        configured: true,
+        healthy,
+        status: healthy ? "healthy" : "provider_unavailable",
+        message: healthy ? "Pexels responded with an authorized video search result." : "Pexels did not return a usable video result for validation.",
+        checkedAt: new Date().toISOString(),
+      });
+      return;
+    }
     const result = await validatePexelsProvider(config, {
       bypassCache: true,
     });
@@ -3374,9 +4162,47 @@ export function createV2PublicRouter(
 
   router.post("/providers/:provider/validate", async (req, res) => {
     const target = req.params.provider.toLowerCase();
+    if (providerVault.isAvailable()) {
+      await providerSecrets.refresh(target, "api_key").catch(() => undefined);
+    }
     if (target === "pexels") {
       const result = await validatePexelsProvider(config, { bypassCache: true });
       res.status(200).json(result);
+      return;
+    }
+    if (target === "pixabay") {
+      const pixabay = new PixabayProvider();
+      if (!pixabay.isConfigured()) {
+        res.status(200).json({
+          provider: "Pixabay",
+          category: "Visuals",
+          configured: false,
+          healthy: false,
+          status: "not_configured",
+          message: "PIXABAY_API_KEY is not configured.",
+          checkedAt: new Date().toISOString(),
+        });
+        return;
+      }
+      const results = await pixabay.search({
+        query: "business",
+        orientation: "portrait",
+        kind: "video",
+        perPage: 3,
+      });
+      const healthy = results.length > 0;
+      if (providerVault.isAvailable()) {
+        await providerVault.markTested("pixabay", healthy ? "healthy" : "provider_unavailable").catch(() => undefined);
+      }
+      res.status(200).json({
+        provider: "Pixabay",
+        category: "Visuals",
+        configured: true,
+        healthy,
+        status: healthy ? "healthy" : "provider_unavailable",
+        message: healthy ? "Pixabay responded with video search results." : "Pixabay did not return a usable video result for validation.",
+        checkedAt: new Date().toISOString(),
+      });
       return;
     }
     if (target === "gemini") {
@@ -3394,6 +4220,30 @@ export function createV2PublicRouter(
     if (target === "fal") {
       const fal = new FalVisualProvider();
       const val = await fal.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "runway") {
+      const runway = new RunwayVisualProvider();
+      const val = await runway.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "replicate") {
+      const replicate = new ReplicateVisualProvider();
+      const val = await replicate.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "comfyui") {
+      const comfyui = new ComfyUIProvider();
+      const val = await comfyui.validate();
+      res.status(200).json(val);
+      return;
+    }
+    if (target === "luma") {
+      const luma = new LumaVisualProvider();
+      const val = await luma.validate();
       res.status(200).json(val);
       return;
     }
@@ -4032,7 +4882,7 @@ export function createV2PublicRouter(
       const { username, password } = req.body;
       const session = await authService.authenticate(username, password);
       if (!session) {
-        res.status(401).json({ error: "Invalid username or password." });
+        res.status(401).json({ error: "invalid_credentials" });
         return;
       }
       res.status(200).json({ session });
@@ -4061,6 +4911,57 @@ export function createV2PublicRouter(
       return;
     }
     res.status(200).json({ user });
+  });
+
+  router.post("/auth/change-password", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    try {
+      const { currentPassword, newPassword } = req.body || {};
+      await authService.changePassword(auth.user.id, currentPassword, newPassword);
+      res.status(200).json({ success: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post("/auth/change-username", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    try {
+      const { username } = req.body || {};
+      const updated = await authService.changeUsername(auth.user.id, username);
+      res.status(200).json({ success: true, username: updated });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.get("/auth/sessions", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const sessions = await authService.listSessions(auth.user.id);
+    res.status(200).json({ sessions });
+  });
+
+  router.post("/auth/sessions/revoke-others", async (req, res) => {
+    const auth = (req as any).v2Auth;
+    if (!auth?.user) {
+      res.status(401).json({ error: "Unauthorized." });
+      return;
+    }
+    const token = bearerToken(req) || "";
+    const revoked = await authService.revokeOtherSessions(auth.user.id, token);
+    res.status(200).json({ success: true, revoked });
   });
 
   // 3. Backups
@@ -4720,6 +5621,40 @@ export function createV2InternalRouter(
       res.status(400).json({ error: "Invalid complete payload." });
       return;
     }
+    const completedMetadata = readMetadata(config.videosDirPath, parsed.data.videoId);
+    const metadataRejected =
+      completedMetadata?.status === "failed" ||
+      completedMetadata?.professionalReady === false;
+    if (metadataRejected) {
+      const rawMessage =
+        typeof completedMetadata?.error === "string" && completedMetadata.error.trim()
+          ? completedMetadata.error
+          : "Video failed final quality readiness checks.";
+      const { message } = classifyRenderFailure(rawMessage);
+      const job = await jobs.updateJob(req.params.id, "failed", 99, "Quality review failed", message, {
+        error: message,
+        technicalError: rawMessage,
+        output: {
+          ...parsed.data.output,
+          videoId: parsed.data.videoId,
+          previewUrl: `/api/short-video/${parsed.data.videoId}`,
+          downloadUrl: `/api/videos/${parsed.data.videoId}/download`,
+          professionalReady: completedMetadata?.professionalReady,
+          validationStatus: completedMetadata?.status,
+        },
+      });
+      if (db) {
+        await new WorkerLeaseService(db).release(process.env.WORKER_ID || "render-worker");
+        await new WebhookService(db, { timeoutMs: config.webhookTimeoutMs }).dispatchEvent("job.failed", {
+          jobId: req.params.id,
+          videoId: parsed.data.videoId,
+          error: message,
+        } as any);
+      }
+      res.status(200).json({ job });
+      return;
+    }
+
     const job = await jobs.completeJob(
       req.params.id,
       parsed.data.videoId,
@@ -4728,7 +5663,6 @@ export function createV2InternalRouter(
     if (db) {
       await new WorkerLeaseService(db).release(process.env.WORKER_ID || "render-worker");
       const revision = await new RevisionService(db).markRevisionReadyForJob(req.params.id, parsed.data.videoId);
-      const completedMetadata = readMetadata(config.videosDirPath, parsed.data.videoId);
       const projectId = revision?.projectId || (completedMetadata?.revisionMetadata as any)?.parentVideoId || parsed.data.videoId;
       if (completedMetadata?.durableArtifacts) {
         await persistSceneArtifacts(db, projectId, completedMetadata.durableArtifacts as DurableSceneArtifact[]);
@@ -4767,14 +5701,17 @@ export function createV2InternalRouter(
       res.status(400).json({ error: "Invalid fail payload." });
       return;
     }
+    const current = await jobs.getJob(req.params.id);
+    const rawMessage = parsed.data.technicalMessage || parsed.data.message;
+    const { message } = classifyRenderFailure(rawMessage);
     const job = await jobs.updateJob(
       req.params.id,
       "failed",
-      100,
-      "Failed",
-      parsed.data.message,
+      Math.min(99, Math.max(0, current?.progress || 99)),
+      current?.currentStage && current.currentStage !== "Queued" ? current.currentStage : "Failed",
+      message,
       {
-        error: parsed.data.message,
+        error: message,
         technicalError: parsed.data.technicalMessage,
       },
     );
@@ -4835,7 +5772,28 @@ export function createV2InternalRouter(
         );
       })
       .catch(async (error) => {
-        const rawMsg = error instanceof Error ? error.message : String(error);
+        const rawMsg =
+          typeof (error as any)?.toSanitizedTechnicalString === "function"
+            ? (error as any).toSanitizedTechnicalString()
+            : (error as any)?.detail?.sanitizedDiagnostic
+              ? (error as any).detail.sanitizedDiagnostic
+              : error instanceof Error
+                ? error.message
+                : String(error);
+        // The customer-facing message (below) is deliberately sanitized down
+        // to a recoverable category, which previously meant the operator had
+        // no way to see what actually failed - only ever a short generic
+        // string. Log the real error (stack, and Zod's full issue list when
+        // that's the cause) so a render failure is diagnosable from the
+        // worker's own logs instead of requiring a live repro.
+        logger.error(
+          {
+            jobId,
+            err: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+            zodIssues: (error as any)?.issues,
+          },
+          "Render job failed",
+        );
         // The customer sees a recoverable category, never the raw message.
         const { message: customerMessage } = classifyRenderFailure(rawMsg);
         await axios.post(

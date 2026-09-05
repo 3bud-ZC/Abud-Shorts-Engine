@@ -42,6 +42,10 @@ export type StockCandidate = {
   /** Provider page for the asset, required by several attribution policies. */
   sourcePageUrl?: string;
   tags?: string[];
+  queryUsed?: string;
+  fileType?: string;
+  fileSizeBytes?: number;
+  fps?: number;
   /** Set by the router, not the provider. */
   qualityScore?: number;
   semanticScore?: number;

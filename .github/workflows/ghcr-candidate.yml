@@ -6,11 +6,15 @@
 # promote an already accepted digest onto the version and stable tags without
 # rebuilding application bytes.
 #
-# The workflow is version-agnostic: it checks only that package.json and
-# src/version.ts agree on PRODUCT_VERSION, so the same gate serves every
-# release candidate. Candidate mode never creates a Git tag or a GitHub
-# Release and never moves the version or stable tag - that is promote mode,
-# run only after the release is approved.
+# The workflow checks that package.json and src/version.ts agree on
+# PRODUCT_VERSION, so the same gate serves every release candidate. Candidate
+# mode accepts a pre-release version (2.4.0-rc.2, 2.4.0-beta.1, ...) as well
+# as a plain one, since it publishes nothing but a sha-<commit> tag - it
+# never creates a Git tag or a GitHub Release and never moves the version or
+# stable tag. promote/retag-stable move real customer-facing tags, so both
+# require a plain stable version (X.Y.Z) and are refused for a pre-release,
+# even if candidate mode already built one - promotion happens only after
+# the release is approved.
 #
 # retag-stable mode moves ONLY the mutable :stable channel pointer onto an
 # already-published digest. It never touches the immutable :version tag, never
@@ -81,8 +85,20 @@ jobs:
             echo "::error::package.json is $VERSION but src/version.ts is $SOURCE_VERSION."
             exit 1
           fi
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::PRODUCT_VERSION $VERSION is not a plain semantic version."
+          # Same pattern scripts/release/package-client.mjs already validates
+          # client package versions against: MAJOR.MINOR.PATCH, optionally
+          # with a pre-release suffix (-rc.2, -beta.1, ...).
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::PRODUCT_VERSION $VERSION is not a valid semantic version."
+            exit 1
+          fi
+          # Only candidate mode may build a pre-release: it publishes nothing
+          # but a sha-<commit> tag. promote/retag-stable move :stable (and
+          # promote also creates the immutable :<version> tag), so both
+          # require a plain, already-released stable version - never a
+          # pre-release riding onto either.
+          if [ "${{ inputs.mode }}" != "candidate" ] && ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::${{ inputs.mode }} mode requires a plain stable version (X.Y.Z); PRODUCT_VERSION is a pre-release ($VERSION). Only candidate mode may run against a pre-release."
             exit 1
           fi
 

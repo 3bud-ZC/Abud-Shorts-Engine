@@ -21,6 +21,7 @@ export const publishingStatuses = [
   "processing",
   "published",
   "failed",
+  "needs_attention",
   "canceled",
 ] as const;
 export type PublishingStatus = (typeof publishingStatuses)[number];
@@ -78,6 +79,11 @@ export type SocialAccountRecord = {
   capabilities: Partial<PlatformCapabilities>;
   encryptedCredentials?: string;
   maskedToken?: string;
+  accountIdentitySafeLabel?: string;
+  authenticated?: boolean;
+  connectionVerified?: boolean;
+  publicationVerified?: boolean;
+  blocker?: string;
   lastCheckedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -154,7 +160,7 @@ export type ScheduledPublicationRecord = {
   videoId: string;
   scheduledAt: Date;
   timezone: string;
-  status: "pending" | "claimed" | "executed" | "canceled" | "failed";
+  status: "pending" | "claimed" | "completed" | "executed" | "canceled" | "failed" | "needs_attention";
   lockedAt?: Date;
   lockedBy?: string;
   createdAt: Date;

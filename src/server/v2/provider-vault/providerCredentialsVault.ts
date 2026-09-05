@@ -43,6 +43,11 @@ const PROVIDER_CREDENTIAL_TYPES: Record<string, CredentialType[]> = {
   // Optional second stock source; absence never blocks readiness.
   pixabay: ["api_key"],
   gemini: ["api_key"],
+  veo: ["api_key"],
+  fal: ["api_key"],
+  runway: ["api_key"],
+  replicate: ["api_key"],
+  luma: ["api_key"],
   google_cloud_tts: ["service_account_json"],
   elevenlabs: ["api_key"],
   telegram: ["bot_token", "chat_config"],

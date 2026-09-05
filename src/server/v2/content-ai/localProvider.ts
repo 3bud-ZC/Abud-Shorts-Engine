@@ -13,6 +13,14 @@ import type {
   ProviderValidationResult,
   SpecReviewResult,
 } from "./types";
+import {
+  inventsUngroundedClaim,
+  resolveCtaProvenance,
+  stripInventedClaims,
+  type ResolvedCta,
+} from "../creative/ctaPolicy";
+import { matchFactPack, type FactPackEntry } from "./factPacks";
+import { detectContentStyle } from "./contentStyleDetector";
 
 function isArabic(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text);
@@ -40,6 +48,102 @@ function detectArabicDialect(text: string): ArabicDialect {
     return "egyptian"; // Default for Arabic market in this engine
   }
   return "none";
+}
+
+function looksLikeRawInstruction(text: string, prompt: string): boolean {
+  const normalizedText = text.toLowerCase().replace(/\s+/g, " ").trim();
+  const normalizedPrompt = prompt.toLowerCase().replace(/\s+/g, " ").trim();
+  return Boolean(
+    normalizedText &&
+    (normalizedPrompt.startsWith(normalizedText) ||
+      normalizedText.startsWith("create a") ||
+      normalizedText.startsWith("make a video") ||
+      normalizedText.startsWith("اعمل فيديو")),
+  );
+}
+
+/** Generic, claim-free search terms for a CTA shot once the canned ones (which
+ * often bake in an invented channel, e.g. "whatsapp communication") have been
+ * discarded. Still on-topic for a satisfied-customer/result closing shot. */
+const SAFE_CTA_SEARCH_TERMS = ["happy business owner", "professional service result", "satisfied customer smiling"];
+
+function safeStockSearchTerms(terms: string[] | undefined, prompt: string): string[] {
+  if (!terms || terms.length === 0) return terms || [];
+  const kept = terms.filter((term) => !inventsUngroundedClaim(term, prompt));
+  if (kept.length === terms.length) return terms;
+  const padded = [...kept];
+  for (const fallback of SAFE_CTA_SEARCH_TERMS) {
+    if (padded.length >= terms.length) break;
+    if (!padded.includes(fallback)) padded.push(fallback);
+  }
+  return padded;
+}
+
+function enforcePromptTruthSafety(
+  scenes: ProductionSceneSpec[],
+  prompt: string,
+  isAr: boolean,
+  dialect: ArabicDialect,
+  resolvedCta: ResolvedCta,
+): ProductionSceneSpec[] {
+  return scenes.map((scene, index) => {
+    const isCtaScene = scene.purpose === "cta";
+    // A canned CTA line can hinge entirely on an invented channel or offer
+    // ("Message our team on WhatsApp today... claim your limited discount").
+    // Patching that word-by-word produces broken grammar ("message us on
+    // message today"), so when the line depends on a claim the prompt never
+    // authorized, the whole line - and the visual search terms that were
+    // built around the same invented claim, e.g. `visualPrompt: "...with
+    // WhatsApp message ready"` or `stockSearchTerms: ["whatsapp
+    // communication", ...]` - is replaced with the canonically resolved,
+    // truth-safe CTA instead.
+    if (
+      isCtaScene &&
+      (inventsUngroundedClaim(scene.narration, prompt) ||
+        inventsUngroundedClaim(scene.onScreenText || "", prompt) ||
+        inventsUngroundedClaim(scene.visualPrompt || "", prompt) ||
+        (scene.stockSearchTerms || []).some((term) => inventsUngroundedClaim(term, prompt)))
+    ) {
+      return {
+        ...scene,
+        narration: resolvedCta.text,
+        onScreenText: resolvedCta.text,
+        // Not website-specific: this fallback fires for any business
+        // vertical's CTA scene (food, real estate, clothing, ...), and a
+        // website-themed description here previously pushed the visual
+        // classifier straight to WEBSITE_MOCKUP regardless of the actual
+        // business, failing the real-footage coverage gate.
+        visualPrompt: inventsUngroundedClaim(scene.visualPrompt || "", prompt)
+          ? "Happy satisfied customer smiling while enjoying the product in a real everyday setting"
+          : scene.visualPrompt,
+        stockSearchTerms: safeStockSearchTerms(scene.stockSearchTerms, prompt),
+        notes: [
+          scene.notes,
+          index === 0 ? "raw_prompt_leak_guard_enabled" : undefined,
+          "truth_safe_cta_replaced",
+        ].filter(Boolean).join("; ") || scene.notes,
+      };
+    }
+
+    const safeNarration = stripInventedClaims(scene.narration, prompt, isAr);
+    const safeOnScreen =
+      scene.onScreenText && !looksLikeRawInstruction(scene.onScreenText, prompt)
+        ? stripInventedClaims(scene.onScreenText, prompt, isAr)
+        : undefined;
+    return {
+      ...scene,
+      narration: safeNarration || scene.narration,
+      onScreenText: safeOnScreen || (isCtaScene ? resolvedCta.text : undefined),
+      visualPrompt: scene.visualPrompt ? stripInventedClaims(scene.visualPrompt, prompt, isAr) : scene.visualPrompt,
+      stockSearchTerms: safeStockSearchTerms(scene.stockSearchTerms, prompt),
+      visualProvider: scene.visualProvider === "pexels" ? undefined : scene.visualProvider,
+      notes: [
+        scene.notes,
+        index === 0 ? "raw_prompt_leak_guard_enabled" : undefined,
+        isCtaScene ? "truth_safe_cta" : undefined,
+      ].filter(Boolean).join("; ") || scene.notes,
+    };
+  });
 }
 
 export function extractDurationFromPrompt(prompt: string): number | null {
@@ -78,7 +182,7 @@ export class LocalContentAIProvider implements ContentAIProvider {
       params.duration;
     const extractedDuration = extractDurationFromPrompt(prompt);
     const durationSeconds = explicitDuration || extractedDuration || 30;
-    const contentStyle = params.contentStyle || "advertisement";
+    const contentStyle = params.contentStyle || detectContentStyle(prompt) || "advertisement";
     const aspectRatio = params.aspectRatio || "9:16";
     const resolution = params.resolution || "1080p";
     const quality = params.quality || "standard";
@@ -87,20 +191,39 @@ export class LocalContentAIProvider implements ContentAIProvider {
     const voiceProvider = params.voiceProvider || "auto";
     const voiceId = params.voiceId || "";
 
-    const scenes = this.buildCreativeScenes({
+    // Content provenance (V2.4 Pass 5, section 5): DETERMINISTIC covers every
+    // hand-written template this planner can produce, including the
+    // business-vertical ad templates - they are real, curated content, just
+    // not curated for THIS specific customer's facts. SAFE_GENERIC marks the
+    // one case where this planner is honestly guessing: a curiosity/
+    // explainer prompt that matched no curated fact pack, where it has no
+    // basis to write a real explanation and falls back to topic-neutral
+    // copy (see buildGenericEnglishScenes). USER_FACT / BRAND_DATA /
+    // MODEL_GENERATED are reserved for providers that actually have those
+    // inputs (a configured brand profile, a live LLM) - see
+    // ollamaProvider.ts / geminiProvider.ts.
+    const curiosityStyle = contentStyle === "viral_curiosity" || contentStyle === "educational" || contentStyle === "explainer";
+    const factPackMatch = !isAr && curiosityStyle ? matchFactPack(prompt, false) : null;
+
+    const resolvedCta = resolveCtaProvenance({
+      prompt,
+      isArabic: isAr,
+      dialect,
+      brandContactText: params.brandKit?.contactText || undefined,
+      isCuriosityStyle: curiosityStyle,
+    });
+
+    const scenes = enforcePromptTruthSafety(this.buildCreativeScenes({
       prompt,
       isArabic: isAr,
       dialect,
       durationSeconds,
       contentStyle,
       brandName: params.brandName || params.brandKit?.brandName,
-    });
+    }), prompt, isAr, dialect, resolvedCta);
 
-    const ctaText = isAr
-      ? dialect === "egyptian"
-        ? "اطلب دلوقتي على واتساب واستفاد بالعرض"
-        : "تواصل معنا عبر واتساب للمزيد"
-      : "Message us on WhatsApp to get started today";
+    const ctaText = resolvedCta.text;
+    const contentProvenance = factPackMatch ? "DETERMINISTIC" : curiosityStyle ? "SAFE_GENERIC" : "DETERMINISTIC";
 
     const rawSpec: ProductionSpec = {
       id: cuid(),
@@ -124,15 +247,25 @@ export class LocalContentAIProvider implements ContentAIProvider {
       brandId: params.brandId,
       cta: {
         text: ctaText,
-        action: "WhatsApp CTA",
-        contact: "WhatsApp",
+        action: resolvedCta.action,
+        contact: resolvedCta.contact,
       },
-      contact: "WhatsApp",
+      contact: resolvedCta.contact,
       scenes,
       brandKit: params.brandKit,
       metadata: {
         planner: "LocalContentAIProvider",
-        plannerVersion: "2.2.0",
+        plannerVersion: "3.0.0",
+        promptCompiler: {
+          version: "prompt_compiler.v3",
+          rawPromptLeakGuard: true,
+          truthGuard: true,
+          ctaProvenance: resolvedCta.provenance,
+          prohibitedInventedClaims: ["prices", "discounts", "phone_numbers", "whatsapp_cta", "statistics", "testimonials", "urls"],
+        },
+        contentProvenance,
+        contentConfidence: contentProvenance === "SAFE_GENERIC" ? "low" : "high",
+        factPackId: factPackMatch?.pack.id,
         scriptPipeline: isAr
           ? {
               stages: [
@@ -242,12 +375,28 @@ export class LocalContentAIProvider implements ContentAIProvider {
     contentStyle: string;
     brandName?: string;
   }): ProductionSceneSpec[] {
-    const { prompt, isArabic: isAr, dialect, durationSeconds, brandName } = context;
+    const { prompt, isArabic: isAr, dialect, durationSeconds, contentStyle, brandName } = context;
     const lower = prompt.toLowerCase();
 
     // Outro budget deduction
     const outroTime = Math.min(2.5, Math.max(1.5, Math.round(durationSeconds * 0.1 * 10) / 10));
     const contentBudget = Math.max(durationSeconds - outroTime, 6);
+
+    // Curated fact packs answer a curiosity/explainer prompt for real
+    // instead of falling straight to the generic ad-flavored template - see
+    // factPacks.ts. English only for now (no Arabic explanation content
+    // written yet); an Arabic curiosity prompt still falls through to the
+    // existing Arabic dispatch below. Only consulted for curiosity-leaning
+    // content styles so a genuine business prompt ("why our web design
+    // service is the best") still gets the business-vertical template it
+    // needs, not a fact pack.
+    const curiosityStyle = contentStyle === "viral_curiosity" || contentStyle === "educational" || contentStyle === "explainer";
+    if (!isAr && curiosityStyle) {
+      const match = matchFactPack(prompt, false);
+      if (match) {
+        return this.buildFactPackScenes(match.pack, contentBudget);
+      }
+    }
 
     // Scene count: 3 scenes for <=22s, 4 scenes for >22s
     const sceneCount = durationSeconds <= 22 ? 3 : 4;
@@ -276,10 +425,68 @@ export class LocalContentAIProvider implements ContentAIProvider {
     if (lower.includes("website") || lower.includes("web") || lower.includes("design") || lower.includes("landing page") || lower.includes("site")) {
       return this.buildWebDesignScenesEnglish(durPerScene, brandName, durationSeconds);
     }
+    if (lower.includes("coffee") || lower.includes("cafe") || lower.includes("barista") || lower.includes("espresso")) {
+      return this.buildCafeScenesEnglish(durPerScene, brandName);
+    }
+    if (lower.includes("fitness") || lower.includes("gym") || lower.includes("workout") || lower.includes("training") || lower.includes("studio")) {
+      return this.buildFitnessScenesEnglish(durPerScene, brandName);
+    }
     if (lower.includes("backup") || lower.includes("cloud") || lower.includes("software") || lower.includes("tech")) {
       return this.buildTechEducationalScenesEnglish(durPerScene, brandName);
     }
     return this.buildGenericEnglishScenes(prompt, durPerScene, brandName);
+  }
+
+  /**
+   * Renders a matched fact pack into exactly 3 scenes (hook / explanation /
+   * closing), regardless of the normal 3-vs-4 scene-count tiering - a
+   * curated explanation is written to read naturally in three beats, and
+   * splitting it further would mean inventing filler between real sentences.
+   */
+  private buildFactPackScenes(pack: FactPackEntry, contentBudget: number): ProductionSceneSpec[] {
+    const dur = Math.round((contentBudget / 3) * 10) / 10;
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: pack.hook.narration,
+        onScreenText: pack.hook.onScreenText,
+        stockSearchTerms: pack.hook.searchTerms,
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: pack.explanation.narration,
+        onScreenText: pack.explanation.onScreenText,
+        stockSearchTerms: pack.explanation.searchTerms,
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: pack.closing.narration,
+        onScreenText: pack.closing.onScreenText,
+        stockSearchTerms: pack.closing.searchTerms,
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+        // Curiosity content does not close on an ad-style CTA (section 10);
+        // enforcePromptTruthSafety only overwrites onScreenText/narration
+        // with the resolved CTA for a scene it recognizes as inventing an
+        // ungrounded claim, and this closing line invents nothing, so it
+        // passes through unchanged unless the customer's own prompt supplied
+        // an explicit CTA (handled the same way as every other production).
+        notes: "fact_pack_closing",
+      },
+    ];
   }
 
   private buildWebDesignScenesEnglish(
@@ -821,21 +1028,20 @@ export class LocalContentAIProvider implements ContentAIProvider {
     ];
   }
 
-  private buildGenericEnglishScenes(
-    prompt: string,
+  private buildCafeScenesEnglish(
     dur: number,
     brand?: string,
   ): ProductionSceneSpec[] {
-    const cleanPrompt = prompt.replace(/[^\w\s]/gi, "").slice(0, 30);
+    const bName = brand || "this coffee subscription";
     return [
       {
         sceneIndex: 0,
         purpose: "hook",
         durationSeconds: dur,
-        narration: `Looking for the absolute best way to experience ${cleanPrompt}?`,
-        onScreenText: cleanPrompt,
-        stockSearchTerms: ["cinematic hero shot", "modern lifestyle", "trending product"],
-        visualPrompt: "High energy cinematic shot introducing the core subject",
+        narration: "Make every morning feel like your favorite cafe, without waiting in line.",
+        onScreenText: "Cafe Quality At Home",
+        stockSearchTerms: ["barista espresso close up", "coffee beans grinding", "coffee bag packaging"],
+        visualPrompt: "Close-up of fresh espresso extraction, roasted beans, and premium coffee packaging",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "cut",
@@ -844,10 +1050,10 @@ export class LocalContentAIProvider implements ContentAIProvider {
         sceneIndex: 1,
         purpose: "solution",
         durationSeconds: dur,
-        narration: "Built with premium quality and tailored to deliver exactly what you need.",
-        onScreenText: "Premium Quality & Speed",
-        stockSearchTerms: ["quality craftsmanship", "customer satisfaction", "modern technology"],
-        visualPrompt: "Close up detail showcasing quality and reliability",
+        narration: `${bName} brings freshly roasted coffee to your routine with a simple, polished experience.`,
+        onScreenText: "Fresh Coffee, Delivered",
+        stockSearchTerms: ["coffee subscription box", "fresh roasted coffee beans", "barista pouring latte"],
+        visualPrompt: "Premium coffee box preparation with warm cafe lighting and latte craft detail",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "fade",
@@ -856,10 +1062,113 @@ export class LocalContentAIProvider implements ContentAIProvider {
         sceneIndex: 2,
         purpose: "cta",
         durationSeconds: dur,
-        narration: "Get in touch today to grab this limited offer before it's gone.",
-        onScreenText: "Message Us Today",
-        stockSearchTerms: ["call to action mobile", "happy customer smartphone", "shopping"],
-        visualPrompt: "Smartphone screen with friendly message prompt and glowing CTA",
+        narration: "Follow for better coffee moments and discover your next favorite roast.",
+        onScreenText: "Discover Your Next Roast",
+        stockSearchTerms: ["morning coffee at home", "coffee delivery package", "cafe lifestyle"],
+        visualPrompt: "Lifestyle shot of a person enjoying fresh coffee at home beside a delivered package",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+    ];
+  }
+
+  private buildFitnessScenesEnglish(
+    dur: number,
+    brand?: string,
+  ): ProductionSceneSpec[] {
+    const bName = brand || "this boutique fitness studio";
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: "Ready for workouts that feel focused, energetic, and built around real progress?",
+        onScreenText: "Train With Purpose",
+        stockSearchTerms: ["boutique fitness studio", "people gym training", "fitness class workout"],
+        visualPrompt: "Energetic boutique fitness class with focused members training under premium studio lighting",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: `${bName} pairs expert coaching with a motivating space that keeps every session moving.`,
+        onScreenText: "Coaching, Energy, Momentum",
+        stockSearchTerms: ["personal trainer coaching", "strength training gym", "athletic workout"],
+        visualPrompt: "Personal trainer guiding a strength session with crisp movement and confident pacing",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: "Follow for training ideas and find a studio routine that fits your week.",
+        onScreenText: "Find Your Routine",
+        stockSearchTerms: ["fitness studio members", "gym community workout", "healthy lifestyle training"],
+        visualPrompt: "Friendly fitness studio community finishing a workout with upbeat energy",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+    ];
+  }
+
+  /**
+   * Used only when the prompt matches none of the business-vertical
+   * templates above (web design, coffee, fitness, tech). This local
+   * deterministic planner has no world knowledge, so it cannot write an
+   * informed explanation of an arbitrary topic (e.g. "why airplane windows
+   * are rounded") - that requires an LLM-backed Content AI provider. What it
+   * must never do is splice the customer's own raw prompt text into the
+   * narration: the previous version built `onScreenText` and the hook line
+   * directly from a truncated, punctuation-stripped copy of the prompt
+   * (`"Looking for the absolute best way to experience Create a 25second
+   * vertical cur?"` for a real benchmark run), which is both nonsensical and
+   * a raw-prompt-leak. This fallback stays topic-neutral instead, and does
+   * not assume the production is an advertisement (no "limited offer",
+   * no invented CTA channel - CTA text still comes from `resolveCtaProvenance`
+   * upstream in `enforcePromptTruthSafety`).
+   */
+  private buildGenericEnglishScenes(
+    prompt: string,
+    dur: number,
+    brand?: string,
+  ): ProductionSceneSpec[] {
+    return [
+      {
+        sceneIndex: 0,
+        purpose: "hook",
+        durationSeconds: dur,
+        narration: "Here's something worth seeing.",
+        stockSearchTerms: ["cinematic hero shot", "modern lifestyle", "close up detail"],
+        visualPrompt: "High energy cinematic establishing shot introducing the subject",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "cut",
+      },
+      {
+        sceneIndex: 1,
+        purpose: "solution",
+        durationSeconds: dur,
+        narration: "Here is what makes it worth your attention.",
+        stockSearchTerms: ["quality craftsmanship", "detail shot", "modern technology"],
+        visualPrompt: "Close up detail showcasing quality and craft",
+        visualSource: "stock",
+        visualProvider: "pexels",
+        transition: "fade",
+      },
+      {
+        sceneIndex: 2,
+        purpose: "cta",
+        durationSeconds: dur,
+        narration: "Follow for more.",
+        stockSearchTerms: ["happy person reaction", "satisfied customer", "positive moment"],
+        visualPrompt: "Genuine positive reaction shot to close the video",
         visualSource: "stock",
         visualProvider: "pexels",
         transition: "cut",

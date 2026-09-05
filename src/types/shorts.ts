@@ -154,7 +154,7 @@ export const brandKitSchema = z.object({
   defaultDurationSeconds: z.number().min(5).max(120).optional(),
   defaultAspectRatio: z.enum(["9:16", "16:9", "1:1"]).optional(),
   defaultQuality: z.enum(["draft", "standard", "high", "max_quality_local"]).optional(),
-  defaultVisualSource: z.enum(["auto_best", "stock", "uploaded_media", "ai_generated", "mixed"]).optional(),
+  defaultVisualSource: z.enum(["auto_free", "auto_best", "auto_budget", "stock", "uploaded_media", "ai_generated", "mixed"]).optional(),
   defaultMusicMood: z.string().max(80).optional(),
   defaultCharacterProfileId: z.string().max(160).optional(),
   watermark: z.object({

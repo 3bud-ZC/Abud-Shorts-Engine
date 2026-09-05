@@ -20,11 +20,15 @@ export type ShotIntent =
   | "cta";
 
 export type ShotSourceType = "stock" | "mockup" | "motion" | "upload" | "image";
+export type ShotSourcePreference = "stock" | "uploaded" | "generated" | "local_ai" | "motion_overlay" | "auto";
+export type ShotFallbackClass = "STOCK_VIDEO" | "GENERATED_VIDEO" | "UPLOADED_VIDEO" | "LOCAL_GENERATIVE_VIDEO" | "MOTION_OVERLAY";
 
 export type VisualShot = {
   shotId: string;
   narrationSceneId: string;
   narrationSceneIndex: number;
+  sceneIndex?: number;
+  purpose?: string;
   intent: ShotIntent;
   sourceType: ShotSourceType;
   /** Provider-scoped identifier: a Pexels/Pixabay id, mockup template, etc. */
@@ -32,17 +36,49 @@ export type VisualShot = {
   provider?: string;
   /** Offset into the SOURCE asset, in seconds. */
   sourceStartSeconds?: number;
+  sourceEndSeconds?: number;
   /** Position of this shot on the video timeline, in seconds. */
   start: number;
+  startTime?: number;
+  timelineIn?: number;
+  timelineOut?: number;
   duration: number;
   crop?: { mode: string; xCenter: number; yCenter: number; safetyScore?: number };
+  scale?: "cover" | "contain";
+  speed?: number;
   motion?: string;
   transitionIn?: string;
   transitionOut?: string;
+  overlay?: string;
+  captions?: string;
+  music?: string;
+  sfx?: string;
+  colorTreatment?: string;
+  visualIntent?: string;
+  subject?: string;
+  action?: string;
+  environment?: string;
+  framing?: string;
+  cameraMovement?: string;
+  lighting?: string;
+  mood?: string;
+  searchQuery?: string;
+  alternativeQueries?: string[];
+  generatedPrompt?: string;
+  sourcePreference?: ShotSourcePreference;
+  fallbackClasses?: ShotFallbackClass[];
+  overlayIntent?: string;
+  captionPriority?: "low" | "normal" | "high";
+  musicEnergy?: "low" | "medium" | "high";
+  sfxIntent?: string;
   /** Nearest musical beat, in seconds. A hint, never a hard snap. */
   beatHint?: number;
   semanticScore?: number;
   qualityScore?: number;
+  technicalScore?: number;
+  decisionScore?: number;
+  decisionBreakdown?: Record<string, number>;
+  rejectedCandidates?: Array<{ provider: string; assetId: string; reason: string }>;
   searchTerms?: string[];
   /** Why the router picked this source; recorded so hybrid choices are auditable. */
   routingReason?: string;
@@ -225,6 +261,34 @@ export type BuildEdlOptions = {
   };
 };
 
+function splitConcept(value: string | undefined): { subject?: string; action?: string; environment?: string } {
+  const text = String(value || "").trim();
+  if (!text) return {};
+  const words = text.split(/\s+/).filter(Boolean);
+  return {
+    subject: words.slice(0, Math.min(3, words.length)).join(" "),
+    action: words.length > 3 ? words.slice(3, 7).join(" ") : undefined,
+    environment: /office|restaurant|kitchen|cafe|store|city|workspace|clinic|classroom/i.test(text)
+      ? text
+      : undefined,
+  };
+}
+
+function framingForIntent(intent: ShotIntent): string {
+  if (intent === "hook" || intent === "detail") return "close up";
+  if (intent === "proof") return "over the shoulder";
+  if (intent === "cta") return "medium portrait";
+  if (intent === "contrast_before") return "wide problem setup";
+  if (intent === "contrast_after") return "bright reveal";
+  return "medium shot";
+}
+
+function musicEnergyForProfile(profile: PacingProfileId, intent: ShotIntent): "low" | "medium" | "high" {
+  if (profile === "calm") return "low";
+  if (profile === "editorial_ad" && (intent === "hook" || intent === "solution")) return "high";
+  return "medium";
+}
+
 /**
  * Builds the canonical shot plan. Pure and deterministic: given the same
  * narration and beats it always produces the same list, so a retry cannot
@@ -260,12 +324,35 @@ export function buildEditDecisionList(options: BuildEdlOptions): EditDecisionLis
         shotId: `${scene.sceneId}-s${i + 1}`,
         narrationSceneId: scene.sceneId,
         narrationSceneIndex: scene.sceneIndex,
+        sceneIndex: scene.sceneIndex,
+        purpose: scene.purpose,
         intent: shotIntent,
         start,
+        startTime: start,
+        timelineIn: start,
+        timelineOut: start,
         duration: 0,
         motion: motionForShot(shotIntent, i, shots[shots.length - 1]?.motion),
         beatHint: beat,
         searchTerms: scene.searchTerms,
+        visualIntent: scene.searchTerms?.[i % Math.max(1, scene.searchTerms.length)] || scene.narration,
+        ...splitConcept(scene.searchTerms?.[i % Math.max(1, scene.searchTerms.length)] || scene.narration),
+        framing: framingForIntent(shotIntent),
+        cameraMovement: motionForShot(shotIntent, i, shots[shots.length - 1]?.motion),
+        lighting: shotIntent === "contrast_before" ? "lower contrast" : "natural clean light",
+        mood: profile === "calm" ? "cinematic calm" : "professional social",
+        searchQuery: scene.searchTerms?.[i % Math.max(1, scene.searchTerms.length)] || scene.narration,
+        alternativeQueries: scene.searchTerms,
+        generatedPrompt: `${framingForIntent(shotIntent)} ${scene.searchTerms?.[i % Math.max(1, scene.searchTerms.length)] || scene.narration || ""}`.trim(),
+        sourcePreference: "stock",
+        fallbackClasses: ["STOCK_VIDEO", "UPLOADED_VIDEO", "MOTION_OVERLAY"],
+        overlayIntent: shotIntent === "cta" ? "cta_lower_third" : shotIntent === "hook" ? "headline" : "none",
+        captionPriority: shotIntent === "hook" || shotIntent === "cta" ? "high" : "normal",
+        musicEnergy: musicEnergyForProfile(profile, shotIntent),
+        sfxIntent: shotIntent === "hook" ? "soft_impact" : shotIntent === "cta" ? "transition_hit" : "none",
+        scale: "cover",
+        speed: 1,
+        colorTreatment: "gentle_social_normalize",
       };
       const assigned = options.assignSource?.(base, i) ?? { sourceType: "stock" as ShotSourceType };
       shots.push({ ...base, ...assigned });
@@ -278,6 +365,9 @@ export function buildEditDecisionList(options: BuildEdlOptions): EditDecisionLis
     const next = shots[index + 1];
     const end = next ? next.start : options.totalDurationSeconds;
     shot.duration = Math.max(0.4, Number((end - shot.start).toFixed(3)));
+    shot.startTime = shot.start;
+    shot.timelineIn = shot.start;
+    shot.timelineOut = Number((shot.start + shot.duration).toFixed(3));
   });
 
   shots.forEach((shot, index) => {

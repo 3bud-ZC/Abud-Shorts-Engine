@@ -44,7 +44,9 @@ RULES:
 2. If the user requests Arabic (Egyptian, MSA, Saudi, etc.), preserve the requested dialect naturally in the narration rather than literal machine translation.
 3. Every scene MUST have: purpose ('hook'|'problem'|'solution'|'benefit'|'proof'|'cta'), durationSeconds (number), narration (punchy and short), onScreenText (short), stockSearchTerms (array of 2-4 English keywords for Pexels search), visualPrompt (cinematic description for AI video).
 4. Scene 0 MUST be a strong hook. The last scene MUST be a clear call to action (CTA).
-5. Do NOT include Markdown formatting or backticks, only pure JSON matching the ProductionSpec structure.`;
+5. Do NOT render the raw customer prompt or meta-instructions as on-screen text.
+6. Do NOT invent prices, discounts, phone numbers, WhatsApp CTAs, claims, statistics, testimonials, addresses, URLs, or product features unless supplied in the customer prompt or brand profile.
+7. Do NOT include Markdown formatting or backticks, only pure JSON matching the ProductionSpec structure.`;
 
       const explicitDuration =
         params.requestedDurationSeconds ??
@@ -115,10 +117,10 @@ RULES:
         captionStyle: params.brandKit?.captionStyle || "bold",
         brandId: params.brandId,
         cta: parsedJson.cta || {
-          text: "Message us on WhatsApp",
-          action: "WhatsApp",
+          text: "Follow for more details",
+          action: "Follow CTA",
         },
-        contact: "WhatsApp",
+        contact: undefined,
         scenes: (parsedJson.scenes || []).map((s: any, idx: number) => ({
           sceneIndex: idx,
           purpose: s.purpose || (idx === 0 ? "hook" : "solution"),
@@ -136,7 +138,15 @@ RULES:
         brandKit: params.brandKit,
         metadata: {
           planner: "GeminiContentAIProvider",
+          contentProvider: "gemini",
           model: this.model,
+          contentProvenance: "MODEL_GENERATED",
+          contentConfidence: "high",
+          promptCompiler: {
+            version: "prompt_compiler.v3",
+            rawPromptLeakGuard: true,
+            truthGuard: true,
+          },
         },
       };
 

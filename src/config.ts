@@ -7,7 +7,11 @@ import { kokoroModelPrecision, whisperModels } from "./types/shorts";
 
 const defaultLogLevel: pino.Level = "info";
 const defaultPort = 3123;
-const whisperVersion = "1.7.1";
+// Pinned to a release that actually publishes a `whisper-bin-x64.zip` asset -
+// 1.7.1 (the previous pin) 404s on Windows install and, worse, feeds the
+// resulting GitHub error page into Expand-Archive as if it were a real zip,
+// which crashes the whole Node process rather than raising a catchable error.
+const whisperVersion = "1.9.2";
 const defaultWhisperModel: whisperModels = "small";
 const defaultRequestTimeoutMs = 30_000;
 const defaultProviderTimeoutMs = 45_000;
@@ -19,6 +23,7 @@ const defaultDatabaseMaxConnections = 10;
 const defaultDatabaseIdleTimeoutMs = 30_000;
 const defaultDatabaseConnectionTimeoutMs = 5_000;
 const defaultDatabaseStatementTimeoutMs = 60_000;
+const defaultRemotionRenderTimeoutMs = 420_000;
 
 export type RuntimeEnvironment = "development" | "test" | "production";
 
@@ -85,11 +90,23 @@ export class Config {
   public databaseIdleTimeoutMs: number;
   public databaseConnectionTimeoutMs: number;
   public databaseStatementTimeoutMs: number;
+  public remotionRenderTimeoutMs: number;
   public enableTestProviders: boolean;
 
   // docker-specific, performance-related settings to prevent memory issues
   public concurrency?: number;
   public videoCacheSizeInBytes: number | null = null;
+  /**
+   * "if-possible" asks Remotion's renderMedia to use hardware H.264 encoding
+   * (h264_nvenc on this project's target hardware) when the ffmpeg binary
+   * and a GPU are actually available, and to silently fall back to libx264
+   * otherwise - never a hard requirement, so a host/container with no GPU
+   * (any Linux CI box, a Mac, a Windows dev machine without Docker GPU
+   * passthrough) renders exactly as before. See ABUD_SHORTS_ENGINE_STATUS.md
+   * V2.4 Pass 5 for the controlled before/after benchmark this default was
+   * decided from.
+   */
+  public hardwareAcceleration: "disable" | "if-possible" = "disable";
 
   constructor() {
     this.dataDirPath =
@@ -177,7 +194,12 @@ export class Config {
       process.env.DATABASE_STATEMENT_TIMEOUT_MS,
       defaultDatabaseStatementTimeoutMs,
     );
+    this.remotionRenderTimeoutMs = parsePositiveInt(
+      process.env.REMOTION_RENDER_TIMEOUT_MS,
+      defaultRemotionRenderTimeoutMs,
+    );
     this.enableTestProviders = process.env.ENABLE_TEST_PROVIDERS === "true";
+    this.hardwareAcceleration = process.env.ABUD_HARDWARE_ACCELERATION === "if-possible" ? "if-possible" : "disable";
 
     if (process.env.WHISPER_MODEL) {
       this.whisperModel = process.env.WHISPER_MODEL as whisperModels;

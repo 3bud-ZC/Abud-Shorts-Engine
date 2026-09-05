@@ -3,6 +3,7 @@ import type { ContentAIProvider, ProviderValidationResult } from "./types";
 import { LocalContentAIProvider } from "./localProvider";
 import { GeminiContentAIProvider } from "./geminiProvider";
 import { OllamaContentAIProvider } from "./ollamaProvider";
+import { providerSecrets } from "../provider-vault/providerSecrets";
 
 export class ContentAIRegistry {
   private providers: Map<string, ContentAIProvider> = new Map();
@@ -16,13 +17,23 @@ export class ContentAIRegistry {
 
     const geminiKey =
       geminiKeyOverride ||
+      providerSecrets.peek("gemini", "api_key") ||
       process.env.GEMINI_API_KEY ||
       process.env.GOOGLE_AI_API_KEY;
     const geminiProvider = new GeminiContentAIProvider(geminiKey);
     this.providers.set(geminiProvider.id, geminiProvider);
   }
 
+  private refreshVaultBackedProviders(): void {
+    const geminiKey = providerSecrets.peek("gemini", "api_key");
+    const gemini = this.providers.get("gemini") as GeminiContentAIProvider | undefined;
+    if (geminiKey && (!gemini || !gemini.isConfigured)) {
+      this.providers.set("gemini", new GeminiContentAIProvider(geminiKey));
+    }
+  }
+
   public getProvider(id?: string): ContentAIProvider {
+    this.refreshVaultBackedProviders();
     if (id && this.providers.has(id)) {
       const p = this.providers.get(id)!;
       // If user specifically requested Gemini but Gemini is not configured, we still return it so it can validate/fallback
@@ -40,10 +51,12 @@ export class ContentAIRegistry {
   }
 
   public listProviders(): ContentAIProvider[] {
+    this.refreshVaultBackedProviders();
     return Array.from(this.providers.values());
   }
 
   public async validateAll(): Promise<ProviderValidationResult[]> {
+    this.refreshVaultBackedProviders();
     const results: ProviderValidationResult[] = [];
     for (const provider of this.providers.values()) {
       results.push(await provider.validate());

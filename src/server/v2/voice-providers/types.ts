@@ -1,24 +1,35 @@
 import type { ArabicDialect } from "../../../types/productionSpec";
 
-export type VoiceProviderId = "kokoro" | "elevenlabs" | "piper" | "edge_tts" | "google_cloud_tts";
+export type VoiceProviderId =
+  | "kokoro"
+  | "voicetut"
+  | "kemetone"
+  | "elevenlabs"
+  | "piper"
+  | "edge_tts"
+  | "google_cloud_tts";
 export type VoiceTier = "free" | "experimental_free_online" | "cloud_free_tier" | "premium";
 export type VoiceQualityProfile = "fast" | "balanced" | "premium";
 
 /**
- * CANONICAL ARABIC VOICE POLICY (V2.2)
+ * CANONICAL ARABIC VOICE POLICY (V2.4 Pass 9.7)
  * ------------------------------------
- * Arabic, Egyptian Arabic and MSA production narration is served by ElevenLabs
- * only. There is no silent fallback to Piper, Kokoro, Edge-TTS or Google Cloud
- * TTS: when ElevenLabs is not configured the job is blocked before execution
- * with ARABIC_ELEVENLABS_REQUIRED_MESSAGE.
+ * Egyptian Arabic production is local-first. VoiceTut is the preferred local
+ * high-quality provider; KemeTone is the CPU-capable local lightweight route.
+ * ElevenLabs remains supported only as explicit premium cloud selection.
  *
  * Piper remains readable for historical jobs and metadata but is no longer the
  * production Arabic route.
  */
-export const ARABIC_PRODUCTION_PROVIDER: VoiceProviderId = "elevenlabs";
+export const ARABIC_PRODUCTION_PROVIDER: VoiceProviderId = "voicetut";
+export const ARABIC_LIGHTWEIGHT_PROVIDER: VoiceProviderId = "kemetone";
+export const ARABIC_PREMIUM_CLOUD_PROVIDER: VoiceProviderId = "elevenlabs";
 
 export const ARABIC_ELEVENLABS_REQUIRED_MESSAGE =
-  "Arabic narration requires ElevenLabs. Configure ElevenLabs in Providers.";
+  "Arabic narration requires local voice setup or an explicit premium ElevenLabs selection.";
+
+export const ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE =
+  "Local Egyptian Arabic voice setup is required. Install VoiceTut for Local High Quality or KemeTone for Local Lightweight.";
 
 /** Voice IDs that only ever existed as local Piper models. */
 export const LEGACY_PIPER_VOICE_IDS = ["ar_JO-kareem-medium"];
@@ -44,6 +55,12 @@ export type VoiceCapabilities = {
   supportsSpeakingRate?: boolean;
   supportsPitch?: boolean;
   supportsVolume?: boolean;
+  supportsCodeSwitching?: boolean;
+  requiresDiacritization?: boolean;
+  preferredScript?: "arabic" | "mixed_arabic_english" | "diacritized_arabic";
+  pronunciationMode?: "native_mixed" | "provider_dictionary" | "egyptian_g2p";
+  multipleVoices?: boolean;
+  voiceCloning?: boolean;
   local: boolean;
   costTier?: VoiceTier;
   commercialUse: "allowed" | "model_dependent" | "not_allowed" | "unknown";
@@ -101,6 +118,7 @@ export type VoiceAudioResult = {
   provider?: VoiceProviderId;
   model?: string;
   modelId?: string;
+  modelRevision?: string;
   voiceFamily?: string;
   voiceId?: string;
   language?: string;
@@ -126,6 +144,8 @@ export type VoiceAudioResult = {
   };
   /** The exact TTS string the alignment above describes. */
   alignmentText?: string;
+  /** SHA-256 of the exact normalized provider input sent for synthesis. */
+  textFingerprint?: string;
 };
 
 /**
@@ -147,14 +167,29 @@ export type ProviderErrorCategory =
   | "plan_upgrade_required"
   | "unknown";
 
+export type ElevenLabsTaxonomyCode =
+  | "INVALID_INPUT"
+  | "AUTH_FAILED"
+  | "VOICE_NOT_FOUND"
+  | "MODEL_UNAVAILABLE"
+  | "QUOTA_EXHAUSTED"
+  | "RATE_LIMITED"
+  | "PROVIDER_UNAVAILABLE"
+  | "TIMEOUT"
+  | "UNSUPPORTED_ENDPOINT";
+
 export type ProviderErrorDetail = {
   category: ProviderErrorCategory;
+  taxonomyCode?: ElevenLabsTaxonomyCode;
+  provider?: string;
+  endpointClass?: string;
   httpStatus?: number;
   upstreamStatus?: string;
   upstreamMessage?: string;
   requestId?: string;
   endpoint: string;
   method: string;
+  sanitizedDiagnostic?: string;
 };
 
 export type VoiceProviderValidationResult = {
@@ -221,11 +256,14 @@ export type VoiceRouteRequest = {
   modelId?: string;
   /** Request native character alignment alongside the audio. */
   requestAlignment?: boolean;
+  /** Explicit synthesis strategy: plain_tts (with Whisper) or timestamps (native alignment) */
+  voiceStrategy?: "plain_tts" | "timestamps" | "auto";
   rate?: string;
   pitch?: string;
   volume?: string;
   fallbackPolicy?: "none" | "local" | "configured";
   brandPronunciations?: Record<string, string>;
+  pronunciationOverrides?: Record<string, string>;
 };
 
 export type VoiceRouteDecision = {
@@ -242,4 +280,6 @@ export type VoiceRouteDecision = {
   voiceSettings?: Partial<ElevenLabsVoiceSettings>;
   modelId?: string;
   requestAlignment?: boolean;
+  voiceStrategy?: "plain_tts" | "timestamps";
+  voiceSynthesisStrategy?: string;
 };

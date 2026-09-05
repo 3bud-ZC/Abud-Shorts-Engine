@@ -9,6 +9,7 @@ fs.ensureDirSync(tmpDir);
 process.env.DATA_DIR_PATH = tmpDir;
 
 import { test, expect, vi, afterAll } from "vitest";
+import nock from "nock";
 
 import { ShortCreator } from "./ShortCreator";
 import { Kokoro } from "./libraries/Kokoro";
@@ -21,6 +22,8 @@ import { MusicManager } from "./music";
 
 afterAll(() => {
   fs.removeSync(tmpDir);
+  nock.cleanAll();
+  delete process.env.PEXELS_API_KEY;
 });
 
 // Mock fluent-ffmpeg
@@ -173,6 +176,51 @@ test("test me", { timeout: 60000 }, async () => {
     width: 1080,
     height: 1920,
   });
+
+  // The legacy `pexelsAPI.findVideo` mock above only feeds the OLD fallback
+  // path in AutoVisualRouter.resolveStockSceneVisual, which is reached only
+  // when the new unified StockProviderRegistry mesh finds nothing. Since
+  // V2.4 that mesh is what Auto productions actually use first
+  // (see v24ProfessionalVideoEngine.test.ts "routes Auto stock through the
+  // unified stock mesh"), and PexelsStockProvider.isConfigured() requires a
+  // real-shaped key - without one, this test previously fell all the way
+  // through to AutoVisualRouter's real, correctly-tested
+  // "Professional automatic video needs at least one visual source" guard.
+  // A real visual fixture is provided here at the HTTP layer instead of
+  // weakening that guard: PEXELS_API_KEY is set to a valid-shaped key and
+  // the actual Pexels search endpoint is faked with `nock`.
+  process.env.PEXELS_API_KEY = "test-pexels-api-key-1234567890";
+  // Several distinct candidates, not one: a real Pexels search returns many
+  // results, so a retry/multi-segment attempt naturally lands on a different
+  // clip. Returning a single fixed id here made every attempt "select" the
+  // same asset, which the real, correct duplicate-asset guard then (rightly)
+  // flagged - an artifact of the fixture, not a product bug.
+  nock("https://api.pexels.com")
+    .persist()
+    .get("/v1/videos/search")
+    .query(true)
+    .reply(200, {
+      videos: [1234567, 2345678, 3456789].map((id) => ({
+        id,
+        url: `https://www.pexels.com/video/${id}/`,
+        image: `https://images.pexels.com/videos/${id}/thumb.jpg`,
+        duration: 20,
+        width: 1080,
+        height: 1920,
+        user: { id: 1, name: "Test Contributor", url: "https://www.pexels.com/@test" },
+        video_files: [
+          {
+            id: id + 1,
+            quality: "hd",
+            file_type: "video/mp4",
+            width: 1080,
+            height: 1920,
+            fps: 25,
+            link: `https://videos.pexels.com/video-files/${id}/${id}-hd.mp4`,
+          },
+        ],
+      })),
+    });
 
   const config = new Config();
   const remotion = await Remotion.init(config);

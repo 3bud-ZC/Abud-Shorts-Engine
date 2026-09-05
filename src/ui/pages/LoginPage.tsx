@@ -63,7 +63,8 @@ export const LoginPage: React.FC = () => {
         setError(t("login.invalidCredentials"));
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || t("login.failed"));
+      const code = err.response?.data?.error;
+      setError(code === "invalid_credentials" ? t("login.invalidCredentials") : t("login.failed"));
     } finally {
       setLoading(false);
     }

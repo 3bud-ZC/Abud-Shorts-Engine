@@ -19,16 +19,28 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("status", "update", "backup", "diagnostics", "start", "stop", "restart", "rollback", "help")]
+    [ValidateSet("status", "update", "backup", "diagnostics", "start", "stop", "restart", "rollback", "owner", "local-voice", "help")]
     [string]$Command = "status",
+
+    [Parameter(Position = 1)]
+    [string]$SubCommand = "",
 
     [switch]$Check,
     [string]$TargetVersion = "",
     [switch]$Yes,
-    [switch]$Pause
+    [switch]$Pause,
+
+    # local-voice install [-LocalVoiceMode AUTO|HIGH_QUALITY|LIGHTWEIGHT|SKIP]
+    [ValidateSet("AUTO", "HIGH_QUALITY", "LIGHTWEIGHT", "SKIP")]
+    [string]$LocalVoiceMode = "AUTO"
 )
 
 $ErrorActionPreference = "Stop"
+
+# The Local Voice lifecycle (hardware detection, runtime/model install, the
+# host-native service, auto-start) is one implementation shared with
+# install.ps1 - see scripts\host\local-voice-lib.ps1. Write-TextFile below is
+# defined before this dot-source, which is the contract that file documents.
 
 # ---------------------------------------------------------------------------
 # Installation layout
@@ -92,6 +104,8 @@ function Write-TextFile {
     }
     [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
 }
+
+. (Join-Path $PSScriptRoot "local-voice-lib.ps1")
 
 function Get-CurrentReleaseDir {
     if (Test-Path $AbudCurrentFile) { return (Get-Content $AbudCurrentFile -Raw).Trim() }
@@ -502,10 +516,37 @@ function Invoke-Status {
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
 
+
+<#
+Local Voice is host-native, not a Compose service, so the full-product
+start/stop/restart commands drive it alongside Docker rather than through it.
+Any failure here is reported but never blocks the Docker-side result - the
+same "do not break the whole app" rule the setup path follows.
+#>
+function Sync-LocalVoiceWithProductLifecycle {
+    param([ValidateSet("start", "stop", "restart")][string]$Action)
+    $mode = Get-EnvValue "LOCAL_VOICE_MODE" "SKIP"
+    if ($mode -eq "SKIP" -or -not $mode) { return }
+    try {
+        $appSourceDir = Get-LocalVoiceAppSourceDir
+        $port = [int](Get-EnvValue "LOCAL_TTS_PORT" "8765")
+        $paths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $port
+        $token = Get-EnvValue "INTERNAL_SERVICE_TOKEN" ""
+        switch ($Action) {
+            "start"   { Start-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token | Out-Null }
+            "stop"    { Stop-LocalVoiceService -Paths $paths | Out-Null }
+            "restart" { Restart-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token | Out-Null }
+        }
+    } catch {
+        Write-Warn "Local Voice $Action failed: $($_.Exception.Message)"
+    }
+}
+
 function Invoke-Start {
     Assert-Docker
     Write-Step "Starting ABUD Shorts..."
     Invoke-Compose @("up", "-d")
+    Sync-LocalVoiceWithProductLifecycle "start"
     Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90 | Out-Null
     Wait-ForContainerSettle
     Show-HealthSummary | Out-Null
@@ -518,6 +559,7 @@ function Invoke-Stop {
     # `stop`, never `down -v`: containers halt, every volume and every file in
     # the data directory stays exactly where it is.
     Invoke-Compose @("stop")
+    Sync-LocalVoiceWithProductLifecycle "stop"
     Write-Ok "Stopped. Your videos, settings and backups are untouched."
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
@@ -526,9 +568,136 @@ function Invoke-Restart {
     Assert-Docker
     Write-Step "Restarting ABUD Shorts..."
     Invoke-Compose @("restart")
+    Sync-LocalVoiceWithProductLifecycle "restart"
     Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90 | Out-Null
     Wait-ForContainerSettle
     Show-HealthSummary | Out-Null
+    if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
+}
+
+function Invoke-OwnerCommand {
+    param([string]$Action)
+    Assert-Docker
+
+    if ($Action -ne "reset-password") {
+        Write-Host 'Usage: abud-shorts.ps1 owner reset-password'
+        Write-Host '  Interactively resets the owner account when you cannot sign in.'
+        Write-Host '  Requires local access to this machine. No customer data is touched.'
+        return
+    }
+
+    $appContainer = Get-ContainerName "app"
+    $running = Invoke-Docker @("inspect", "-f", "{{.State.Running}}", $appContainer)
+    if ($LASTEXITCODE -ne 0 -or ($running | Select-Object -Last 1) -ne "true") {
+        Stop-WithMessage "The app service is not running. Start ABUD Shorts first (Status shortcut), then try again."
+    }
+
+    Write-Step "Owner password recovery"
+    Write-Host "      This runs inside the application, asks for the new username/password"
+    Write-Host "      directly (never on this command line), and signs out every existing"
+    Write-Host "      session. Nothing else about this installation is changed."
+    Write-Host ""
+
+    & docker exec -it $appContainer node dist/scripts/resetOwnerCredentials.js
+    exit $LASTEXITCODE
+}
+
+<# The services\local-tts source ships inside the current release directory;
+   the runtime venv and model cache live under shared\ (see local-voice-lib.ps1),
+   which is what makes the setup survive an update. #>
+function Get-LocalVoiceAppSourceDir {
+    $releaseDir = Get-CurrentReleaseDir
+    if (-not $releaseDir) { Stop-WithMessage "ABUD Shorts is not installed yet. Run install.ps1 first." }
+    return (Join-Path $releaseDir "services\local-tts")
+}
+
+function Show-LocalVoiceStatus {
+    param($Paths, $Result = $null)
+    $status = Get-LocalVoiceServiceStatus -Paths $Paths
+    Write-Host ""
+    Write-Host "  Local Voice"
+    Write-Host "  Mode:            $(Get-EnvValue "LOCAL_VOICE_MODE" "not set")"
+    Write-Host "  Port:            $($Paths.Port)"
+    Write-Host "  Runtime ready:   $(Test-LocalVoiceRuntimeReady -Paths $Paths)"
+    Write-Host "  Service running: $($status.running)"
+    Write-Host "  Service healthy: $($status.healthy)"
+    Write-Host "  Models ready:    $(if ($status.modelsReady.Count -gt 0) { $status.modelsReady -join ', ' } else { 'none' })"
+    Write-Host "  Auto-start:      $((Test-LocalVoiceAutoStartRegistered).mechanism)"
+    if ($Result -and $Result.error) { Write-Bad "Last setup error: $($Result.error)" }
+    Write-Host ""
+}
+
+function Invoke-LocalVoiceCommand {
+    param([string]$Action)
+    $appSourceDir = Get-LocalVoiceAppSourceDir
+    $port = [int](Get-EnvValue "LOCAL_TTS_PORT" "8765")
+    $paths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $port
+    $token = Get-EnvValue "INTERNAL_SERVICE_TOKEN" ""
+
+    switch ($Action) {
+        "install" {
+            Write-Step "Setting up Local Voice ($LocalVoiceMode)..."
+            $result = Invoke-LocalVoiceSetup -Mode $LocalVoiceMode -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
+                -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot `
+                -InternalServiceToken $token
+            if ($result.resolvedMode -ne "SKIP") {
+                Set-EnvValue "LOCAL_VOICE_MODE" $result.resolvedMode
+                if ($result.port) { Set-EnvValue "LOCAL_TTS_PORT" "$($result.port)" }
+                if ($result.baseUrl) { Set-EnvValue "LOCAL_TTS_BASE_URL" $result.baseUrl }
+            } else {
+                Set-EnvValue "LOCAL_VOICE_MODE" "SKIP"
+            }
+            if ($result.error) {
+                Write-Bad "Local High Quality setup failed: $($result.error)"
+                Write-Host "      Retry with: abud-shorts.ps1 local-voice repair"
+                Write-Host "      ElevenLabs was not used. Arabic jobs will report Local Voice setup is required until this is fixed."
+            } else {
+                Write-Ok "Resolved mode: $($result.resolvedMode) ($($result.resolutionReason))"
+                if ($result.resolvedMode -ne "SKIP") {
+                    Write-Ok "Model: $($result.modelId), ready: $($result.modelReady)"
+                    Write-Ok "Service healthy: $($result.serviceStarted); auto-start: $($result.autoStartMechanism)"
+                }
+            }
+        }
+        "start" {
+            $r = Start-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token
+            if ($r.ready) { Write-Ok "Local Voice is running on port $($paths.Port)." }
+            else { Write-Bad "Local Voice did not become healthy. Check $($paths.LogFile)." }
+        }
+        "stop" {
+            Stop-LocalVoiceService -Paths $paths | Out-Null
+            Write-Ok "Local Voice stopped."
+        }
+        "restart" {
+            $r = Restart-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token
+            if ($r.ready) { Write-Ok "Local Voice restarted and healthy." }
+            else { Write-Bad "Local Voice did not become healthy after restart. Check $($paths.LogFile)." }
+        }
+        "repair" {
+            Write-Step "Repairing Local Voice..."
+            $mode = Get-EnvValue "LOCAL_VOICE_MODE" "AUTO"
+            if ($mode -eq "SKIP" -or $mode -eq "not set") { $mode = "AUTO" }
+            $result = Invoke-LocalVoiceSetup -Mode $mode -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
+                -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot `
+                -InternalServiceToken $token -Repair
+            if ($result.error) { Write-Bad "Repair failed: $($result.error)" }
+            else { Write-Ok "Repair complete. Resolved mode: $($result.resolvedMode)." }
+        }
+        "uninstall" {
+            Stop-LocalVoiceService -Paths $paths | Out-Null
+            Unregister-LocalVoiceAutoStart -AbudShared $AbudShared | Out-Null
+            Write-Ok "Local Voice service stopped and auto-start removed."
+            Write-Host "      The downloaded model and Python runtime were preserved."
+            Write-Host "      To remove them too: Remove-Item -Recurse -Force `"$($paths.RuntimeDir)`", `"$($paths.ModelCacheDir)`""
+        }
+        "status" {
+            Show-LocalVoiceStatus -Paths $paths
+        }
+        default {
+            Write-Host 'Usage: abud-shorts.ps1 local-voice <install|start|stop|restart|repair|uninstall|status>'
+            Write-Host '  install [-LocalVoiceMode AUTO|HIGH_QUALITY|LIGHTWEIGHT|SKIP]'
+        }
+    }
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
 
@@ -898,6 +1067,7 @@ function Invoke-Update {
                 $result = "succeeded"
                 Write-Ok "Rolled back to version $currentVersion and the system is healthy again."
                 Wait-ForContainerSettle
+                Sync-LocalVoiceWithProductLifecycle "restart"
             } else {
                 Write-Bad "Rollback finished but the system is not reporting healthy."
             }
@@ -947,6 +1117,14 @@ function Invoke-Update {
 
         Wait-ForContainerSettle
 
+        # Local Voice is host-native and runs the *release directory's* copy of
+        # services\local-tts, so a version update that only recreates app and
+        # render-worker leaves it serving the old release's code until this
+        # restarts it against the just-activated release directory. The model
+        # cache and Python runtime are untouched (they live under shared\, not
+        # under any release directory).
+        Sync-LocalVoiceWithProductLifecycle "restart"
+
         $script:Txn.rollback = [ordered]@{ attempted = $false; result = "not_required" }
         Save-Transaction "SUCCESS"
 
@@ -977,6 +1155,9 @@ ABUD Shorts Engine
   abud-shorts.ps1 diagnostics                Write a support bundle
   abud-shorts.ps1 start | stop | restart
   abud-shorts.ps1 rollback                   Return to the previous working version
+  abud-shorts.ps1 owner reset-password       Recover a lost owner username/password locally
+  abud-shorts.ps1 local-voice install [-LocalVoiceMode AUTO|HIGH_QUALITY|LIGHTWEIGHT|SKIP]
+  abud-shorts.ps1 local-voice start | stop | restart | repair | uninstall | status
 
 Backups, videos, media and settings are never removed by any of these commands.
 "@
@@ -991,5 +1172,7 @@ switch ($Command) {
     "stop"        { Invoke-Stop }
     "restart"     { Invoke-Restart }
     "rollback"    { Invoke-Rollback }
+    "owner"       { Invoke-OwnerCommand $SubCommand }
+    "local-voice" { Invoke-LocalVoiceCommand $SubCommand }
     default       { Show-Usage }
 }

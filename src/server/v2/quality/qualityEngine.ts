@@ -67,12 +67,21 @@ export type CreativeQualityInput = {
   captionStyle?: string;
   hasCaptions?: boolean;
   mediaRelevanceScores?: number[];
+  realVisualCoveragePercent?: number;
+  textOnlyTimelinePercent?: number;
+  blackFramePercent?: number;
+  duplicateAssetCount?: number;
+  promptLeakCount?: number;
+  inventedClaimRiskCount?: number;
 };
 
 export type CreativeQualityDiagnostics = {
   audioContinuityScore: number;
   visualDiversityScore: number;
   mediaRelevanceScore: number;
+  realVisualCoverageScore: number;
+  textOnlyScore: number;
+  blackFrameScore: number;
   fallbackScore: number;
   captionLegibilityScore: number;
   maxNarrationSilenceMs: number;
@@ -130,6 +139,42 @@ export class QualityEngine {
       warnings.push("Generic fallback queries used for one or more scenes");
     }
 
+    const realVisualCoverageScore = input.realVisualCoveragePercent === undefined
+      ? 90
+      : Math.max(0, Math.min(100, Math.round(input.realVisualCoveragePercent)));
+    if (realVisualCoverageScore < 90) {
+      issues.push(`Real visual coverage below professional target: ${realVisualCoverageScore}%`);
+    }
+
+    const textOnlyPercent = input.textOnlyTimelinePercent ?? 0;
+    // Hard cap (V2.4 Pass 4, section 58): any full-screen text/motion timeline
+    // at all means this cannot score as a perfect professional visual bed,
+    // even a single percent - incident cmtehsptj000108ledzk3f3ji's 32.9%
+    // text-only timeline previously coexisted with a 0% textOnlyTimelinePercent
+    // *plan* claim, so the rendered-media measurement must never be allowed to
+    // read as flawless once it is nonzero.
+    const textOnlyScore = textOnlyPercent > 0
+      ? Math.max(0, Math.min(99, Math.round(99 - Math.max(0, textOnlyPercent - 10) * 4)))
+      : 100;
+    if (textOnlyPercent > 10) {
+      issues.push(`Text-only timeline exceeds professional target: ${textOnlyPercent}%`);
+    } else if (textOnlyPercent > 0) {
+      warnings.push(`Text-only timeline is nonzero: ${textOnlyPercent}%`);
+    }
+
+    const blackFramePercent = input.blackFramePercent ?? 0;
+    const blackFrameScore = Math.max(0, Math.min(100, Math.round(100 - blackFramePercent * 25)));
+    if (blackFramePercent > 1) {
+      issues.push(`Black-frame percentage is high: ${blackFramePercent}%`);
+    }
+
+    if ((input.promptLeakCount || 0) > 0) {
+      issues.push(`Raw prompt leakage detected: ${input.promptLeakCount}`);
+    }
+    if ((input.inventedClaimRiskCount || 0) > 0) {
+      issues.push(`Invented claim risk detected: ${input.inventedClaimRiskCount}`);
+    }
+
     // 4. Fallback Penalty Score (Weight: 15%)
     const fallbackCount = input.fallbackCount || 0;
     const genericCount = input.genericFallbackCount || 0;
@@ -151,11 +196,16 @@ export class QualityEngine {
       Math.min(
         100,
         Math.round(
-          audioContinuityScore * 0.30 +
-          visualDiversityScore * 0.25 +
-          mediaRelevanceScore * 0.20 +
-          fallbackScore * 0.15 +
-          captionLegibilityScore * 0.10,
+          audioContinuityScore * 0.18 +
+          visualDiversityScore * 0.14 +
+          mediaRelevanceScore * 0.16 +
+          realVisualCoverageScore * 0.20 +
+          textOnlyScore * 0.10 +
+          blackFrameScore * 0.10 +
+          fallbackScore * 0.07 +
+          captionLegibilityScore * 0.05 -
+          (input.promptLeakCount || 0) * 25 -
+          (input.inventedClaimRiskCount || 0) * 20,
         ),
       ),
     );
@@ -166,6 +216,14 @@ export class QualityEngine {
     else if (creativeScore < 80) creativeGrade = "C";
     else if (creativeScore < 90) creativeGrade = "B";
 
+    // Hard cap (V2.4 Pass 4, section 58): a raw prompt leak or an unsupported/
+    // invented claim (WhatsApp, a discount, a statistic) is a trust failure,
+    // not a quality deduction a high production-value score can outweigh. No
+    // numeric blend is allowed to grade this "passing".
+    if ((input.promptLeakCount || 0) > 0 || (input.inventedClaimRiskCount || 0) > 0) {
+      creativeGrade = "F";
+    }
+
     return {
       creativeScore,
       creativeGrade,
@@ -173,6 +231,9 @@ export class QualityEngine {
         audioContinuityScore,
         visualDiversityScore,
         mediaRelevanceScore,
+        realVisualCoverageScore,
+        textOnlyScore,
+        blackFrameScore,
         fallbackScore,
         captionLegibilityScore,
         maxNarrationSilenceMs: input.maxNarrationSilenceMs,

@@ -426,6 +426,48 @@ describe("release automation cannot be triggered by a Git tag push", () => {
   });
 });
 
+describe("F4 - GHCR candidate SemVer policy", () => {
+  // Context: candidate mode originally required PRODUCT_VERSION to match
+  // ^[0-9]+\.[0-9]+\.[0-9]+$ exactly, so it could never build an RC/beta
+  // version (2.4.0-rc.2) - the workflow_dispatch run failed at "Resolve
+  // candidate identity" before touching Docker at all. Fixed to accept a
+  // pre-release for candidate mode while promote/retag-stable - which move
+  // real customer-facing tags - keep the original strict, plain-version-only
+  // requirement.
+  const candidateYml = readExecutable(".github/workflows/ghcr-candidate.yml");
+
+  it("accepts a pre-release version syntactically (candidate mode's use case)", () => {
+    const permissive = /\^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\(-\[0-9A-Za-z\.-\]\+\)\?\$/;
+    expect(candidateYml).toMatch(permissive);
+    for (const version of ["2.4.0-rc.2", "2.4.0-beta.1", "2.4.0"]) {
+      expect(new RegExp("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$").test(version)).toBe(true);
+    }
+  });
+
+  it("refuses promote/retag-stable for a pre-release version, even though candidate mode accepts one", () => {
+    expect(candidateYml).toMatch(/inputs\.mode.*!=.*candidate/);
+    expect(candidateYml).toMatch(/requires a plain stable version/i);
+    // The plain-version gate for non-candidate modes is a stricter, separate
+    // check from the general syntax check above, not a relaxation of it.
+    const strictPlainVersion = /\^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$/;
+    expect(candidateYml).toMatch(strictPlainVersion);
+  });
+
+  it("never applies the plain-version-only gate to candidate mode itself", () => {
+    // The gate must be conditioned on mode, not unconditional - otherwise
+    // this is the exact regression being fixed, just moved to a new line.
+    const gateLine = candidateYml
+      .split("\n")
+      .find((line) => line.includes("requires a plain stable version"));
+    expect(gateLine).toBeDefined();
+    const context = candidateYml.slice(
+      candidateYml.indexOf(gateLine!) - 200,
+      candidateYml.indexOf(gateLine!),
+    );
+    expect(context).toMatch(/mode.*!=.*candidate/);
+  });
+});
+
 describe("F4 - image reference parsing", () => {
   /**
    * Mirrors `image_repository` in abud-update.sh and `Get-ImageRepository` in

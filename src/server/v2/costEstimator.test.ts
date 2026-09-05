@@ -34,7 +34,7 @@ describe("Cost Estimator Foundation", () => {
     expect(cost.breakdown.visualAssets.stockCount).toBe(2);
   });
 
-  it("computes estimated cost for AI scenes and premium voice", () => {
+  it("reports AI scenes and premium voice as usage based without invented pricing", () => {
     const cost = estimateProductionCost({
       visualMode: "ai",
       voiceProvider: "elevenlabs",
@@ -63,8 +63,11 @@ describe("Cost Estimator Foundation", () => {
     });
 
     expect(cost.isFree).toBe(false);
-    expect(cost.estimatedCost).toBeGreaterThan(0.3);
+    expect(cost.estimatedCost).toBe(0);
+    expect(cost.usageBased).toBe(true);
+    expect(cost.costLabel).toContain("Usage Based");
     expect(cost.breakdown.visualAssets.aiCount).toBe(2);
+    expect(cost.breakdown.visualAssets.usageBased).toBe(true);
     expect(cost.breakdown.voice.provider).toBe("elevenlabs");
   });
 
