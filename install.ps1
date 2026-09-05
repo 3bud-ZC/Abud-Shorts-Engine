@@ -251,6 +251,23 @@ foreach ($dir in @($AbudConfigDir, (Join-Path $AbudShared "backups"), (Join-Path
 }
 
 $ReleaseDir = Join-Path $AbudReleases $ReleaseVersion
+
+# Local Voice is host-native and can hold its process working directory
+# inside a release's services\local-tts, which blocks Windows from replacing
+# that directory below - the exact case of repairing/reinstalling the same
+# version while Local Voice is already running. Stop it first; Local Voice
+# setup later in this script (or the next `local-voice start`) always starts
+# it again against whichever release ends up current.
+if (Test-Path $AbudEnvFile) {
+    try {
+        $existingPort = 8765
+        $portLine = Get-Content $AbudEnvFile | Where-Object { $_ -match "^LOCAL_TTS_PORT=" } | Select-Object -Last 1
+        if ($portLine) { $existingPort = [int]$portLine.Substring("LOCAL_TTS_PORT=".Length) }
+        $stopPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $existingPort
+        Stop-LocalVoiceService -Paths $stopPaths | Out-Null
+    } catch { }
+}
+
 if (Test-Path "$ReleaseDir.incoming") { Remove-Item "$ReleaseDir.incoming" -Recurse -Force }
 New-Item -ItemType Directory -Path "$ReleaseDir.incoming" -Force | Out-Null
 # The image archive is not copied into the release directory: it is many
@@ -361,13 +378,12 @@ if ($LocalVoice -eq "SKIP") {
 } else {
     try {
         $localVoiceAppSource = Join-Path $ReleaseDir "services\local-tts"
-        $localVoiceCliPath = Join-Path $ReleaseDir "scripts\host\abud-shorts.ps1"
         $tokenLine = Get-Content $AbudEnvFile | Where-Object { $_ -match "^INTERNAL_SERVICE_TOKEN=" } | Select-Object -Last 1
         $internalToken = if ($tokenLine) { $tokenLine.Substring("INTERNAL_SERVICE_TOKEN=".Length) } else { "" }
 
         $localVoiceResult = Invoke-LocalVoiceSetup -Mode $LocalVoice -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
             -AppSourceDir $localVoiceAppSource -LibRoot (Join-Path $ReleaseDir "scripts\host") `
-            -AbudShortsPs1Path $localVoiceCliPath -InternalServiceToken $internalToken
+            -InternalServiceToken $internalToken
 
         function Update-EnvLineInstaller([string[]]$Lines, [string]$Key, [string]$Value) {
             $found = $false
@@ -393,7 +409,7 @@ if ($LocalVoice -eq "SKIP") {
         } else {
             Write-Host "      Mode: $($localVoiceResult.resolvedMode) ($($localVoiceResult.resolutionReason))" -ForegroundColor Green
             Write-Host "      Model: $($localVoiceResult.modelId), ready: $($localVoiceResult.modelReady)" -ForegroundColor Green
-            Write-Host "      Service healthy: $($localVoiceResult.serviceStarted); starts automatically at login: $($localVoiceResult.autoStartRegistered)" -ForegroundColor Green
+            Write-Host "      Service healthy: $($localVoiceResult.serviceStarted); starts automatically at login: $($localVoiceResult.autoStartRegistered) ($($localVoiceResult.autoStartMechanism))" -ForegroundColor Green
         }
     } catch {
         Write-Host "      Local High Quality setup failed: $($_.Exception.Message)" -ForegroundColor Yellow

@@ -373,20 +373,32 @@ export class AutoVisualRouter {
     }
 
     if (this.pexelsProvider.isConfigured()) {
-      const legacy = await this.pexelsProvider.fetchOrGenerateScene(scene, options);
-      return {
-        sceneIndex: scene.sceneIndex,
-        provider: legacy.provider,
-        source: "stock",
-        url: legacy.url,
-        durationSeconds: legacy.durationSeconds,
-        fallbackUsed: false,
-        estimatedCost: legacy.estimatedCost,
-        metadata: {
-          ...legacy.metadata,
-          registryFallbackReason: "unified_stock_registry_returned_no_candidate",
-        },
-      };
+      try {
+        const legacy = await this.pexelsProvider.fetchOrGenerateScene(scene, options);
+        if (legacy && typeof legacy.url === "string" && legacy.url) {
+          return {
+            sceneIndex: scene.sceneIndex,
+            provider: legacy.provider,
+            source: "stock",
+            url: legacy.url,
+            durationSeconds: legacy.durationSeconds,
+            fallbackUsed: false,
+            estimatedCost: legacy.estimatedCost,
+            metadata: {
+              ...legacy.metadata,
+              registryFallbackReason: "unified_stock_registry_returned_no_candidate",
+            },
+          };
+        }
+      } catch (legacyErr) {
+        // A configured-but-unavailable provider (network failure, malformed
+        // response, an exhausted test double) must degrade to the same
+        // customer-safe message below - never a raw internal error.
+        logger.warn(
+          { error: legacyErr instanceof Error ? legacyErr.message : String(legacyErr) },
+          "Legacy Pexels fallback failed; no visual source is available for this scene",
+        );
+      }
     }
 
     throw new Error(

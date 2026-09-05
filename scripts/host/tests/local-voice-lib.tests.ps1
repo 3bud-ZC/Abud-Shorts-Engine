@@ -120,6 +120,100 @@ Describe "Get-LocalVoiceServiceStatus" {
     }
 }
 
+Describe "Windows auto-start (real, against this machine's actual Task Scheduler state)" {
+    <#
+    This machine's Task Scheduler denies task creation for this account (Pass
+    9.10 finding, reproduced with the sandbox on and off, via schtasks.exe and
+    the ScheduledTasks module, and independent of task name/flags). That is
+    exactly the real condition Register-LocalVoiceAutoStart's fallback exists
+    for, so running these tests here exercises the fallback path for real
+    rather than mocking it. On a machine where Task Scheduler succeeds, the
+    same assertions hold with mechanism == "scheduled_task" instead.
+    #>
+    It "registers via SOME working mechanism, never silently reporting none when one exists" {
+        $root = Join-Path $env:TEMP ("abud-lv-autostart-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            $result = Register-LocalVoiceAutoStart -AbudShared $root
+            $result.registered | Should Be $true
+            @("scheduled_task", "startup_folder") -contains $result.mechanism | Should Be $true
+            Test-Path (Get-LocalVoiceAutoStartLauncherPath -AbudShared $root) | Should Be $true
+
+            $status = Test-LocalVoiceAutoStartRegistered
+            $status.any | Should Be $true
+            $status.mechanism | Should Be $result.mechanism
+        } finally {
+            Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "is idempotent - registering twice never creates a duplicate Startup entry" {
+        $root = Join-Path $env:TEMP ("abud-lv-autostart-dup-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            Register-LocalVoiceAutoStart -AbudShared $root | Out-Null
+            Register-LocalVoiceAutoStart -AbudShared $root | Out-Null
+            $startupDir = [System.Environment]::GetFolderPath("Startup")
+            $matches = @(Get-ChildItem $startupDir -Filter "ABUD Shorts - Local Voice*" -ErrorAction SilentlyContinue)
+            $matches.Count | Should BeLessThan 2
+        } finally {
+            Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "writes and quotes the launcher correctly for a shared root containing a space" {
+        $root = Join-Path $env:TEMP ("abud lv autostart space " + [Guid]::NewGuid().ToString("N"))
+        try {
+            $result = Register-LocalVoiceAutoStart -AbudShared $root
+            $result.registered | Should Be $true
+            $launcherPath = Get-LocalVoiceAutoStartLauncherPath -AbudShared $root
+            Test-Path $launcherPath | Should Be $true
+            # A real syntax parse of the generated launcher - a bad quote here
+            # would otherwise only surface the next time Windows logs in.
+            $parseErrors = $null
+            [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $launcherPath), [ref]$parseErrors) | Out-Null
+            $parseErrors.Count | Should Be 0
+        } finally {
+            Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "unregisters both mechanisms and the launcher, but never touches the model cache or runtime" {
+        $root = Join-Path $env:TEMP ("abud-lv-autostart-preserve-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            $dataDir = Join-Path $root "data"
+            $paths = Get-LocalVoicePaths -AbudShared $root -AbudDataDir $dataDir -Port 18780
+            New-Item -ItemType Directory -Path $paths.VenvDir -Force | Out-Null
+            New-Item -ItemType Directory -Path $paths.ModelCacheDir -Force | Out-Null
+            Set-Content -Path (Join-Path $paths.ModelCacheDir "metadata.json") -Value "{}" -Encoding utf8
+
+            Register-LocalVoiceAutoStart -AbudShared $root | Out-Null
+            Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
+
+            (Test-LocalVoiceAutoStartRegistered).any | Should Be $false
+            Test-Path (Get-LocalVoiceAutoStartLauncherPath -AbudShared $root) | Should Be $false
+            Test-Path $paths.VenvDir | Should Be $true
+            Test-Path (Join-Path $paths.ModelCacheDir "metadata.json") | Should Be $true
+        } finally {
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "the launcher re-resolves current.txt, so it stays correct across an upgrade without re-registering" {
+        $root = Join-Path $env:TEMP ("abud-lv-autostart-upgrade-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            $launcherPath = Install-LocalVoiceAutoStartLauncher -AbudShared $root
+            $content = Get-Content $launcherPath -Raw
+            # It must read current.txt at run time, not bake in today's release path.
+            $content | Should Match "current\.txt"
+            $content | Should Not Match "releases\\\\2\."
+        } finally {
+            Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe "Uninstall preserves data by default" {
     It "Stop-LocalVoiceService never deletes the runtime or the model cache" {
         $root = Join-Path $env:TEMP ("abud-lv-test-uninstall-" + [Guid]::NewGuid().ToString("N"))

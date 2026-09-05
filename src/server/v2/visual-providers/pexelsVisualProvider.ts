@@ -54,6 +54,15 @@ export class PexelsVisualProvider implements VisualProvider {
       orientation: options.orientation || OrientationEnum.portrait,
     });
 
+    // findVideo's own contract can go unmet (a bare test double, an
+    // unexpected empty/malformed response) without throwing on its own.
+    // Never let that surface as a raw property-access crash further up -
+    // the caller (AutoVisualRouter) treats a thrown error here as "this
+    // provider could not supply a scene" and falls through accordingly.
+    if (!video || typeof video.url !== "string" || !video.url) {
+      throw new Error("Pexels did not return a usable video for this scene.");
+    }
+
     return {
       provider: "pexels",
       source: "stock",

@@ -42,7 +42,7 @@ if (Test-Path $localVoiceLibPath) {
     try {
         $lvPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port 8765
         Stop-LocalVoiceService -Paths $lvPaths | Out-Null
-        Unregister-LocalVoiceAutoStart | Out-Null
+        Unregister-LocalVoiceAutoStart -AbudShared $AbudShared | Out-Null
     } catch { }
 }
 

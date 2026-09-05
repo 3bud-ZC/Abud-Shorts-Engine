@@ -454,23 +454,122 @@ function Restart-LocalVoiceService {
 }
 
 # ---------------------------------------------------------------------------
-# Windows auto-start (per-user scheduled task, no admin, no stored password)
+# Windows auto-start (per-user, no admin, no stored password)
 # ---------------------------------------------------------------------------
+<#
+Both the scheduled task and the Startup-folder fallback point at ONE fixed
+path under shared\ instead of a specific release directory. A release
+directory can be replaced or pruned on the next update; shared\ never is.
+This file itself re-reads current.txt every time Windows runs it, so
+whichever mechanism actually got registered keeps starting whichever
+release is current - including after an update - without ever needing to
+be re-registered.
+#>
+function Get-LocalVoiceAutoStartLauncherPath {
+    param([Parameter(Mandatory = $true)][string]$AbudShared)
+    return Join-Path $AbudShared "bin\start-local-voice.ps1"
+}
+
+<#
+Embeds the exact install root this was registered for (usually the default
+%ProgramData%\AbudShorts, but a custom -InstallRoot is a real, supported
+override) as a literal, rather than re-deriving the default at run time -
+otherwise a non-default install's autostart would silently resolve against
+the wrong (or a nonexistent) default location.
+#>
+function Install-LocalVoiceAutoStartLauncher {
+    param([Parameter(Mandatory = $true)][string]$AbudShared)
+    $launcherPath = Get-LocalVoiceAutoStartLauncherPath -AbudShared $AbudShared
+    $abudHome = Split-Path $AbudShared -Parent
+    $escapedHome = $abudHome.Replace("'", "''")
+    $content = @"
+# ABUD Shorts Engine - stable Local Voice autostart launcher.
+# Regenerated on every install/repair - do not edit by hand. Re-resolves
+# current.txt on every run so it always starts whichever release is
+# actually current, never a specific (and eventually obsolete) one.
+`$ErrorActionPreference = "SilentlyContinue"
+`$abudHome = '$escapedHome'
+`$currentFile = Join-Path `$abudHome "current.txt"
+if (-not (Test-Path `$currentFile)) { exit 0 }
+`$releaseDir = (Get-Content `$currentFile -Raw).Trim()
+`$cli = Join-Path `$releaseDir "scripts\host\abud-shorts.ps1"
+if (-not (Test-Path `$cli)) { exit 0 }
+`$env:ABUD_HOME = `$abudHome
+& `$cli local-voice start
+"@
+    Write-TextFile $launcherPath $content
+    return $launcherPath
+}
+
+function Get-LocalVoiceStartupShortcutPath {
+    $startupDir = [System.Environment]::GetFolderPath("Startup")
+    return Join-Path $startupDir "$($script:LocalVoiceTaskName).lnk"
+}
+
+function Register-LocalVoiceStartupFolderFallback {
+    param([Parameter(Mandatory = $true)][string]$LauncherPath)
+    try {
+        $shortcutPath = Get-LocalVoiceStartupShortcutPath
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = "powershell.exe"
+        $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$LauncherPath`""
+        $shortcut.WorkingDirectory = Split-Path $LauncherPath -Parent
+        $shortcut.Description = "Starts ABUD Shorts Local Voice at login"
+        $shortcut.Save()
+        return (Test-Path $shortcutPath)
+    } catch {
+        return $false
+    }
+}
+
+function Unregister-LocalVoiceStartupFolderFallback {
+    $shortcutPath = Get-LocalVoiceStartupShortcutPath
+    if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue }
+    return $true
+}
+
+<#
+Tries the primary mechanism (a per-user "at logon" scheduled task, no admin,
+no stored password) first; if Task Scheduler itself denies task creation for
+this account - a real, observed failure mode on some Windows accounts even
+though the Task Scheduler service is running normally - falls back to a
+Startup-folder shortcut, which needs no Task Scheduler access at all. Never
+claims success it did not actually verify.
+#>
 function Register-LocalVoiceAutoStart {
-    param([Parameter(Mandatory = $true)][string]$AbudShortsPs1Path)
-    $action = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$AbudShortsPs1Path`" local-voice start"
+    param([Parameter(Mandatory = $true)][string]$AbudShared)
+    $launcherPath = Install-LocalVoiceAutoStartLauncher -AbudShared $AbudShared
+    $action = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcherPath`""
+
     Invoke-LocalVoiceNative "schtasks" @("/create", "/tn", $script:LocalVoiceTaskName, "/tr", "powershell.exe $action", "/sc", "onlogon", "/rl", "limited", "/f") | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    if ($LASTEXITCODE -eq 0) {
+        Unregister-LocalVoiceStartupFolderFallback | Out-Null
+        return [ordered]@{ registered = $true; mechanism = "scheduled_task" }
+    }
+
+    if (Register-LocalVoiceStartupFolderFallback -LauncherPath $launcherPath) {
+        return [ordered]@{ registered = $true; mechanism = "startup_folder" }
+    }
+
+    return [ordered]@{ registered = $false; mechanism = "none" }
 }
 
 function Unregister-LocalVoiceAutoStart {
+    param([Parameter(Mandatory = $true)][string]$AbudShared)
     Invoke-LocalVoiceNative "schtasks" @("/delete", "/tn", $script:LocalVoiceTaskName, "/f") | Out-Null
+    Unregister-LocalVoiceStartupFolderFallback | Out-Null
+    $launcherPath = Get-LocalVoiceAutoStartLauncherPath -AbudShared $AbudShared
+    if (Test-Path $launcherPath) { Remove-Item $launcherPath -Force -ErrorAction SilentlyContinue }
     return $true
 }
 
 function Test-LocalVoiceAutoStartRegistered {
     Invoke-LocalVoiceNative "schtasks" @("/query", "/tn", $script:LocalVoiceTaskName) | Out-Null
-    return ($LASTEXITCODE -eq 0)
+    $scheduledTask = ($LASTEXITCODE -eq 0)
+    $startupFolder = Test-Path (Get-LocalVoiceStartupShortcutPath)
+    $mechanism = if ($scheduledTask) { "scheduled_task" } elseif ($startupFolder) { "startup_folder" } else { "none" }
+    return [ordered]@{ scheduledTask = $scheduledTask; startupFolder = $startupFolder; any = ($scheduledTask -or $startupFolder); mechanism = $mechanism }
 }
 
 # ---------------------------------------------------------------------------
@@ -485,7 +584,6 @@ function Invoke-LocalVoiceSetup {
         [Parameter(Mandatory = $true)][string]$AbudDataDir,
         [Parameter(Mandatory = $true)][string]$AppSourceDir,
         [Parameter(Mandatory = $true)][string]$LibRoot,
-        [Parameter(Mandatory = $true)][string]$AbudShortsPs1Path,
         [string]$InternalServiceToken = "",
         [switch]$Repair
     )
@@ -503,6 +601,7 @@ function Invoke-LocalVoiceSetup {
         serviceStarted      = $false
         modelReady          = $false
         autoStartRegistered = $false
+        autoStartMechanism  = "none"
         port                = $null
         baseUrl             = $null
         error               = $null
@@ -541,7 +640,9 @@ function Invoke-LocalVoiceSetup {
         $status = Get-LocalVoiceServiceStatus -Paths $paths
         $result.modelReady = ($status.modelsReady -contains $modelId)
 
-        $result.autoStartRegistered = Register-LocalVoiceAutoStart -AbudShortsPs1Path $AbudShortsPs1Path
+        $autoStart = Register-LocalVoiceAutoStart -AbudShared $AbudShared
+        $result.autoStartRegistered = $autoStart.registered
+        $result.autoStartMechanism = $autoStart.mechanism
     } catch {
         $result.error = $_.Exception.Message
     }

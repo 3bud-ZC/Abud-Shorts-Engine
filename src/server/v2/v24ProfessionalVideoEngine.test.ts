@@ -435,8 +435,37 @@ describe("V2.4 Professional Video Production Engine", () => {
   });
 
   it("blocks professional Auto when no real visual provider exists", async () => {
+    // config.ts's `import "dotenv/config"` loads this repo's real dev .env
+    // (which carries a real PEXELS_API_KEY for the dev stack) as a side
+    // effect of merely importing config - PexelsVisualProvider.getApiKey()
+    // falls back to it, so constructing an "unconfigured" provider with an
+    // empty string here is silently defeated unless it is cleared for this
+    // test, same as the ELEVENLABS_API_KEY isolation elsewhere in this suite.
+    const previousPexelsKey = process.env.PEXELS_API_KEY;
+    delete process.env.PEXELS_API_KEY;
+    try {
+      const registry = new StockProviderRegistry([]);
+      const legacyPexels = new PexelsVisualProvider({ findVideo: vi.fn() } as any, "");
+      const router = new AutoVisualRouter(legacyPexels, [], registry);
+
+      await expect(router.resolveSceneVisual(scene, spec, {
+        orientation: OrientationEnum.portrait,
+        tempDirPath: "/tmp",
+        targetDurationSeconds: 5,
+      })).rejects.toThrow("Professional automatic video needs at least one visual source");
+    } finally {
+      if (previousPexelsKey === undefined) delete process.env.PEXELS_API_KEY;
+      else process.env.PEXELS_API_KEY = previousPexelsKey;
+    }
+  });
+
+  it("fails closed with the canonical error when a configured Pexels provider returns no usable video", async () => {
+    // The provider IS "configured" (a real-shaped key), but its own call
+    // comes back empty/malformed - the invariant under test is that this
+    // never surfaces as a raw property-access crash, regardless of why the
+    // provider failed to produce a result.
     const registry = new StockProviderRegistry([]);
-    const legacyPexels = new PexelsVisualProvider({ findVideo: vi.fn() } as any, "");
+    const legacyPexels = new PexelsVisualProvider({ findVideo: vi.fn().mockResolvedValue(undefined) } as any, "P".repeat(40));
     const router = new AutoVisualRouter(legacyPexels, [], registry);
 
     await expect(router.resolveSceneVisual(scene, spec, {
@@ -444,6 +473,46 @@ describe("V2.4 Professional Video Production Engine", () => {
       tempDirPath: "/tmp",
       targetDurationSeconds: 5,
     })).rejects.toThrow("Professional automatic video needs at least one visual source");
+  });
+
+  it("fails closed with the canonical error when the configured Pexels provider throws", async () => {
+    const registry = new StockProviderRegistry([]);
+    const legacyPexels = new PexelsVisualProvider(
+      { findVideo: vi.fn().mockRejectedValue(new Error("Pexels API is unreachable")) } as any,
+      "P".repeat(40),
+    );
+    const router = new AutoVisualRouter(legacyPexels, [], registry);
+
+    await expect(router.resolveSceneVisual(scene, spec, {
+      orientation: OrientationEnum.portrait,
+      tempDirPath: "/tmp",
+      targetDurationSeconds: 5,
+    })).rejects.toThrow("Professional automatic video needs at least one visual source");
+  });
+
+  it("returns a real scene when the configured Pexels provider succeeds", async () => {
+    const registry = new StockProviderRegistry([]);
+    const legacyPexels = new PexelsVisualProvider(
+      {
+        findVideo: vi.fn().mockResolvedValue({
+          id: "pexels-123",
+          url: "https://videos.pexels.com/real-clip.mp4",
+          width: 1080,
+          height: 1920,
+        }),
+      } as any,
+      "P".repeat(40),
+    );
+    const router = new AutoVisualRouter(legacyPexels, [], registry);
+
+    const result = await router.resolveSceneVisual(scene, spec, {
+      orientation: OrientationEnum.portrait,
+      tempDirPath: "/tmp",
+      targetDurationSeconds: 5,
+    });
+
+    expect(result.url).toBe("https://videos.pexels.com/real-clip.mp4");
+    expect(result.provider).toBe("pexels");
   });
 
   it("normalizes async generated-video lifecycle without requiring synchronous MP4 output", () => {

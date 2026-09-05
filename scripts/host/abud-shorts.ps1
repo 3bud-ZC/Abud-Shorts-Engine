@@ -622,7 +622,7 @@ function Show-LocalVoiceStatus {
     Write-Host "  Service running: $($status.running)"
     Write-Host "  Service healthy: $($status.healthy)"
     Write-Host "  Models ready:    $(if ($status.modelsReady.Count -gt 0) { $status.modelsReady -join ', ' } else { 'none' })"
-    Write-Host "  Auto-start:      $(Test-LocalVoiceAutoStartRegistered)"
+    Write-Host "  Auto-start:      $((Test-LocalVoiceAutoStartRegistered).mechanism)"
     if ($Result -and $Result.error) { Write-Bad "Last setup error: $($Result.error)" }
     Write-Host ""
 }
@@ -638,7 +638,7 @@ function Invoke-LocalVoiceCommand {
         "install" {
             Write-Step "Setting up Local Voice ($LocalVoiceMode)..."
             $result = Invoke-LocalVoiceSetup -Mode $LocalVoiceMode -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
-                -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot -AbudShortsPs1Path $MyInvocation.PSCommandPath `
+                -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot `
                 -InternalServiceToken $token
             if ($result.resolvedMode -ne "SKIP") {
                 Set-EnvValue "LOCAL_VOICE_MODE" $result.resolvedMode
@@ -655,7 +655,7 @@ function Invoke-LocalVoiceCommand {
                 Write-Ok "Resolved mode: $($result.resolvedMode) ($($result.resolutionReason))"
                 if ($result.resolvedMode -ne "SKIP") {
                     Write-Ok "Model: $($result.modelId), ready: $($result.modelReady)"
-                    Write-Ok "Service healthy: $($result.serviceStarted); auto-start registered: $($result.autoStartRegistered)"
+                    Write-Ok "Service healthy: $($result.serviceStarted); auto-start: $($result.autoStartMechanism)"
                 }
             }
         }
@@ -678,14 +678,14 @@ function Invoke-LocalVoiceCommand {
             $mode = Get-EnvValue "LOCAL_VOICE_MODE" "AUTO"
             if ($mode -eq "SKIP" -or $mode -eq "not set") { $mode = "AUTO" }
             $result = Invoke-LocalVoiceSetup -Mode $mode -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
-                -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot -AbudShortsPs1Path $MyInvocation.PSCommandPath `
+                -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot `
                 -InternalServiceToken $token -Repair
             if ($result.error) { Write-Bad "Repair failed: $($result.error)" }
             else { Write-Ok "Repair complete. Resolved mode: $($result.resolvedMode)." }
         }
         "uninstall" {
             Stop-LocalVoiceService -Paths $paths | Out-Null
-            Unregister-LocalVoiceAutoStart | Out-Null
+            Unregister-LocalVoiceAutoStart -AbudShared $AbudShared | Out-Null
             Write-Ok "Local Voice service stopped and auto-start removed."
             Write-Host "      The downloaded model and Python runtime were preserved."
             Write-Host "      To remove them too: Remove-Item -Recurse -Force `"$($paths.RuntimeDir)`", `"$($paths.ModelCacheDir)`""
