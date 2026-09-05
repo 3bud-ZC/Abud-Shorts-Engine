@@ -15,13 +15,20 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.2 + V2.4 Pass 9.11 RC.2 Last-Mile Qualification**
+Version: **2.4.0** — Stage: **General Availability** (GA candidate; GA publication is
+in progress as of this section — see the V2.4-GA record below for the exact, real
+outcome once performed)
 
-Release: **RC.2 QUALIFIED (Pass 9.11) / GA NOT RELEASED.** Both release blockers from
-Pass 9.9-9.10 (Windows Local Voice installer automation; isolated fresh-install and
-v2.3.1→RC.2 upgrade validation) are closed with real evidence — see Pass 9.11 Section
-12. GA (a `v2.4.0` Git tag, GitHub Release, or moving GHCR `stable`) requires a
-separate, explicit owner authorization and was not performed by this pass.
+Release: **RC.2 QUALIFIED (Pass 9.11).** Both release blockers from Pass 9.9-9.10
+(Windows Local Voice installer automation; isolated fresh-install and v2.3.1→RC.2
+upgrade validation) are closed with real evidence — see Pass 9.11 Section 12.
+
+**Owner GA authorization:** **APPROVED.** The owner explicitly authorized V2.4 General
+Availability release. This supersedes the earlier "NOT APPROVED for V2.4" statement
+below, which described the state before RC.2 was qualified and reflected a real
+production incident that Pass 9.9 root-caused and closed (an owner login-username
+mismatch, not a product defect) — that incident is historical and resolved, not a
+current blocker.
 
 **Local Voice (VoiceTut) human acceptance** (established in Pass 9.9 Section 1, restated
 here as current fact, not re-verified beyond confirming the underlying artifacts are
@@ -33,11 +40,12 @@ alternative a customer may explicitly select, never a silent default or requirem
 
 Schema: **2.13.0** (unchanged from v2.3.0 — no migration)
 
-**Owner release approval:** NOT APPROVED for V2.4. The v2.3.1 stable release
-approval remains historical only. V2.4 is blocked after the real production
-failure on 2026-09-02 and must not be merged, tagged, published, promoted to
-stable, or called released until a post-fix production retry is explicitly
-authorized and passes.
+**Historical note (superseded by the GA authorization above):** an earlier state of
+this file recorded "Owner release approval: NOT APPROVED for V2.4" following a real
+production failure on 2026-09-02, and said V2.4 must not be merged, tagged, published,
+promoted to stable, or called released until an explicit retry was authorized. Pass 9.9
+root-caused and closed that incident; Pass 9.10/9.11 qualified RC.2 with real evidence;
+the owner has now explicitly authorized GA. That older constraint no longer applies.
 
 V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2. Pass 9.8 executed on the target PC (Intel i7-12700K, RTX 4070 12GB, 32GB RAM): preserved the pre-existing PC repository untouched, cloned fresh from `origin/v2.4-professional-video-engine` at the exact handoff SHA, downloaded and verified the real VoiceTut-TTS inference weights (2.45GB) and all 17 real reference-speaker audio files, proved real GPU inference and real Whisper transcription against that real audio, fixed four real defects found only by exercising the real pipeline end to end (a VoiceTut API kwarg mismatch; two independent Windows/Linux whisper.cpp executable-layout bugs, one of which silently crashed the whole Node process instead of raising a catchable error; a one-shot audio stream being read twice in the render pipeline, which is what an ElevenLabs-shaped error classifier had been mislabeling; and a truth-safety CTA fallback that hardcoded a website-themed description for every business vertical), and produced one real Arabic Egyptian golden video through the normal product pipeline that passes every acceptance threshold. Pass 9.8 consumed 0 paid provider calls, did not touch Postgres/n8n data, and did not qualify RC.2. Pass 9.9 closed a real production-blocking authentication defect (the owner's login attempt used a username that did not match the configured account — not a password or hash failure), built a first local owner-account lifecycle (change username/password, session listing/revocation, a local-only recovery command), fixed a Windows Python-launcher bug and three real instances of stale "ElevenLabs is required for Arabic narration" UI copy left over from before VoiceTut/KemeTone became the default local route, bumped the version to 2.4.0-rc.2, rebuilt the candidate image from the exact committed source, and built/verified a clean RC.2 client package. Pass 9.9 consumed 0 paid provider calls, made 0 ElevenLabs calls, and did **not** qualify RC.2: fresh-install and v2.3.1→RC.2 upgrade validation could not be executed (no isolated second environment was available), and the Windows installer still does not automate native VoiceTut setup (a customer must run `scripts/install-local-voice.ps1` manually) — both remain open before RC.2 can be called qualified. Pass 9.10 productized the Windows Local Voice lifecycle end to end (hardware detection, AUTO/HIGH_QUALITY/LIGHTWEIGHT/SKIP, a product-owned Python runtime, host-native service lifecycle, no manual script) and ran real isolated fresh-install and v2.3.1 upgrade rehearsals; RC.2 remained blocked pending a still-completing fresh runtime install, a real GHCR candidate image, and one unrelated pre-existing test failure. Pass 9.11 confirmed the fresh runtime completed for real, added a Startup-folder autostart fallback for machines where Task Scheduler denies task creation (this machine's own case), root-caused and fixed the pre-existing `AutoVisualRouter` fail-closed defect (with real, verified tests, not a waiver), and fixed the GHCR Candidate workflow's version gate to accept a pre-release for candidate builds while keeping promote/retag-stable strictly plain-version-only.
 
