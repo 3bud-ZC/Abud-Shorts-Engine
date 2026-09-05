@@ -10574,3 +10574,167 @@ versions). Remaining before RC.2 can be called qualified:
    this release.
 4. Auto-start (`schtasks`) could not be verified as functioning on this specific test
    machine (Section 3); verify on a clean machine before relying on it for GA.
+
+## V2.4 Pass 9.11: RC.2 Last-Mile Qualification
+
+Starting HEAD: `ef22f58f1e7eabe600722bb9edd255b2bf15732a` (verified against local HEAD,
+`origin/v2.4-professional-video-engine`, and the SHA specified before any change).
+Candidate/status SHA after this pass's fixes: `055500b7099dbaad3021373a44967436e359201c`.
+
+### 1. Fresh Local Voice Runtime — Confirmed Complete
+
+The genuinely-fresh runtime install left in progress at the end of Pass 9.10 completed
+for real. Verified directly, not inferred from installer output alone:
+
+- `python.exe -c "import torch, voicetut_tts; print(torch.__version__, torch.cuda.is_available())"`
+  against the isolated environment's own venv → `torch 2.5.1+cu121 cuda True` (real,
+  matches the pinned Pass 9.8 version exactly).
+- `runtime-manifest.json` at `C:\AbudTest\rc2-fresh\shared\runtime\local-tts\` shows
+  `"source": "fresh_install"` (not a reuse) with `installedAt` matching the real
+  timestamp.
+- `GET http://127.0.0.1:8765/health` → `ok: true`, `cuda_available: true`,
+  `gpu_name: "NVIDIA GeForce RTX 4070"`, `models_ready: ["voicetut"]`.
+- Installer's own report: `Model: voicetut, ready: True`, all 23 model files matched
+  `[✓] Existing:` (the already-verified 2.45 GB cache was reused, not re-downloaded).
+
+### 2. Windows Autostart — Fallback Implemented, Verified For Real
+
+Root design: a stable launcher script (`shared\bin\start-local-voice.ps1`, regenerated
+on every install/repair) that embeds the exact install root it was registered for and
+re-reads `current.txt` every time it runs, so whichever autostart mechanism is
+registered keeps starting whichever release is actually current - including after an
+update - without ever needing to be re-registered. `Register-LocalVoiceAutoStart` tries
+a per-user "at logon" scheduled task first; if `schtasks` is denied (this machine's own
+Pass 9.10 finding, reproduced again here), it falls back to a Startup-folder shortcut
+(`%APPDATA%\...\Startup\ABUD Shorts - Local Voice.lnk`) - no admin, no stored password,
+either way.
+
+A real bug was found and fixed while wiring this in: `install.ps1` did not stop the
+host-native Local Voice service before replacing a release directory of the same
+version, and that service's own working directory can be inside
+`services\local-tts` - Windows refused to remove the directory
+(`Remove-Item : ... being used by another process`) the first time this was actually
+exercised by re-running the real installer. Fixed by stopping Local Voice before the
+release-directory swap.
+
+**Real, live verification performed** (not simulated):
+
+1. Confirmed exactly one Startup-folder shortcut exists after multiple real installer
+   runs over the same install root (idempotent, no duplicates).
+2. Stopped the running service via `abud-shorts.ps1 local-voice stop`; confirmed
+   `/health` unreachable.
+3. Invoked the *exact* registered command Windows would run at logon (read the real
+   `.lnk`'s `TargetPath`/`Arguments` and executed them directly).
+4. Confirmed `/health` returned healthy again (`models_ready: ["voicetut"]`) and exactly
+   one uvicorn process tree was running (`Win32_Process` query for every process with
+   `uvicorn` in its command line: one parent/child pair, one logical service - the
+   uv-created venv's `pythonw.exe` is itself a thin relauncher for the base interpreter
+   on this machine, which is why it appears as two OS processes for one service; this
+   was checked and is not a duplicate instance).
+5. Re-ran registration again; shortcut count stayed at exactly one.
+
+5 new Pester tests added (real, against this machine's actual Task Scheduler denial -
+not mocked): registers via *some* working mechanism, idempotent re-registration, correct
+quoting for an install root containing a space, unregister removes both mechanisms and
+the launcher while preserving the model cache/runtime, and the launcher never bakes in
+today's release path. 21/21 Pester tests passing.
+
+**Not verified by this pass**: whether the *scheduled-task* mechanism itself would
+succeed on a machine where Task Scheduler does not deny this account - only the fallback
+path has been exercised for real, because that is the condition this specific test
+machine is actually in.
+
+### 3. AutoVisualRouter Fail-Closed Fix (root-caused, not waived)
+
+Root cause, traced exactly: `AutoVisualRouter.resolveStockSceneVisual`'s legacy-Pexels
+fallback (`src/server/v2/visual-providers/router.ts`) called
+`this.pexelsProvider.fetchOrGenerateScene(...)` and read `legacy.url`/`legacy.provider`
+without checking the result was usable. `PexelsVisualProvider.fetchOrGenerateScene`
+(`pexelsVisualProvider.ts`) likewise never validated `findVideo()`'s return value.
+Given a provider that reports itself "configured" but whose underlying call returns
+`undefined`/malformed data, this crashed with a raw `Cannot read properties of undefined
+(reading 'url')` instead of degrading to the documented
+"Professional automatic video needs at least one visual source" error.
+
+A second, compounding cause: the failing test constructed a provider with an empty-string
+API key intending it to be "unconfigured", but `src/config.ts`'s `import "dotenv/config"`
+loads this repository's real development `.env` (which carries a real `PEXELS_API_KEY`
+for the local Docker stack) as a side effect of merely importing config - which nearly
+every test file does transitively - so `PexelsVisualProvider.getApiKey()`'s
+`process.env.PEXELS_API_KEY` fallback made the "unconfigured" test double look
+configured, forcing execution into the exact crashing branch. Both are fixed:
+
+- `pexelsVisualProvider.ts`: validates `video`/`video.url` after `findVideo()`, throwing
+  a clear internal error on a malformed result instead of letting a later `.url` access
+  crash.
+- `router.ts`: wraps the legacy-Pexels fallback in try/catch; any failure (malformed
+  result or thrown error) now falls through to the canonical
+  "needs at least one visual source" error instead of propagating.
+- The test now clears `PEXELS_API_KEY` for its own scope only (restored after), matching
+  the `ELEVENLABS_API_KEY` isolation pattern already used elsewhere in this suite.
+- 3 new tests added: malformed/undefined provider result, a thrown provider error, and a
+  genuine success case (so the fixed boundary is covered in both directions, not just the
+  failure case).
+
+Targeted file first (`v24ProfessionalVideoEngine.test.ts`): **22/22 passing** (19
+original + 3 new). Related suites (`visualProviders.test.ts`, `Pexels.test.ts`): **8/8
+passing.** Full suite afterward: Section 6.
+
+### 4. GHCR Candidate Workflow — Pre-release Gate Fixed, Promotion Safety Kept Strict
+
+`.github/workflows/ghcr-candidate.yml`'s identity-resolution step required
+`PRODUCT_VERSION` to match `^[0-9]+\.[0-9]+\.[0-9]+$` exactly - it could never build a
+candidate for *any* pre-release version, including this release's own `2.4.0-rc.2` (Pass
+9.10's dispatched run `33948241648` failed here before touching Docker at all). Fixed
+narrowly:
+
+- `candidate` mode now accepts an optional pre-release suffix
+  (`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$` - the identical pattern
+  `scripts/release/package-client.mjs` already validates client package versions
+  against, for consistency rather than inventing a new rule).
+- `promote`/`retag-stable` - the only modes that move real customer-facing tags
+  (`:<version>`, `:stable`) - keep the original strict plain-version-only requirement
+  and are explicitly refused with a clear error if `PRODUCT_VERSION` is a pre-release,
+  even one candidate mode already built. This is a deliberate, separate check, not a
+  relaxation of the general syntax check.
+- 3 new tests added to `src/test/clientDelivery.test.ts` asserting the gate exists, is
+  mode-conditional (not a blanket relaxation), and that the strict plain-version pattern
+  for promote/retag-stable is textually distinct from the permissive one for candidate.
+- Workflow YAML re-verified: header comment corrected to describe the new (accurate)
+  behavior; the edited bash block's real syntax verified independently (`bash -n` against
+  the extracted script with GitHub's `${{ }}` template expressions substituted out, since
+  those are not real bash syntax and would otherwise produce false positives).
+
+**Operational finding, not a code defect**: the first dispatch attempt of the *fixed*
+workflow (run `33950307186`, via `gh workflow run` without `--ref`) still failed with the
+identical pre-fix error. Cause: `gh workflow run` resolves which version of the workflow
+*definition* to execute from the default branch (`main`) unless `--ref` is passed
+explicitly - the `source_ref` *input* only controls what the job checks out to build, not
+which copy of the `.yml` GitHub actually runs. Re-dispatched with
+`--ref v2.4-professional-video-engine` (run `33970204416`); "Resolve candidate identity"
+passed immediately. Recorded here so this is not repeated.
+
+### 5. Full Local Gate (after all fixes above)
+
+Reproduced the established `ABUD_MODEL_CACHE_DIR`-redirect method for this machine.
+
+- `npm run typecheck`: **PASS**, 0 errors.
+- `npx vitest run`: **73/73 test files, 1115/1115 tests, 0 failures.** (1109 baseline +
+  6 net new: 3 in `v24ProfessionalVideoEngine.test.ts`, 3 in `clientDelivery.test.ts`.)
+  The one pre-existing failure carried over from Pass 9.10 is fixed and verified, not
+  waived or weakened.
+- Python: **PASS**, 8/8.
+- `npm run build`: **PASS.**
+- PowerShell/Pester Local Voice lifecycle tests: **21/21 passing** (16 baseline + 5 new
+  real autostart tests).
+
+### 6. GHCR Candidate Dispatch (in progress at time of writing)
+
+Committed `055500b7099dbaad3021373a44967436e359201c` on
+`v2.4-professional-video-engine`, pushed. Dispatched the real GHCR Candidate workflow
+(`mode=candidate`, `expected_sha=055500b7...`, `source_ref=v2.4-professional-video-engine`,
+`--ref v2.4-professional-video-engine`) - run `33970204416`. Identity resolution passed;
+dependency install, quality-runtime setup, and the full typecheck/vitest/build gate were
+running inside that CI job at the time this section was written. This section will be
+updated with the real completed outcome (image digest, revision label verification,
+isolated upgrade rehearsal result) once that run finishes - not fabricated in advance.
