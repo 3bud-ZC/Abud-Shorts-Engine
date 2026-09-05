@@ -419,17 +419,18 @@ export const SetupWizard: React.FC = () => {
                 Voice &amp; AI
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                ElevenLabs is required for Arabic narration. Everything on this step is optional and can be added
-                later from Integrations.
+                Arabic, Egyptian Arabic and MSA narration runs locally by default (VoiceTut or KemeTone, set up
+                after this wizard from Providers). ElevenLabs is an optional premium alternative. Everything on
+                this step is optional and can be added later from Integrations.
               </Typography>
               <TextField
-                label="ElevenLabs API key (required for Arabic narration)"
+                label="ElevenLabs API key (optional premium Arabic/multilingual voice)"
                 value={elevenLabsKey}
                 onChange={(e) => setElevenLabsKey(e.target.value)}
                 type="password"
                 fullWidth
                 size="small"
-                helperText="Stored encrypted. Skip if you only produce English videos."
+                helperText="Stored encrypted. Skip to use the local voice route instead."
               />
               <TextField
                 label="Google Gemini API key (optional)"

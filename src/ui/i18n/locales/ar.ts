@@ -187,6 +187,12 @@ export const ar: TranslationCatalog = {
   "create.readiness.setupNotRunnable": "إعداد الإنتاج المختار غير جاهز للتشغيل بعد.",
   "create.voiceGuidance.arabic":
     "يتم إنتاج التعليق الصوتي بالعربية والمصرية والفصحى محليًا افتراضيًا عبر VoiceTut أو KemeTone. يظل ElevenLabs متاحًا كخيار مدفوع صريح؛ وتقيّم أنت جودة الصوت في المزوّدون - استوديو الصوت.",
+  "create.voiceGuidance.localVoiceSetupRequired":
+    "يلزم إعداد صوت عربي مصري محلي. ثبّت VoiceTut لجودة محلية عالية أو KemeTone لجودة محلية خفيفة - أو اختر ElevenLabs كخيار مدفوع صريح من المزوّدون.",
+  "create.voiceGuidance.openLocalVoiceSetup": "إعداد الصوت المحلي",
+  "create.voiceGuidance.elevenlabsNotConfigured":
+    "ElevenLabs غير مُعدّ. أضف مفتاح API الخاص بـ ElevenLabs في المزوّدون، أو ارجع إلى الوضع التلقائي لاستخدام الصوت المحلي بدلاً من ذلك.",
+  "create.voiceGuidance.configureElevenlabs": "إعداد ElevenLabs",
 
   // ----------------------------------------------------------- productions
   "productions.title": "الإنتاجات",
@@ -710,7 +716,7 @@ export const ar: TranslationCatalog = {
   "providers.voiceLab.browseVoices": "تصفّح الأصوات",
   "providers.voiceLab.open": "مختبر الصوت",
   "providers.voiceLab.needsKey":
-    "ElevenLabs مطلوب للتعليق الصوتي العربي. أضِف مفتاح API قبل تجربة الأصوات.",
+    "يلزم مفتاح API الخاص بـ ElevenLabs لتجربة أصوات ElevenLabs هنا. التعليق الصوتي العربي نفسه يعتمد افتراضيًا على أصوات VoiceTut/KemeTone المحلية ولا يتطلب ElevenLabs.",
   "providers.voiceLab.auditionOnly":
     "تجارب قصيرة فقط — لا يُنتَج أي فيديو. اختر الصوت الذي تفضّله بالاستماع؛ المحرّك لا يرتّب الأصوات ولا يدّعي أن أيًّا منها مصري.",
   "providers.voiceLab.loadFailed": "تعذّر الوصول إلى استكشاف أصوات ElevenLabs.",

@@ -294,6 +294,7 @@ export class VoiceRegistry {
     warnings: string[];
     blocked?: boolean;
     blockedReason?: string;
+    blockedReasonCode?: "elevenlabs_not_configured" | "local_voice_setup_required";
   }> {
     const provider = request.provider || "auto";
     const language = request.language === "auto" ? undefined : request.language;
@@ -309,6 +310,7 @@ export class VoiceRegistry {
             warnings: [ARABIC_ELEVENLABS_REQUIRED_MESSAGE],
             blocked: true,
             blockedReason: ARABIC_ELEVENLABS_REQUIRED_MESSAGE,
+            blockedReasonCode: "elevenlabs_not_configured",
           };
         }
         const voices = await this.elevenlabsProvider.listVoices("ar").catch(() => []);
@@ -328,6 +330,7 @@ export class VoiceRegistry {
           warnings: [ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE],
           blocked: true,
           blockedReason: ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+          blockedReasonCode: "local_voice_setup_required",
         };
       }
       if (provider === "auto" && !this.voiceTutProvider.isConfigured() && this.kemeToneProvider.isConfigured()) {
@@ -344,6 +347,7 @@ export class VoiceRegistry {
           warnings: [ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE],
           blocked: true,
           blockedReason: ARABIC_LOCAL_VOICE_SETUP_REQUIRED_MESSAGE,
+          blockedReasonCode: "local_voice_setup_required",
         };
       }
       return { voices: await selected.listVoices(), resolvedProvider: selected.id as VoiceProviderId, warnings };

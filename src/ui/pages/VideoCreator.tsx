@@ -331,6 +331,7 @@ const VideoCreator: React.FC = () => {
   const [resolvedVoiceProvider, setResolvedVoiceProvider] = useState<string>("auto");
   const [voiceWarnings, setVoiceWarnings] = useState<string[]>([]);
   const [arabicVoiceBlocked, setArabicVoiceBlocked] = useState(false);
+  const [arabicVoiceBlockedReasonCode, setArabicVoiceBlockedReasonCode] = useState<string | null>(null);
   const [captionEnabled, setCaptionEnabled] = useState(true);
   const [captionStyle, setCaptionStyle] = useState<string>("social_ad");
 
@@ -523,6 +524,7 @@ const VideoCreator: React.FC = () => {
         setResolvedVoiceProvider(response.data.resolvedProvider || voiceProvider);
         setVoiceWarnings(response.data.warnings || []);
         setArabicVoiceBlocked(Boolean(response.data.blocked));
+        setArabicVoiceBlockedReasonCode(response.data.blockedReasonCode || null);
         // Auto-select deliberately stays empty. An empty voice ID is what lets
         // the server apply the persisted human default from the Voice Lab;
         // pinning the first voice in the account list would send an explicit
@@ -736,6 +738,18 @@ const VideoCreator: React.FC = () => {
   // ElevenLabs configuration is never required on its own.
   const arabicBlocked = Boolean(isArabicMode && arabicVoiceBlocked);
 
+  function arabicBlockedMessage(): string {
+    return arabicVoiceBlockedReasonCode === "elevenlabs_not_configured"
+      ? t("create.voiceGuidance.elevenlabsNotConfigured")
+      : t("create.voiceGuidance.localVoiceSetupRequired");
+  }
+
+  function arabicBlockedActionLabel(): string {
+    return arabicVoiceBlockedReasonCode === "elevenlabs_not_configured"
+      ? t("create.voiceGuidance.configureElevenlabs")
+      : t("create.voiceGuidance.openLocalVoiceSetup");
+  }
+
   function voiceProviderGuidance(): string {
     if (isArabicMode) {
       return t("create.voiceGuidance.arabic");
@@ -847,7 +861,7 @@ const VideoCreator: React.FC = () => {
       return;
     }
     if (arabicBlocked) {
-      setError("ElevenLabs is required for Arabic narration. Configure ElevenLabs in Providers before creating an Arabic video.");
+      setError(arabicBlockedMessage());
       return;
     }
     if (selectedProviderUnavailable) {
@@ -1634,7 +1648,7 @@ const VideoCreator: React.FC = () => {
                       }}
                     >
                       <MenuItem value="auto">
-                        {isArabicMode ? "Auto - ElevenLabs (Arabic production)" : "Auto - safest local provider"}
+                        {isArabicMode ? "Auto - VoiceTut/KemeTone local voice" : "Auto - safest local provider"}
                       </MenuItem>
                       <MenuItem value="elevenlabs">ElevenLabs - Arabic production / multilingual</MenuItem>
                       <MenuItem value="kokoro" disabled={isArabicMode}>Kokoro - English local / free</MenuItem>
@@ -1924,11 +1938,11 @@ const VideoCreator: React.FC = () => {
               severity="error"
               action={
                 <Button size="small" variant="contained" onClick={() => navigate("/providers")}>
-                  Configure ElevenLabs
+                  {arabicBlockedActionLabel()}
                 </Button>
               }
             >
-              ElevenLabs is required for Arabic narration. Arabic production is blocked until an ElevenLabs API key is configured in Providers.
+              {arabicBlockedMessage()}
             </Alert>
           )}
           <Alert severity={selectedProviderUnavailable && !arabicBlocked ? "warning" : "info"}>
