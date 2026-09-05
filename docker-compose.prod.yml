@@ -96,39 +96,19 @@ services:
         aliases:
           - n8n
 
-  abud-shorts-local-tts:
-    image: ${ABUD_LOCAL_TTS_IMAGE:-ghcr.io/3bud-zc/abud-shorts-local-tts:2.4.0}
-    container_name: ${ABUD_CONTAINER_PREFIX:-abud-shorts}-local-tts
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "5"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      PORT: 8765
-      DOCKER: "true"
-      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must be set by the installer}
-      ABUD_MODEL_CACHE_DIR: /models
-      LOCAL_TTS_IDLE_UNLOAD_SECONDS: ${LOCAL_TTS_IDLE_UNLOAD_SECONDS:-600}
-    volumes:
-      - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}/models:/models
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8765/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-    networks:
-      abud-shorts-v2:
-        aliases:
-          - local-tts
+  # Local Voice (VoiceTut/KemeTone) is host-native, not containerized: it needs
+  # real NVIDIA/CUDA access, which Docker Desktop for Windows does not reliably
+  # pass through for arbitrary consumer GPUs. install.ps1 and
+  # scripts\host\abud-shorts.ps1's `local-voice` command run it directly on
+  # the Windows host (see scripts\host\local-voice-lib.ps1) and the app/
+  # render-worker below reach it over host.docker.internal. A previous
+  # revision of this file defined a containerized abud-shorts-local-tts
+  # service with a hard `driver: nvidia` device reservation and a hard
+  # depends_on from app/render-worker - that made a from-scratch customer
+  # install fail outright on any machine without NVIDIA Container Toolkit
+  # configured, since the service could never start and both dependents
+  # would wait on it forever. Removed; nothing here ever ran real inference
+  # (its own Dockerfile has no torch/voicetut_tts either).
 
   # The render worker and the application are the same immutable image running
   # in two roles, which is what SERVICE_ROLE already selects. One image to pull,
@@ -160,22 +140,33 @@ services:
       DEV: "false"
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
-      # Arabic narration is ElevenLabs only, configured from the app UI and held
-      # encrypted in the provider vault. This variable is an override, not the
-      # normal route.
-      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://local-tts:8765}
+      # Local Voice (VoiceTut/KemeTone) is the default Arabic route and runs
+      # host-native on Windows (see the note above abud-shorts-render-worker);
+      # host.docker.internal is how a container reaches it. ElevenLabs is an
+      # optional premium alternative, configured from the app UI and held
+      # encrypted in the provider vault - never a silent fallback.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:8765}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       CONCURRENCY: ${CONCURRENCY:-1}
       VIDEO_CACHE_SIZE_IN_BYTES: ${VIDEO_CACHE_SIZE_IN_BYTES:-2097152000}
     volumes:
       - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}:/app/data
+      # LocalModelManager checks Local Voice model readiness from this
+      # filesystem view (metadata.json), not from a live call to the
+      # host-native service, so this must be the same physical directory
+      # install.ps1's Local Voice setup writes the model cache into.
+      - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}/models:/models
     entrypoint: ["sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3125/health >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 20
+    extra_hosts:
+      # Docker Desktop for Windows already resolves this; explicit on native
+      # Linux Docker Engine (>=20.10), which also loads this same compose file.
+      - "host.docker.internal:host-gateway"
     networks:
       abud-shorts-v2:
         aliases:
@@ -197,13 +188,15 @@ services:
         condition: service_started
       abud-shorts-render-worker:
         condition: service_started
-      abud-shorts-local-tts:
-        condition: service_started
     environment:
       SERVICE_ROLE: app
       V2_ENABLED: "true"
       PORT: 3123
-      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://local-tts:8765}
+      # Local Voice is host-native (see the note above abud-shorts-render-worker)
+      # and is never a hard startup dependency: if it is not installed or not
+      # reachable, Arabic jobs report Local Voice setup is required instead of
+      # blocking the whole application from starting.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:8765}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
@@ -243,12 +236,17 @@ services:
       - "${HOST_PORT:-3130}:3123"
     volumes:
       - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}:/app/data
+      # Same physical directory as render-worker's /models mount - see the
+      # comment there.
+      - ${ABUD_DATA_DIR:?ABUD_DATA_DIR must be set by the installer}/models:/models
     entrypoint: ["sh", "-c", "if [ ! -f /app/data/libs/whisper/models/ggml-small.bin ]; then rm -rf /app/data/libs/whisper && mkdir -p /app/data/libs && cp -R /app/bootstrap/whisper /app/data/libs/whisper; fi && node dist/index.js"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3123/health >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 20
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       abud-shorts-v2:
         aliases:

@@ -15,11 +15,36 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Write-TextFile {
+    param([string]$Path, [string]$Content)
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 if (-not $InstallRoot) { $InstallRoot = Join-Path $env:ProgramData "AbudShorts" }
 $AbudShared      = Join-Path $InstallRoot "shared"
 $AbudDataDir     = Join-Path $AbudShared "data"
 $AbudEnvFile     = Join-Path $AbudShared "config\.env"
 $AbudCurrentFile = Join-Path $InstallRoot "current.txt"
+
+# Local Voice is host-native, so it is never removed by `docker compose down`
+# below - it has to be stopped explicitly, always, or an uninstall (even the
+# non-destructive default) leaves an orphaned python process and a scheduled
+# task that keeps relaunching it after every future login.
+$localVoiceLibPath = if (Test-Path $AbudCurrentFile) {
+    Join-Path (Join-Path (Get-Content $AbudCurrentFile -Raw).Trim() "scripts\host") "local-voice-lib.ps1"
+} else { Join-Path $PSScriptRoot "scripts\host\local-voice-lib.ps1" }
+if (Test-Path $localVoiceLibPath) {
+    . $localVoiceLibPath
+    try {
+        $lvPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port 8765
+        Stop-LocalVoiceService -Paths $lvPaths | Out-Null
+        Unregister-LocalVoiceAutoStart | Out-Null
+    } catch { }
+}
 
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "  ABUD Shorts Engine - Uninstaller" -ForegroundColor Cyan
@@ -61,7 +86,9 @@ if (-not $RemoveData) {
     Write-Host "    Database                    Docker volume ${ComposeProject}_abud-shorts-postgres-data"
     Write-Host "    Backups                     $(Join-Path $AbudShared 'backups')"
     Write-Host "    Configuration and secrets   $(Join-Path $AbudShared 'config')"
+    Write-Host "    Local Voice model + runtime  $(Join-Path $AbudShared 'runtime') , $(Join-Path $AbudDataDir 'models')"
     Write-Host ""
+    Write-Host "  Local Voice was stopped and no longer starts automatically at login."
     Write-Host "  Reinstalling over this directory picks everything up again."
     Write-Host "  To erase all of it permanently: .\uninstall.ps1 -RemoveData"
     Write-Host "=================================================================" -ForegroundColor Cyan

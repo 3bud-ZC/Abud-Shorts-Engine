@@ -62,9 +62,17 @@ export const PACKAGE_INCLUDE = [
   "scripts/host/abud-shorts.sh",
   "scripts/host/abud-update.sh",
   "scripts/host/abud-shorts.ps1",
+  "scripts/host/local-voice-lib.ps1",
+  "scripts/install-local-voice.ps1",
+  "scripts/install-local-voice.sh",
   "docs/UPDATING.md",
   "docs/SERVER_INSTALL.md",
   "integrations/n8n",
+  // The Local Voice (VoiceTut/KemeTone) FastAPI service source. install.ps1
+  // and abud-shorts.ps1's `local-voice` command run this host-native via the
+  // Python runtime local-voice-lib.ps1 installs - it is code only (no model
+  // weights, no venv: both are forbidden below and live outside the package).
+  "services/local-tts",
 ];
 
 /**
@@ -90,6 +98,13 @@ export const PACKAGE_FORBIDDEN_PATTERNS = [
   /(^|[\\/])(vault|provider-vault)\.(db|sqlite3?)$/i,
   /(^|[\\/])[^\\/]*n8n-credentials[^\\/]*\.json$/i,
   /(^|[\\/])[^\\/]*(secret|credential|token|apikey|api-key)[^\\/]*\.(json|txt|yaml|yml)$/i,
+  // The Local Voice Python runtime is product-owned and lives outside the
+  // package (see local-voice-lib.ps1): a developer .venv here is a multi-
+  // gigabyte CUDA/torch install that must never be copied into a release.
+  /(^|[\\/])\.venv([\\/]|$)/i,
+  /(^|[\\/])__pycache__([\\/]|$)/i,
+  /(^|[\\/])\.pytest_cache([\\/]|$)/i,
+  /\.(safetensors|pth|pt)$/i,
 ];
 
 /** True when this path must never appear in a client package. */

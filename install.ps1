@@ -30,7 +30,14 @@ param(
     # with a real one on the same machine.
     [string]$ComposeProject = "abud-shorts",
     [switch]$NoShortcuts,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    # AUTO detects hardware and picks the best supported Local Voice option.
+    # HIGH_QUALITY/LIGHTWEIGHT force VoiceTut/KemeTone respectively; SKIP
+    # installs the product without any local Arabic voice (the app then
+    # truthfully reports Local Voice setup is required - it never silently
+    # falls back to a paid provider).
+    [ValidateSet("AUTO", "HIGH_QUALITY", "LIGHTWEIGHT", "SKIP")]
+    [string]$LocalVoice = "AUTO"
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,10 +106,17 @@ function Invoke-Docker {
     }
 }
 
+# The Local Voice lifecycle (hardware detection, runtime/model install, the
+# host-native service, auto-start) is one implementation shared with
+# scripts\host\abud-shorts.ps1's `local-voice` command - see
+# scripts\host\local-voice-lib.ps1. Write-TextFile above is defined before
+# this dot-source, which is the contract that file documents.
+. (Join-Path $PackageDir "scripts\host\local-voice-lib.ps1")
+
 # ---------------------------------------------------------------------------
 # 1. Docker
 # ---------------------------------------------------------------------------
-Write-Host "[1/9] Checking Docker..." -ForegroundColor Yellow
+Write-Host "[1/10] Checking Docker..." -ForegroundColor Yellow
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Fail "Docker Desktop is not installed. Install it from https://www.docker.com/products/docker-desktop/ and run this installer again."
 }
@@ -117,7 +131,7 @@ Write-Host "      Docker is running." -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # 2. Disk
 # ---------------------------------------------------------------------------
-Write-Host "[2/9] Checking disk space..." -ForegroundColor Yellow
+Write-Host "[2/10] Checking disk space..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 $driveLetter = (Split-Path -Qualifier $InstallRoot).TrimEnd(":")
 $freeGb = [math]::Round((Get-PSDrive -Name $driveLetter).Free / 1GB, 1)
@@ -127,7 +141,7 @@ Write-Host "      $freeGb GB available." -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # 3. Address
 # ---------------------------------------------------------------------------
-Write-Host "[3/9] Checking the address this installation will serve..." -ForegroundColor Yellow
+Write-Host "[3/10] Checking the address this installation will serve..." -ForegroundColor Yellow
 $portBusy = $false
 try {
     $probe = New-Object System.Net.Sockets.TcpClient
@@ -172,7 +186,7 @@ if (-not $PublicUrl) {
 # ---------------------------------------------------------------------------
 # 4. Release identity
 # ---------------------------------------------------------------------------
-Write-Host "[4/9] Reading this release..." -ForegroundColor Yellow
+Write-Host "[4/10] Reading this release..." -ForegroundColor Yellow
 $releaseJsonPath = Join-Path $PackageDir "release.json"
 if (-not (Test-Path $releaseJsonPath)) {
     Fail "release.json is missing. This does not look like an ABUD Shorts client package."
@@ -188,7 +202,7 @@ Write-Host "      Version $ReleaseVersion ($ReleaseChannel)" -ForegroundColor Gr
 # ---------------------------------------------------------------------------
 # 5. The application image: offline archive first, otherwise pull
 # ---------------------------------------------------------------------------
-Write-Host "[5/9] Preparing the application..." -ForegroundColor Yellow
+Write-Host "[5/10] Preparing the application..." -ForegroundColor Yellow
 $offlineArchive = $null
 $imagesDir = Join-Path $PackageDir "images"
 if (Test-Path $imagesDir) {
@@ -228,7 +242,7 @@ if ($offlineArchive) {
 # ---------------------------------------------------------------------------
 # 6. Persistent layout
 # ---------------------------------------------------------------------------
-Write-Host "[6/9] Creating the installation..." -ForegroundColor Yellow
+Write-Host "[6/10] Creating the installation..." -ForegroundColor Yellow
 foreach ($dir in @("videos", "thumbnails", "uploads", "cache", "models", "backups", "logs", "updates")) {
     New-Item -ItemType Directory -Path (Join-Path $AbudDataDir $dir) -Force | Out-Null
 }
@@ -250,7 +264,7 @@ Write-Host "      Installed to $ReleaseDir" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 # 7. Configuration and secrets
 # ---------------------------------------------------------------------------
-Write-Host "[7/9] Configuring..." -ForegroundColor Yellow
+Write-Host "[7/10] Configuring..." -ForegroundColor Yellow
 function New-SecretHex([int]$Bytes) {
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     $buffer = New-Object byte[] $Bytes
@@ -293,7 +307,8 @@ SESSION_SECRET=$(New-SecretHex 32)
 PROVIDER_VAULT_MASTER_KEY=$(New-SecretHex 32)
 WEBHOOK_SIGNING_SECRET=whsec_$(New-SecretHex 24)
 
-# Arabic narration is produced by ElevenLabs and configured from the app:
+# Arabic narration defaults to Local Voice (VoiceTut/KemeTone, set up below).
+# ElevenLabs is an optional premium alternative, configured from the app:
 # Providers -> ElevenLabs -> Configure. The key is held encrypted in the
 # provider vault, so editing this file is not required.
 ELEVENLABS_API_KEY=
@@ -334,9 +349,63 @@ PEXELS_API_KEY=
 } | ConvertTo-Json -Depth 6 | ForEach-Object { Write-TextFile (Join-Path $AbudShared "installation.json") $_ }
 
 # ---------------------------------------------------------------------------
-# 8. Start
+# 8. Local Voice (Egyptian Arabic) - hardware detection, runtime/model
+#    install, host-native service, auto-start. A customer never runs
+#    scripts\install-local-voice.ps1 themselves; this is the one place that
+#    does, via the shared lifecycle in scripts\host\local-voice-lib.ps1.
 # ---------------------------------------------------------------------------
-Write-Host "[8/9] Starting ABUD Shorts..." -ForegroundColor Yellow
+Write-Host "[8/10] Setting up Local Voice ($LocalVoice)..." -ForegroundColor Yellow
+if ($LocalVoice -eq "SKIP") {
+    Write-Host "      Skipped by request. Arabic jobs will report Local Voice setup is required" -ForegroundColor Yellow
+    Write-Host "      until it is installed later (Local Voice command, or the app's Providers page)."
+} else {
+    try {
+        $localVoiceAppSource = Join-Path $ReleaseDir "services\local-tts"
+        $localVoiceCliPath = Join-Path $ReleaseDir "scripts\host\abud-shorts.ps1"
+        $tokenLine = Get-Content $AbudEnvFile | Where-Object { $_ -match "^INTERNAL_SERVICE_TOKEN=" } | Select-Object -Last 1
+        $internalToken = if ($tokenLine) { $tokenLine.Substring("INTERNAL_SERVICE_TOKEN=".Length) } else { "" }
+
+        $localVoiceResult = Invoke-LocalVoiceSetup -Mode $LocalVoice -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
+            -AppSourceDir $localVoiceAppSource -LibRoot (Join-Path $ReleaseDir "scripts\host") `
+            -AbudShortsPs1Path $localVoiceCliPath -InternalServiceToken $internalToken
+
+        function Update-EnvLineInstaller([string[]]$Lines, [string]$Key, [string]$Value) {
+            $found = $false
+            $out = foreach ($line in $Lines) {
+                if ($line -match "^$([regex]::Escape($Key))=") { $found = $true; "$Key=$Value" } else { $line }
+            }
+            if (-not $found) { $out = @($out) + "$Key=$Value" }
+            return $out
+        }
+        $envLines = Get-Content $AbudEnvFile
+        $envLines = Update-EnvLineInstaller $envLines "LOCAL_VOICE_MODE" $localVoiceResult.resolvedMode
+        if ($localVoiceResult.port) { $envLines = Update-EnvLineInstaller $envLines "LOCAL_TTS_PORT" "$($localVoiceResult.port)" }
+        if ($localVoiceResult.baseUrl) { $envLines = Update-EnvLineInstaller $envLines "LOCAL_TTS_BASE_URL" $localVoiceResult.baseUrl }
+        Write-TextFile $AbudEnvFile (($envLines -join "`r`n") + "`r`n")
+
+        if ($localVoiceResult.error) {
+            Write-Host "      Local High Quality setup failed: $($localVoiceResult.error)" -ForegroundColor Yellow
+            Write-Host "      The rest of ABUD Shorts will still install and start normally." -ForegroundColor Yellow
+            Write-Host "      Retry from the Start Menu: ABUD Shorts - Repair Local Voice." -ForegroundColor Yellow
+            Write-Host "      ElevenLabs is not used automatically; Arabic jobs will report setup is required until this is fixed."
+        } elseif ($localVoiceResult.resolvedMode -eq "SKIP") {
+            Write-Host "      $($localVoiceResult.resolutionReason)" -ForegroundColor Yellow
+        } else {
+            Write-Host "      Mode: $($localVoiceResult.resolvedMode) ($($localVoiceResult.resolutionReason))" -ForegroundColor Green
+            Write-Host "      Model: $($localVoiceResult.modelId), ready: $($localVoiceResult.modelReady)" -ForegroundColor Green
+            Write-Host "      Service healthy: $($localVoiceResult.serviceStarted); starts automatically at login: $($localVoiceResult.autoStartRegistered)" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "      Local High Quality setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "      The rest of ABUD Shorts will still install and start normally." -ForegroundColor Yellow
+        Write-Host "      Retry from the Start Menu: ABUD Shorts - Repair Local Voice." -ForegroundColor Yellow
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 9. Start
+# ---------------------------------------------------------------------------
+Write-Host "[9/10] Starting ABUD Shorts..." -ForegroundColor Yellow
 $env:ABUD_DATA_DIR = $AbudDataDir
 $env:ABUD_RELEASE_DIR = $ReleaseDir
 $env:ABUD_CONTAINER_PREFIX = $ComposeProject
@@ -356,7 +425,8 @@ if (-not $NoShortcuts) {
             @{ Name = "ABUD Shorts - Update";      Cmd = "update";      Desc = "Install the latest version, safely" },
             @{ Name = "ABUD Shorts - Backup";      Cmd = "backup";      Desc = "Create a backup now" },
             @{ Name = "ABUD Shorts - Diagnostics"; Cmd = "diagnostics"; Desc = "Write a support bundle" },
-            @{ Name = "ABUD Shorts - Status";      Cmd = "status";      Desc = "Show system health and version" }
+            @{ Name = "ABUD Shorts - Status";      Cmd = "status";      Desc = "Show system health and version" },
+            @{ Name = "ABUD Shorts - Repair Local Voice"; Cmd = "local-voice repair"; Desc = "Retry Local Voice (Arabic) setup" }
         )
         foreach ($entry in $shortcuts) {
             $link = $shell.CreateShortcut((Join-Path $startMenu "$($entry.Name).lnk"))
@@ -373,7 +443,7 @@ if (-not $NoShortcuts) {
     }
 }
 
-Write-Host "[9/9] Waiting for the system to become ready..." -ForegroundColor Yellow
+Write-Host "[10/10] Waiting for the system to become ready..." -ForegroundColor Yellow
 $ready = $false
 for ($attempt = 0; $attempt -lt 90; $attempt++) {
     try {
@@ -411,13 +481,16 @@ Write-Host "  Application:   $(Friendly (Get-Health "$ComposeProject-app"))"
 Write-Host "  Video Engine:  $(Friendly (Get-Health "$ComposeProject-render-worker"))"
 Write-Host "  Database:      $(Friendly (Get-Health "$ComposeProject-postgres"))"
 Write-Host "  Automation:    $(Friendly (Get-Health "$ComposeProject-n8n"))"
+$localVoiceModeReport = Get-Content $AbudEnvFile | Where-Object { $_ -match "^LOCAL_VOICE_MODE=" } | Select-Object -Last 1
+$localVoiceModeReport = if ($localVoiceModeReport) { $localVoiceModeReport.Substring("LOCAL_VOICE_MODE=".Length) } else { "SKIP" }
+Write-Host "  Local Voice:   $localVoiceModeReport$(if ($localVoiceModeReport -eq 'SKIP') { ' (Arabic jobs need setup - see the Repair Local Voice shortcut)' })"
 Write-Host "  URL:           $PublicUrl"
 Write-Host ""
 Write-Host "  Next step - open this address and create your administrator account:" -ForegroundColor Yellow
 Write-Host "      $PublicUrl/setup" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Day-to-day, use the Start Menu shortcuts under 'ABUD Shorts':"
-Write-Host "      ABUD Shorts - Status, Update, Backup, Diagnostics"
+Write-Host "      ABUD Shorts - Status, Update, Backup, Diagnostics, Repair Local Voice"
 Write-Host ""
 if (-not $ready) {
     Write-Host "  The system is taking longer than usual to start. Check it with the Status shortcut." -ForegroundColor Yellow
