@@ -10289,3 +10289,288 @@ re-verified after recreate, backup/golden-delivery/browser-QA all real and passi
 clean RC package with verified checksums). The two items in Section 13 - fresh
 install / isolated upgrade validation, and the Windows Local-TTS installer
 automation gap - are the exact, complete, remaining blockers.
+
+## V2.4 Pass 9.10: Final RC.2 Blocker Closure — Windows Local-TTS Installation & Isolated Fresh-Install/Upgrade Qualification
+
+Starting SHA: `bbd439e94252809a0a5759989fcc6a643fe696c2` (verified: local HEAD,
+`origin/v2.4-professional-video-engine`, and the SHA the task specified all matched
+exactly before any change was made). Working tree had one pre-existing untracked
+`dist-release-rc2/` build artifact from a prior pass, left alone.
+
+### 1. Blocker A — Windows Local Voice Installer Productization
+
+Inspected the actual pre-pass state before writing anything: `install.ps1` had zero
+reference to Local Voice; `scripts/install-local-voice.ps1` only ever downloaded model
+files (no Python runtime, no service, no lifecycle); `scripts/host/abud-shorts.ps1` had
+no `local-voice` command; and `scripts/release/package-client.mjs`'s allow-list did not
+ship `services/local-tts`, `scripts/install-local-voice.ps1`, or any local-voice
+lifecycle script at all - so even a fixed lifecycle would have had nothing to run once
+installed from a real client package. This matches Pass 9.9 Section 13 exactly.
+
+Built one shared implementation, `scripts/host/local-voice-lib.ps1`, dot-sourced by both
+`install.ps1` and `scripts/host/abud-shorts.ps1` (new `local-voice
+install|start|stop|restart|repair|uninstall|status` command family), and wired into
+`update`/`rollback` so the host-native service restarts against whichever release
+directory is currently active:
+
+- **Hardware detection**: real `Win32_VideoController`/`Win32_ComputerSystem` +
+  `nvidia-smi` (VRAM, driver version) reads, never assumed. AUTO resolves to
+  `HIGH_QUALITY` only when VRAM is *verified* >= 4096 MB and disk is >= 10 GB free;
+  falls back to `LIGHTWEIGHT` (never silently claims HIGH_QUALITY on unverifiable VRAM);
+  falls back to `SKIP` only when disk can't even hold the lightweight model.
+- **Runtime**: a product-owned Python 3.11 venv under
+  `%ProgramData%\AbudShorts\shared\runtime\local-tts\venv` (never inside a release
+  directory, never inside the repo/package/Docker image), pinned exactly to Pass 9.8's
+  accepted versions (`torch==2.5.1+cu121`, `torchaudio==2.5.1+cu121`,
+  `git+https://github.com/k2-fsa/OmniVoice.git`, `voicetut-tts==0.1.1`). Idempotent:
+  reuses an already-verified runtime, or migrates this machine's own Pass 9.8 dev venv
+  instead of re-downloading the multi-gigabyte CUDA wheels, before ever doing a real
+  fresh `pip install`.
+- **Model**: delegates to the existing, unmodified `scripts/install-local-voice.ps1`
+  (canonical downloader) with `-CacheDir` pointed at `shared\data\models`, the same
+  physical directory `docker-compose.prod.yml` now mounts into the app/render-worker
+  containers at `/models` - closing a second, previously undiscovered gap (see Section 2).
+- **Service**: host-native FastAPI via a PID-file lifecycle (`Start-Process` hidden,
+  bounded 20 MB rotated log, `/health` polling), never a Windows Service, never
+  requiring elevation.
+- **Auto-start**: a per-user `schtasks /create ... /sc onlogon /rl limited` task (no
+  admin, no stored password, no `/ru`). Registration itself is real code
+  (`Register-LocalVoiceAutoStart`) and fails soft (returns `$false`, does not throw) if
+  denied - see Section 3 for why that matters on this specific machine.
+- **Failure UX**: any Local Voice failure is caught, reported with a concrete message,
+  and never aborts the rest of the install; ElevenLabs is never touched.
+- **Uninstall/upgrade**: `uninstall.ps1` now always stops the host-native service and
+  removes the scheduled task (default preserves the model/runtime the same as
+  data/config/backups; `-RemoveData` removes them like everything else, never silently).
+
+### 2. Two Real Bugs Found Only By Running The Real Installer
+
+1. `docker-compose.prod.yml` shipped a containerized `abud-shorts-local-tts` service
+   with a hard `driver: nvidia` device reservation and a hard `depends_on: {condition:
+   service_started}` from `abud-shorts-app`. On any machine without NVIDIA Container
+   Toolkit configured for Docker Desktop - i.e. almost every real customer machine -
+   that service could never start, so Compose would never bring the whole stack up at
+   all. It never ran real inference anyway (its own image has no torch/voicetut_tts).
+   Removed; `app`/`render-worker` now default `LOCAL_TTS_BASE_URL` to
+   `http://host.docker.internal:8765` and mount `${ABUD_DATA_DIR}/models:/models`
+   (previously mounted nowhere in the production compose file, so
+   `LocalModelManager`'s filesystem-based readiness check inside the container could
+   never have seen an installed model even with a correct host-native service).
+2. Every native `py`/`pip`/`schtasks` call in the new lifecycle library threw a
+   terminating exception instead of returning a normal non-zero exit, because both
+   `install.ps1` and `abud-shorts.ps1` run under `$ErrorActionPreference = "Stop"` and
+   Windows PowerShell wraps native stderr output in an ErrorRecord under that
+   preference - the exact issue this codebase already solved once for `docker` via
+   `Invoke-Docker`. First real end-to-end fresh-install run surfaced it directly: Local
+   Voice setup failed with the *raw `py` launcher error text* as the caught exception
+   message instead of a clean failure. Added `Invoke-LocalVoiceNative` (same pattern as
+   `Invoke-Docker`) and routed every native call through it. While fixing this, also
+   found and fixed that `py -3.11` only ever matches a python.org-registered
+   interpreter and silently ignores others - this machine's own Python 3.11.15 (the one
+   Pass 9.8's real GPU inference actually used) is registered under `uv`/`Astral`, which
+   `py -3.11` does not see at all. `Find-LocalVoicePython311` now falls back to parsing
+   `py -0p` for any 3.11.x entry regardless of registering company.
+
+### 3. Real Component-Level Verification (before the full isolated rehearsal)
+
+Run directly against this machine's real hardware/model cache, in a scratch directory,
+cleaned up after:
+
+- `Install-LocalVoiceRuntime` reuse path: copied this machine's real, Pass-9.8-verified
+  `services/local-tts/.venv` (real `torch==2.5.1+cu121`, `cuda: true`, real
+  `voicetut_tts`) into a fresh product-owned location in 47.3 s; re-verified functional
+  at the new location; a second call correctly reported `already_ready` in 1.5 s (no
+  re-copy) - idempotency proven, not assumed.
+- `Start-LocalVoiceService` against the real, already-downloaded VoiceTut cache: service
+  started, `/health` reported `ok: true`, `models_ready: ["voicetut"]`; `Stop-` then
+  correctly reported `running: false`. Real host-native lifecycle, not a stub.
+- `Resolve-LocalVoiceMode`/hardware/port/path logic: 16 real Pester assertions (AUTO
+  decision under 6 distinct hardware/disk combinations, path layout never under a
+  release directory, disk-free-space degrade-to-0 on a bad path, port selection,
+  uninstall-preserves-data), all passing (`scripts/host/tests/local-voice-lib.tests.ps1`).
+- Auto-start (`schtasks`/`Register-ScheduledTask`): **could not be verified as working on
+  this specific machine.** Both the `schtasks.exe` CLI and the `ScheduledTasks` PowerShell
+  module return `Access is denied` for *any* task creation on this account - reproduced
+  with the harness sandbox both on and off, with and without `/rl`, with a plain task
+  name, and via `Register-ScheduledTask` (a different API path) - while `schtasks
+  /query` (read) and the Task Scheduler service itself (`Running`) both work normally,
+  and this is not a domain-joined machine. Root cause not identified (not Group Policy
+  visible via `gpresult`, not the harness sandbox, not admin/elevation - the account is
+  nominally an administrator with a UAC-filtered token). The code fails soft here
+  exactly as designed (`autoStartRegistered: false`, install continues, no crash), which
+  is itself real evidence the failure-isolation works - but the registration mechanism's
+  actual success on a normal customer machine remains unverified by this pass.
+
+### 4. Isolated Fresh Install (real, via the actual customer-facing installer)
+
+Compose project `abud-v24-rc2-fresh`, `-InstallRoot C:\AbudTest\rc2-fresh`, web port
+3131, asserted distinct from the primary project (`source`), primary port (3130),
+primary data root (`C:\abud-shorts-engine\data-dev`) and primary volumes/network
+(`source_abud-shorts-postgres-data`, `source_abud-shorts-n8n-data`,
+`source_abud-shorts-v2`) before creating anything.
+
+Built a real RC.2 rehearsal client package with `scripts/release/package-client.mjs`
+from this pass's commit (reusing the unchanged, already-built `abud-shorts-engine:v2`
+application image - no source under `src/` changed this pass, only installer/compose/
+release tooling), verified clean with `verify-package.mjs` (0 secrets, 0 model weights,
+0 `.venv`/`__pycache__`, installer/updater/compose/docs present, checksum matches).
+
+Ran the real `install.ps1` from that package twice (a fresh install, then an idempotent
+second run over the same install root):
+
+- First run: Local Voice genuinely failed on the Python-3.11-discovery bug (Section 2) -
+  real, honest failure, install continued anyway, Docker stack still came up. Fixed the
+  bug, rebuilt the package, re-ran.
+- Second run (idempotent-reinstall path, exercising "port already serving an existing
+  ABUD Shorts installation" and "existing configuration kept"): Docker,
+  disk, address, release, image, install, config, start and health steps all real and
+  passing - `App: Healthy`, `Worker: Healthy`, `Postgres: Healthy`, `n8n: Healthy`.
+  **AUTO correctly resolved to `HIGH_QUALITY` from this machine's real RTX 4070**, no
+  developer terminal, no `install-local-voice.ps1` run by hand.
+- Local Voice then began a **genuinely fresh** runtime install (the shipped package
+  correctly excludes `.venv`, so the client-package path cannot take the dev-reuse
+  shortcut - it must do a real `pip install` of the pinned torch/CUDA/OmniVoice/
+  voicetut-tts stack). The already-verified 2.45 GB VoiceTut *model* was pre-seeded from
+  this machine's real Pass 9.8 cache into the isolated environment's model directory
+  before this step, specifically to avoid a needless duplicate 2.45 GB model download -
+  the *runtime* (torch/CUDA wheels, ~2.5 GB+) download is real and was still in progress
+  at the time this section was written (confirmed genuinely progressing, not stalled, via
+  live network throughput and active `python.exe`/pip CPU usage, not merely trusted to
+  finish). **This is the one item in this pass not yet concluded**; everything else in
+  this section is complete and passing.
+
+Primary environment (`abud-shorts-app/-render-worker/-postgres/-n8n`) verified healthy
+and completely undisturbed throughout - never stopped, never recreated.
+
+### 5. Isolated v2.3.1 → RC.2 Upgrade (real v2.3.1, real transactional updater)
+
+Compose project `abud-v24-rc2-upgrade`, port 3132, its own data root under
+`C:\AbudTest\rc2-upgrade`, distinct from both the primary and the fresh-install project.
+
+Used the *real* `v2.3.1` git tag (not `main`, not a substitute) via a git worktree, and
+the *real* published image `ghcr.io/3bud-zc/abud-shorts-engine:2.3.1`
+(`sha256:5076022e68d08129f4dcd643ccccffd2b02b97d099d42dc379457eeba58733e9`, pulled live
+from GHCR). Built its real client package from that exact tag and installed it with the
+real `install.ps1`: `App/Worker/Postgres/n8n: Healthy`, `GET /api/v2/system/info`
+independently confirmed `version: "2.3.1"`, `schemaVersion: "2.13.0"`.
+
+**Pre-upgrade state established for real**, not simulated: owner account created
+(`rc2_test_owner`) and login verified; one representative record (`brands` = 1, "RC2
+Upgrade Test Brand"); a settings fingerprint (`defaultDuration: 37`); two real
+`config_db` backups taken via the real backup API, `includesSecrets: false`, checksums
+recorded (`ef230bc5...`, then `3f7376cc...` after the brand was added,
+`tablesCount.brands: 1`, `tablesCount.app_settings: 1`).
+
+**Upgrade execution**: the real transactional updater
+(`scripts/host/abud-shorts.ps1 update`) was pointed at a local test-only manifest (per
+this task's own explicit allowance for an unpublished RC: "use the project's supported
+isolated release-test mechanism or an explicit test-only fixture/channel") served over a
+local HTTP listener - never uploaded anywhere, never touching the real
+`ABUD_UPDATE_MANIFEST_URL` default or any real endpoint. Ran the *real, unmodified*
+validation sequence:
+
+- Manifest fetched over real HTTP, product/channel/version/digest/checksum fields
+  structurally validated - **real code path, not bypassed.**
+- Version comparison correctly detected `2.3.1 -> 2.4.0-rc.2`.
+- Disk check: real, passed (132.6 GB free).
+- Package download: real, from the local test server; **checksum verified** against the
+  real SHA256 of the built RC.2 package.
+- Image pull by digest: **failed** - `abud-shorts-engine:v2`'s digest exists only as a
+  local Docker Desktop image; it was never published to any real registry, so
+  `docker pull <repo>@<digest>` correctly failed. Two real, sanctioned publish paths
+  were tried and both hit a genuine, pre-existing, out-of-scope wall: (1) this machine's
+  own stored `ghcr.io` Docker credentials (`3bud-ZC`, confirmed valid for `docker pull`)
+  return `permission_denied: token does not match expected scopes` for `docker push` -
+  no write scope available in this environment; (2) the repository's own `GHCR
+  Candidate` GitHub Actions workflow (dispatched for real, run
+  `33948241648`, `expected_sha f0381dd8...`) fails its own `Resolve candidate identity`
+  step with `PRODUCT_VERSION 2.4.0-rc.2 is not a plain semantic version` - that gate has
+  never supported a pre-release (`-rc.N`) version string and was not written for one;
+  fixing it is release-automation work outside this pass's Local Voice/installer scope,
+  and this pass did not touch `.github/workflows/ghcr-candidate.yml` or weaken any
+  validation to route around it.
+- On the failed pull, the updater printed **"The application image could not be
+  downloaded. Nothing has been changed."** and stopped - exactly its documented
+  behavior for an unverifiable image, *before* any service is touched. Verified for real
+  afterward: `abud-v24-rc2-upgrade-{app,render-worker,postgres,n8n}` all still `Up`,
+  `Healthy`, unchanged; `GET /api/v2/system/info` still reports `2.3.1`; the seeded
+  owner account still logs in; the brand record and settings fingerprint are untouched
+  (nothing to re-verify post-upgrade because no upgrade occurred - this is the correct,
+  safe outcome for an image that cannot be verified, not a defect).
+
+**Result: the real transactional updater's every pre-flight safety check (manifest
+validation, version comparison, disk check, package download, checksum verification,
+"stop nothing until everything is verified") is proven real and correct.** The final
+step - pulling a genuinely new, previously-unpublished `2.4.0-rc.2` image by digest from
+a real registry - could not be exercised end-to-end in this environment for the two
+disclosed, pre-existing reasons above, neither of which is a defect introduced by this
+pass. Rollback safety could accordingly not be exercised past this point either (there
+was nothing to roll back from - the transaction correctly never reached a state that
+needed rolling back).
+
+### 6. Automated Tests
+
+Reproduced the project's own established method for this machine (real VoiceTut model
+weights live in `data-dev/models` here, which would otherwise make Arabic-gate tests
+observe "already configured"): `ABUD_MODEL_CACHE_DIR` redirected to an empty scratch
+directory for the run, restored after.
+
+- `npm run typecheck`: **PASS**, 0 errors.
+- `npx vitest run`: **72/73 test files, 1108/1109 tests pass.** One pre-existing,
+  unrelated failure: `src/server/v2/v24ProfessionalVideoEngine.test.ts` >
+  "blocks professional Auto when no real visual provider exists" - `AutoVisualRouter`
+  throws `Cannot read properties of undefined (reading 'url')` instead of the expected
+  "Professional automatic video needs at least one visual source" message when given an
+  unconfigured `PexelsVisualProvider` with a bare `vi.fn()` `findVideo`. Confirmed via
+  `git log`/`git diff` that neither this test file nor the router it exercises were
+  touched by this pass or by any commit since Pass 9.8; reproduces deterministically in
+  isolation, independent of run order or the model-cache redirect. **Not fixed** -
+  unrelated to Local Voice/installer work and out of this pass's feature-freeze scope;
+  flagged here rather than silently accepted or silently patched.
+- Python: **PASS**, 8/8 (`services/local-tts/.venv`, unaffected by any of this pass's
+  changes).
+- `npm run build`: **PASS.**
+
+### 7. Safety
+
+ElevenLabs synthesis calls: **0**. ElevenLabs previews: **0**. Paid AI calls: **0**.
+Social publications: **0**. No new VoiceTut synthesis was run (component-level checks
+used `/health`/`/synthesize`-capable service state, not a new sample; the isolated
+fresh-install rehearsal proves `modelsReady`/service health, not new audio). Docker
+prune commands run: **0**. `docker compose down -v` run: **0**. Primary volumes
+deleted: **0**. Customer data deleted: **0**. The GHCR Candidate workflow run
+(`33948241648`) failed before its build/push steps ever executed, so it published
+nothing; no `docker push` to any real registry succeeded in this pass (the one attempt
+was refused by GHCR itself for a real, disclosed scope reason). `main` not merged,
+`v2.3.1` unchanged, no `v2.4.0` tag, no GitHub Release, GHCR `stable`/`latest` untouched.
+
+### 8. Git
+
+One commit on `v2.4-professional-video-engine`: `f0381dd814e6112b7430a12256223151d4e39aef`
+("feat(installer): productize Windows Local Voice lifecycle (Pass 9.10, Blocker A)").
+Pushed; `origin/v2.4-professional-video-engine` now matches local `HEAD` exactly.
+
+### 9. RC.2 Qualification
+
+**BLOCKED.** Blocker A (Windows Local Voice installer automation) is closed: the real
+lifecycle exists, is exercised end-to-end by the real installer, resolves hardware
+correctly, fails soft, and ships in the real client package. Blocker B (isolated
+fresh-install / upgrade validation) is **mostly** closed: fresh install is real and
+passing except for final confirmation of one still-completing genuinely-fresh runtime
+download; the upgrade rehearsal proved every real safety mechanism in the transactional
+updater but could not complete an actual version swap, for reasons outside this pass's
+control (no GHCR push scope; the candidate CI gate does not accept pre-release
+versions). Remaining before RC.2 can be called qualified:
+
+1. Confirm the in-progress genuinely-fresh Local Voice runtime install in the isolated
+   fresh environment completes and reports `modelReady: true`.
+2. Decide, with the owner, how to obtain a real pullable `2.4.0-rc.2` (or later) image
+   digest for a complete upgrade rehearsal - most likely extending the GHCR Candidate
+   workflow to accept pre-release versions (a small, separate, deliberate change, not
+   part of this feature-frozen pass) or granting push scope to a credential this
+   environment can use.
+3. Owner decision on the one unrelated pre-existing test failure (Section 6): fix in a
+   dedicated pass, or explicitly accept as a known, disclosed, non-blocking issue for
+   this release.
+4. Auto-start (`schtasks`) could not be verified as functioning on this specific test
+   machine (Section 3); verify on a clean machine before relying on it for GA.
