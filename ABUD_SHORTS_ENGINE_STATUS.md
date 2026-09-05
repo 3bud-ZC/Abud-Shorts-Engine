@@ -15,7 +15,7 @@
 
 Product: ABUD Shorts Engine V2
 
-Version: **2.4.0-rc.1 + V2.4 Pass 9.8 PC Recovery & Real Local Egyptian TTS Validation**
+Version: **2.4.0-rc.2 + V2.4 Pass 9.9 Owner Auth Recovery, RC.2 Build & Arabic UI Truth Correction**
 
 Release: **BLOCKED / NOT RELEASED**
 
@@ -27,7 +27,7 @@ failure on 2026-09-02 and must not be merged, tagged, published, promoted to
 stable, or called released until a post-fix production retry is explicitly
 authorized and passes.
 
-V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2. Pass 9.8 executed on the target PC (Intel i7-12700K, RTX 4070 12GB, 32GB RAM): preserved the pre-existing PC repository untouched, cloned fresh from `origin/v2.4-professional-video-engine` at the exact handoff SHA, downloaded and verified the real VoiceTut-TTS inference weights (2.45GB) and all 17 real reference-speaker audio files, proved real GPU inference and real Whisper transcription against that real audio, fixed four real defects found only by exercising the real pipeline end to end (a VoiceTut API kwarg mismatch; two independent Windows/Linux whisper.cpp executable-layout bugs, one of which silently crashed the whole Node process instead of raising a catchable error; a one-shot audio stream being read twice in the render pipeline, which is what an ElevenLabs-shaped error classifier had been mislabeling; and a truth-safety CTA fallback that hardcoded a website-themed description for every business vertical), and produced one real Arabic Egyptian golden video through the normal product pipeline that passes every acceptance threshold. Pass 9.8 consumed 0 paid provider calls, did not touch Postgres/n8n data, and did not qualify RC.2.
+V2.4 source chronology: Pass 9.2 starting baseline HEAD was `8023401ec0a0f3f384069d78305089708f3c1590`; Pass 9.2 committed feature HEAD was `643c73e1f024843432974c90620658ea476d9f1b` (branch `v2.4-professional-video-engine`, equal to `origin/v2.4-professional-video-engine`). Pass 9.3 forensic closure completed (HEAD `85b0d6f849d16e86e9cf086d4a80a6f2ea2959c6`). Pass 9.4 Plain-TTS diagnostic executed (1 authorized call consumed, succeeded), durable artifacts persisted, Arabic stable route implemented, and runtime rebuilt from exact Git HEAD. Pass 9.5 final retry then exposed a retry-reuse worker defect: the product endpoint carried the Scene 1 artifacts, but the worker attempted a new Scene 1 ElevenLabs synthesis because legacy input hash fields drifted. Pass 9.6 product-source checkpoint added planner-bound Retry Reuse Manifests and worker fail-closed validation. Pass 9.7 implemented the standalone Local Egyptian TTS architecture (`mohammedaly22/VoiceTut-TTS` and `Rabe3/kemetone`), Python microservice under `services/local-tts/`, selective model installer, Arabic error localization, and local-first routing. Pass 9.7-H executes truth correction, removes mock/simulated benchmark and fake golden video scripts, verifies the complete build and test suites, freezes laptop state, and prepares the repository for real VoiceTut/KemeTone weight download and verification on the PC. Pass 9.7-H consumed 0 paid provider calls and did not create or qualify RC.2. Pass 9.8 executed on the target PC (Intel i7-12700K, RTX 4070 12GB, 32GB RAM): preserved the pre-existing PC repository untouched, cloned fresh from `origin/v2.4-professional-video-engine` at the exact handoff SHA, downloaded and verified the real VoiceTut-TTS inference weights (2.45GB) and all 17 real reference-speaker audio files, proved real GPU inference and real Whisper transcription against that real audio, fixed four real defects found only by exercising the real pipeline end to end (a VoiceTut API kwarg mismatch; two independent Windows/Linux whisper.cpp executable-layout bugs, one of which silently crashed the whole Node process instead of raising a catchable error; a one-shot audio stream being read twice in the render pipeline, which is what an ElevenLabs-shaped error classifier had been mislabeling; and a truth-safety CTA fallback that hardcoded a website-themed description for every business vertical), and produced one real Arabic Egyptian golden video through the normal product pipeline that passes every acceptance threshold. Pass 9.8 consumed 0 paid provider calls, did not touch Postgres/n8n data, and did not qualify RC.2. Pass 9.9 closed a real production-blocking authentication defect (the owner's login attempt used a username that did not match the configured account — not a password or hash failure), built a first local owner-account lifecycle (change username/password, session listing/revocation, a local-only recovery command), fixed a Windows Python-launcher bug and three real instances of stale "ElevenLabs is required for Arabic narration" UI copy left over from before VoiceTut/KemeTone became the default local route, bumped the version to 2.4.0-rc.2, rebuilt the candidate image from the exact committed source, and built/verified a clean RC.2 client package. Pass 9.9 consumed 0 paid provider calls, made 0 ElevenLabs calls, and did **not** qualify RC.2: fresh-install and v2.3.1→RC.2 upgrade validation could not be executed (no isolated second environment was available), and the Windows installer still does not automate native VoiceTut setup (a customer must run `scripts/install-local-voice.ps1` manually) — both remain open before RC.2 can be called qualified.
 
 V2.4 release commit: none. V2.4 tag: none. V2.4 GitHub Release: none. GHCR
 `stable`: untouched.
@@ -10044,3 +10044,248 @@ ElevenLabs synthesis calls: **0**. Paid AI image/video calls: **0**. Social publ
 Arabic Egyptian golden production are proven on the PC; the release gate remains the
 owner's own human listening/viewing approval, which is explicitly not part of an
 automated pass.
+
+## V2.4 Pass 9.9: Owner Auth Recovery, RC.2 Build & Arabic UI Truth Correction
+
+### 1. Human Acceptance
+
+The owner listened to/watched the Pass 9.8 artifacts (Egyptian sample, code-switch
+sample, golden video for `cmtnbq339000407pb46xvetz5`) and approved all three. This is
+the owner's own statement, recorded as given - not independently re-verified by this
+pass beyond confirming the artifacts and job metadata are unchanged from Pass 9.8.
+
+### 2. Authentication Incident - Root Cause
+
+The owner could not sign in at `/login` (`"Invalid username or password"`), using
+username `admin`. A read-only audit of `admin_users` (metadata only - no hash/salt
+values were ever printed) found exactly one account, username `1234`, with a
+password hash/salt length consistent with the current PBKDF2-SHA512 scheme (no
+migration or hash-incompatibility issue). **Root cause: the login attempt used the
+wrong username. This was not a password, hash, or migration failure.**
+
+### 3. Owner Account Lifecycle (New)
+
+The product previously had login/logout only, with no way to recover from a lost
+username/password short of manual SQL. Added to `AuthService`
+(`src/server/v2/auth/authService.ts`): `changePassword` (requires the current
+password, revokes every session on success), `changeUsername` (trim/length/duplicate
+validation), `listSessions` and `revokeOtherSessions` (session IDs and expiry only -
+never tokens). Authenticated routes added for each
+(`/api/v2/auth/change-password`, `/change-username`, `/sessions`,
+`/sessions/revoke-others`). A new "Account & security" section was added to Settings
+(`AccountSecurityManager` in `SettingsPage.tsx`) exposing current username, change
+username/password forms, session count, "Sign out other sessions," and "Sign out" -
+none of it displays a password, hash, salt, or token.
+
+A local-only recovery command was added: `src/scripts/resetOwnerCredentials.ts`
+(compiled into the shipped image at `dist/scripts/resetOwnerCredentials.js`) and
+wired into the canonical host tool as `abud-shorts.ps1 owner reset-password`. It
+requires local machine access, prompts interactively (username optional, password
+never echoed, never a CLI argument or environment variable), refuses to run if zero
+or more than one owner account exists, hashes through the same
+`AuthService.hashPassword`, updates only that one row, and revokes all existing
+sessions. No email, token, or predictable secret is involved.
+
+### 4. Current Installation Recovery
+
+The owner ran the recovery command themselves (first via a temporary `docker cp` of
+the compiled script into the then-running Pass 9.8 container, before the fix was
+committed - explicitly **not** treated as final RC evidence) and chose their own new
+username/password interactively; this agent never saw, requested, or printed either.
+After the final RC.2 image was rebuilt from committed source and the containers were
+recreated (Section 8), the account was confirmed intact (exactly one row in
+`admin_users`, real login verified end-to-end) with zero data loss - Postgres was
+never touched by container recreation.
+
+### 5. Login UX / Localization
+
+`POST /auth/login` returned a hardcoded English `"Invalid username or password."`
+regardless of locale, and the Arabic `login.invalidCredentials` translation
+(`"بيانات الدخول غير صحيحة."`) already existed but was dead code because
+`LoginPage.tsx` preferred the raw server string. The server now returns a stable
+`invalid_credentials` code; the client maps it through `t()`. Verified end-to-end
+with headless Playwright: submitting wrong credentials in both locales shows the
+correct localized message with no raw English leak, and `dir` is `rtl`/`ltr`
+correctly. `LoginPage.tsx` was also confirmed to start with an empty username field
+(no hardcoded `"admin"` prefill) - the owner had simply mistyped their own username.
+
+### 6. Arabic "ElevenLabs Required" UI Truth Correction (Real Bugs Found)
+
+`VideoCreator.tsx`'s Arabic-blocked error banner and submit-time error both
+unconditionally said "ElevenLabs is required for Arabic narration," regardless of
+why the request was actually blocked - a leftover from before VoiceTut/KemeTone
+became the default local-first Arabic route (Pass 9.7). The backend
+(`VoiceRegistry.listCompatibleVoices`) already computed the correct reason per case
+(no local voice installed vs. explicit ElevenLabs selection without credentials) but
+only returned it as English prose the frontend ignored. Fixed by adding a stable
+`blockedReasonCode` (`"local_voice_setup_required"` | `"elevenlabs_not_configured"`)
+to the registry response and making the frontend show the matching localized message
+and action for each case - `arabicVoicePolicy.test.ts`'s existing coverage of the
+legitimate "explicit ElevenLabs, not configured" case was preserved and still passes.
+The Arabic voice-provider dropdown's "Auto" option label
+(`"Auto - ElevenLabs (Arabic production)"`) was equally wrong and corrected to
+`"Auto - VoiceTut/KemeTone local voice"`. The same unconditional "ElevenLabs is
+required" framing was also corrected in `SetupWizard.tsx`'s Voice & AI step and the
+Voice Lab "needs key" hint, in both locales. None of this touched routing/security
+logic - `registry.ts`'s actual Auto → VoiceTut → KemeTone → explicit-setup-error
+behavior was already correct and remains unchanged; only customer-facing copy that
+had drifted from it was fixed.
+
+### 7. Windows Python-Launcher Fix
+
+Unrelated to Arabic voice policy: `capabilityManager.getQualityPythonPath()` fell
+back to a bare `"python"` on Windows, which resolves to the Microsoft Store's App
+Execution Alias stub (a default Windows 10/11 behavior) when a real interpreter
+exists elsewhere on `PATH`, breaking Motion Canvas quality rendering with a
+confusing Store-install prompt instead of running. Found via a real
+`npx vitest run` failure on the dev PC (a real Python 3.14.4 install existed but was
+shadowed). Fixed by preferring the `py` launcher (registered by the official
+python.org installer) on Windows. Confirmed this does not affect the packaged
+product: the render-worker/app Docker image is Linux-based and already sets
+`PYTHON_BIN=/opt/pyruntime/bin/python` explicitly, so the affected code path is
+Windows-host-only (this dev shell).
+
+### 8. Automated Gate
+
+Reproduced Pass 9.8's exact method (`.env` moved aside + `ABUD_MODEL_CACHE_DIR`
+pointed at an empty directory, then restored) after every source change:
+- `npm run typecheck`: **PASS**, 0 errors.
+- `npx vitest run`: **PASS**, **73/73 test files, 1,109/1,109 tests** (72/1,102 before
+  this pass's 7 net-new targeted auth tests). 0 weakened assertions.
+- `npm run build`: **PASS**.
+- Python: **PASS**, **8/8 tests** (`services/local-tts/.venv`, unaffected by the
+  Windows PATH issue - it uses its own pinned interpreter).
+
+Targeted new tests (`src/server/v2/auth/authService.test.ts`,
+`authRoutes.test.ts`): fresh owner creation, duplicate-bootstrap rejection, correct
+and incorrect login, change-password (success, wrong-current-password rejection,
+full session revocation), change-username (success, duplicate rejection, login with
+new username), revoke-others-only session semantics, setup-admin blocked once an
+owner exists, and the login route's stable error code.
+
+### 9. Repository & Secret Audit
+
+`git status --short` clean before and after commit; `git diff --check` clean (no
+conflict markers/whitespace issues). Tracked files audited for
+`*.safetensors|*.pt|*.pth`, WAV/MP4 review samples, `.venv`, `__pycache__`,
+`.env*`: only `.env.example` (placeholder values only) is tracked. `data-dev/`
+(qa-samples, golden video, model cache) is `.gitignore`d and confirmed untracked via
+`git check-ignore`.
+
+### 10. Immutable RC.2 Build
+
+Built twice from two different exact commits (the second superseding the first once
+the Arabic UI fixes landed) - **never** from a dirty tree or via `docker cp` as final
+evidence:
+- Final source SHA: `4f4c1abbe988365ac17437e433e42623d8834cd4` (branch
+  `v2.4-professional-video-engine`), clean working tree.
+- `docker compose -f docker-compose.v2.yml build abud-shorts-render-worker` (shared
+  image tag `abud-shorts-engine:v2` used by both `abud-shorts-app` and
+  `abud-shorts-render-worker`).
+- Final image ID: `sha256:1aa694eb35c1b02beaf991eccfc2fb1476c6766dce4397f070f384189bdf6ad8`.
+- `docker compose up -d --no-deps abud-shorts-app abud-shorts-render-worker`
+  recreated only those two services; Postgres and n8n containers/volumes were never
+  touched (uptime unchanged across the recreate).
+- Verified in the rebuilt container (not the earlier `docker cp` patch):
+  `dist/scripts/resetOwnerCredentials.js` and `scripts/host/abud-shorts.ps1`
+  (with the new `owner` command) both present; `RestartCount: 0` on all four
+  containers; `/health` → `{"status":"ok"}`;
+  `GET /api/v2/system/info` → `version: "2.4.0-rc.2"`,
+  `build: "2026.09.05.1"`, `schemaVersion: "2.13.0"` (unchanged - no migration
+  was added this pass).
+
+### 11. Authenticated Verification (Temporary QA Session)
+
+Claude-in-Chrome was unavailable in this environment (extension reported
+disconnected on repeated attempts). With the owner's explicit direction, a
+cryptographically random, memory-only session token was generated and inserted as
+one row in `admin_sessions` for the existing owner (`openssl rand -hex 32`, never
+printed, never committed) - **no new account was created**, the owner's real
+password was never touched, and the session was revoked (`DELETE FROM
+admin_sessions`) and the local token file deleted immediately after use.
+
+Using that session:
+- **Config DB backup**: `POST /api/v2/backups {type: "config_db"}` → id
+  `cmtnmfk0k000007qv1ssshfab`, `includesSecrets: false`, size 1,073,879 bytes,
+  checksum `8bc1f78a3a38bab91ac0df5c944b01c0d2f886b7f570dff8cb5647b5db0300e3`.
+  `includesMedia: false`; manifest lists only table row counts (jobs, job_events,
+  publications, etc.) - no model weights, HF cache, qa-samples, or Golden MP4 are
+  ever part of a `config_db` backup by construction. Not restored anywhere.
+- **Golden video delivery** (`cmtnbq339000407pb46xvetz5`, not regenerated):
+  metadata readable (`status: "ready"`), thumbnail `200 image/jpeg`, preview
+  `200 video/mp4`, Range request `206`, download `200 video/mp4`. Persisted job
+  metadata reconfirmed: `professionalReady: true`, `realVisualCoveragePercent: 99.9`,
+  `voice_provider: "voicetut"`, `resolution: "1080p"`, `aspect_ratio: "9:16"` -
+  matches Pass 9.8 exactly, and matches the independently `ffprobe`-verified MP4
+  from the human-review-artifact retrieval earlier in this pass.
+- **Browser QA** (headless Playwright, `chromium` already installed locally - the
+  project's existing browser-QA dependency, not a new one): 12 routes ×
+  {1366×768, 390×844} × {en, ar} = **48 checks. 0 blank pages, 0 console/page
+  errors, 0 mobile horizontal overflow, 0 unexpected 401s, 0 visible
+  hash/token-shaped strings in page text.**
+- **Login localization end-to-end**: wrong credentials in both locales show no raw
+  English leak; Arabic renders `dir="rtl"`.
+
+### 12. RC.2 Client Package
+
+Built with the existing, unmodified `scripts/release/package-client.mjs` /
+`verify-package.mjs` (allow-list + forbidden-pattern based - not new tooling), on
+the `development` channel (never `stable`), output kept local only
+(`dist-release-rc2/`, not published/uploaded anywhere):
+- Package: `ABUD-Shorts-Engine-2.4.0-rc.2.tar.gz`, 56,963 bytes.
+- SHA256: `8c3cd5be883140086d5c6f719b7a253a321d32e627141df0366614510f6cd929`
+  (independently re-verified by `verify-package.mjs` against the extracted
+  contents, not just recomputed from the same file).
+- `verify-package.mjs`: **ok: no secrets, source, dependencies or developer data**;
+  **ok: installer, updater, compose and documentation present**; **ok: manifest
+  matches the package**.
+- `update-manifest.json` channel: `development`; image digest and package
+  checksum both pinned; **not published to any real endpoint** - GHCR `stable`
+  and the real update-manifest URL are untouched.
+
+### 13. Confirmed Gaps (RC.2 NOT Qualified On These)
+
+1. **Fresh install and v2.3.1 → RC.2 upgrade validation were not executed.** This
+   PC has only the one shared Docker stack bound to the PROTECTED `data-dev`
+   directory - no isolated second environment exists to install/upgrade into
+   without risking real data. `Invoke-Update`'s transactional mechanics
+   (manifest/digest/checksum validation before anything stops, pre-upgrade
+   `pg_dump` backup, image pulled by digest, stop only app/worker, rollback on
+   failure) were statically reviewed and appear correct, but this is not the same
+   as an executed upgrade test.
+2. **The Windows installer does not automate native VoiceTut setup.** `install.ps1`
+   has no reference to `install-local-voice.ps1`, Python venv creation, or torch/
+   OmniVoice installation, and nothing in the product calls
+   `install-local-voice.ps1` automatically. A customer must still run that script
+   themselves in a terminal to get local Arabic voice working - the same
+   developer-terminal dependency this pass's own gate criteria calls a release
+   blocker. Not fixed this pass: automating a multi-gigabyte GPU/PyTorch
+   environment install from the GUI is new, substantial work, not a targeted fix,
+   and was not attempted without a separate sizing/priority decision.
+
+### 14. Safety
+
+ElevenLabs synthesis calls: **0**. Paid AI calls: **0**. Social publications: **0**.
+Docker prune commands run: **0**. Volumes deleted: **0**. Customer data deleted:
+**0**. No new video production or TTS synthesis was run this pass beyond what
+Section 11 required (a config-only backup and read requests against the existing
+Golden video). `main` not merged, no `v2.4.0` tag created, no GitHub Release, GHCR
+`stable` untouched.
+
+### 15. Git
+
+Two focused commits on `v2.4-professional-video-engine`:
+`ef0ccfe` (Windows Python-launcher fix + owner account lifecycle) and `4f4c1ab`
+(RC.2 version bump + Arabic UI truth correction). Pushed:
+`origin/v2.4-professional-video-engine` now at `4f4c1abbe988365ac17437e433e42623d8834cd4`,
+matching local `HEAD` exactly. `main` unchanged, `v2.3.1` unchanged, no tag created.
+
+### 16. RC.2 Qualification
+
+**BLOCKED** - not qualified. Everything this pass could verify passed (auth
+incident closed and root-caused, owner recovery real and working, 0 test failures,
+clean secret/repo audit, immutable image built from exact committed source and
+re-verified after recreate, backup/golden-delivery/browser-QA all real and passing,
+clean RC package with verified checksums). The two items in Section 13 - fresh
+install / isolated upgrade validation, and the Windows Local-TTS installer
+automation gap - are the exact, complete, remaining blockers.
