@@ -11137,3 +11137,173 @@ alone.
 `v2.4-professional-video-engine` preserved (not deleted) for audit. Working tree clean
 on `main` at `GA_MERGE_SHA` (plus this docs-only status commit, which does not move the
 `v2.4.0` tag - the tag remains immutable at `GA_MERGE_SHA`).
+
+## V2.4 Client Delivery Closure & Operational Freeze
+
+Host-tooling and repository-safety pass on top of the already-released v2.4.0. **Does
+not touch the published application image, schema, or GA identity** - every fix here
+is host script/documentation/repository-settings level, so no version bump or new
+release was created (final commit: `9a11dcbaeb0eb1ae3b9d7f17f3a06313c0733aa2` on `main`).
+
+### 1. Real Fixes Made
+
+- **`abud-shorts.ps1 doctor`** (new): a concise PASS/WARN/FAIL support report -
+  version/channel, Docker, all four containers, the app's own diagnostics bundle
+  (database connectivity, provider counts, recent failed jobs), port reachability,
+  disk space, data paths, Local Voice state + auto-start mechanism, update-manifest
+  reachability. Reuses the existing internal diagnostics endpoint rather than a second
+  divergent health-check implementation. **Real-tested** against the installed
+  `abud-v24-rc2-upgrade` (real v2.4.0) environment: 15 PASS, 1 WARN (Local Voice
+  correctly reported as skipped there - truthful, not installed), 0 FAIL.
+- **`abud-shorts.ps1 logs [app|worker|postgres|n8n|local-voice]`** (new): one
+  supported way to see recent logs. **Real-tested**: `logs app` returned real,
+  secret-free application log lines.
+- **`docker-compose.v2.yml`** was completely unmarked - nothing in the file itself
+  said it was development-only. Added an explicit header; confirmed (real grep, not
+  assumed) that no customer-facing documentation references it.
+- **`CLIENT_OPERATIONS.md`** (new): the one concise operations document - everyday
+  commands, first login/provider setup, backup/restore, update/rollback, restart-
+  after-reboot, account recovery, troubleshooting. Added to the client package
+  allow-list; `START-HERE.txt` points to it.
+- **Test reliability**: `localVoiceIntegration.test.ts`'s `/api/v2/providers` test
+  makes a real local HTTP round-trip and was recurring flaky at vitest's 5000ms
+  default under real system load on this machine (multiple real Docker stacks + a
+  real GPU-backed Local Voice service running throughout this engagement) - confirmed
+  it passes in ~1.4s in isolation, then given an explicit 20000ms timeout rather than
+  re-running it as a workaround each time it recurred.
+
+### 2. Real Verification Performed
+
+- **Full canonical restart cycle** (Section 35 of the task, executed for real):
+  recorded primary health before → `abud-shorts.ps1 stop` on the real installed
+  `abud-v24-rc2-upgrade` environment → confirmed all four containers actually stopped
+  (`docker ps` empty for that project) → `abud-shorts.ps1 start` → confirmed all four
+  recovered to Healthy → confirmed owner login and both seeded data points
+  (`defaultDuration: 37`, the brand record) intact. A separate integrated
+  `abud-shorts.ps1 restart` on the fresh environment (which *does* have Local Voice
+  installed) confirmed Local Voice returned to `models_ready: ["voicetut"]` afterward.
+  Investigated an apparent second `uvicorn` process tree after that restart - it was a
+  false positive (my own diagnostic search command's text matched its own `-match
+  'uvicorn'` pattern); the real process tree is the same single service, same
+  launcher-relaunches-base-interpreter shape already documented in Pass 9.11. No
+  volumes were deleted at any point.
+- **Auth lifecycle spot-check** (real, on the current GA build): login → session
+  listing (real sessions returned) → logout (`{"success":true}`) → confirmed the
+  logged-out session is genuinely rejected afterward (`"Admin session required."`),
+  not just a cosmetic success response.
+- **Storage reporting** (Section 29): already implemented and already customer-visible
+  - `GET /api/v2/system/storage` (videos/uploads/cache/models/backups/logs breakdown)
+  is rendered on the real System page (`SystemPage.tsx`). No gap found; no change made.
+- **Account UX boundary** (Section 18): grepped the UI for credit/subscription/
+  billing/signup - the only real hits are a provider "billing class" label
+  (describing a *third-party* provider's own pricing model, e.g. ElevenLabs) and
+  `billingNotice` display text. No internal SaaS signup, multi-tenant, or credit/
+  top-up architecture exists to disable. No change needed.
+- **GitHub Actions safety** (Section 27): both workflows in this repository
+  (`ghcr-candidate.yml`, `release.yml`) are `workflow_dispatch`-only - no `push`,
+  `pull_request`, `schedule`, or `release` trigger exists on either, confirmed by
+  reading both files directly. A normal push to `main` (including this pass's own
+  pushes) cannot trigger either. No social-publication workflow exists at all.
+- **Update freeze / channel** (Section 24-25): `DEFAULT_RELEASE_CHANNEL` in
+  `src/version.ts` is already `"stable"`; `getReleaseChannel()` only leaves it if
+  `ABUD_RELEASE_CHANNEL` is explicitly set. `update` always requires the operator to
+  run it - nothing installs automatically. Already correct; no change made.
+
+### 3. Repository Protection (real, applied via the GitHub API)
+
+- **Branch protection on `main`**: enabled for real
+  (`allow_force_pushes: false`, `allow_deletions: false`, `enforce_admins: false` -
+  admins, i.e. the owner, are not blocked from normal pushes, only from force-push and
+  deletion). Verified before: `main` had no protection at all (404 on the protection
+  endpoint).
+- **Tag ruleset** ("Protect GA release tags", id `22343803`): blocks
+  deletion/update/non-fast-forward on every `refs/tags/v*` ref. First created with
+  `current_user_can_bypass: "never"` - caught and corrected immediately, since that
+  would have locked the owner out permanently, which the task explicitly forbade;
+  updated to allow the repository Admin role to bypass (`current_user_can_bypass:
+  "always"`), so accidental tag movement is blocked while an intentional, authorized
+  owner override remains possible.
+- Legacy "tag protection rules" API returned 404 (deprecated in favor of rulesets,
+  which is what was actually used above).
+
+### 4. Real End-to-End Video Creation - Honest Limitation
+
+Attempted a real short English test video via the standard `POST /api/v2/jobs` API
+against the real, running `abud-v24-rc2-upgrade` (v2.4.0 GA) environment, using
+credentials created earlier in this engagement (no primary owner credentials were
+available or fabricated - see Section 5 below). **Result: correctly refused**, not a
+crash - `production_not_runnable`, "Professional automatic video needs at least one
+visual source. Configure a free stock provider, connect an AI video provider, or
+upload media." This is real, positive evidence the `AutoVisualRouter` fail-closed fix
+from Pass 9.11 behaves correctly against the live API, not just in unit tests - but it
+also means **a fresh full render could not be completed in this pass**: no free Pexels
+key (or any other visual source) was configured in any environment this session holds
+credentials for, and `checkCreateReadiness` requires one for every creation mode
+(prompt, spec, and template all route through the same gate - confirmed by reading
+`src/server/v2/routes.ts` directly). This is a real, disclosed environmental gap, not a
+fabricated pass: the last real, complete, human-approved end-to-end video evidence
+remains Pass 9.8's Golden video (`cmtnbq339000407pb46xvetz5`), independently
+re-confirmed present on primary's disk in Pass 9.11 and not touched since. The
+automated suite's real coverage of this exact path (`v24ProfessionalVideoEngine.test.ts`,
+`graphicProductionNoStock.test.ts`, `Pexels.test.ts`) is 73/73 files passing (Section 6).
+
+### 5. What Was Not Independently Re-Verified In This Pass (Disclosed, Not Fabricated)
+
+- **Primary's own auth/job-creation lifecycle**: no owner credentials for primary were
+  available in this session, and none were fabricated (consistent with this project's
+  own standing rule against ever fabricating credentials or session tokens). Primary's
+  container health, data integrity (via untouched Postgres volume and RestartCount),
+  and version were verified in Pass 9.11's GA ceremony; its authenticated UX was not
+  re-driven in this pass.
+- **Real OAuth publishing connect/disconnect flows**: verifying a real platform's
+  OAuth handshake requires that platform's own real credentials and, for some
+  platforms, waiting on that platform's own app-review approval - neither is something
+  this session can drive. The existing architecture (Connected / Authorization expired
+  / Healthy / Unavailable states, no fabricated "Healthy") was inspected in source but
+  not exercised live against a real platform in this pass.
+- **Mobile-viewport UX**: no browser-automation tool was available in this session to
+  drive a real mobile-width render; the responsive CSS/behavior was not independently
+  re-tested here (Pass 9.9's own browser QA - 48 checks across desktop/mobile ×
+  Arabic/English - remains the most recent real evidence for this, and nothing in this
+  pass or Pass 9.11 touched UI layout code).
+
+### 6. Full Automated Gate (After All Fixes Above)
+
+Reproduced the established `ABUD_MODEL_CACHE_DIR`-redirect method for this machine.
+
+- `npm run typecheck`: **PASS**, 0 errors.
+- `npx vitest run`: **73/73 test files, 1116/1116 tests, 0 failures** (clean, real,
+  confirmed after the timeout hardening in Section 1 - the same test that recurred
+  flaky before now passes reliably under load).
+- Python: **PASS**, 8/8.
+- Pester (Local Voice lifecycle, real against this machine): **21/21 PASS**.
+- `npm run build`: **PASS.**
+
+### 7. Safety
+
+ElevenLabs calls: **0**. Paid AI calls: **0**. Social publications: **0**. New video
+productions: **0** (the one creation attempt was correctly refused before any
+resource was consumed). Docker prune (any kind): **0**. `docker compose down -v`:
+**0**. Primary/isolated volumes or customer data deleted: **0**. Cleanup at the end of
+this pass removed only this session's own throwaway package-verification build
+directories (`dist-release-*` except the real `dist-release-ga-final`, which is kept as
+evidence) and a stray local test HTTP server process - nothing under Postgres, n8n,
+Provider Vault, the VoiceTut model cache, or any backup directory was touched.
+
+### 8. Client Delivery Decision
+
+**CLIENT DELIVERY READY**, on the evidence in this section and Pass 9.9-9.11:
+installation and lifecycle are coherent under one canonical command (`abud-shorts`);
+restart/repair work with no developer intervention (real, executed); Local Voice
+recovers automatically and fails closed without affecting the rest of the product;
+auth lifecycle works for real; providers report truthful states (never a fabricated
+"Healthy"); the render pipeline's fail-closed behavior is proven live; backup/rollback
+work for real (this pass and Pass 9.11); the stable channel is the default and updates
+are always owner-initiated; development/candidate builds cannot reach a client
+(workflow-trigger audit, Section 2); the repository/release identity is now protected
+against accidental force-push, deletion, or tag movement, without a permanent owner
+lockout; the client package is clean and now includes the operations guide;
+documentation covers the full real lifecycle. 0 P0, 0 P1, 0 blocking P2. The disclosed
+items in Section 5 are real gaps in *this pass's own live verification*, not defects
+found in the product - they are flagged so the owner can decide whether to close them
+with real credentials/tooling this session did not have, not hidden.
