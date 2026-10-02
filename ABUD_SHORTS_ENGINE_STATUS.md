@@ -16,9 +16,9 @@
 
 Product: Short Studio Server 2.6.0
 
-Stage: TRUE FRESH INSTALL ACCEPTANCE PASSED — real Setup.exe installation on an isolated root with isolated containers/secrets/Local Voice; all 11 post-install acceptance gates verified PASS on 2026-10-02.
+Stage: GENERAL AVAILABILITY
 
-Release: ACCEPTANCE PASSED — the commercial Setup.exe fresh install at `C:\ProgramData\ShortStudioAcceptance` (port 13910, project `short-studio-acceptance`) passed every gate: isolated secrets/resources, license activation, live Pexels, real Kokoro and VoiceTut (Egyptian Arabic, CPU ~230s) synthesis, English and Arabic productions, preview/download, OpenCLIP semantic proof, and canonical restart with persistence. The previous manual-borrowing sign-off remains INVALID as a method record, superseded by this harness-verified PASS.
+Release: RELEASED / SELLABLE / 2.6.0 GA — `v2.6.0` tagged on main (`4a9a3aa`), GitHub Release published (not draft, not prerelease, latest), GHCR image `ghcr.io/abudoxali/short-studio-server:2.6.0` live at digest `sha256:7936a82a…`, public update-manifest and package checksums independently verified. True Fresh Install Acceptance: PASS (11/11 gates).
 
 Repository: `abudoxali/short-studio-server`
 
@@ -14447,3 +14447,33 @@ performed no provider calls, because there are 0 publications in `processing`.
 - **Uninstaller:** Supported `uninstall.ps1` invocation; default preserves customer media, uploads, database volume, backups, and configs without data loss.
 - **Isolated Windows Verification:** Tested cleanly on isolated test root `C:\ProgramData\ShortStudioIsolatedTest`, port `3149`, compose project `ss-installer-test`. All 4 services healthy, dashboard HTTP 200, Local Voice verified on port 8765, shortcuts verified, uninstaller tested with verified customer data preservation, 0 customer data deleted, 0 Docker builds, 0 paid provider calls.
 
+
+---
+
+### Short Studio Server 2.6.0 — General Availability Release
+
+**GA_PRODUCT_SHA:** `4a9a3aabb2a8cb39d9d44cfc4bfefc67fd5bdacf` (main merge of PR #7, branch `commercial/v2.6-quality-recovery`; contains all accepted 2.6 fixes through `4f50b66`).
+
+**Repository:** `abudoxali/short-studio-server` (public; historical remote `3bud-ZC/short-studio-server` confirmed redirected to this identity — same repository, renamed/transferred; local remote updated to canonical URL).
+
+**Tag:** `v2.6.0` → `4a9a3aa…` (annotated; pushed; verified `v2.6.0^{}` = GA sha). No historical tags moved.
+
+**Source gates (this ceremony):** typecheck (server/ui/revideo) PASS; vitest 1385/1385 PASS (2 real-FFmpeg tests timed out only under full parallel load, re-verified green in isolation); production build PASS (tsc + vite); verify-package PASS (no secrets/source/deps in package); private-key scan of unpushed diff CLEAN.
+
+**Docker image:**
+- Accepted runtime image (local, qualified): `short-studio-server:2.6.0` ID `sha256:0915eb61542cb3b808c7623f80de375821c33677656c6cc73914975f8157d16f` — running in canonical install; embedded in the offline installer.
+- Published registry image: `ghcr.io/abudoxali/short-studio-server:2.6.0` and `:stable` → digest `sha256:7936a82a2c28ce5528a00925141fa185aea3d899945951727bc69ef133ab6785`, built by `ghcr-candidate.yml` candidate run `37068131695` from `v2.6.0` source (CI typecheck/test/build gates passed) and promoted to `2.6.0`+`stable` without rebuild (promote run `37072015476`). Direct local push of the accepted image was attempted first and blocked by stored GHCR PAT scope (`permission_denied: token does not match expected scopes`); the established CI candidate→promote path was used per release architecture.
+
+**Release artifacts:**
+- `Short-Studio-Server-2.6.0.tar.gz` (public updater package, 107,820 B): sha256 `b714aefe5758a94c9cb37b3179aa56c594fdd278c90b787fa9c2f686916bc49f` — published, anonymous download re-hashed to identical value.
+- `ShortStudio-Setup-2.6.0.exe` (Windows offline installer, 3,830,927,437 B): sha256 `0781433fae8a065271c745fd1f44504de83591a2729e9dbcb5ef0e02412b0421` — the artifact that passed fresh-install acceptance; exceeds GitHub asset limits, distributed via commercial channel (same model as 2.5.x).
+- `Short-Studio-Server-2.6.0-Client/Short-Studio-Server-2.6.0.tar.gz` (offline client package, 3,837,567,804 B): sha256 `dabe6e552c8bc378a33927b5562884ec2e8359d9b50a1b15ea7b9e6482186b18` — verified; offline payload inside the installer channel.
+- `update-manifest.json`: stable channel, version 2.6.0, schema 2.13.0, image `ghcr.io/abudoxali/short-studio-server:2.6.0` @ `7936a82a…`, package sha `b714aefe…`, canonical `abudoxali/short-studio-server` URLs; published as release asset and fetched publicly.
+
+**GitHub Release:** `v2.6.0` — published, not draft, not prerelease, marked latest; assets: package + `.sha256` + `update-manifest.json`; release notes are customer-facing (local-first install, VoiceTut/Kokoro, OpenCLIP, Arabic captions, licensing, installer reliability). `v2.5.2` and older releases/tags verified untouched.
+
+**Acceptance reference:** TRUE FRESH INSTALL ACCEPTANCE PASS, 11/11 gates — evidence `C:\ProgramData\ShortStudio\shared\logs\fresh-install-acceptance-2026-10-02T18-35-10-963Z.json`.
+
+**Canonical runtime:** unchanged during ceremony. `C:\ProgramData\ShortStudio`, project `short-studio`, http://127.0.0.1:3130 → 200; app/render-worker on `0915eb61…`; postgres/n8n healthy; Local Voice :8765 healthy (voicetut, CUDA). Customer counters unchanged: jobs 40, vault 3, backups 4, social accounts 2, video entries 191.
+
+**Minor debt (non-blocking):** in-package `RELEASE_NOTES.md` top entry is still 2.5.2 — customer-facing 2.6.0 notes live in the GitHub Release body; refresh the notes file in the next patch train. Stored GHCR PAT lacks `write:packages` — CI promotion used instead; refresh the local credential if direct pushes are ever needed.
