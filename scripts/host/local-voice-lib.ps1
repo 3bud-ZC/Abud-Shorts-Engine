@@ -224,6 +224,38 @@ This is the check that keeps a second installation from silently binding its
 run: the fresh install recorded LOCAL_TTS_PORT=8765 - the primary install's
 port - because the running primary service answered /health).
 #>
+<#
+Decides whether a python process belongs to this install's Local Voice runtime.
+The naive check (executable lives under RuntimeDir) fails for redirector-style
+CPython builds (python-build-standalone / uv): venv\Scripts\python.exe is only
+a launcher - it delegates to the real interpreter in its own "home" directory,
+so the process actually owning the listening socket sits outside RuntimeDir.
+The venv records that directory in venv\pyvenv.cfg's "home" key, so accept both
+roots. Anything else is still treated as a foreign listener.
+#>
+function Test-LocalVoiceOwnedProcess {
+    param(
+        [Parameter(Mandatory = $true)]$Process,
+        [Parameter(Mandatory = $true)][string]$RuntimeDir
+    )
+    $exe = [string]$Process.ExecutablePath
+    if (-not $exe) { return $false }
+    $roots = @([System.IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\'))
+    $cfg = Join-Path $RuntimeDir 'venv\pyvenv.cfg'
+    if (Test-Path $cfg) {
+        $homeLine = Get-Content $cfg -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1
+        if ($homeLine) {
+            $homeDir = ($homeLine -replace '^\s*home\s*=\s*', '').Trim().TrimEnd('\')
+            if ($homeDir) { $roots += $homeDir }
+        }
+    }
+    foreach ($root in $roots) {
+        if ($exe.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
 function Test-LocalVoiceOwnedByInstall {
     param(
         [int]$Port,
@@ -236,10 +268,7 @@ function Test-LocalVoiceOwnedByInstall {
         if (-not $listener) { return $false }
         $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction Stop
         if ($process.Name -notmatch '^pythonw?\.exe$') { return $false }
-        $exe = [string]$process.ExecutablePath
-        if (-not $exe) { return $false }
-        $root = [System.IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\') + '\'
-        return $exe.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
+        return (Test-LocalVoiceOwnedProcess -Process $process -RuntimeDir $RuntimeDir)
     }
     catch {
         return $false
@@ -368,11 +397,22 @@ function Test-LocalVoiceRuntimeReady {
     $probe = Invoke-LocalVoiceNative $python @("-c", "import torch, voicetut_tts; print(torch.__version__)")
     if ($LASTEXITCODE -ne 0 -or -not $probe) { return $false }
     $version = (@($probe)[-1]).Trim()
-    # Accept both the CUDA variant (e.g. "2.5.1+cu121") and the CPU variant
-    # (e.g. "2.5.1") - both are valid installed runtimes, the CUDA one is
-    # just preferred when available.
-    $baseVersion = ($script:LocalVoicePinned.TorchVersion -replace '\+cu121', '')
-    return ($version -eq $script:LocalVoicePinned.TorchVersion -or $version -eq $baseVersion)
+    return (Test-LocalVoiceTorchVersionMatch $version)
+}
+
+<#
+Decides whether an installed torch.__version__ satisfies the pinned runtime.
+The pin fixes the base version ("2.5.1"); the local-version suffix ("+cu121",
+"+cpu") only describes which wheel flavor was installed - and PyPI's Windows
+CPU wheels report "2.5.1+cpu", so the CPU fallback would never pass a check
+that only accepted "2.5.1" or "2.5.1+cu121" verbatim.
+#>
+function Test-LocalVoiceTorchVersionMatch {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Version)
+    if ([string]::IsNullOrWhiteSpace($Version)) { return $false }
+    $baseVersion = ($script:LocalVoicePinned.TorchVersion -replace '\+.*$', '')
+    $installedBase = ($Version.Trim() -replace '\+.*$', '')
+    return ($installedBase -eq $baseVersion)
 }
 
 <#
@@ -544,13 +584,13 @@ function Get-LocalVoiceServiceStatus {
         if ($listener) {
             $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction Stop
             $expectedPort = "--port $($Paths.Port)"
-            $runtimeRoot = [System.IO.Path]::GetFullPath($Paths.RuntimeDir).TrimEnd('\') + '\'
             # The listener must also run out of THIS install's runtime
-            # directory. A different install's Local Voice serves the same
-            # uvicorn/app shape on its own port - treating it as ours would
-            # let start/stop/restart adopt or kill a foreign service.
-            $ownedExe = $process.ExecutablePath -and
-            ([string]$process.ExecutablePath).StartsWith($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            # (or the venv's recorded base interpreter - redirector-style
+            # CPython builds delegate there). A different install's Local
+            # Voice serves the same uvicorn/app shape on its own port -
+            # treating it as ours would let start/stop/restart adopt or
+            # kill a foreign service.
+            $ownedExe = Test-LocalVoiceOwnedProcess -Process $process -RuntimeDir $Paths.RuntimeDir
             if ($process.Name -match '^pythonw?\.exe$' -and
                 $ownedExe -and
                 $process.CommandLine -match '(^|\s)-m\s+uvicorn(\s|$)' -and

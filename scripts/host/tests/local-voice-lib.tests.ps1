@@ -93,6 +93,49 @@ Describe "Test-LocalVoiceRuntimeReady" {
     }
 }
 
+Describe "Test-LocalVoiceTorchVersionMatch" {
+    It "accepts the pinned base version and any local build tag on it" {
+        Test-LocalVoiceTorchVersionMatch "2.5.1" | Should Be $true
+        Test-LocalVoiceTorchVersionMatch "2.5.1+cu121" | Should Be $true
+        # PyPI's Windows CPU wheels report "+cpu" - the CPU fallback path
+        # depends on this variant being accepted.
+        Test-LocalVoiceTorchVersionMatch "2.5.1+cpu" | Should Be $true
+    }
+
+    It "rejects other torch versions and empty values" {
+        Test-LocalVoiceTorchVersionMatch "2.6.0" | Should Be $false
+        Test-LocalVoiceTorchVersionMatch "2.5.10" | Should Be $false
+        Test-LocalVoiceTorchVersionMatch "" | Should Be $false
+    }
+}
+
+Describe "Test-LocalVoiceOwnedProcess" {
+    It "accepts an interpreter under the runtime dir" {
+        $rt = Join-Path $env:TEMP "abud-lv-own-$(New-Guid)"
+        New-Item -ItemType Directory -Path (Join-Path $rt 'venv') -Force | Out-Null
+        $p = [pscustomobject]@{ ExecutablePath = "$rt\venv\Scripts\python.exe" }
+        Test-LocalVoiceOwnedProcess -Process $p -RuntimeDir $rt | Should Be $true
+    }
+
+    It "accepts the base interpreter recorded in pyvenv.cfg (redirector venvs)" {
+        $rt = Join-Path $env:TEMP "abud-lv-own-$(New-Guid)"
+        $base = Join-Path $env:TEMP "abud-lv-base-$(New-Guid)"
+        New-Item -ItemType Directory -Path (Join-Path $rt 'venv') -Force | Out-Null
+        Set-Content (Join-Path $rt 'venv\pyvenv.cfg') "home = $base`ninclude-system-site-packages = false"
+        $p = [pscustomobject]@{ ExecutablePath = "$base\python.exe" }
+        Test-LocalVoiceOwnedProcess -Process $p -RuntimeDir $rt | Should Be $true
+    }
+
+    It "rejects foreign interpreters and missing executables" {
+        $rt = Join-Path $env:TEMP "abud-lv-own-$(New-Guid)"
+        New-Item -ItemType Directory -Path (Join-Path $rt 'venv') -Force | Out-Null
+        $foreign = [pscustomobject]@{ ExecutablePath = "C:\Other\Python\python.exe" }
+        $none = [pscustomobject]@{ ExecutablePath = $null }
+        Test-LocalVoiceOwnedProcess -Process $foreign -RuntimeDir $rt | Should Be $false
+        Test-LocalVoiceOwnedProcess -Process $none -RuntimeDir $rt | Should Be $false
+    }
+}
+
 Describe "Get-LocalVoiceDiskFreeGb" {
     It "never throws on a path that does not exist, and degrades to 0" {
         { Get-LocalVoiceDiskFreeGb -Path "Q:\definitely\not\a\real\drive" } | Should Not Throw
