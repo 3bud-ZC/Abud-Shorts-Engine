@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   expectedResourceNames,
   findSemanticProof,
+  missingNamespaceResources,
   parseEnvText,
   sanitizePublicEvidence,
   sha256File,
@@ -79,4 +80,35 @@ test("expectedResourceNames derives an isolated Docker namespace", () => {
     ],
     network: "short-studio-acceptance-v2",
   });
+});
+
+test("missingNamespaceResources returns empty when the installed namespace is complete", () => {
+  const expected = expectedResourceNames("short-studio-acceptance");
+  assert.deepEqual(
+    missingNamespaceResources(expected, {
+      containers: [...expected.containers, "unrelated-container"],
+      volumes: [...expected.volumes, "unrelated-volume"],
+      networks: [expected.network, "unrelated-network"],
+    }),
+    [],
+  );
+});
+
+test("missingNamespaceResources names every absent container, volume and network", () => {
+  const expected = expectedResourceNames("short-studio-acceptance");
+  assert.deepEqual(
+    missingNamespaceResources(expected, {
+      containers: ["short-studio-acceptance-app"],
+      volumes: [],
+      networks: [],
+    }),
+    [
+      "short-studio-acceptance-render-worker",
+      "short-studio-acceptance-postgres",
+      "short-studio-acceptance-n8n",
+      "short-studio-acceptance-postgres-data",
+      "short-studio-acceptance-n8n-data",
+      "short-studio-acceptance-v2",
+    ],
+  );
 });

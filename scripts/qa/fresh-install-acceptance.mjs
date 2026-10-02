@@ -107,7 +107,7 @@ export function expectedResourceNames(project) {
 }
 
 function usage() {
-  return `Short Studio true fresh-install acceptance\n\nRequired:\n  --installer <Setup.exe>\n  --install-root <new, nonexistent directory>\n  --license-token-file <file>\n  --pexels-key-file <file>\n\nOptional:\n  --port <port>                       default: 13910\n  --compose-project <name>            default: short-studio-acceptance\n  --primary-install-root <path>       default: C:\\ProgramData\\ShortStudio\n  --job-timeout-ms <ms>               default: ${DEFAULT_JOB_TIMEOUT_MS}\n  --ready-timeout-ms <ms>             default: ${DEFAULT_READY_TIMEOUT_MS}\n  --report <path>                     default: <install-root>\\shared\\logs\\fresh-install-acceptance-<timestamp>.json\n  --help\n`;
+  return `Short Studio true fresh-install acceptance\n\nRequired:\n  --installer <Setup.exe>\n  --install-root <new, nonexistent directory>\n  --license-token-file <file>\n  --pexels-key-file <file>\n\nOptional:\n  --port <port>                       default: 13910\n  --compose-project <name>            default: short-studio-acceptance\n  --primary-install-root <path>       default: C:\\ProgramData\\ShortStudio\n  --job-timeout-ms <ms>               default: ${DEFAULT_JOB_TIMEOUT_MS}\n  --ready-timeout-ms <ms>             default: ${DEFAULT_READY_TIMEOUT_MS}\n  --report <path>                     default: <install-root>\\shared\\logs\\fresh-install-acceptance-<timestamp>.json\n  --resume-after-install              resume the gates against an install root where\n                                      Setup.exe already completed (e.g. the host\n                                      rebooted mid-run). Requires the installer's own\n                                      completion marker in <install-root>\\logs\\installer.log;\n                                      never re-runs Setup.exe.\n  --help\n`;
 }
 
 function parseArgs(argv) {
@@ -429,6 +429,47 @@ function assertFreshDockerNamespace(project) {
   return expected;
 }
 
+export function missingNamespaceResources(expected, present) {
+  const containers = new Set(present.containers || []);
+  const volumes = new Set(present.volumes || []);
+  const networks = new Set(present.networks || []);
+  return [
+    ...expected.containers.filter((name) => !containers.has(name)),
+    ...expected.volumes.filter((name) => !volumes.has(name)),
+    ...(networks.has(expected.network) ? [] : [expected.network]),
+  ];
+}
+
+// Resume-mode inverse of assertFreshDockerNamespace: the interrupted run must
+// pick up exactly the namespace this install created - every expected
+// container, volume and network present under the acceptance project name.
+export function assertInstalledDockerNamespace(project) {
+  const expected = expectedResourceNames(project);
+  const missing = missingNamespaceResources(expected, {
+    containers: listDocker(['ps', '-a', '--format', '{{.Names}}']),
+    volumes: listDocker(['volume', 'ls', '--format', '{{.Name}}']),
+    networks: listDocker(['network', 'ls', '--format', '{{.Name}}']),
+  });
+  if (missing.length) {
+    throw new Error(`Acceptance Docker namespace is incomplete; cannot resume (${missing.join(', ')} missing).`);
+  }
+  return expected;
+}
+
+// A resume is only honest if the real Setup.exe actually finished - the
+// installer engine writes this line as its very last step.
+function assertInstallerCompleted(installRoot) {
+  const log = path.join(installRoot, 'logs', 'installer.log');
+  if (!fs.existsSync(log)) {
+    throw new Error('Cannot resume: installer.log is missing, so Setup.exe completion is unproven.');
+  }
+  const text = fs.readFileSync(log, 'utf8');
+  if (!/INSTALLATION COMPLETE/i.test(text)) {
+    throw new Error('Cannot resume: installer.log has no INSTALLATION COMPLETE marker; Setup.exe did not finish.');
+  }
+  return true;
+}
+
 function verifyLocalVoiceIsolation(freshEnv, primaryEnv, installRoot, primaryRoot) {
   const freshPort = Number(freshEnv.LOCAL_TTS_PORT || 0);
   if (!Number.isInteger(freshPort) || freshPort <= 0) {
@@ -472,6 +513,7 @@ async function main(argv = process.argv.slice(2)) {
   const licenseTokenFile = requireArg(args, 'license-token-file');
   const pexelsKeyFile = requireArg(args, 'pexels-key-file');
   const primaryRoot = path.resolve(String(args['primary-install-root'] || 'C:\\ProgramData\\ShortStudio'));
+  const resume = Boolean(args['resume-after-install']);
   const port = Number(args.port || 13910);
   const project = String(args['compose-project'] || 'short-studio-acceptance').trim();
   const jobTimeoutMs = Number(args['job-timeout-ms'] || DEFAULT_JOB_TIMEOUT_MS);
@@ -481,12 +523,20 @@ async function main(argv = process.argv.slice(2)) {
   if (!/^[a-z0-9][a-z0-9_-]{2,50}$/i.test(project)) throw new Error('--compose-project contains unsupported characters.');
   if (!fs.existsSync(installer) || path.extname(installer).toLowerCase() !== '.exe') throw new Error('The supplied --installer does not exist or is not an EXE.');
   if (!fs.existsSync(licenseTokenFile) || !fs.existsSync(pexelsKeyFile)) throw new Error('The license token file and Pexels key file must both exist.');
-  if (fs.existsSync(installRoot)) throw new Error('The acceptance install root already exists. Choose a brand-new directory; this harness never deletes it for you.');
+  if (resume) {
+    if (!fs.existsSync(installRoot)) {
+      throw new Error('--resume-after-install requires an existing install root from a completed Setup.exe run.');
+    }
+    assertInstallerCompleted(installRoot);
+  } else {
+    if (fs.existsSync(installRoot)) throw new Error('The acceptance install root already exists. Choose a brand-new directory; this harness never deletes it for you.');
+    if (await portIsListening(port)) throw new Error(`Port ${port} is already in use.`);
+  }
   if (samePath(installRoot, primaryRoot)) throw new Error('The acceptance install root must not be the primary installation root.');
-  if (await portIsListening(port)) throw new Error(`Port ${port} is already in use.`);
 
   runDocker(['info']);
-  assertFreshDockerNamespace(project);
+  if (resume) assertInstalledDockerNamespace(project);
+  else assertFreshDockerNamespace(project);
 
   // Requiring elevation up front avoids a silent/hidden UAC failure halfway
   // through a multi-gigabyte Setup.exe run.
@@ -498,7 +548,7 @@ async function main(argv = process.argv.slice(2)) {
     targetVersion: '2.6.0',
     startedAt: new Date().toISOString(),
     host: { platform: os.platform(), release: os.release(), arch: os.arch() },
-    install: { root: installRoot, port, composeProject: project },
+    install: { root: installRoot, port, composeProject: project, resumedAfterInstall: resume },
     gates: {},
     overall: 'RUNNING',
   };
@@ -514,12 +564,17 @@ async function main(argv = process.argv.slice(2)) {
     gate('preflight_isolation', {
       installerSha256: await sha256File(installer),
       primaryInstallDetected: Boolean(primaryEnv),
-      dockerNamespaceFresh: true,
-      targetPortFree: true,
+      resumedAfterInstall: resume,
+      dockerNamespace: resume ? 'installed' : 'fresh',
+      ...(resume ? { installerCompletedMarker: true } : { targetPortFree: true }),
     });
 
-    process.stdout.write('[RUN ] real Setup.exe fresh install\n');
-    run(installer, installerArgs({ installRoot, port, project }), { inherit: true, timeoutMs: 45 * 60 * 1000 });
+    if (resume) {
+      process.stdout.write('[RUN ] resume after completed Setup.exe install\n');
+    } else {
+      process.stdout.write('[RUN ] real Setup.exe fresh install\n');
+      run(installer, installerArgs({ installRoot, port, project }), { inherit: true, timeoutMs: 45 * 60 * 1000 });
+    }
 
     const envFile = path.join(installRoot, 'shared', 'config', '.env');
     if (!fs.existsSync(envFile)) throw new Error('Setup.exe finished but the fresh installation .env file is missing.');
