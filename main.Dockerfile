@@ -51,13 +51,16 @@ FROM node:22-bookworm-slim AS install-openclip
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update && apt install -y python3 python3-pip python3-venv wget && apt-get clean && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/pyruntime
-# Install torch AND torchvision together from the CPU-only index (smaller, no
-# CUDA). torchvision MUST come from the same index as torch: PyPI's torchvision
-# wheel is built against CUDA torch and fails at import against torch+cpu with
-# "operator torchvision::nms does not exist". The PyTorch CPU index mirrors
-# all of their shared deps (filelock, typing-extensions, sympy, etc.) so a
-# plain --index-url suffices here.
-RUN /opt/pyruntime/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Install torch AND torchvision together, pinned to the exact +cpu wheel pair
+# (smaller, no CUDA). torchvision MUST come from the same index as torch:
+# PyPI's torchvision wheel is built against CUDA torch and fails at import
+# against torch+cpu with "operator torchvision::nms does not exist". The
+# +cpu local version exists only on the PyTorch index, so the pins cannot
+# drift to PyPI's CUDA builds even though PyPI is enabled as
+# --extra-index-url - which it must be: the PyTorch index's typing-extensions
+# mirror entry carries a raw-name metadata mismatch that makes pip discard
+# the wheel and try to build the sdist (fails: flit_core is not mirrored).
+RUN /opt/pyruntime/bin/pip install --no-cache-dir torch==2.14.1+cpu torchvision==0.29.1+cpu --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
 # open-clip-torch and opencv-python-headless live only on PyPI. torch and
 # torchvision are already satisfied by the CPU wheels above, so pip leaves
 # them untouched. opencv (cv2) is required by the media-analysis worker

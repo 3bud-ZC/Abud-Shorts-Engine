@@ -219,7 +219,7 @@ begin
     CmdParams := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
       ExpandConstant('{tmp}\run-install.ps1') + '"' +
       ' -PackageArchive "' + ExpandConstant('{tmp}\Short-Studio-Server-2.6.0.tar.gz') + '"' +
-      ' -ExpectedSha256 "181e5aca3aac19ff0657b315ec1b99e3ac7b08f4940b78e6a015e856dd25688d"' +
+      ' -ExpectedSha256 "dabe6e552c8bc378a33927b5562884ec2e8359d9b50a1b15ea7b9e6482186b18"' +
       ' -InstallRoot "' + TargetRoot + '"' +
       ' -Port ' + GetPort('') +
       ' -ComposeProject "' + GetComposeProject('') + '"' +

@@ -29,6 +29,17 @@ if (tarballs.length === 0) {
   process.exit(1);
 }
 
+// Packages are several gigabytes - readFileSync refuses anything over ~2 GiB.
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(file);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
 let failed = false;
 
 for (const name of tarballs) {
@@ -39,7 +50,7 @@ for (const name of tarballs) {
   const sidecar = `${tarball}.sha256`;
   if (fs.existsSync(sidecar)) {
     const expected = fs.readFileSync(sidecar, "utf-8").trim().split(/\s+/)[0];
-    const actual = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
+    const actual = await sha256File(tarball);
     if (expected !== actual) {
       console.error(`  FAIL: checksum mismatch (published ${expected}, actual ${actual})`);
       failed = true;
@@ -113,7 +124,7 @@ if (fs.existsSync(manifestPath)) {
     console.error(`  FAIL: the manifest names version ${manifest.version} but ${expectedName} is not here`);
     failed = true;
   } else {
-    const actual = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
+    const actual = await sha256File(tarball);
     if (actual !== manifest.packageSha256) {
       console.error("  FAIL: the manifest checksum does not match the package");
       failed = true;
