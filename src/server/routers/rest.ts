@@ -35,12 +35,14 @@ import { AuthService } from "../v2/auth/authService";
 import { ApiTokenService } from "../v2/auth/apiTokenService";
 import { isLocalSingleUserAccess, localSingleUserOwner } from "../v2/auth/localSingleUser";
 import { PRODUCT_SLUG } from "../../version";
+import { LicenseManager } from "../v2/licensing/licenseManager";
 
 // todo abstract class
 export class APIRouter {
   public router: express.Router;
   private shortCreator: ShortCreator;
   private config: Config;
+  private licenseManager = LicenseManager.getInstance();
 
   constructor(config: Config, shortCreator: ShortCreator, private authService?: AuthService, private apiTokenService?: ApiTokenService) {
     this.config = config;
@@ -148,6 +150,12 @@ export class APIRouter {
       this.requireProtectedAccess("production:create"),
       async (req: ExpressRequest, res: ExpressResponse) => {
         try {
+          const synthesisTimeoutMs = Number(
+            process.env.LOCAL_TTS_SYNTHESIS_TIMEOUT_MS || 180000,
+          );
+          req.setTimeout(
+            Math.max(this.config.requestTimeoutMs, synthesisTimeoutMs + 60_000),
+          );
           const text = String(req.body?.text || "").trim();
           if (!text || text.length > 500) {
             res.status(400).json({
@@ -165,7 +173,7 @@ export class APIRouter {
             voiceId: typeof req.body?.voiceId === "string" ? req.body.voiceId : undefined,
             pronunciationDictionary:
               req.body?.pronunciationDictionary &&
-              typeof req.body.pronunciationDictionary === "object"
+                typeof req.body.pronunciationDictionary === "object"
                 ? req.body.pronunciationDictionary
                 : undefined,
           });
@@ -599,6 +607,17 @@ export class APIRouter {
 
   private requireProtectedAccess(requiredScope: "production:create" | "videos:read") {
     return async (req: ExpressRequest, res: ExpressResponse, next: express.NextFunction) => {
+      if (requiredScope === "production:create") {
+        if (process.env.VITEST === "true" && process.env.ABUD_ENFORCE_LICENSE_IN_TESTS !== "true") {
+          next();
+          return;
+        }
+        const gate = this.licenseManager.requireActiveForProduction();
+        if (!gate.allowed) {
+          res.status(402).json(gate.response);
+          return;
+        }
+      }
       if (!this.authService) {
         next();
         return;

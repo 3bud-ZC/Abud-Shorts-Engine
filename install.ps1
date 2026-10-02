@@ -60,7 +60,8 @@ if (-not $InstallRoot) {
         # does not perform - the safe move is to keep operating where the real
         # data already is.
         $InstallRoot = $LegacyAbudRoot
-    } else {
+    }
+    else {
         $InstallRoot = $FreshShortStudioRoot
     }
 }
@@ -70,18 +71,19 @@ if (-not $IsLegacyAbudInstall -and $InstallRoot -and (Test-Path $ExistingEnvFile
     $legacyEnvLine = Get-Content $ExistingEnvFile | Where-Object { $_ -match "^ABUD_CONTAINER_PREFIX=" } | Select-Object -Last 1
     $IsLegacyAbudInstall = [bool]$legacyEnvLine
 }
-$AbudShared      = Join-Path $InstallRoot "shared"
-$AbudReleases    = Join-Path $InstallRoot "releases"
+$AbudShared = Join-Path $InstallRoot "shared"
+$AbudReleases = Join-Path $InstallRoot "releases"
 $AbudCurrentFile = Join-Path $InstallRoot "current.txt"
-$AbudDataDir     = Join-Path $AbudShared "data"
-$AbudConfigDir   = Join-Path $AbudShared "config"
-$AbudEnvFile     = Join-Path $AbudConfigDir ".env"
+$AbudDataDir = Join-Path $AbudShared "data"
+$AbudConfigDir = Join-Path $AbudShared "config"
+$AbudEnvFile = Join-Path $AbudConfigDir ".env"
 
 if (-not $ComposeProject) {
     if ($IsLegacyAbudInstall) {
         $existingPrefixLine = if (Test-Path $AbudEnvFile) { Get-Content $AbudEnvFile | Where-Object { $_ -match "^ABUD_CONTAINER_PREFIX=" } | Select-Object -Last 1 } else { $null }
         $ComposeProject = if ($existingPrefixLine) { $existingPrefixLine.Substring("ABUD_CONTAINER_PREFIX=".Length) } else { "abud-shorts" }
-    } else {
+    }
+    else {
         $ComposeProject = "short-studio"
     }
 }
@@ -136,7 +138,8 @@ function Invoke-Docker {
     $ErrorActionPreference = "Continue"
     try {
         & docker @DockerArgs 2>&1 | ForEach-Object { "$_" }
-    } finally {
+    }
+    finally {
         $ErrorActionPreference = $previous
     }
 }
@@ -183,7 +186,8 @@ try {
     $probe.Connect("127.0.0.1", $Port)
     $probe.Close()
     $portBusy = $true
-} catch { $portBusy = $false }
+}
+catch { $portBusy = $false }
 if ($portBusy) {
     # The port being busy is only a problem if something ELSE has it. Re-running
     # the installer over an existing installation - to repair it, or to move it
@@ -195,12 +199,14 @@ if ($portBusy) {
     try {
         $probe = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v2/system/info" -TimeoutSec 5 -ErrorAction Stop
         $ownedByUs = ($probe.name -like "Short Studio*") -or ($probe.name -like "ABUD Shorts Engine*")
-    } catch { $ownedByUs = $false }
+    }
+    catch { $ownedByUs = $false }
 
     if ($ownedByUs) {
         Write-Host "      Port $Port is serving an existing installation; reinstalling over it." -ForegroundColor Yellow
         Write-Host "      Your videos, settings and backups are not touched."
-    } else {
+    }
+    else {
         Fail "Port $Port is already in use by another program on this machine. Choose another one: .\install.ps1 -Port 3131"
     }
 }
@@ -211,7 +217,8 @@ if (-not $PublicUrl) {
     $PublicUrl = "http://localhost:$Port"
     Write-Host "      Local installation: $PublicUrl" -ForegroundColor Green
     Write-Host "      For a server with a domain, rerun with: -PublicUrl https://shorts.example.com"
-} else {
+}
+else {
     if ($PublicUrl -notmatch '^https?://') { Fail "-PublicUrl must start with http:// or https://" }
     $PublicUrl = $PublicUrl.TrimEnd("/")
     Write-Host "      Public address: $PublicUrl" -ForegroundColor Green
@@ -230,8 +237,8 @@ if (-not (Test-Path $releaseJsonPath)) {
 }
 $releaseInfo = Get-Content $releaseJsonPath -Raw | ConvertFrom-Json
 $ReleaseVersion = $releaseInfo.version
-$ReleaseImage   = if ($Image) { $Image } else { $releaseInfo.image }
-$ReleaseDigest  = $releaseInfo.imageDigest
+$ReleaseImage = if ($Image) { $Image } else { $releaseInfo.image }
+$ReleaseDigest = $releaseInfo.imageDigest
 $ReleaseChannel = if ($releaseInfo.channel) { $releaseInfo.channel } else { "stable" }
 if (-not $ReleaseVersion) { Fail "This package does not declare a version." }
 Write-Host "      Version $ReleaseVersion ($ReleaseChannel)" -ForegroundColor Green
@@ -256,11 +263,13 @@ if ($offlineArchive) {
     Invoke-Docker @("load", "-i", $offlineArchive.FullName) | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "The bundled application image could not be loaded." }
     Write-Host "      Image loaded from the package." -ForegroundColor Green
-} elseif ($imageAlreadyLocal) {
+}
+elseif ($imageAlreadyLocal) {
     # Already present locally - the case an offline reinstall and the isolated
     # F4 rehearsal both hit. No download needed.
     Write-Host "      The application image is already on this machine." -ForegroundColor Green
-} else {
+}
+else {
     # Pull by digest when the package publishes one: a tag can be moved, a
     # digest cannot, so this is what makes the installed version reproducible.
     $pullRef = $ReleaseImage
@@ -302,7 +311,8 @@ if (Test-Path $AbudEnvFile) {
         if ($portLine) { $existingPort = [int]$portLine.Substring("LOCAL_TTS_PORT=".Length) }
         $stopPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $existingPort
         Stop-LocalVoiceService -Paths $stopPaths | Out-Null
-    } catch { }
+    }
+    catch { }
 }
 
 if (Test-Path "$ReleaseDir.incoming") { Remove-Item "$ReleaseDir.incoming" -Recurse -Force }
@@ -337,6 +347,32 @@ function Test-EnvKeyPresent([string[]]$Lines, [string]$Key) {
     return [bool]($Lines | Where-Object { $_ -match "^$([regex]::Escape($Key))=" })
 }
 
+function Get-DeviceFingerprintMaterial {
+    $parts = @()
+    try {
+        $guid = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid -ErrorAction Stop).MachineGuid
+        if ($guid) { $parts += "win_guid:$guid" }
+    }
+    catch { }
+    try {
+        $uuid = (Get-CimInstance Win32_ComputerSystemProduct -ErrorAction Stop).UUID
+        if ($uuid) { $parts += "system_uuid:$uuid" }
+    }
+    catch { }
+    try {
+        $cpu = (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1).ProcessorId
+        if ($cpu) { $parts += "cpu:$cpu" }
+    }
+    catch { }
+    $raw = if ($parts.Count -gt 0) { $parts -join "|" } else { "$env:COMPUTERNAME|$env:USERNAME" }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
+    $hash = (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+    return "SS-$($hash.Substring(0,4))-$($hash.Substring(4,4))-$($hash.Substring(8,4))-$($hash.Substring(12,4))"
+}
+
+$HostDeviceFingerprint = Get-DeviceFingerprintMaterial
+
 if (-not (Test-Path $AbudEnvFile)) {
     # Never reached for an upgrade: $IsLegacyAbudInstall guarantees this file
     # already exists whenever a real ABUD Shorts Engine 2.4 install is present.
@@ -369,6 +405,7 @@ LOG_LEVEL=info
 GENERIC_TIMEZONE=Africa/Cairo
 WHISPER_MODEL=small
 KOKORO_MODEL_PRECISION=q4
+ABUD_HOST_DEVICE_FINGERPRINT=$HostDeviceFingerprint
 
 POSTGRES_DB=short_studio
 POSTGRES_USER=short_studio
@@ -390,7 +427,8 @@ PEXELS_API_KEY=
 "@
     Write-TextFile $AbudEnvFile $envContent
     Write-Host "      Generated a unique configuration with fresh secrets." -ForegroundColor Green
-} else {
+}
+else {
     # An existing installation keeps its secrets and its data. Only the version
     # pointers move - and, for an install upgraded from ABUD Shorts Engine 2.4,
     # the compose identity variables that keep it attached to its real,
@@ -421,7 +459,8 @@ PEXELS_API_KEY=
         if (-not (Test-EnvKeyPresent $lines "ABUD_NETWORK")) {
             $lines = Update-EnvLine $lines "ABUD_NETWORK" "${ComposeProject}_abud-shorts-v2"
         }
-    } else {
+    }
+    else {
         $lines = Update-EnvLine $lines "SHORT_STUDIO_IMAGE" $ReleaseImage
         $lines = Update-EnvLine $lines "SHORT_STUDIO_RELEASE_CHANNEL" $ReleaseChannel
         $lines = Update-EnvLine $lines "SHORT_STUDIO_COMPOSE_PROJECT" $ComposeProject
@@ -442,6 +481,7 @@ PEXELS_API_KEY=
     if (-not (Test-EnvKeyPresent $lines "SHORT_STUDIO_PUBLIC_BIND_HOST")) {
         $lines = Update-EnvLine $lines "SHORT_STUDIO_PUBLIC_BIND_HOST" "127.0.0.1"
     }
+    $lines = Update-EnvLine $lines "ABUD_HOST_DEVICE_FINGERPRINT" $HostDeviceFingerprint
     Write-TextFile $AbudEnvFile (($lines -join "`r`n") + "`r`n")
     Write-Host "      Existing configuration kept; secrets and data untouched." -ForegroundColor Green
 }
@@ -477,15 +517,28 @@ Write-Host "[8/10] Setting up Local Voice ($LocalVoice)..." -ForegroundColor Yel
 if ($LocalVoice -eq "SKIP") {
     Write-Host "      Skipped by request. Arabic jobs will report Local Voice setup is required" -ForegroundColor Yellow
     Write-Host "      until it is installed later (Local Voice command, or the app's Providers page)."
-} else {
+}
+else {
     try {
         $localVoiceAppSource = Join-Path $ReleaseDir "services\local-tts"
         $tokenLine = Get-Content $AbudEnvFile | Where-Object { $_ -match "^INTERNAL_SERVICE_TOKEN=" } | Select-Object -Last 1
         $internalToken = if ($tokenLine) { $tokenLine.Substring("INTERNAL_SERVICE_TOKEN=".Length) } else { "" }
 
+        # A reinstall/repair keeps the port this install already claimed in
+        # its .env instead of resolving a fresh one; a brand-new install has
+        # no claim yet and resolves from the default.
+        $preferredVoicePort = 8765
+        $existingVoicePortLine = Get-Content $AbudEnvFile | Where-Object { $_ -match "^LOCAL_TTS_PORT=" } | Select-Object -Last 1
+        if ($existingVoicePortLine) {
+            $existingVoicePort = 0
+            if ([int]::TryParse($existingVoicePortLine.Substring("LOCAL_TTS_PORT=".Length).Trim(), [ref]$existingVoicePort) -and $existingVoicePort -gt 0) {
+                $preferredVoicePort = $existingVoicePort
+            }
+        }
+
         $localVoiceResult = Invoke-LocalVoiceSetup -Mode $LocalVoice -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
             -AppSourceDir $localVoiceAppSource -LibRoot (Join-Path $ReleaseDir "scripts\host") `
-            -InternalServiceToken $internalToken
+            -InternalServiceToken $internalToken -PreferredPort $preferredVoicePort
 
         function Update-EnvLineInstaller([string[]]$Lines, [string]$Key, [string]$Value) {
             $found = $false
@@ -506,14 +559,17 @@ if ($LocalVoice -eq "SKIP") {
             Write-Host "      The rest of Short Studio will still install and start normally." -ForegroundColor Yellow
             Write-Host "      Retry from the Start Menu: Short Studio Doctor, or the Repair Local Voice shortcut." -ForegroundColor Yellow
             Write-Host "      ElevenLabs is not used automatically; Arabic jobs will report setup is required until this is fixed."
-        } elseif ($localVoiceResult.resolvedMode -eq "SKIP") {
+        }
+        elseif ($localVoiceResult.resolvedMode -eq "SKIP") {
             Write-Host "      $($localVoiceResult.resolutionReason)" -ForegroundColor Yellow
-        } else {
+        }
+        else {
             Write-Host "      Mode: $($localVoiceResult.resolvedMode) ($($localVoiceResult.resolutionReason))" -ForegroundColor Green
             Write-Host "      Model: $($localVoiceResult.modelId), ready: $($localVoiceResult.modelReady)" -ForegroundColor Green
             Write-Host "      Service healthy: $($localVoiceResult.serviceStarted); starts automatically at login: $($localVoiceResult.autoStartRegistered) ($($localVoiceResult.autoStartMechanism))" -ForegroundColor Green
         }
-    } catch {
+    }
+    catch {
         Write-Host "      Local High Quality setup failed: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "      The rest of Short Studio will still install and start normally." -ForegroundColor Yellow
         Write-Host "      Retry from the Start Menu: Short Studio - Repair Local Voice." -ForegroundColor Yellow
@@ -534,6 +590,7 @@ $env:SHORT_STUDIO_RELEASE_DIR = $ReleaseDir
 $env:ABUD_RELEASE_DIR = $ReleaseDir
 $env:SHORT_STUDIO_CONTAINER_PREFIX = $ComposeProject
 $env:ABUD_CONTAINER_PREFIX = $ComposeProject
+$env:ABUD_HOST_DEVICE_FINGERPRINT = $HostDeviceFingerprint
 if (-not $IsLegacyAbudInstall) {
     $env:SHORT_STUDIO_POSTGRES_VOLUME = "$ComposeProject-postgres-data"
     $env:SHORT_STUDIO_N8N_VOLUME = "$ComposeProject-n8n-data"
@@ -569,11 +626,11 @@ if (-not $NoShortcuts) {
         New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
         $shell = New-Object -ComObject WScript.Shell
         $shortcuts = @(
-            @{ Name = "Short Studio - Open";        Cmd = "start";       Desc = "Start Short Studio and open the dashboard" },
-            @{ Name = "Short Studio - Update";      Cmd = "update";      Desc = "Install the latest version, safely" },
-            @{ Name = "Short Studio - Backup";      Cmd = "backup";      Desc = "Create a backup now" },
+            @{ Name = "Short Studio - Open"; Cmd = "start"; Desc = "Start Short Studio and open the dashboard" },
+            @{ Name = "Short Studio - Update"; Cmd = "update"; Desc = "Install the latest version, safely" },
+            @{ Name = "Short Studio - Backup"; Cmd = "backup"; Desc = "Create a backup now" },
             @{ Name = "Short Studio - Diagnostics"; Cmd = "diagnostics"; Desc = "Write a support bundle" },
-            @{ Name = "Short Studio - Status";      Cmd = "status";      Desc = "Show system health and version" },
+            @{ Name = "Short Studio - Status"; Cmd = "status"; Desc = "Show system health and version" },
             @{ Name = "Short Studio - Repair Local Voice"; Cmd = "local-voice repair"; Desc = "Retry Local Voice (Arabic) setup" }
         )
         foreach ($entry in $shortcuts) {
@@ -585,7 +642,8 @@ if (-not $NoShortcuts) {
             $link.Save()
         }
         Write-Host "      Start Menu shortcuts created under 'Short Studio'." -ForegroundColor Green
-    } catch {
+    }
+    catch {
         Write-Host "      Note: Start Menu shortcuts could not be created (run as administrator to add them)." -ForegroundColor Yellow
         Write-Host "      Run operations from: $cliPath"
     }
@@ -598,7 +656,8 @@ for ($attempt = 0; $attempt -lt 90; $attempt++) {
         Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health/ready" -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
         $ready = $true
         break
-    } catch { Start-Sleep -Seconds 2 }
+    }
+    catch { Start-Sleep -Seconds 2 }
 }
 
 # ---------------------------------------------------------------------------
@@ -619,7 +678,8 @@ Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Green
 if ($ready) {
     Write-Host "  Short Studio Server $ReleaseVersion is installed and running" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "  Short Studio Server $ReleaseVersion is installed" -ForegroundColor Green
 }
 if ($migratedFromAbud) {

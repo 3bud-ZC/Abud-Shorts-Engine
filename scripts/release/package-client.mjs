@@ -16,6 +16,11 @@
  * Optional:
  *   --channel stable|development   default stable
  *   --offline                      also export the image into images/ (large)
+ *   --image-archive <path>         use an already-exported `docker save` tar
+ *                                  instead of running docker save again -
+ *                                  needed where the daemon->client stream is
+ *                                  pathologically slow (Docker Desktop) and
+ *                                  the tar was produced inside the VM instead
  *   --release-url / --notes-url    links published in the manifest
  *   --manifest-only                regenerate the manifest for an existing package
  *
@@ -150,8 +155,16 @@ function parseArgs(argv) {
   return args;
 }
 
+// The offline package tarball is several gigabytes - readFileSync refuses
+// anything over ~2 GiB, so the hash must stream.
 function sha256File(file) {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(file);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
 }
 
 /**
@@ -174,7 +187,7 @@ function copyInto(source, destination, relative) {
   fs.copyFileSync(source, destination);
 }
 
-export function buildClientPackage(options) {
+export async function buildClientPackage(options) {
   const {
     version,
     image,
@@ -183,6 +196,7 @@ export function buildClientPackage(options) {
     schemaVersion,
     outDir,
     offline = false,
+    imageArchive = "",
     repoRoot = REPO_ROOT,
     schemaBackwardsCompatible = true,
   } = options;
@@ -239,7 +253,14 @@ export function buildClientPackage(options) {
     const imagesDir = path.join(stageDir, "images");
     fs.mkdirSync(imagesDir, { recursive: true });
     const archive = path.join(imagesDir, `short-studio-server-${version}.tar`);
-    execFileSync("docker", ["save", "-o", archive, image], { stdio: "inherit" });
+    if (imageArchive) {
+      if (!fs.existsSync(imageArchive)) {
+        throw new Error(`--image-archive does not exist: ${imageArchive}`);
+      }
+      fs.copyFileSync(imageArchive, archive);
+    } else {
+      execFileSync("docker", ["save", "-o", archive, image], { stdio: "inherit" });
+    }
   }
 
   // Nothing that should never leave this machine may be inside the staged
@@ -262,7 +283,7 @@ export function buildClientPackage(options) {
     stdio: "inherit",
   });
 
-  const packageSha256 = sha256File(tarball);
+  const packageSha256 = await sha256File(tarball);
   fs.writeFileSync(
     path.join(outDir, `${packageName}.tar.gz.sha256`),
     `${packageSha256}  ${packageName}.tar.gz\n`,
@@ -343,7 +364,7 @@ async function main() {
   console.log(`  schema: ${schemaVersion}`);
   console.log(`  out:    ${outDir}`);
 
-  const built = buildClientPackage({
+  const built = await buildClientPackage({
     version,
     image,
     digest,
@@ -351,6 +372,7 @@ async function main() {
     schemaVersion,
     outDir,
     offline: Boolean(args.offline),
+    imageArchive: typeof args["image-archive"] === "string" ? path.resolve(args["image-archive"]) : "",
   });
 
   console.log(`  package: ${path.basename(built.tarball)}`);

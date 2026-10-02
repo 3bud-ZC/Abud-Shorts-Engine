@@ -93,6 +93,49 @@ Describe "Test-LocalVoiceRuntimeReady" {
     }
 }
 
+Describe "Test-LocalVoiceTorchVersionMatch" {
+    It "accepts the pinned base version and any local build tag on it" {
+        Test-LocalVoiceTorchVersionMatch "2.5.1" | Should Be $true
+        Test-LocalVoiceTorchVersionMatch "2.5.1+cu121" | Should Be $true
+        # PyPI's Windows CPU wheels report "+cpu" - the CPU fallback path
+        # depends on this variant being accepted.
+        Test-LocalVoiceTorchVersionMatch "2.5.1+cpu" | Should Be $true
+    }
+
+    It "rejects other torch versions and empty values" {
+        Test-LocalVoiceTorchVersionMatch "2.6.0" | Should Be $false
+        Test-LocalVoiceTorchVersionMatch "2.5.10" | Should Be $false
+        Test-LocalVoiceTorchVersionMatch "" | Should Be $false
+    }
+}
+
+Describe "Test-LocalVoiceOwnedProcess" {
+    It "accepts an interpreter under the runtime dir" {
+        $rt = Join-Path $env:TEMP "abud-lv-own-$(New-Guid)"
+        New-Item -ItemType Directory -Path (Join-Path $rt 'venv') -Force | Out-Null
+        $p = [pscustomobject]@{ ExecutablePath = "$rt\venv\Scripts\python.exe" }
+        Test-LocalVoiceOwnedProcess -Process $p -RuntimeDir $rt | Should Be $true
+    }
+
+    It "accepts the base interpreter recorded in pyvenv.cfg (redirector venvs)" {
+        $rt = Join-Path $env:TEMP "abud-lv-own-$(New-Guid)"
+        $base = Join-Path $env:TEMP "abud-lv-base-$(New-Guid)"
+        New-Item -ItemType Directory -Path (Join-Path $rt 'venv') -Force | Out-Null
+        Set-Content (Join-Path $rt 'venv\pyvenv.cfg') "home = $base`ninclude-system-site-packages = false"
+        $p = [pscustomobject]@{ ExecutablePath = "$base\python.exe" }
+        Test-LocalVoiceOwnedProcess -Process $p -RuntimeDir $rt | Should Be $true
+    }
+
+    It "rejects foreign interpreters and missing executables" {
+        $rt = Join-Path $env:TEMP "abud-lv-own-$(New-Guid)"
+        New-Item -ItemType Directory -Path (Join-Path $rt 'venv') -Force | Out-Null
+        $foreign = [pscustomobject]@{ ExecutablePath = "C:\Other\Python\python.exe" }
+        $none = [pscustomobject]@{ ExecutablePath = $null }
+        Test-LocalVoiceOwnedProcess -Process $foreign -RuntimeDir $rt | Should Be $false
+        Test-LocalVoiceOwnedProcess -Process $none -RuntimeDir $rt | Should Be $false
+    }
+}
+
 Describe "Get-LocalVoiceDiskFreeGb" {
     It "never throws on a path that does not exist, and degrades to 0" {
         { Get-LocalVoiceDiskFreeGb -Path "Q:\definitely\not\a\real\drive" } | Should Not Throw
@@ -108,6 +151,67 @@ Describe "Resolve-LocalVoicePort" {
     It "returns the preferred port when nothing else is listening on it" {
         $port = Resolve-LocalVoicePort -PreferredPort 18765 -MaxAttempts 3
         $port | Should Be 18765
+    }
+
+    It "never hands out a port another installation has claimed, even while it is free" {
+        $port = Resolve-LocalVoicePort -PreferredPort 18766 -MaxAttempts 4 -ReservedPorts @(18766)
+        $port | Should Be 18767
+        $port | Should Not Be 18766
+    }
+
+    It "scans past both reserved and occupied candidates" {
+        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 18768)
+        try {
+            $listener.Start()
+            $port = Resolve-LocalVoicePort -PreferredPort 18768 -MaxAttempts 4 -ReservedPorts @(18769)
+            $port | Should Be 18770
+        }
+        finally {
+            $listener.Stop()
+        }
+    }
+}
+
+Describe "Get-SiblingLocalVoiceReservedPorts" {
+    It "collects a sibling install's claimed port and always excludes our own root" {
+        $base = Join-Path $env:TEMP ("abud-lv-sib-" + [Guid]::NewGuid().ToString("N"))
+        $myRoot = Join-Path $base "Mine"
+        $sibling = Join-Path $base "Sibling"
+        $other = Join-Path $base "NoEnv"
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $myRoot "shared\config") -Force | Out-Null
+            New-Item -ItemType Directory -Path (Join-Path $sibling "shared\config") -Force | Out-Null
+            New-Item -ItemType Directory -Path $other -Force | Out-Null
+            Set-Content -Path (Join-Path $myRoot "shared\config\.env") -Value "LOCAL_TTS_PORT=18771" -Encoding ascii
+            Set-Content -Path (Join-Path $sibling "shared\config\.env") -Value "LOCAL_TTS_PORT=18772`nOTHER=1" -Encoding ascii
+
+            $ports = Get-SiblingLocalVoiceReservedPorts -AbudShared (Join-Path $myRoot "shared") `
+                -InstallRoots @($myRoot, $sibling, $other)
+            ($ports -join ',') | Should Be "18772"
+            @($ports) -contains 18771 | Should Be $false
+        }
+        finally {
+            Remove-Item $base -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe "Get-LocalVoiceTaskNameFor" {
+    It "keeps the bare historical name for the default install roots" {
+        Get-LocalVoiceTaskNameFor -AbudShared (Join-Path $env:ProgramData "ShortStudio\shared") | Should Be "Short Studio - Local Voice"
+        Get-LocalVoiceTaskNameFor -AbudShared (Join-Path $env:ProgramData "AbudShorts\shared") | Should Be "Short Studio - Local Voice"
+    }
+
+    It "derives a stable, distinct scoped name for any other install root" {
+        $rootA = Join-Path $env:TEMP "abud-lv-name-a\shared"
+        $rootB = Join-Path $env:TEMP "abud-lv-name-b\shared"
+        $nameA = Get-LocalVoiceTaskNameFor -AbudShared $rootA
+        $nameB = Get-LocalVoiceTaskNameFor -AbudShared $rootB
+        $nameA | Should Match "^Short Studio - Local Voice \([0-9a-f]{8}\)$"
+        $nameB | Should Match "^Short Studio - Local Voice \([0-9a-f]{8}\)$"
+        $nameA | Should Not Be $nameB
+        # Same root must always derive the same name (idempotent registration).
+        Get-LocalVoiceTaskNameFor -AbudShared $rootA | Should Be $nameA
     }
 }
 
@@ -138,10 +242,11 @@ Describe "Windows auto-start (real, against this machine's actual Task Scheduler
             @("scheduled_task", "startup_folder") -contains $result.mechanism | Should Be $true
             Test-Path (Get-LocalVoiceAutoStartLauncherPath -AbudShared $root) | Should Be $true
 
-            $status = Test-LocalVoiceAutoStartRegistered
+            $status = Test-LocalVoiceAutoStartRegistered -AbudShared $root
             $status.any | Should Be $true
             $status.mechanism | Should Be $result.mechanism
-        } finally {
+        }
+        finally {
             Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -153,9 +258,11 @@ Describe "Windows auto-start (real, against this machine's actual Task Scheduler
             Register-LocalVoiceAutoStart -AbudShared $root | Out-Null
             Register-LocalVoiceAutoStart -AbudShared $root | Out-Null
             $startupDir = [System.Environment]::GetFolderPath("Startup")
-            $matches = @(Get-ChildItem $startupDir -Filter "ABUD Shorts - Local Voice*" -ErrorAction SilentlyContinue)
+            $matches = @(Get-ChildItem $startupDir -Filter "Short Studio - Local Voice*" -ErrorAction SilentlyContinue) +
+            @(Get-ChildItem $startupDir -Filter "ABUD Shorts - Local Voice*" -ErrorAction SilentlyContinue)
             $matches.Count | Should BeLessThan 2
-        } finally {
+        }
+        finally {
             Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -173,7 +280,8 @@ Describe "Windows auto-start (real, against this machine's actual Task Scheduler
             $parseErrors = $null
             [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $launcherPath), [ref]$parseErrors) | Out-Null
             $parseErrors.Count | Should Be 0
-        } finally {
+        }
+        finally {
             Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -191,11 +299,12 @@ Describe "Windows auto-start (real, against this machine's actual Task Scheduler
             Register-LocalVoiceAutoStart -AbudShared $root | Out-Null
             Unregister-LocalVoiceAutoStart -AbudShared $root | Out-Null
 
-            (Test-LocalVoiceAutoStartRegistered).any | Should Be $false
+            (Test-LocalVoiceAutoStartRegistered -AbudShared $root).any | Should Be $false
             Test-Path (Get-LocalVoiceAutoStartLauncherPath -AbudShared $root) | Should Be $false
             Test-Path $paths.VenvDir | Should Be $true
             Test-Path (Join-Path $paths.ModelCacheDir "metadata.json") | Should Be $true
-        } finally {
+        }
+        finally {
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -208,7 +317,8 @@ Describe "Windows auto-start (real, against this machine's actual Task Scheduler
             # It must read current.txt at run time, not bake in today's release path.
             $content | Should Match "current\.txt"
             $content | Should Not Match "releases\\\\2\."
-        } finally {
+        }
+        finally {
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -227,7 +337,8 @@ Describe "Uninstall preserves data by default" {
 
             Test-Path $paths.VenvDir | Should Be $true
             Test-Path (Join-Path $paths.ModelCacheDir "metadata.json") | Should Be $true
-        } finally {
+        }
+        finally {
             Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
         }
     }

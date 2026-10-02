@@ -42,47 +42,93 @@ WORKDIR /whisper/models
 # the final stage below) was itself broken and never used this directory.
 RUN sh ./download-ggml-model.sh small
 
+# OpenCLIP semantic media matching - build the Python runtime and download
+# the ViT-B-32 checkpoint at BUILD time so a fresh container has everything
+# it needs without internet access. The compose file mounts the shared data
+# directory at /models, and the entrypoint seeds the checkpoint there on
+# first run (same pattern as whisper.cpp above).
+FROM node:22-bookworm-slim AS install-openclip
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt update && apt install -y python3 python3-pip python3-venv wget && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/pyruntime
+# Install torch AND torchvision together, pinned to the exact +cpu wheel pair
+# (smaller, no CUDA). torchvision MUST come from the same index as torch:
+# PyPI's torchvision wheel is built against CUDA torch and fails at import
+# against torch+cpu with "operator torchvision::nms does not exist". The
+# +cpu local version exists only on the PyTorch index, so the pins cannot
+# drift to PyPI's CUDA builds even though PyPI is enabled as
+# --extra-index-url - which it must be: the PyTorch index's typing-extensions
+# mirror entry carries a raw-name metadata mismatch that makes pip discard
+# the wheel and try to build the sdist (fails: flit_core is not mirrored).
+RUN /opt/pyruntime/bin/pip install --no-cache-dir torch==2.14.1+cpu torchvision==0.29.1+cpu --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+# open-clip-torch and opencv-python-headless live only on PyPI. torch and
+# torchvision are already satisfied by the CPU wheels above, so pip leaves
+# them untouched. opencv (cv2) is required by the media-analysis worker
+# script (frame sampling + perceptual hash); without it every analysis
+# returns "opencv_unavailable" and semantic matching silently degrades to
+# lexical/perceptual-only.
+RUN /opt/pyruntime/bin/pip install --no-cache-dir open-clip-torch==2.29.0 opencv-python-headless==4.12.0.88
+# The ViT-B-32 OpenCLIP checkpoint is COPYed from the build context (pre-
+# downloaded and verified) rather than wget'd at build time - HuggingFace's
+# CDN intermittently returns 5xx for large model files, which would make the
+# image build non-deterministic. The checkpoint is excluded from git via
+# .gitignore; it lives in assets/ alongside the Arabic caption fonts.
+RUN mkdir -p /bootstrap-openclip
+COPY assets/ViT-B-32-openclip-state.pt /bootstrap-openclip/ViT-B-32-openclip-state.pt
+
 FROM node:22-bookworm-slim AS base
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 RUN apt update
 RUN apt install -y \
-      # whisper dependencies
-      git \
-      wget \
-      cmake \
-      ffmpeg \
-      curl \
-      make \
-      libsdl2-dev \
-      # OpenMP runtime the whisper.cpp binary (built with -fopenmp in the
-      # install-whisper stage) links against; not pulled in transitively
-      # here since this stage never installs a C/C++ compiler itself.
-      libgomp1 \
-      # remotion dependencies
-      libnss3 \
-      libdbus-1-3 \
-      libatk1.0-0 \
-      libgbm-dev \
-      libasound2 \
-      libxrandr2 \
-      libxkbcommon-dev \
-      libxfixes3 \
-      libxcomposite1 \
-      libxdamage1 \
-      libatk-bridge2.0-0 \
-      libpango-1.0-0 \
-      libcairo2 \
-      libcups2 \
-      # Revideo evaluation: @puppeteer/browsers (used to fetch Chromium for
-      # @revideo/renderer) extracts the downloaded archive with `unzip` -
-      # without it the download itself "succeeds" but leaves an empty,
-      # non-functional install directory with no build-time error, only
-      # discovered the first time a real render tries to launch Chromium.
-      # See ABUD_SHORTS_ENGINE_STATUS.md "Revideo Evaluation" section 3/4.
-      unzip \
+    # whisper dependencies
+    git \
+    wget \
+    cmake \
+    ffmpeg \
+    curl \
+    make \
+    libsdl2-dev \
+    # OpenMP runtime the whisper.cpp binary (built with -fopenmp in the
+    # install-whisper stage) links against; not pulled in transitively
+    # here since this stage never installs a C/C++ compiler itself.
+    libgomp1 \
+    # Python 3 for OpenCLIP semantic media matching - the render worker
+    # shells out to /opt/pyruntime/bin/python to run open_clip inference.
+    python3 \
+    python3-pip \
+    python3-venv \
+    # remotion dependencies
+    libnss3 \
+    libdbus-1-3 \
+    libatk1.0-0 \
+    libgbm-dev \
+    libasound2 \
+    libxrandr2 \
+    libxkbcommon-dev \
+    libxfixes3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libatk-bridge2.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libcups2 \
+    # Revideo evaluation: @puppeteer/browsers (used to fetch Chromium for
+    # @revideo/renderer) extracts the downloaded archive with `unzip` -
+    # without it the download itself "succeeds" but leaves an empty,
+    # non-functional install directory with no build-time error, only
+    # discovered the first time a real render tries to launch Chromium.
+    # See ABUD_SHORTS_ENGINE_STATUS.md "Revideo Evaluation" section 3/4.
+    unzip \
+    # Kokoro TTS phonemizer (phonemizer@1.2.1, used by kokoro-js) bundles an
+    # Emscripten build of espeak-ng and expects /usr/share/espeak-ng-data
+    # to exist at runtime. Without it the phonemizer throws an
+    # uncaughtException that crashes the whole Node process. Install the
+    # native espeak-ng-data package so the data directory is present.
+    espeak-ng-data \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/lib/x86_64-linux-gnu/espeak-ng-data /usr/share/espeak-ng-data
 # setup pnpm
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
@@ -111,6 +157,10 @@ RUN pnpm build
 
 FROM base
 COPY static /app/static
+# Arabic caption fonts (Cairo, IBM Plex Sans Arabic, Noto Kufi/Sans Arabic)
+# and other static assets. Without this COPY, the motion engine's font
+# discovery falls through to system fonts and Arabic renders as tofu boxes.
+COPY assets /app/assets
 # Populated in two places, for two different consumers:
 #
 # 1. /app/data/libs/whisper - `RUN node dist/scripts/install.js` below runs
@@ -130,6 +180,12 @@ COPY static /app/static
 #    instead of the entrypoint's `cp` failing.
 COPY --from=install-whisper /whisper /app/data/libs/whisper
 COPY --from=install-whisper /whisper /app/bootstrap/whisper
+# OpenCLIP Python runtime and ViT-B-32 checkpoint - provisioned at build
+# time so a fresh container has semantic media matching without internet.
+# The checkpoint is also copied to a bootstrap directory for the entrypoint
+# to seed into the /models volume on first run (same pattern as whisper).
+COPY --from=install-openclip /opt/pyruntime /opt/pyruntime
+COPY --from=install-openclip /bootstrap-openclip /app/bootstrap/openclip
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=build /app/dist /app/dist
 # Revideo evaluation: @revideo/renderer's own Vite pipeline transforms the
@@ -164,6 +220,14 @@ ENV VIDEO_CACHE_SIZE_IN_BYTES=2097152000
 # bootstrap-copy dance above - Chromium has no such fallback, so it must
 # live somewhere the bind mount never touches.
 ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
+
+# Kokoro model precision must match the runtime default in
+# docker-compose.prod.yml (KOKORO_MODEL_PRECISION:-q4). The build step below
+# calls Kokoro.init() which downloads the ONNX model for the configured
+# precision. Without this ENV, the build defaults to fp32 and only downloads
+# model.onnx, while the runtime requests model_q4.onnx - causing a fetch
+# failure on first voice generation in a fresh container with no internet.
+ENV KOKORO_MODEL_PRECISION=q4
 
 # install kokoro, headless chrome and ensure music files are present
 RUN node dist/scripts/install.js

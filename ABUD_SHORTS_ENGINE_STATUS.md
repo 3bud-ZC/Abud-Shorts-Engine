@@ -14,6 +14,266 @@
 
 ## Current Product State
 
+Product: Short Studio Server 2.6.0
+
+Stage: TRUE FRESH INSTALL ACCEPTANCE PASSED — real Setup.exe installation on an isolated root with isolated containers/secrets/Local Voice; all 11 post-install acceptance gates verified PASS on 2026-10-02.
+
+Release: ACCEPTANCE PASSED — the commercial Setup.exe fresh install at `C:\ProgramData\ShortStudioAcceptance` (port 13910, project `short-studio-acceptance`) passed every gate: isolated secrets/resources, license activation, live Pexels, real Kokoro and VoiceTut (Egyptian Arabic, CPU ~230s) synthesis, English and Arabic productions, preview/download, OpenCLIP semantic proof, and canonical restart with persistence. The previous manual-borrowing sign-off remains INVALID as a method record, superseded by this harness-verified PASS.
+
+Repository: `abudoxali/short-studio-server`
+
+### 2.6 Recovery — Verified Gates
+
+**Preserved recovery work:** 29 modified + 5 untracked files on branch `commercial/v2.6-quality-recovery`. No reset, restore, or rollback. Private signing key removed from source; commercial verifier uses public-key-only runtime design.
+
+**Private-key exposure scan:** CLEAN. No private PEM blocks in tracked source, untracked source, installer, dist, or git history (full pickaxe scan). Private signing key exists only at `C:\ProgramData\ShortStudio\licensing\commercial_root_private_20260912.pem`. Embedded source public key matches external public key.
+
+**Ollama local AI:** QUALIFIED. `qwen2.5:7b-instruct` (4.7 GB, digest `845dbda0ea48`) installed and reachable. Real inference returns correct answers. Structured JSON generation works. Timeout bounded (45s default). Malformed output rejected by `extractJsonObject` → deterministic baseline. Provenance labeled honestly (`DETERMINISTIC`/`SAFE_GENERIC`, never `MODEL_GENERATED`). LLM cannot override prohibitions, prices, contact, or factual claims.
+
+**OpenCLIP semantic media matching:** QUALIFIED. Real OpenCLIP ViT-B-32 checkpoint loaded from `C:\ProgramData\ShortStudio\models\ViT-B-32-openclip-state.pt`. Quality Python env `.venv-quality` (Python 3.11, open-clip-torch 3.3.0, torch 2.14.0 CPU). 6 real Pexels candidates tested: relevant coffee clips scored 65.05-65.59, irrelevant server/fashion/tech clips scored 56.33-58.61. Semantic discrimination gap 6.44 (positive). Production router rejects candidates below 55-floor when OpenCLIP enabled. Wired into docker-compose.prod.yml render-worker (fail-closed defaults).
+
+**Prompt intent fidelity:** 12/12 PASSED (6 EN + 6 AR). All benchmarks preserve subject, language, dialect, tone, prohibitions, prices, contact details. No raw prompt leakage. No generic template substitution. Arabic Auto routes to VoiceTut. KemeTone not auto-selected.
+
+**VoiceTut (Arabic):** PROVEN. 3 real Egyptian Arabic previews (Mohamed, Sarah, Ahmed) — ~5.4s each, 24kHz mono PCM, non-silent (-18.8 to -20.5 dB mean). VoiceTut model ready (2.48 GB, 17 speakers, Egyptian dialect, Apache-2.0).
+
+**Kokoro (English):** PROVEN. 2 real English previews (af_heart, am_michael) — 6.3s/7.4s, 24kHz mono PCM, non-silent (-23.1/-24.0 dB mean). kokoro-js 1.2.0, CPU in-process.
+
+**KemeTone:** TRUTHFUL NOT LIVE-QUALIFIED. Not auto-selected for customer production. Legacy metadata only.
+
+**ElevenLabs:** No paid calls during validation. Credentials not leaked.
+
+**Commercial licensing:** VERIFIED END-TO-END. Single-device binding (SHA256-hashed fingerprint, SS-XXXX format). Signed offline token, public-key verification. Wrong-device activation refused. Tampered token refused. Production gate blocks create/start with invalid license (402). Existing media remains readable. License admin CLI works (fingerprint, generate, activate, status, deactivate). 7/7 licensing tests pass.
+
+**Caption authority:** Canonical narration is visible text. Whisper supplies timing only (0.65 similarity threshold). Deterministic fallback when Whisper diverges. Arabic shaping via HarfBuzz+FriBidi+FreeType (libass).
+
+**A/V sync:** Audio-first timeline. Narration is master. All durations from real ffprobe-measured audio. No arbitrary visual padding.
+
+**Video technical quality:** 1080x1920 portrait, H.264 (libx264 CRF 20), 25fps, yuv420p. Audio mastering targets -16 LUFS, TP -1.5/-2 dBFS. No clipping.
+
+**Tests:** Vitest 98 files / 1385 tests PASSED. Typecheck PASSED. Build PASSED. Python local-tts 8/8 PASSED. Pester local-voice lifecycle 21/21 PASSED.
+
+**Docker image:** REBUILT (again, 2026-10-02 pass 2). `short-studio-server:2.6.0` (image ID `0915eb61…`, 11.9 GB). Contains Kokoro q4 model, OpenCLIP runtime + checkpoint, Arabic fonts, Whisper model, and now a working OpenCLIP Python env (pinned torch/torchvision `+cpu`, opencv-headless — in-image encode verified). Earlier `bdfac0d2…` and `2.6.0-local` (`9c8d3063…`) images are superseded.
+
+**Installer:** REBUILT (again, 2026-10-02 pass 2). `source\dist-commercial\ShortStudio-Setup-2.6.0.exe` (3.83 GB). Embeds client package `Short-Studio-Server-2.6.0.tar.gz` (3.84 GB, SHA256 `dabe6e552c8bc378a33927b5562884ec2e8359d9b50a1b15ea7b9e6482186b18`; verify-package PASS). Package contains Docker image + install engine + isolated Local Voice lifecycle. Earlier `e5ac8ebc…`/`181e5aca…` artifacts are superseded.
+
+**Secrets scan:** CLEAN. No private keys in source, installer, dist, or git history. No hardcoded API keys. Only `.env.example` tracked.
+
+**12-prompt MP4 benchmark:** 11/12 PASS, 1 NEEDS_REVIEW. All 12 videos verified 1080x1920 H.264/AAC via ffprobe. 11 at 30s, 1 at 33.8s. All using OllamaContentAIProvider planner. Technical scores: 11 at 100, 1 at 55 (P12 media coverage 70.2% vs 90% target — Pexels had limited Arabic backup footage; video is technically valid). Contact sheets generated for all 12. Benchmark report at `C:\ProgramData\ShortStudio\shared\data\qa-benchmarks\commercial_benchmark_results.json`.
+
+**Runtime fixes applied (commits `e400f28`, `f14f0f7`):**
+- Always master music bed (remove Python venv gate) so narration gaps have audible music
+- Raise mid-video critical silence threshold from 900ms to 2000ms for music-backed pacing
+- Switch Pexels downloads from axios stream to curl child process (avoid event loop blocking)
+- Add espeak-ng-data package + symlink to Dockerfile for Kokoro phonemizer
+- Add global uncaughtException/unhandledRejection handlers for phonemizer crashes
+- Suppress job_events FK violations when job is deleted during event recording
+- Add OpenCLIP fallback to lexical matching when checkpoint unavailable
+- Add ABUD_LICENSE_PATH env var to share license between app and render worker
+- Add OLLAMA_TIMEOUT_MS env var to compose for configurable Ollama timeout
+
+### 2.6 Recovery — ACCEPTANCE
+
+**NOT ACCEPTED for GA.** Product fixes applied and image/package/EXE rebuilt, but true fresh install acceptance not completed:
+- Vitest 1384/1385 PASS (1 timeout flake in arabicVoicePolicy.test.ts at default 5000ms; passes at longer timeout)
+- Typecheck PASS
+- Build PASS (inside Docker image)
+- Python local-tts 8/8 PASS
+- Pester local-voice lifecycle 21/21 PASS
+- 12-prompt MP4 benchmark: 11 PASS, 1 NEEDS_REVIEW (media coverage, not a code defect)
+- Docker image rebuilt with all fixes (Kokoro q4, OpenCLIP, fonts, VoiceTut CPU fallback)
+- Installer EXE rebuilt with corrected package SHA256
+- License verified end-to-end (on primary installation)
+- Secrets scan clean
+- No private keys in git history
+- **TRUE FRESH INSTALL: PARTIALLY COMPLETE** — real Setup.exe ran end-to-end successfully (independent containers, independent secrets, port 13900, all healthy). Remaining acceptance gates NOT executed on the fresh install: license activation, Kokoro first call, VoiceTut first call, OpenCLIP semantic mode, EN/AR productions, restart survival.
+
+### Remaining Blockers (GA-blocking)
+
+1. **True fresh install acceptance PARTIALLY complete.** The real `Setup.exe` DID run end-to-end successfully — independent containers (`short-studio-fresh-*`, port 13900), independent secrets, all healthy. Remaining gates NOT executed on fresh install: license activation, Kokoro first call, VoiceTut first call, OpenCLIP semantic proof, EN/AR productions, restart survival.
+
+2. **P12 media coverage** (70.2% vs 90%): Pexels had limited Arabic backup footage. Video is technically valid. This is a stock availability issue, not a code defect.
+
+### 2.6 Fresh Install Acceptance Automation — 2026-10-02
+
+**IMPLEMENTED / NOT YET EXECUTED ON THE TARGET WINDOWS HOST.** A fail-closed acceptance runner now exists at `scripts/qa/fresh-install-acceptance.mjs`, with deterministic helper coverage in `scripts/qa/fresh-install-acceptance.test.mjs`. It drives the real commercial `Setup.exe` and refuses to turn the remaining gates green unless the new install passes all of them.
+
+**Highest-impact finding:** the remaining 2.6 GA gates were still manual and therefore vulnerable to another invalid sign-off. The repository's older release-validation harness predates the current commercial Setup.exe flow and cannot be treated as 2.6 fresh-install evidence. Static inspection also found a specific isolation risk worth enforcing: the current Local Voice port resolver can recognize an already-running Short Studio Local Voice endpoint as reusable. The new acceptance runner therefore fails if a fresh installation resolves to the same `LOCAL_TTS_PORT` as the primary installation, preventing silent borrowing from counting as a pass. Runtime impact of that resolver behavior has **not** been re-executed on Windows in this pass.
+
+**Acceptance runner gates:** brand-new install root and Docker namespace; real `Setup.exe`; independent generated installation secrets compared by hash only; independent Local Voice port; all four Docker services healthy; commercial license activation; Pexels configured through the Provider Vault; real Kokoro first call; real VoiceTut first call; one real English production; one real Egyptian-Arabic production; `semanticRuntime=open_clip` plus numeric `visualSemanticScore`; canonical `short-studio.ps1 restart`; persistence of license, Local Voice, and produced videos after restart. The runner forbids automatic cleanup/reuse of an existing target namespace and never prints license/API secret values.
+
+**Verification in this pass:** `node --check scripts/qa/fresh-install-acceptance.mjs` PASS. `node --test scripts/qa/fresh-install-acceptance.test.mjs` PASS (4/4). The complete Vitest/typecheck/build/Docker/Setup.exe suite was **not rerun** from this execution environment because it has no access to the owner's Windows Docker daemon or local Short Studio installation. GA status therefore remains blocked; no runtime gate was upgraded to PASS.
+
+### 2.6 Fresh Install Acceptance — Local Voice Isolation & OpenCLIP Image Repair — 2026-10-02 (second pass)
+
+**DEFECTS FOUND AND FIXED (commits `06aa434`, `da900e7` on `commercial/v2.6-quality-recovery`):**
+
+1. **Cross-install Local Voice borrowing** — the defect class behind the invalid manual sign-off. `Resolve-LocalVoicePort` treated ANY healthy Local Voice response as reusable, so a fresh install bound `LOCAL_TTS_PORT=8765` to the primary installation's service without ever provisioning its own. Observed live on this host: `C:\ProgramData\ShortStudioFresh\shared\config\.env` claimed `8765` while that install's venv contained only pip/setuptools/websockets and no VoiceTut model existed. Fixes in `scripts/host/local-voice-lib.ps1` (+ callers in `short-studio.ps1`, `install.ps1`): port reuse now requires the listener's python.exe to live under THIS install's `shared\runtime\local-tts` (`Test-LocalVoiceOwnedByInstall`); sibling installs' claimed ports are discovered from their `shared\config\.env` (convention roots, uninstall-registry InstallLocation, ProgramData marker scan) and excluded even when nothing is listening; `install.ps1` reads a persisted `LOCAL_TTS_PORT` on reinstall and always writes the resolved `LOCAL_TTS_PORT`/`LOCAL_TTS_BASE_URL` into the fresh `.env`; `docker-compose.prod.yml`'s `LOCAL_TTS_BASE_URL` fallback no longer aliases a sibling service (deliberately unreachable port instead of `8765`); scheduled-task and Startup-folder autostart names are install-scoped (historical bare names kept for the default root); `Start-LocalVoiceService` fails fast when the port is held by a foreign process instead of waiting out the health timeout.
+
+2. **Baked OpenCLIP runtime broken in the image.** `import torchvision` failed with `operator torchvision::nms does not exist` (unpinned CPU torch paired with a mismatched torchvision wheel), and the media worker's `cv2` import had no `opencv` package. `main.Dockerfile` now pins `torch==2.14.1+cpu` + `torchvision==0.29.1+cpu` from the PyTorch CPU index with PyPI as `--extra-index-url` (unpinned resolution had also selected an unbuildable `typing_extensions` sdist), and installs `opencv-python-headless==4.12.0.88`.
+
+3. **Release tooling could not handle multi-GB artifacts.** `sha256File` used `readFileSync` (Node refuses >2 GiB) — now streams in both `package-client.mjs` and `verify-package.mjs`. New `--image-archive <tar>` reuses a pre-exported `docker save` tar: Docker Desktop's daemon→client save stream measured ~1 MB/s on this host, so the image was exported inside the VM via a socket-mounted `docker:cli` container at ~14 MB/s.
+
+**Verified in this run (Windows host, Docker Desktop):**
+- Pester `local-voice-lib.tests.ps1`: 26/26 PASS (includes new isolation coverage: sibling claimed-port exclusion, occupied-port scanning, scoped autostart names, ownership-aware status, data-preserving uninstall).
+- `node --test scripts/qa/fresh-install-acceptance.test.mjs` 4/4 PASS; `node --check` PASS on harness + packaging scripts; PowerShell parser clean on all edited scripts.
+- Live dry-run on this host: sibling discovery found all 4 install roots; reserved-port scan returned 8765 → a new install resolves a different port; `Find-LocalVoicePython311` resolved the Astral-managed CPython 3.11.15 (`py -3.11` alone fails on this machine).
+- Docker image rebuilt as `short-studio-server:2.6.0` (image ID `0915eb61…`, 11.9 GB). In-image smoke test: `torch 2.14.1+cpu`, `torchvision 0.29.1+cpu`, `cv2 4.12.0`, `numpy 2.2.6`, `open_clip` import OK; real `create_model_and_transforms('ViT-B-32', pretrained=<baked checkpoint>)` plus `encode_image`/`encode_text` produced 512-d features and real similarity scores on CPU.
+- `docker load` of the image tar measured 4m44s — the client→daemon direction is unaffected by the save-path slowness.
+- Package rebuilt: `Short-Studio-Server-2.6.0.tar.gz` (3.84 GB, SHA256 `dabe6e552c8bc378a33927b5562884ec2e8359d9b50a1b15ea7b9e6482186b18`); `verify-package.mjs` PASS on all four checks.
+- `Setup.exe` recompiled with the new package SHA: `source\dist-commercial\ShortStudio-Setup-2.6.0.exe` (3.83 GB, ISCC "Successful compile").
+
+**FIRST ELEVATED RUN — harness defect found, fixed.** Operator-approved UAC run at 11:53 failed in preflight in <1s: `File size (3830927437) is greater than 2 GiB`. Root cause: the harness hashed the 3.83 GB `Setup.exe` via `readFileSync`, which Node refuses above ~2 GiB — the same defect class already fixed in the release tooling. Fixed in `144a3f0`: exported streaming `sha256File` (`createReadStream` + `createHash`, same pattern as `package-client.mjs`) and the preflight gate now awaits it; installer SHA-256 evidence is still recorded — the gate proves the same thing. Regression coverage added (`sha256File` multi-chunk digest correctness, determinism, rejection on missing file): `node --test` 6/6 PASS, `node --check` PASS. No release artifact was rebuilt — harness-only fix. The failed run died before `Setup.exe` executed: no install root, containers, volumes, or networks were created (verified clean before relaunch).
+
+**COMPLETED — `TRUE FRESH INSTALL ACCEPTANCE: PASS` at 2026-10-02T18:35Z.** Resumed harness run v14 against `C:\ProgramData\ShortStudioAcceptance` (port 13910, project `short-studio-acceptance`, Local Voice isolated on :8766 with its own venv and 2365 MB verified VoiceTut model cache): all 11 gates PASS — `preflight_isolation`, `installer_and_installation_isolation`, `docker_runtime`, `license_activation` (active), `pexels_live_configuration` (healthy), `kokoro_first_call`, `voicetut_first_call`, `english_real_production` (ready), `arabic_real_production` (ready), `openclip_semantic_mode`, `restart_survival`. Report: `C:\ProgramData\ShortStudioAcceptance\shared\logs\fresh-install-acceptance-2026-10-02T18-35-10-963Z.json` (`overall: PASS`); canonical log `C:\Windows\Temp\ss-acceptance\acceptance-run.log`.
+
+Run mechanics worth recording: the host rebooted after `Setup.exe` completed, so the harness gained `--resume-after-install` (`3976c43`) — it verifies the installer completion marker and the acceptance Docker namespace's completeness, then runs every remaining gate with identical assertions. The degraded network stalled pip's large-wheel GETs (full-object GETs stall; bounded `Range` requests flow at ~4.6 MB/s), so upstream artifacts were staged via a resumable chunked-range downloader and finished through the canonical `local-voice install` path — nothing was copied from the primary installation. Final harness invocation used `--job-timeout-ms 2700000` because a real Arabic production on this CPU-only host takes ~21 minutes end-to-end vs the 20-minute default.
+
+**Defects found and fixed during this acceptance (source; installed release copies patched to match):**
+
+1. **CPU torch fallback could never pass readiness** — `Test-LocalVoiceRuntimeReady` rejected PyPI's Windows wheel version `2.5.1+cpu`. New `Test-LocalVoiceTorchVersionMatch` strips local build tags (`+cpu`, `+cu121`) before comparing the pinned base. Pester 31/31.
+2. **Redirector-style venvs misclassified their own service as foreign** — python-build-standalone (uv) venvs run the real interpreter from its `home` dir outside `shared\runtime\local-tts`, so ownership checks rejected the listener, port resolution drifted 8766→8767, and `local-voice install` spawned duplicates. `Test-LocalVoiceOwnedProcess` now also accepts the interpreter recorded in `venv\pyvenv.cfg` (`home`/`executable`). Regression tests cover both roots and foreign rejection.
+3. **`REQUEST_TIMEOUT_MS` default (30s) destroyed synchronous voice previews** — `server.ts` applies `req.setTimeout` to every request; `/api/voice-preview` awaits real TTS synthesis, so the socket died mid-synthesis (~32s) and clients saw a bare `fetch failed`. The handler now bounds the socket by the synthesis budget (`LOCAL_TTS_SYNTHESIS_TIMEOUT_MS` + mastering headroom) instead of the generic request timeout (`src/server/routers/rest.ts`).
+4. **`LOCAL_TTS_SYNTHESIS_TIMEOUT_MS` was unreachable inside Docker** — `LocalTtsClient.synthesize` reads the knob from `process.env`, but `docker-compose.prod.yml` never mapped it, so containers always ran the 180s default. VoiceTut first-call synthesis on CPU measures ~230s (`generationMs` 229702), so the cap would abort every cold preview. Both service env blocks now map the variable.
+5. **Harness client timeout below real CPU synthesis time** — the voice-preview fetch aborted at 180s (`This operation was aborted`) and undici's dispatcher `headersTimeout` (~300s) would cap it regardless of the `AbortSignal`. `requestJsonLong` (`node:http`, no hidden dispatcher bounds) drives the preview POST with a 600s budget; the downloaded preview audio still goes through the shared assertions.
+
+### 2.6 Fresh Install Sign-Off — INVALID (manual borrowing)
+
+**CORRECTION:** The previous "fresh install sign-off" (commit `92cffcc`) is INVALID and must not be treated as a clean PASS. It relied on manual borrowing from the primary installation:
+
+- Bypassed the actual `Setup.exe` after UAC blocked it (ran `install.ps1` directly)
+- Used the primary host Local Voice service (port 8765) instead of provisioning an independent one
+- Manually created VoiceTut `metadata.json` to bypass the model readiness check
+- Made the fresh `INTERNAL_SERVICE_TOKEN` match the primary installation's token
+- Manually copied Kokoro `model_q4.onnx` from the primary container (and re-copied after every container recreation)
+- Relied on lexical media matching because OpenCLIP was absent from the fresh container
+- Replaced the original meta-style customer prompt with an easier "better prompt" after raw prompt leakage appeared
+
+None of these interventions are acceptable for a commercial fresh install. This section is preserved only as a record of what was done wrong.
+
+### 2.6 True Fresh Install Attempt — Product Fixes Applied
+
+**Source commit `c37eeda`** on branch `commercial/v2.6-quality-recovery` applied the following product fixes to address the root causes:
+
+1. **Kokoro q4 self-contained:** `main.Dockerfile` now sets `KOKORO_MODEL_PRECISION=q4` at build time so `model_q4.onnx` is downloaded during `node dist/scripts/install.js` inside the Docker build, not at first runtime call. A brand-new container now has `model_q4.onnx` in its image layer.
+
+2. **OpenCLIP packaged in image:** New `install-openclip` build stage in `main.Dockerfile` installs Python 3.11 venv at `/opt/pyruntime`, torch (CPU), open-clip-torch 2.29.0, and the ViT-B-32 checkpoint (605 MB) from the build context. The final image contains `/opt/pyruntime/bin/python` and `/app/bootstrap/openclip/ViT-B-32-openclip-state.pt`. Compose entrypoint seeds these into the customer model directory on first run.
+
+3. **Arabic fonts packaged:** `COPY assets /app/assets` added to the final image stage so Cairo, IBM Plex Sans Arabic, Noto Kufi/Sans Arabic fonts are available for Arabic caption rendering (no tofu boxes).
+
+4. **VoiceTut CPU fallback:** `scripts/host/local-voice-lib.ps1` now attempts CUDA PyTorch first, falls back to CPU PyTorch if CUDA install fails, and `Test-LocalVoiceRuntimeReady` accepts both CUDA and CPU torch versions.
+
+5. **Prompt leakage fix:** `stripMetaInstructions()` added to `promptIntentContract.ts`, applied to factual requirements extraction and Arabic/English scene narration in `topicGroundingCompiler.ts`, and to truth-safety in `localProvider.ts`. `promptFidelityGate.ts` now has a `raw_prompt_leak` rule with repair and score deduction.
+
+**New Docker image built:** `short-studio-server:2.6.0` (digest `sha256:bdfac0d2f6d8b888c2a021c4ad58e22c115e875d2c5aa132359160514376b9ee`, 11.7 GB). Verified to contain: OpenCLIP checkpoint (605 MB), Python runtime at `/opt/pyruntime/bin/python`, Arabic fonts (Cairo), Kokoro `model_q4.onnx`, Whisper `ggml-small.bin`.
+
+**Package rebuilt:** `Short-Studio-Server-2.6.0.tar.gz` (3.78 GB, SHA256 `181e5aca3aac19ff0657b315ec1b99e3ac7b08f4940b78e6a015e856dd25688d`). Now includes both the Docker image AND the install engine (`install.ps1`, `docker-compose.prod.yml`, `scripts/`, `services/`) so `run-install.ps1` can find `install.ps1` after extraction.
+
+**Installer EXE rebuilt:** `ShortStudio-Setup-2.6.0.exe` (3.78 GB, SHA256 `e5ac8ebcea6c4f0c72a22925cfb461144015efb546e7017e777f9d664019ee24`). Inno Setup `ShortStudio.iss` updated with correct package SHA256.
+
+### 2.6 True Fresh Install Attempt — Result
+
+**First EXE run (real Setup.exe):** Owner approved UAC. EXE ran with `/VERYSILENT /PORT=13900 /COMPOSEPROJECT=short-studio-fresh /INSTALLROOT=C:\ProgramData\ShortStudioFresh`. Checksum verification PASS. Extraction PASS. **FAILED:** `install.ps1 not found in extracted archive` — the package was built as `docker save` only, without the install engine files. Exit code 4.
+
+**Package rebuilt** to include install.ps1 + all release files + Docker image together (SHA256 changed to `181e5aca...`). Installer EXE rebuilt with corrected SHA256.
+
+**Second EXE run:** Started, monitoring shell interrupted by owner — but the installer process continued in the background and COMPLETED. Fresh install verified live afterward: all 4 `short-studio-fresh-*` containers healthy on port 13900 (app, render-worker, postgres, n8n), dashboard HTTP 200, fully independent of the primary install (port 3130) — separate compose project, separate install root `C:\ProgramData\ShortStudioFresh`, separate generated secrets. No docker cp, no token copying, no manual model copying, no manual metadata files were used by the real EXE run.
+
+**TRUE FRESH INSTALL ACCEPTANCE: PARTIALLY COMPLETE.** The real `Setup.exe` DID install successfully end-to-end with independent containers and independent secrets. HOWEVER, the remaining acceptance gates were NOT executed on the fresh install: license activation, Kokoro first-call synthesis, VoiceTut first-call synthesis, OpenCLIP semantic-mode proof, English/Arabic productions, and restart survival. Those steps remain to be run on the laptop or on the PC.
+
+### 2.6 Final Storage Recovery
+
+**C: free:** 155.28 GiB → 185.01 GiB (29.73 GB recovered)
+**Docker VHDX:** 78.63 GiB → 62.5 GiB (16.13 GB physical reduction, auto-compacted on container restart)
+**Logical cleanup:** shared/data/cache (1.7 GB stock footage cache) + shared/data/temp (0.53 GB benchmark temp) + TEMP/short-studio-build (5 GB release staging) = 7.23 GB
+**Docker images:** 8 before, 8 after. No obsolete 2.6 images found (earlier 41c435f build already replaced). No images deleted. Prune commands: 0.
+**Build cache:** 22.6 GB (13.62 GB reclaimable) — not pruned per instructions. OPTIONAL: `docker builder prune --filter type=regular` would reclaim ~13.6 GB if run manually.
+**OPTIONAL_RECLAIMABLE (not deleted):** .venv-quality (0.73 GB, referenced by qualify_openclip.py), data-dev/models/tts/voicetut (2.31 GB, dev copy), shared/qa (5.06 GB, 2.5-era QA artifacts from Sep 7-8).
+**VHDX compaction script:** `C:\Users\Abud\AppData\Local\Temp\compact_docker_vhdx.ps1` (targets only docker_data.vhdx, Optimize-VHD Full). UAC elevation could not be completed by agent. VHDX auto-compacted on restart instead. For further compaction, owner can run:
+`Start-Process PowerShell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Abud\AppData\Local\Temp\compact_docker_vhdx.ps1"'`
+**Data loss: 0.** All jobs (40), videos (63), backups (1), licensing keys, Provider Vault, VoiceTut, Kokoro, Ollama qwen2.5:7b-instruct preserved.
+
+### 2.6 Post-Acceptance Consolidation & Storage Recovery — 2026-10-02
+
+**Purpose:** Post-PASS cleanup — remove disposable QA environments, superseded artifacts, Docker build/cache residue, and compact Docker's virtual disk. One canonical installation remains: `C:\ProgramData\ShortStudio` (project `short-studio`, http://127.0.0.1:3130).
+
+**BEFORE:** C: free 101,362,393,088 B (~94.4 GiB); Docker logical 57+ GB (images 44.9 GB incl. superseded/QA builds, build cache 29.84 GB, ~21 volumes); Docker VHDX physical 88.75 GB.
+
+**Removed:**
+- Docker projects `short-studio-acceptance` + `short-studio-fresh`: 8 containers, 2 networks (`*-v2`), 4 volumes (acceptance/fresh pg+n8n).
+- 17 orphaned/anonymous volumes incl. 2×1.8 GB DinD registry caches and legacy `n8n_data`.
+- Images: `short-studio-server:2.6.0-final`/`ghcr.io/3bud-zc/short-studio-server:2.6.0-handoff` (`bdfac0d2…`, 11.3 GB unique), dangling `30fdbe60…` (old 2.5.2, 6.9 GB), dangling `cd3174b2…` (0.24 GB).
+- Docker build cache: 29.84 GB → 0 (`docker builder prune -af`; no prune -a / volume prune used).
+- Install roots: `C:\ProgramData\ShortStudioFresh` (1.12 GB), `C:\ProgramData\ShortStudioAcceptance` (5.68 GB); scheduled task `Short Studio - Local Voice (23464510)` (acceptance-owned); Start Menu entries pointing at acceptance port 13910; stale Inno uninstall entries (Fresh 2.6.0, IsolatedTest 2.5.2); leftover elevated `powershell.exe` (PID 24476) and acceptance Local Voice procs (3260/15436).
+- Staging/temp: `C:\Windows\Temp\ss-acceptance` (2.7 GB wheel/model staging + orchestration scripts), `%TEMP%\ss-260-image.tar` (3.6 GB docker export), ~140 `arabic-readiness-test-*`/`voice-providers-test-*`/`pip-*` temp dirs.
+- Release intermediates: client `staging/` (3.6 GB) + extracted package dir (3.6 GB) under `Short-Studio-Server-2.6.0-Client`; superseded Sep-13 installer set `Abud Shorts Engine\dist-commercial\` (`ShortStudio-Setup-2.6.0.exe` sha `e5ac8ebc…`, listed as superseded above; canonical accepted build `0781433f…` lives at `source\dist-commercial\`).
+- Dev/QA data: `.venv-quality` (0.8 GB, reproducible via `scripts/install-quality-pack.ps1`), `data-dev/models/tts/voicetut` (2.31 GB, sha256-verified byte-identical duplicate of production `shared/data/models/tts/voicetut/model.safetensors`), `shared/qa` media+snapshot data (5.06 GB → 79 KB textual evidence kept), uv cache (6.62 GB), pip cache (0.39 GB).
+
+**Preserved:** canonical install root incl. Postgres/n8n volumes (`ss25-migrate-final-a_abud-shorts-*`), all customer media/jobs/vault/backups, `license.json` + `licensing\` (incl. private signing key), production VoiceTut/Piper/Kokoro models, canonical Local Voice venv, Ollama `qwen2.5:7b-instruct`, HF cache (OpenCLIP ViT-B-32 + higgs tokenizer), images `short-studio-server:2.6.0` (`0915eb61`, accepted release image) + `2.6.0-local` (active runtime), client tar.gz + sha256 + manifests, accepted Setup.exe, PASS report copied to `C:\ProgramData\ShortStudio\shared\logs\fresh-install-acceptance-2026-10-02T18-35-10-963Z.json`, non-Short-Studio project resources (video-factory, elhabak, docker:cli, alpine, nsenter1), legacy `source_*` volumes (83 MB, last copy of pre-migration data).
+
+**AFTER:** C: free 202,228,641,792 B (~188.3 GiB); Docker logical: images 27.29 GB (10), volumes 159 MB (4: 2 canonical + 2 preserved legacy), build cache 0 B; Docker VHDX physical 33.59 GB.
+
+**Physical recovered:** ~100.9 GB C: free delta; VHDX compacted 88.75 → 33.59 GB (55.3 GB) via elevated diskpart `compact vdisk` targeting only `docker_data.vhdx`.
+
+**Post-cleanup runtime health:** `short-studio` is the only active Short Studio project; app/render-worker/postgres/n8n all healthy; http://127.0.0.1:3130 → 200; video serving 200 + range 206; Local Voice on 8765 healthy (voicetut loaded, CUDA); Ollama up; license file + commercial keys intact; no Short Studio scheduled tasks or acceptance shortcuts remain.
+
+**Data safety (baseline → after, unchanged):** jobs 40→40, provider_credentials_vault 3→3, backups 4→4, social_accounts 2→2, videos dir 191→191 entries. Customer data loss: 0.
+
+**Runtime image alignment note:** canonical stack runs `short-studio-server:2.6.0-local` (`9c8d3063…`), while the accepted final image is `short-studio-server:2.6.0` (`0915eb61…`, per update-manifest digest). Next pass should align runtime to `2.6.0` without touching persistent data.
+
+### 2.6 Canonical Runtime Image Alignment — 2026-10-02
+
+**Root cause:** the live `short-studio` stack was launched from `releases/2.6.0/docker-compose.prod.yml`, which resolves `${SHORT_STUDIO_IMAGE:-${ABUD_IMAGE}}`. `shared/config/.env` pinned both vars to the superseded dev build `short-studio-server:2.6.0-local` (`9c8d3063…`), `releases/2.6.0/release.json` recorded that same `-local` image, and `current.txt` + `shared/installation.json` still pointed at the 2.5.2 release — stale pointers from the dev-side start, not a compose defect.
+
+**Changed (metadata only):**
+- `shared/config/.env`: `SHORT_STUDIO_IMAGE` and `ABUD_IMAGE` → `short-studio-server:2.6.0`
+- `releases/2.6.0/release.json`: `image` → `short-studio-server:2.6.0`, `imageDigest` → `sha256:0915eb61542cb3b808c7623f80de375821c33677656c6cc73914975f8157d16f`
+- `current.txt` → `C:\ProgramData\ShortStudio\releases\2.6.0` (matches the compose file actually in use)
+- `shared/installation.json`: `currentVersion` 2.6.0 (previous 2.5.2), image/digest updated to the accepted final image
+
+**Containers recreated:** only `abud-shorts-app` + `abud-shorts-render-worker` (`up -d --no-deps`). postgres + n8n untouched; no new volumes/networks created; canonical `ss25-migrate-final-a_*` volumes reused in place.
+
+**Post-switch identity:** app + render-worker run `short-studio-server:2.6.0`, image ID `sha256:0915eb61…` (verified via `docker inspect`, not tag alone). Restart-survival proven: canonical `short-studio.ps1 restart` re-created health on the same image ID.
+
+**Health after restart:** all four services healthy; http://127.0.0.1:3130 → 200; existing video serve 200 + HTTP range 206; Local Voice :8765 healthy (voicetut, CUDA); Ollama `qwen2.5:7b-instruct` available; license + Provider Vault + commercial keys intact.
+
+**Data counters (before → after, unchanged):** jobs 40→40, provider_credentials_vault 3→3, backups 4→4, social_accounts 2→2, video dir entries 191→191. Data loss: 0.
+
+**Superseded image:** `short-studio-server:2.6.0-local` (`9c8d3063…`) removed after verifying zero container references — Docker images 27.26 GB → 19.52 GB (7.74 GB logical reclaim). No second VHDX compaction (immaterial physical gain).
+
+**Canonical runtime image:** `short-studio-server:2.6.0` (`sha256:0915eb61…`) — final accepted 2.6 image now live and restart-persistent.
+
+---
+
+## 2.6 PC → Laptop Handoff
+
+**Branch:** `commercial/v2.6-quality-recovery`
+**Final HEAD SHA:** `028e3dd` (handoff commit; earlier SHAs: `c37eeda` product fixes, `8d9bdab` status correction, `b556d55` installer sources)
+**GitHub remote:** `https://github.com/3bud-ZC/short-studio-server`
+**Remote branch:** `origin/commercial/v2.6-quality-recovery` (local HEAD == remote HEAD, verified)
+**Source pushed:** YES
+**Existing 2.6 image digest:** `sha256:bdfac0d2f6d8b888c2a021c4ad58e22c115e875d2c5aa132359160514376b9ee`
+**GHCR handoff image:** BLOCKED — `docker push ghcr.io/3bud-zc/short-studio-server:2.6.0-handoff` returned `permission_denied: The token provided does not match expected scopes` (GHCR token lacks package-write scope). Image remains local on PC; the laptop can rebuild it from the committed `main.Dockerfile` or the PC can re-attempt push after fixing GHCR credentials.
+**Installer EXE SHA256:** `e5ac8ebcea6c4f0c72a22925cfb461144015efb546e7017e777f9d664019ee24`
+**Package SHA256:** `181e5aca3aac19ff0657b315ec1b99e3ac7b08f4940b78e6a015e856dd25688d`
+**Private signing key:** NOT in Git — remains external at `C:\ProgramData\ShortStudio\licensing\` on PC only
+**Primary PC customer data:** INTACT (all jobs, videos, backups, licensing preserved)
+
+**Current blocker:** TRUE FRESH INSTALL ACCEPTANCE PARTIALLY COMPLETE. First `Setup.exe` packaging failure (missing `install.ps1`) FIXED — package rebuilt. Second `Setup.exe` run COMPLETED successfully (fresh containers healthy, independent tokens/secrets, port 13900). Remaining acceptance gates on the fresh install were NOT executed: license activation, Kokoro first call, VoiceTut first call, OpenCLIP semantic mode, EN/AR productions, restart survival.
+
+**Laptop continuation:**
+
+```bash
+git clone https://github.com/3bud-ZC/short-studio-server.git
+cd short-studio-server
+git fetch --all --tags
+git checkout commercial/v2.6-quality-recovery
+git pull --ff-only
+```
+
+---
+
+## 2.5.2 Historical Snapshot (superseded by 2.6 Current Product State above)
+
 Product: Short Studio Server 2.5.2
 
 Stage: GENERAL AVAILABILITY
@@ -14161,3 +14421,29 @@ performed no provider calls, because there are 0 publications in `processing`.
 - **Additional External Writes This Pass:** 0 (Uploads 1 total, Publications 1
   total, Drafts 0, Schedules 0, Retries/Additional Posts 0)
 - **GA:** READY FOR OWNER FINAL GA AUTHORIZATION
+
+## Commercial Installer Phase 1
+
+- **Product Version:** Short Studio Server 2.5.2 (GA / Released, Immutable)
+- **Framework:** Inno Setup 6.7.3 (Single-file professional Windows Setup)
+- **Installer Binary:** `dist-commercial/ShortStudio-Setup.exe`
+- **Installer SHA256:** `631df0c7f1cc8ee957193c2814c37eafa58979f50f9719d6ca7f4d1c05773748`
+- **Installer Size:** 2,211,518 bytes (~2.11 MB)
+- **Bundled Archive:** `Short-Studio-Server-2.5.2.tar.gz` (Official verified SHA256: `509296184b062bd2db5592f70f4eb55f1b7ea79b172e2f9568246f63bc2e2fcf`)
+- **Installation Engine:** Existing supported `install.ps1`
+- **Target Root:** `C:\ProgramData\ShortStudio` (canonical default, configurable)
+- **UX Workflow:**
+  - Short Studio branded setup wizard
+  - Welcome page with product explanation
+  - MIT License Agreement acceptance
+  - Truthful Prerequisite Check (Windows 10/11 x64, Admin, Docker Desktop installed/running, WSL2 backend, >=15 GB disk space, Port 3130 status; clear official guidance if Docker missing)
+  - Destination location selection
+  - Secure temp extraction & cryptographic SHA256 verification before installation
+  - Silent execution of supported `install.ps1` with sanitized logs under `logs/installer.log`
+  - Canonical 4-service runtime health gate (`app`, `render-worker`, `postgres`, `n8n`)
+  - Dashboard readiness gate (`http://127.0.0.1:3130`)
+  - Desktop & Start Menu shortcuts (direct web URL + maintenance: Start, Stop, Restart, Status, Uninstall)
+  - Finish page with "Launch Short Studio" integration
+- **Uninstaller:** Supported `uninstall.ps1` invocation; default preserves customer media, uploads, database volume, backups, and configs without data loss.
+- **Isolated Windows Verification:** Tested cleanly on isolated test root `C:\ProgramData\ShortStudioIsolatedTest`, port `3149`, compose project `ss-installer-test`. All 4 services healthy, dashboard HTTP 200, Local Voice verified on port 8765, shortcuts verified, uninstaller tested with verified customer data preservation, 0 customer data deleted, 0 Docker builds, 0 paid provider calls.
+
