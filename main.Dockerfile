@@ -51,12 +51,20 @@ FROM node:22-bookworm-slim AS install-openclip
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update && apt install -y python3 python3-pip python3-venv wget && apt-get clean && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/pyruntime
-# Install torch from the CPU-only index (smaller, no CUDA), then open-clip-torch
-# from PyPI (it depends on torch but is not hosted on the PyTorch index).
-# Use --extra-index-url (not --index-url) so PyPI remains available for
-# torch's own dependencies (typing-extensions, filelock, etc.).
-RUN /opt/pyruntime/bin/pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
-RUN /opt/pyruntime/bin/pip install --no-cache-dir open-clip-torch==2.29.0
+# Install torch AND torchvision together from the CPU-only index (smaller, no
+# CUDA). torchvision MUST come from the same index as torch: PyPI's torchvision
+# wheel is built against CUDA torch and fails at import against torch+cpu with
+# "operator torchvision::nms does not exist". The PyTorch CPU index mirrors
+# all of their shared deps (filelock, typing-extensions, sympy, etc.) so a
+# plain --index-url suffices here.
+RUN /opt/pyruntime/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# open-clip-torch and opencv-python-headless live only on PyPI. torch and
+# torchvision are already satisfied by the CPU wheels above, so pip leaves
+# them untouched. opencv (cv2) is required by the media-analysis worker
+# script (frame sampling + perceptual hash); without it every analysis
+# returns "opencv_unavailable" and semantic matching silently degrades to
+# lexical/perceptual-only.
+RUN /opt/pyruntime/bin/pip install --no-cache-dir open-clip-torch==2.29.0 opencv-python-headless==4.12.0.88
 # The ViT-B-32 OpenCLIP checkpoint is COPYed from the build context (pre-
 # downloaded and verified) rather than wget'd at build time - HuggingFace's
 # CDN intermittently returns 5xx for large model files, which would make the

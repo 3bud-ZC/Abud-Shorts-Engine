@@ -145,6 +145,13 @@ services:
       DEV: "false"
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
+      # Kokoro model artifacts are baked into the image at build time
+      # (model_q4.onnx under the transformers cache). Force offline mode so a
+      # first-call synthesis never requires a network fetch to HuggingFace;
+      # without this the transformers runtime revalidates the cache online and
+      # fails on machines without connectivity to huggingface.co.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
       OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-45000}
@@ -163,7 +170,11 @@ services:
       # host.docker.internal is how a container reaches it. ElevenLabs is an
       # optional premium alternative, configured from the app UI and held
       # encrypted in the provider vault - never a silent fallback.
-      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:8765}
+      # The fallback port is deliberately unreachable (9 = discard): the
+      # installer always writes the resolved per-install port into .env, and
+      # a missing value must fail fast rather than silently alias whatever
+      # Local Voice another installation happens to run on this host's 8765.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:9}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       CONCURRENCY: ${CONCURRENCY:-1}
@@ -220,8 +231,10 @@ services:
       # Local Voice is host-native (see the note above short-studio-render-worker)
       # and is never a hard startup dependency: if it is not installed or not
       # reachable, Arabic jobs report Local Voice setup is required instead of
-      # blocking the whole application from starting.
-      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:8765}
+      # blocking the whole application from starting. Port 9 is deliberately
+      # unreachable - see the matching note on the app service above; the real
+      # per-install port always comes from the installer's generated .env.
+      LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:9}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
@@ -255,6 +268,13 @@ services:
       DEV: "false"
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       KOKORO_MODEL_PRECISION: ${KOKORO_MODEL_PRECISION:-q4}
+      # Kokoro model artifacts are baked into the image at build time
+      # (model_q4.onnx under the transformers cache). Force offline mode so a
+      # first-call synthesis never requires a network fetch to HuggingFace;
+      # without this the transformers runtime revalidates the cache online and
+      # fails on machines without connectivity to huggingface.co.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
       OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-45000}

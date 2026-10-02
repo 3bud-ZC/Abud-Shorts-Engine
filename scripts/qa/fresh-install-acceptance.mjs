@@ -317,12 +317,16 @@ async function activateLicense(baseUrl, token) {
     body: { token },
   });
   const status = await requestJson(baseUrl, '/api/v2/licensing/status', { expected: [200] });
-  const resolved = status.status || status;
+  // /licensing/status returns the flat LicenseStatus object
+  // ({ activated, status, fingerprintMatch, ... }); tolerate a wrapped
+  // { status: <object> } envelope but never treat the status STRING as the
+  // status object.
+  const resolved = status && typeof status.status === 'object' && status.status !== null ? status.status : status;
   if (activation.success !== true || resolved.activated !== true || resolved.status !== 'active' || resolved.fingerprintMatch !== true) {
     throw new Error('Fresh installation license did not reach active/fingerprint-matched state.');
   }
   return {
-    fingerprint: fingerprint.fingerprint || fingerprint.currentMachineFingerprint || null,
+    fingerprint: fingerprint.fingerprint || fingerprint.machineFingerprint || fingerprint.currentMachineFingerprint || null,
     activated: true,
     status: 'active',
     fingerprintMatch: true,
@@ -640,7 +644,9 @@ async function main(argv = process.argv.slice(2)) {
       'اختبار الصوت بعد إعادة تشغيل النظام.',
     );
     const postRestartLicense = await requestJson(baseUrl, '/api/v2/licensing/status', { expected: [200] });
-    const status = postRestartLicense.status || postRestartLicense;
+    const status = postRestartLicense && typeof postRestartLicense.status === 'object' && postRestartLicense.status !== null
+      ? postRestartLicense.status
+      : postRestartLicense;
     if (status.activated !== true || status.status !== 'active') {
       throw new Error('License activation did not survive the canonical restart.');
     }

@@ -207,21 +207,139 @@ function Get-LocalVoicePaths {
 # ---------------------------------------------------------------------------
 # Port selection
 # ---------------------------------------------------------------------------
-function Test-LocalVoiceOwnsPort {
-    param([int]$Port)
+<#
+True only when the process listening on $Port is THIS installation's Local
+Voice service. A Short Studio Local Voice health response proves "some Local
+Voice is alive on this port"; it does NOT prove which installation it belongs
+to - every install serves the same /health shape. The only durable ownership
+marker is the listener process itself: a Local Voice service is always its
+own installation's venv python (shared\runtime\local-tts\venv\Scripts\
+python*.exe), so the executable path is checked against this install's
+runtime directory. Anything else answering - even a perfectly healthy Local
+Voice belonging to a *different* install root - is foreign and the port must
+be treated as taken, never adopted.
+
+This is the check that keeps a second installation from silently binding its
+.env to the first installation's service (observed on the 2.6 fresh-install
+run: the fresh install recorded LOCAL_TTS_PORT=8765 - the primary install's
+port - because the running primary service answered /health).
+#>
+function Test-LocalVoiceOwnedByInstall {
+    param(
+        [int]$Port,
+        [Parameter(Mandatory = $true)][string]$RuntimeDir
+    )
     try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2 -ErrorAction Stop
-        return ($health.PSObject.Properties.Name -contains "hardware")
+        $listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
+        Where-Object { $_.OwningProcess -gt 0 } |
+        Select-Object -First 1
+        if (-not $listener) { return $false }
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction Stop
+        if ($process.Name -notmatch '^pythonw?\.exe$') { return $false }
+        $exe = [string]$process.ExecutablePath
+        if (-not $exe) { return $false }
+        $root = [System.IO.Path]::GetFullPath($RuntimeDir).TrimEnd('\') + '\'
+        return $exe.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
     }
     catch {
         return $false
     }
 }
 
+<#
+Ports durably claimed by OTHER Short Studio installations. A port can belong
+to another install even while its Local Voice service is stopped - the claim
+lives in that install's shared\config\.env, not in a live listener. Skipping
+only live ports would let a fresh install steal a port the primary install
+still owns on paper, and whichever service started second would silently
+serve both installs.
+
+Sibling roots are found three ways so no shape of install is missed:
+  1. the two convention roots (%ProgramData%\ShortStudio, %ProgramData%\AbudShorts),
+  2. Inno uninstall registry InstallLocation entries for Short Studio,
+  3. any %ProgramData% directory carrying the Short Studio install markers
+     (shared\config\.env + current.txt) - covers install.ps1-only roots that
+     never registered an uninstall entry.
+Our own root is always excluded: re-running setup on the same install must
+keep its existing port.
+#>
+function Get-LocalVoiceSiblingInstallRoots {
+    param([Parameter(Mandatory = $true)][string]$AbudShared)
+    $myRoot = [System.IO.Path]::GetFullPath((Split-Path $AbudShared -Parent)).TrimEnd('\')
+    $candidates = @(
+        (Join-Path $env:ProgramData "ShortStudio"),
+        (Join-Path $env:ProgramData "AbudShorts")
+    )
+    foreach ($hive in @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")) {
+        Get-ChildItem $hive -ErrorAction SilentlyContinue | ForEach-Object {
+            $loc = $_.GetValue("InstallLocation")
+            $name = [string]$_.GetValue("DisplayName")
+            if ($loc -and $name -match "Short Studio|ABUD Shorts") { $candidates += [string]$loc }
+        }
+    }
+    Get-ChildItem $env:ProgramData -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if ((Test-Path (Join-Path $_.FullName "shared\config\.env")) -and
+            (Test-Path (Join-Path $_.FullName "current.txt"))) {
+            $candidates += $_.FullName
+        }
+    }
+    return @($candidates | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') } |
+        Where-Object { $_ -ine $myRoot } | Select-Object -Unique)
+}
+
+<#
+Reads each sibling install root's shared\config\.env for its claimed
+LOCAL_TTS_PORT. -InstallRoots is injectable so the claim/exclusion logic is
+testable without this machine's real installations; omitted, it discovers
+real siblings via Get-LocalVoiceSiblingInstallRoots.
+#>
+function Get-SiblingLocalVoiceReservedPorts {
+    param(
+        [Parameter(Mandatory = $true)][string]$AbudShared,
+        [string[]]$InstallRoots
+    )
+    $roots = if ($null -ne $InstallRoots) { $InstallRoots } else { Get-LocalVoiceSiblingInstallRoots -AbudShared $AbudShared }
+    $myRoot = [System.IO.Path]::GetFullPath((Split-Path $AbudShared -Parent)).TrimEnd('\')
+    $ports = @()
+    foreach ($root in $roots) {
+        if (-not $root) { continue }
+        $resolved = $root.TrimEnd('\')
+        if ($resolved -ieq $myRoot) { continue }
+        $envFile = Join-Path $resolved "shared\config\.env"
+        if (-not (Test-Path $envFile)) { continue }
+        $line = Get-Content $envFile -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^LOCAL_TTS_PORT=' } | Select-Object -Last 1
+        if ($line) {
+            $p = 0
+            if ([int]::TryParse($line.Substring("LOCAL_TTS_PORT=".Length).Trim(), [ref]$p) -and $p -gt 0) {
+                $ports += $p
+            }
+        }
+    }
+    return @($ports | Select-Object -Unique)
+}
+
 function Resolve-LocalVoicePort {
-    param([int]$PreferredPort = 8765, [int]$MaxAttempts = 10)
+    param(
+        [int]$PreferredPort = 8765,
+        [int]$MaxAttempts = 10,
+        # This installation's shared\runtime\local-tts directory. When set, a
+        # busy port is only reusable if the listening service's python.exe
+        # lives under it - i.e. the service is literally ours.
+        [string]$OwnedRuntimeDir = "",
+        # Ports other installations have already claimed in their .env. Never
+        # handed out to this install even when nothing is listening right now.
+        [int[]]$ReservedPorts = @()
+    )
     for ($i = 0; $i -lt $MaxAttempts; $i++) {
         $candidate = $PreferredPort + $i
+        if ($OwnedRuntimeDir -and (Test-LocalVoiceOwnedByInstall -Port $candidate -RuntimeDir $OwnedRuntimeDir)) {
+            return $candidate
+        }
+        if ($ReservedPorts -contains $candidate) { continue }
         $busy = $true
         try {
             $probe = New-Object System.Net.Sockets.TcpClient
@@ -232,7 +350,10 @@ function Resolve-LocalVoicePort {
             $busy = $false
         }
         if (-not $busy) { return $candidate }
-        if (Test-LocalVoiceOwnsPort -Port $candidate) { return $candidate }
+        # A busy port that answers like a Local Voice but is NOT this install's
+        # own service belongs to another installation - keep scanning instead
+        # of adopting it (the previous behavior that caused cross-install
+        # borrowing). Non-Local-Voice listeners are likewise skipped.
     }
     throw "Could not find a free port for Local Voice starting at $PreferredPort."
 }
@@ -423,7 +544,15 @@ function Get-LocalVoiceServiceStatus {
         if ($listener) {
             $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction Stop
             $expectedPort = "--port $($Paths.Port)"
+            $runtimeRoot = [System.IO.Path]::GetFullPath($Paths.RuntimeDir).TrimEnd('\') + '\'
+            # The listener must also run out of THIS install's runtime
+            # directory. A different install's Local Voice serves the same
+            # uvicorn/app shape on its own port - treating it as ours would
+            # let start/stop/restart adopt or kill a foreign service.
+            $ownedExe = $process.ExecutablePath -and
+            ([string]$process.ExecutablePath).StartsWith($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase)
             if ($process.Name -match '^pythonw?\.exe$' -and
+                $ownedExe -and
                 $process.CommandLine -match '(^|\s)-m\s+uvicorn(\s|$)' -and
                 $process.CommandLine -match 'app\.main:app' -and
                 $process.CommandLine.Contains($expectedPort)) {
@@ -446,6 +575,28 @@ function Start-LocalVoiceService {
     if ($status.healthy -and $status.running) {
         Set-Content -Path $Paths.PidFile -Value "$($status.processId)" -Encoding ascii -NoNewline
         return [ordered]@{ started = $false; alreadyRunning = $true; ready = $true; processId = $status.processId }
+    }
+
+    # The configured port can be live yet belong to a DIFFERENT installation
+    # (Get-LocalVoiceServiceStatus above deliberately does not claim it). A
+    # blind uvicorn spawn would just fail EADDRINUSE after a long wait and the
+    # app would then silently work against the other install's service.
+    # Fail fast and say whose port it is.
+    if (Test-LocalVoiceOwnedByInstall -Port $Paths.Port -RuntimeDir $Paths.RuntimeDir) {
+        # Ours but unhealthy/not-yet-ready - fall through to a normal start.
+    }
+    else {
+        $foreign = $false
+        try {
+            $probe = New-Object System.Net.Sockets.TcpClient
+            $probe.Connect("127.0.0.1", $Paths.Port)
+            $probe.Close()
+            $foreign = $true
+        }
+        catch { }
+        if ($foreign) {
+            throw "Port $($Paths.Port) is already in use by a service that does not belong to this installation (another Short Studio install's Local Voice, or an unrelated app). Re-resolve the port with 'local-voice repair', which never adopts a port another installation owns."
+        }
     }
 
     $python = Join-Path $Paths.VenvDir "Scripts\python.exe"
@@ -572,6 +723,41 @@ if (-not (Test-Path `$cli)) { exit 0 }
     return $launcherPath
 }
 
+<#
+Scheduled-task and Startup-shortcut names are machine-global, unlike every
+other Local Voice path which is scoped under the install's own shared\.
+Two installations sharing one name means the second register silently
+overwrites the first install's autostart (schtasks /create /f replaces the
+task and points it at the second install's launcher), and either install's
+unregister removes the other's. The name is therefore derived from the
+install root: the two convention roots keep the bare historical name so
+existing registrations stay continuous, and any other install root gets a
+stable hash suffix so installs never collide.
+#>
+function Get-LocalVoiceInstallKey {
+    param([Parameter(Mandatory = $true)][string]$AbudShared)
+    $normalized = [System.IO.Path]::GetFullPath($AbudShared).TrimEnd('\').ToUpperInvariant()
+    $defaults = @(
+        ([System.IO.Path]::GetFullPath((Join-Path $env:ProgramData "ShortStudio\shared"))).TrimEnd('\').ToUpperInvariant(),
+        ([System.IO.Path]::GetFullPath((Join-Path $env:ProgramData "AbudShorts\shared"))).TrimEnd('\').ToUpperInvariant()
+    )
+    if ($defaults -contains $normalized) { return "" }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($normalized))
+    }
+    finally { $sha.Dispose() }
+    return "-" + (($hash[0..3] | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+
+function Get-LocalVoiceTaskNameFor {
+    param([string]$AbudShared = "")
+    if (-not $AbudShared) { return $script:LocalVoiceTaskName }
+    $key = Get-LocalVoiceInstallKey -AbudShared $AbudShared
+    if (-not $key) { return $script:LocalVoiceTaskName }
+    return "$($script:LocalVoiceTaskName) ($($key.TrimStart('-')))"
+}
+
 function Get-LocalVoiceStartupShortcutPath {
     param([string]$Name = $script:LocalVoiceTaskName)
     $startupDir = [System.Environment]::GetFolderPath("Startup")
@@ -579,9 +765,12 @@ function Get-LocalVoiceStartupShortcutPath {
 }
 
 function Register-LocalVoiceStartupFolderFallback {
-    param([Parameter(Mandatory = $true)][string]$LauncherPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$LauncherPath,
+        [string]$Name = $script:LocalVoiceTaskName
+    )
     try {
-        $shortcutPath = Get-LocalVoiceStartupShortcutPath
+        $shortcutPath = Get-LocalVoiceStartupShortcutPath -Name $Name
         $startupDir = Split-Path $shortcutPath -Parent
         if ($startupDir -and -not (Test-Path $startupDir)) {
             New-Item -ItemType Directory -Path $startupDir -Force | Out-Null
@@ -601,7 +790,8 @@ function Register-LocalVoiceStartupFolderFallback {
 }
 
 function Unregister-LocalVoiceStartupFolderFallback {
-    foreach ($name in @($script:LocalVoiceTaskName, $script:LegacyLocalVoiceTaskName)) {
+    param([string[]]$Names = @($script:LocalVoiceTaskName, $script:LegacyLocalVoiceTaskName))
+    foreach ($name in $Names) {
         $shortcutPath = Get-LocalVoiceStartupShortcutPath -Name $name
         if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue }
     }
@@ -621,17 +811,26 @@ function Register-LocalVoiceAutoStart {
     $launcherPath = Install-LocalVoiceAutoStartLauncher -AbudShared $AbudShared
     $action = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcherPath`""
 
-    Invoke-LocalVoiceNative "schtasks" @("/create", "/tn", $script:LocalVoiceTaskName, "/tr", "powershell.exe $action", "/sc", "onlogon", "/rl", "limited", "/f") | Out-Null
+    $taskName = Get-LocalVoiceTaskNameFor -AbudShared $AbudShared
+    $isDefaultRoot = ($taskName -eq $script:LocalVoiceTaskName)
+    Invoke-LocalVoiceNative "schtasks" @("/create", "/tn", $taskName, "/tr", "powershell.exe $action", "/sc", "onlogon", "/rl", "limited", "/f") | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        # Registering under the new name never leaves an installation with two
-        # competing autostart entries: an ABUD Shorts Engine 2.4 install's
-        # legacy-named task/shortcut is cleaned up as part of the same call.
-        Invoke-LocalVoiceNative "schtasks" @("/delete", "/tn", $script:LegacyLocalVoiceTaskName, "/f") | Out-Null
-        Unregister-LocalVoiceStartupFolderFallback | Out-Null
+        # Registering under the install-scoped name never leaves an
+        # installation with two competing autostart entries. Only the
+        # default-root install cleans up the bare/legacy names - those
+        # registrations belong to whichever install owns the primary root,
+        # and a secondary install must not touch them.
+        if ($isDefaultRoot) {
+            Invoke-LocalVoiceNative "schtasks" @("/delete", "/tn", $script:LegacyLocalVoiceTaskName, "/f") | Out-Null
+            Unregister-LocalVoiceStartupFolderFallback | Out-Null
+        }
+        else {
+            Unregister-LocalVoiceStartupFolderFallback -Names @($taskName) | Out-Null
+        }
         return [ordered]@{ registered = $true; mechanism = "scheduled_task" }
     }
 
-    if (Register-LocalVoiceStartupFolderFallback -LauncherPath $launcherPath) {
+    if (Register-LocalVoiceStartupFolderFallback -LauncherPath $launcherPath -Name $taskName) {
         return [ordered]@{ registered = $true; mechanism = "startup_folder" }
     }
 
@@ -640,27 +839,46 @@ function Register-LocalVoiceAutoStart {
 
 function Unregister-LocalVoiceAutoStart {
     param([Parameter(Mandatory = $true)][string]$AbudShared)
-    foreach ($name in @($script:LocalVoiceTaskName, $script:LegacyLocalVoiceTaskName)) {
+    $taskName = Get-LocalVoiceTaskNameFor -AbudShared $AbudShared
+    $taskNames = if ($taskName -eq $script:LocalVoiceTaskName) {
+        @($script:LocalVoiceTaskName, $script:LegacyLocalVoiceTaskName)
+    }
+    else {
+        @($taskName)
+    }
+    foreach ($name in $taskNames) {
         Invoke-LocalVoiceNative "schtasks" @("/delete", "/tn", $name, "/f") | Out-Null
     }
-    Unregister-LocalVoiceStartupFolderFallback | Out-Null
+    Unregister-LocalVoiceStartupFolderFallback -Names $taskNames | Out-Null
     $launcherPath = Get-LocalVoiceAutoStartLauncherPath -AbudShared $AbudShared
     if (Test-Path $launcherPath) { Remove-Item $launcherPath -Force -ErrorAction SilentlyContinue }
     return $true
 }
 
 function Test-LocalVoiceAutoStartRegistered {
-    Invoke-LocalVoiceNative "schtasks" @("/query", "/tn", $script:LocalVoiceTaskName) | Out-Null
-    $scheduledTask = ($LASTEXITCODE -eq 0)
-    if (-not $scheduledTask) {
-        # Detects an ABUD Shorts Engine 2.4 install's still-registered legacy
-        # task, so this reports "registered" truthfully instead of a false
-        # "none" next to Local Voice actually auto-starting.
-        Invoke-LocalVoiceNative "schtasks" @("/query", "/tn", $script:LegacyLocalVoiceTaskName) | Out-Null
-        $scheduledTask = ($LASTEXITCODE -eq 0)
+    param([string]$AbudShared = "")
+    $taskName = Get-LocalVoiceTaskNameFor -AbudShared $AbudShared
+    $isDefaultRoot = ($taskName -eq $script:LocalVoiceTaskName)
+    $checkNames = if ($isDefaultRoot) {
+        @($taskName, $script:LegacyLocalVoiceTaskName)
     }
-    $startupFolder = (Test-Path (Get-LocalVoiceStartupShortcutPath -Name $script:LocalVoiceTaskName)) -or
-    (Test-Path (Get-LocalVoiceStartupShortcutPath -Name $script:LegacyLocalVoiceTaskName))
+    else {
+        @($taskName)
+    }
+    $scheduledTask = $false
+    foreach ($name in $checkNames) {
+        # Detects an ABUD Shorts Engine 2.4 install's still-registered legacy
+        # task for the default-root install, so this reports "registered"
+        # truthfully instead of a false "none" next to Local Voice actually
+        # auto-starting. A secondary install is checked only under its own
+        # scoped name - another install's registration is never ours.
+        Invoke-LocalVoiceNative "schtasks" @("/query", "/tn", $name) | Out-Null
+        if ($LASTEXITCODE -eq 0) { $scheduledTask = $true }
+    }
+    $startupFolder = $false
+    foreach ($name in $checkNames) {
+        if (Test-Path (Get-LocalVoiceStartupShortcutPath -Name $name)) { $startupFolder = $true }
+    }
     $mechanism = if ($scheduledTask) { "scheduled_task" } elseif ($startupFolder) { "startup_folder" } else { "none" }
     return [ordered]@{ scheduledTask = $scheduledTask; startupFolder = $startupFolder; any = ($scheduledTask -or $startupFolder); mechanism = $mechanism }
 }
@@ -678,6 +896,10 @@ function Invoke-LocalVoiceSetup {
         [Parameter(Mandatory = $true)][string]$AppSourceDir,
         [Parameter(Mandatory = $true)][string]$LibRoot,
         [string]$InternalServiceToken = "",
+        # The port this install already claims in its .env, when it has one.
+        # Repair/re-install must keep the existing claim stable rather than
+        # drifting to a new port on every run.
+        [int]$PreferredPort = 8765,
         [switch]$Repair
     )
 
@@ -716,8 +938,14 @@ function Invoke-LocalVoiceSetup {
     try {
         $modelId = if ($resolution.mode -eq "HIGH_QUALITY") { "voicetut" } else { "kemetone" }
         $result.modelId = $modelId
-        $port = Resolve-LocalVoicePort -PreferredPort 8765
-        $paths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $port
+        # Build the per-install paths first (the runtime dir is the ownership
+        # marker), collect ports other installs have claimed, then resolve -
+        # the port handed out must be free AND not owned or claimed by a
+        # different installation.
+        $paths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $PreferredPort
+        $reserved = Get-SiblingLocalVoiceReservedPorts -AbudShared $AbudShared
+        $port = Resolve-LocalVoicePort -PreferredPort $PreferredPort -OwnedRuntimeDir $paths.RuntimeDir -ReservedPorts $reserved
+        $paths.Port = $port
         $result.port = $port
         $result.baseUrl = "http://host.docker.internal:$port"
 

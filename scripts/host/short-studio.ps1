@@ -60,24 +60,26 @@ $ErrorActionPreference = "Stop"
 if ($env:ABUD_HOME) {
     # Explicit override - always honored, matches the pre-2.5 contract.
     $AbudHome = $env:ABUD_HOME
-} elseif (Test-Path (Join-Path $env:ProgramData "AbudShorts")) {
+}
+elseif (Test-Path (Join-Path $env:ProgramData "AbudShorts")) {
     # An ABUD Shorts Engine 2.4 installation already exists on this machine.
     # Reattaching to it - not a fresh ShortStudio\ root - is what makes the
     # upgrade preserve the owner account, jobs, videos and Provider Vault.
     $AbudHome = Join-Path $env:ProgramData "AbudShorts"
-} else {
+}
+else {
     $AbudHome = Join-Path $env:ProgramData "ShortStudio"
 }
-$env:ABUD_HOME   = $AbudHome
-$AbudShared      = Join-Path $AbudHome "shared"
-$AbudReleases    = Join-Path $AbudHome "releases"
+$env:ABUD_HOME = $AbudHome
+$AbudShared = Join-Path $AbudHome "shared"
+$AbudReleases = Join-Path $AbudHome "releases"
 $AbudCurrentFile = Join-Path $AbudHome "current.txt"
-$AbudDataDir     = Join-Path $AbudShared "data"
-$AbudConfigDir   = Join-Path $AbudShared "config"
-$AbudEnvFile     = Join-Path $AbudConfigDir ".env"
-$AbudBackupDir   = Join-Path $AbudShared "backups"
-$AbudStateDir    = Join-Path $AbudShared "state"
-$AbudLockFile    = Join-Path $AbudStateDir "update.lock"
+$AbudDataDir = Join-Path $AbudShared "data"
+$AbudConfigDir = Join-Path $AbudShared "config"
+$AbudEnvFile = Join-Path $AbudConfigDir ".env"
+$AbudBackupDir = Join-Path $AbudShared "backups"
+$AbudStateDir = Join-Path $AbudShared "state"
+$AbudLockFile = Join-Path $AbudStateDir "update.lock"
 $AbudInstallFile = Join-Path $AbudShared "installation.json"
 # Read by the application to populate Settings -> Updates. It lives in the data
 # directory because that is the only path both the host and the container see.
@@ -87,15 +89,15 @@ $AbudUpdateStateFile = Join-Path $AbudDataDir "updates\update-state.json"
 # its existing abud-shorts container/compose project name instead, so this
 # script reattaches to the running containers rather than creating new ones.
 $DefaultComposeProject = if ($AbudHome -eq (Join-Path $env:ProgramData "AbudShorts")) { "abud-shorts" } else { "short-studio" }
-$ComposeProject  = if ($env:SHORT_STUDIO_COMPOSE_PROJECT) { $env:SHORT_STUDIO_COMPOSE_PROJECT }
-                    elseif ($env:ABUD_COMPOSE_PROJECT) { $env:ABUD_COMPOSE_PROJECT }
-                    else { $DefaultComposeProject }
+$ComposeProject = if ($env:SHORT_STUDIO_COMPOSE_PROJECT) { $env:SHORT_STUDIO_COMPOSE_PROJECT }
+elseif ($env:ABUD_COMPOSE_PROJECT) { $env:ABUD_COMPOSE_PROJECT }
+else { $DefaultComposeProject }
 $DefaultManifestUrl = "https://github.com/3bud-ZC/Abud-Shorts-Engine/releases/latest/download/update-manifest.json"
 
 function Write-Step { param([string]$Text) Write-Host $Text -ForegroundColor Cyan }
-function Write-Ok   { param([string]$Text) Write-Host "      $Text" -ForegroundColor Green }
+function Write-Ok { param([string]$Text) Write-Host "      $Text" -ForegroundColor Green }
 function Write-Warn { param([string]$Text) Write-Host "      $Text" -ForegroundColor Yellow }
-function Write-Bad  { param([string]$Text) Write-Host "      $Text" -ForegroundColor Red }
+function Write-Bad { param([string]$Text) Write-Host "      $Text" -ForegroundColor Red }
 
 function Stop-WithMessage {
     param([string]$Message)
@@ -213,15 +215,18 @@ function Get-DeviceFingerprintMaterial {
     try {
         $guid = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -Name MachineGuid -ErrorAction Stop).MachineGuid
         if ($guid) { $parts += "win_guid:$guid" }
-    } catch { }
+    }
+    catch { }
     try {
         $uuid = (Get-CimInstance Win32_ComputerSystemProduct -ErrorAction Stop).UUID
         if ($uuid) { $parts += "system_uuid:$uuid" }
-    } catch { }
+    }
+    catch { }
     try {
         $cpu = (Get-CimInstance Win32_Processor -ErrorAction Stop | Select-Object -First 1).ProcessorId
         if ($cpu) { $parts += "cpu:$cpu" }
-    } catch { }
+    }
+    catch { }
     $raw = if ($parts.Count -gt 0) { $parts -join "|" } else { "$env:COMPUTERNAME|$env:USERNAME" }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($raw)
@@ -252,7 +257,8 @@ function Invoke-Docker {
     $ErrorActionPreference = "Continue"
     try {
         & docker @DockerArgs 2>&1 | ForEach-Object { "$_" }
-    } finally {
+    }
+    finally {
         $ErrorActionPreference = $previous
     }
 }
@@ -318,18 +324,18 @@ function Wait-ForContainerSettle {
 }
 
 function Show-HealthSummary {
-    $app        = Get-ContainerHealth (Get-ContainerName "app")
-    $worker     = Get-ContainerHealth (Get-ContainerName "render-worker")
-    $db         = Get-ContainerHealth (Get-ContainerName "postgres")
+    $app = Get-ContainerHealth (Get-ContainerName "app")
+    $worker = Get-ContainerHealth (Get-ContainerName "render-worker")
+    $db = Get-ContainerHealth (Get-ContainerName "postgres")
     $automation = Get-ContainerHealth (Get-ContainerName "n8n")
 
     function Friendly([string]$s) {
         switch ($s) {
-            "healthy"  { "Healthy" }
-            "running"  { "Healthy" }
+            "healthy" { "Healthy" }
+            "running" { "Healthy" }
             "starting" { "Starting" }
-            "missing"  { "Not installed" }
-            default    { "Problem" }
+            "missing" { "Not installed" }
+            default { "Problem" }
         }
     }
 
@@ -358,7 +364,8 @@ function Wait-ForEndpoint {
         try {
             Invoke-WebRequest -Uri $Url -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
             return $true
-        } catch {
+        }
+        catch {
             Start-Sleep -Seconds 2
         }
     }
@@ -368,7 +375,8 @@ function Wait-ForEndpoint {
 function Get-RunningSystemInfo {
     try {
         return Invoke-RestMethod -Uri "$(Get-AppBaseUrl)/api/v2/system/info" -TimeoutSec 10 -ErrorAction Stop
-    } catch { return $null }
+    }
+    catch { return $null }
 }
 
 # ---------------------------------------------------------------------------
@@ -384,7 +392,8 @@ function Enter-UpdateLock {
         $script:LockStream = [System.IO.File]::Open(
             $AbudLockFile, [System.IO.FileMode]::OpenOrCreate,
             [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-    } catch {
+    }
+    catch {
         Stop-WithMessage "Update already in progress. Wait for the running update to finish, then try again."
     }
 }
@@ -452,7 +461,8 @@ function Save-Transaction {
     New-Item -ItemType Directory -Path (Split-Path $AbudUpdateStateFile) -Force | Out-Null
     try {
         Write-TextFile $AbudUpdateStateFile ($out | ConvertTo-Json -Depth 8)
-    } catch {
+    }
+    catch {
         # Never fabricate a record; say so and carry on with the update itself.
         Write-Warn "Could not write the update transaction record."
     }
@@ -463,7 +473,8 @@ function Get-InterruptedTransaction {
     try {
         $doc = Get-Content $AbudUpdateStateFile -Raw | ConvertFrom-Json
         if ($doc.PSObject.Properties.Name -contains "current" -and $doc.current) { return $doc.current }
-    } catch { }
+    }
+    catch { }
     return $null
 }
 
@@ -513,7 +524,8 @@ function Get-FileSha256 {
     $stream = [System.IO.File]::OpenRead($Path)
     try {
         return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
-    } finally {
+    }
+    finally {
         $stream.Dispose()
         $sha.Dispose()
     }
@@ -529,7 +541,7 @@ function New-PreUpgradeBackup {
     New-Item -ItemType Directory -Path $AbudBackupDir -Force | Out-Null
     $target = Join-Path $AbudBackupDir "$BackupId.sql"
     $pgUser = Get-EnvValue "POSTGRES_USER" "abud_shorts"
-    $pgDb   = Get-EnvValue "POSTGRES_DB" "abud_shorts"
+    $pgDb = Get-EnvValue "POSTGRES_DB" "abud_shorts"
 
     # Not routed through Invoke-Docker: that merges stderr into the output
     # stream, which would corrupt the dump. stderr is discarded instead, and
@@ -538,8 +550,9 @@ function New-PreUpgradeBackup {
     $ErrorActionPreference = "Continue"
     try {
         & docker exec (Get-ContainerName "postgres") pg_dump -U $pgUser -d $pgDb 2>$null |
-            Out-File -FilePath $target -Encoding utf8
-    } finally {
+        Out-File -FilePath $target -Encoding utf8
+    }
+    finally {
         $ErrorActionPreference = $previous
     }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $target) -or (Get-Item $target).Length -eq 0) {
@@ -557,13 +570,14 @@ function Restore-PreUpgradeBackup {
     $source = Join-Path $AbudBackupDir "$BackupId.sql"
     if (-not (Test-Path $source)) { return $false }
     $pgUser = Get-EnvValue "POSTGRES_USER" "abud_shorts"
-    $pgDb   = Get-EnvValue "POSTGRES_DB" "abud_shorts"
+    $pgDb = Get-EnvValue "POSTGRES_DB" "abud_shorts"
     # As above: psql reads the dump on stdin, so stderr must not be folded in.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
         Get-Content $source | & docker exec -i (Get-ContainerName "postgres") psql -U $pgUser -d $pgDb 2>$null | Out-Null
-    } finally {
+    }
+    finally {
         $ErrorActionPreference = $previous
     }
     return $true
@@ -610,23 +624,24 @@ function Sync-LocalVoiceWithProductLifecycle {
         $paths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $port
         $token = Get-EnvValue "INTERNAL_SERVICE_TOKEN" ""
         switch ($Action) {
-            "start"   {
+            "start" {
                 Start-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token | Out-Null
-                $autoStart = Test-LocalVoiceAutoStartRegistered
+                $autoStart = Test-LocalVoiceAutoStartRegistered -AbudShared $AbudShared
                 if (-not $autoStart.any) {
                     Register-LocalVoiceAutoStart -AbudShared $AbudShared | Out-Null
                 }
             }
-            "stop"    { Stop-LocalVoiceService -Paths $paths | Out-Null }
+            "stop" { Stop-LocalVoiceService -Paths $paths | Out-Null }
             "restart" {
                 Restart-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token | Out-Null
-                $autoStart = Test-LocalVoiceAutoStartRegistered
+                $autoStart = Test-LocalVoiceAutoStartRegistered -AbudShared $AbudShared
                 if (-not $autoStart.any) {
                     Register-LocalVoiceAutoStart -AbudShared $AbudShared | Out-Null
                 }
             }
         }
-    } catch {
+    }
+    catch {
         Write-Warn "Local Voice $Action failed: $($_.Exception.Message)"
     }
 }
@@ -711,7 +726,7 @@ function Show-LocalVoiceStatus {
     Write-Host "  Service running: $($status.running)"
     Write-Host "  Service healthy: $($status.healthy)"
     Write-Host "  Models ready:    $(if ($status.modelsReady.Count -gt 0) { $status.modelsReady -join ', ' } else { 'none' })"
-    Write-Host "  Auto-start:      $((Test-LocalVoiceAutoStartRegistered).mechanism)"
+    Write-Host "  Auto-start:      $((Test-LocalVoiceAutoStartRegistered -AbudShared $AbudShared).mechanism)"
     if ($Result -and $Result.error) { Write-Bad "Last setup error: $($Result.error)" }
     Write-Host ""
 }
@@ -728,19 +743,21 @@ function Invoke-LocalVoiceCommand {
             Write-Step "Setting up Local Voice ($LocalVoiceMode)..."
             $result = Invoke-LocalVoiceSetup -Mode $LocalVoiceMode -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
                 -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot `
-                -InternalServiceToken $token
+                -InternalServiceToken $token -PreferredPort $port
             if ($result.resolvedMode -ne "SKIP") {
                 Set-EnvValue "LOCAL_VOICE_MODE" $result.resolvedMode
                 if ($result.port) { Set-EnvValue "LOCAL_TTS_PORT" "$($result.port)" }
                 if ($result.baseUrl) { Set-EnvValue "LOCAL_TTS_BASE_URL" $result.baseUrl }
-            } else {
+            }
+            else {
                 Set-EnvValue "LOCAL_VOICE_MODE" "SKIP"
             }
             if ($result.error) {
                 Write-Bad "Local High Quality setup failed: $($result.error)"
                 Write-Host "      Retry with: short-studio.ps1 local-voice repair"
                 Write-Host "      ElevenLabs was not used. Arabic jobs will report Local Voice setup is required until this is fixed."
-            } else {
+            }
+            else {
                 Write-Ok "Resolved mode: $($result.resolvedMode) ($($result.resolutionReason))"
                 if ($result.resolvedMode -ne "SKIP") {
                     Write-Ok "Model: $($result.modelId), ready: $($result.modelReady)"
@@ -750,7 +767,7 @@ function Invoke-LocalVoiceCommand {
         }
         "start" {
             $r = Start-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token
-            $autoStart = Test-LocalVoiceAutoStartRegistered
+            $autoStart = Test-LocalVoiceAutoStartRegistered -AbudShared $AbudShared
             if (-not $autoStart.any) { $autoStart = Register-LocalVoiceAutoStart -AbudShared $AbudShared }
             if ($r.ready) { Write-Ok "Local Voice is running on port $($paths.Port)." }
             else { Write-Bad "Local Voice did not become healthy. Check $($paths.LogFile)." }
@@ -762,7 +779,7 @@ function Invoke-LocalVoiceCommand {
         }
         "restart" {
             $r = Restart-LocalVoiceService -Paths $paths -AppSourceDir $appSourceDir -InternalServiceToken $token
-            $autoStart = Test-LocalVoiceAutoStartRegistered
+            $autoStart = Test-LocalVoiceAutoStartRegistered -AbudShared $AbudShared
             if (-not $autoStart.any) { $autoStart = Register-LocalVoiceAutoStart -AbudShared $AbudShared }
             if ($r.ready) { Write-Ok "Local Voice restarted and healthy." }
             else { Write-Bad "Local Voice did not become healthy after restart. Check $($paths.LogFile)." }
@@ -774,7 +791,7 @@ function Invoke-LocalVoiceCommand {
             if ($mode -eq "SKIP" -or $mode -eq "not set") { $mode = "AUTO" }
             $result = Invoke-LocalVoiceSetup -Mode $mode -AbudShared $AbudShared -AbudDataDir $AbudDataDir `
                 -AppSourceDir $appSourceDir -LibRoot $PSScriptRoot `
-                -InternalServiceToken $token -Repair
+                -InternalServiceToken $token -PreferredPort $port -Repair
             if ($result.error) { Write-Bad "Repair failed: $($result.error)" }
             else { Write-Ok "Repair complete. Resolved mode: $($result.resolvedMode)." }
         }
@@ -805,7 +822,8 @@ function Invoke-Backup {
         Write-Ok "Backup created: $path"
         Write-Host "      It contains the database and this installation's configuration."
         Write-Host "      Videos and media are not copied; they already live in $AbudDataDir."
-    } else {
+    }
+    else {
         Write-Bad "The backup could not be created. Check the system with the Status shortcut."
     }
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
@@ -831,18 +849,21 @@ function Invoke-Diagnostics {
                 -OutFile $out -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
             Write-Ok "Support bundle written to: $out"
             $written = $true
-        } catch {
+        }
+        catch {
             # Say what actually happened rather than blaming the network for
             # what may be a rejected token.
             $status = $null
             if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
             if ($status -eq 401 -or $status -eq 403) {
                 $reason = "The application rejected this installation's service token"
-            } elseif ($status) {
+            }
+            elseif ($status) {
                 $reason = "The application answered with HTTP $status"
             }
         }
-    } else {
+    }
+    else {
         $reason = "This installation's configuration has no service token"
     }
 
@@ -890,13 +911,15 @@ function Invoke-Doctor {
 
     if ($record) {
         $results += Write-DoctorLine "PASS" "Installed version $($record.currentVersion), channel $($record.channel)"
-    } else {
+    }
+    else {
         $results += Write-DoctorLine "FAIL" "No installation record found (is this an installed system?)"
     }
 
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         $results += Write-DoctorLine "FAIL" "Docker is not installed"
-    } else {
+    }
+    else {
         Invoke-Docker @("info") | Out-Null
         if ($LASTEXITCODE -eq 0) { $results += Write-DoctorLine "PASS" "Docker Desktop is running" }
         else { $results += Write-DoctorLine "FAIL" "Docker Desktop is installed but not running" }
@@ -914,7 +937,8 @@ function Invoke-Doctor {
         try {
             $bundle = Invoke-RestMethod -Uri "$(Get-AppBaseUrl)/internal/v1/system/diagnostics/bundle" `
                 -Headers @{ "x-internal-token" = $internalToken } -TimeoutSec 15 -ErrorAction Stop
-        } catch { }
+        }
+        catch { }
     }
     if ($bundle) {
         $results += Write-DoctorLine "PASS" "Application diagnostics reachable (schema $($bundle.product.schemaVersion))"
@@ -934,7 +958,8 @@ function Invoke-Doctor {
             $r = if ($failedCount -eq 0) { "PASS" } else { "WARN" }
             $results += Write-DoctorLine $r "Recent failed jobs: $failedCount"
         }
-    } else {
+    }
+    else {
         $results += Write-DoctorLine "WARN" "Could not reach application diagnostics (app may still be starting)"
     }
 
@@ -945,7 +970,8 @@ function Invoke-Doctor {
         $probe.Connect("127.0.0.1", [int]$port)
         $probe.Close()
         $portOpen = $true
-    } catch { }
+    }
+    catch { }
     $results += Write-DoctorLine $(if ($portOpen) { "PASS" } else { "FAIL" }) "Port $port is reachable"
 
     try {
@@ -953,7 +979,8 @@ function Invoke-Doctor {
         $freeGb = [math]::Round((Get-PSDrive -Name $driveLetter).Free / 1GB, 1)
         $r = if ($freeGb -ge 10) { "PASS" } elseif ($freeGb -ge 3) { "WARN" } else { "FAIL" }
         $results += Write-DoctorLine $r "Disk free on $($driveLetter): $freeGb GB"
-    } catch {
+    }
+    catch {
         $results += Write-DoctorLine "WARN" "Could not determine free disk space"
     }
 
@@ -965,7 +992,8 @@ function Invoke-Doctor {
     $lvMode = Get-EnvValue "LOCAL_VOICE_MODE" "SKIP"
     if ($lvMode -eq "SKIP" -or -not $lvMode) {
         $results += Write-DoctorLine "WARN" "Local Voice: setup skipped (Arabic jobs will report setup required)"
-    } else {
+    }
+    else {
         try {
             $lvPort = [int](Get-EnvValue "LOCAL_TTS_PORT" "8765")
             $lvPaths = Get-LocalVoicePaths -AbudShared $AbudShared -AbudDataDir $AbudDataDir -Port $lvPort
@@ -973,9 +1001,10 @@ function Invoke-Doctor {
             $r = if ($lvStatus.healthy -and $lvStatus.modelsReady.Count -gt 0) { "PASS" } elseif ($lvStatus.running) { "WARN" } else { "FAIL" }
             $modelsText = if ($lvStatus.modelsReady.Count -gt 0) { $lvStatus.modelsReady -join ", " } else { "none ready" }
             $results += Write-DoctorLine $r "Local Voice ($lvMode): healthy=$($lvStatus.healthy), models=$modelsText"
-            $autoStart = Test-LocalVoiceAutoStartRegistered
+            $autoStart = Test-LocalVoiceAutoStartRegistered -AbudShared $AbudShared
             $results += Write-DoctorLine $(if ($autoStart.any) { "PASS" } else { "WARN" }) "Local Voice auto-start: $($autoStart.mechanism)"
-        } catch {
+        }
+        catch {
             $results += Write-DoctorLine "WARN" "Local Voice status could not be checked: $($_.Exception.Message)"
         }
     }
@@ -984,7 +1013,8 @@ function Invoke-Doctor {
     try {
         Invoke-WebRequest -Uri $manifestUrl -Method Head -TimeoutSec 8 -UseBasicParsing -ErrorAction Stop | Out-Null
         $results += Write-DoctorLine "PASS" "Update manifest reachable"
-    } catch {
+    }
+    catch {
         $results += Write-DoctorLine "WARN" "Update manifest not reachable right now (offline, or no release published yet)"
     }
 
@@ -1075,7 +1105,8 @@ function Invoke-Rollback {
             Save-Transaction "ROLLED_BACK"
             Wait-ForContainerSettle
             Write-Ok "Returned to version $previous."
-        } else {
+        }
+        else {
             $script:Txn.rollback = [ordered]@{
                 attempted = $true; result = "failed"; restoredVersion = $previous
                 databaseRestored = $false
@@ -1084,7 +1115,8 @@ function Invoke-Rollback {
             Save-Transaction "FAILED"
             Write-Bad "Version $previous was restored but the system is not healthy."
         }
-    } finally {
+    }
+    finally {
         Exit-UpdateLock
     }
     Show-HealthSummary | Out-Null
@@ -1108,7 +1140,8 @@ function Invoke-Update {
         $manifestFile = Join-Path $workDir "update-manifest.json"
         try {
             Invoke-WebRequest -Uri $manifestUrl -OutFile $manifestFile -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop
-        } catch {
+        }
+        catch {
             Stop-WithMessage "Could not reach the update service. Check this machine's internet connection and try again."
         }
 
@@ -1118,7 +1151,8 @@ function Invoke-Update {
         $release = $null
         if ($manifest.PSObject.Properties.Name -contains "channels") {
             $release = $manifest.channels.$channel
-        } elseif ($manifest.channel -eq $channel) {
+        }
+        elseif ($manifest.channel -eq $channel) {
             $release = $manifest
         }
         if (-not $release) { Stop-WithMessage "No $channel release is published yet." }
@@ -1173,9 +1207,9 @@ function Invoke-Update {
         }
 
         Initialize-Transaction $currentVersion $release.version $channel
-        $script:Txn.schemaVersion  = $release.schemaVersion
-        $script:Txn.imageDigest    = $release.imageDigest
-        $script:Txn.packageSha256  = $release.packageSha256
+        $script:Txn.schemaVersion = $release.schemaVersion
+        $script:Txn.imageDigest = $release.imageDigest
+        $script:Txn.packageSha256 = $release.packageSha256
         Save-Transaction "PREPARING"
 
         # --- disk ---------------------------------------------------------
@@ -1194,7 +1228,8 @@ function Invoke-Update {
         $packageFile = Join-Path $workDir "package.tar.gz"
         try {
             Invoke-WebRequest -Uri $release.packageUrl -OutFile $packageFile -TimeoutSec 900 -UseBasicParsing -ErrorAction Stop
-        } catch {
+        }
+        catch {
             $script:Txn.error = "The release package could not be downloaded."
             Save-Transaction "FAILED"
             Stop-WithMessage "The update could not be downloaded. Nothing has been changed."
@@ -1314,7 +1349,8 @@ function Invoke-Update {
                 if (Restore-PreUpgradeBackup $backupId) {
                     $databaseRestored = $true
                     Write-Ok "Database restored from the pre-upgrade backup."
-                } else {
+                }
+                else {
                     Write-Bad "The database could not be restored automatically."
                 }
             }
@@ -1327,7 +1363,8 @@ function Invoke-Update {
                 Write-Ok "Rolled back to version $currentVersion and the system is healthy again."
                 Wait-ForContainerSettle
                 Sync-LocalVoiceWithProductLifecycle "restart"
-            } else {
+            }
+            else {
                 Write-Bad "Rollback finished but the system is not reporting healthy."
             }
 
@@ -1352,7 +1389,7 @@ function Invoke-Update {
         Save-Transaction "VERIFYING"
 
         Write-Step "[7/9] Waiting for the system to come back..."
-        if (-not (Wait-ForEndpoint "$(Get-AppBaseUrl)/health/live" 90))  { & $rollback "Version $($release.version) never finished starting." }
+        if (-not (Wait-ForEndpoint "$(Get-AppBaseUrl)/health/live" 90)) { & $rollback "Version $($release.version) never finished starting." }
         if (-not (Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90)) { & $rollback "Version $($release.version) started but never became ready." }
         Write-Ok "The application is live and ready."
 
@@ -1395,7 +1432,8 @@ function Invoke-Update {
         Write-Host "  Previous version $currentVersion is kept for rollback."
         Write-Host "  Pre-update backup: $backupId"
         Write-Host ""
-    } finally {
+    }
+    finally {
         Exit-UpdateLock
         Remove-Item $workDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -1425,17 +1463,17 @@ Backups, videos, media and settings are never removed by any of these commands.
 }
 
 switch ($Command) {
-    "status"      { Invoke-Status }
-    "update"      { Invoke-Update }
-    "backup"      { Invoke-Backup }
+    "status" { Invoke-Status }
+    "update" { Invoke-Update }
+    "backup" { Invoke-Backup }
     "diagnostics" { Invoke-Diagnostics }
-    "doctor"      { Invoke-Doctor }
-    "logs"        { Invoke-Logs $SubCommand }
-    "start"       { Invoke-Start }
-    "stop"        { Invoke-Stop }
-    "restart"     { Invoke-Restart }
-    "rollback"    { Invoke-Rollback }
-    "owner"       { Invoke-OwnerCommand $SubCommand }
+    "doctor" { Invoke-Doctor }
+    "logs" { Invoke-Logs $SubCommand }
+    "start" { Invoke-Start }
+    "stop" { Invoke-Stop }
+    "restart" { Invoke-Restart }
+    "rollback" { Invoke-Rollback }
+    "owner" { Invoke-OwnerCommand $SubCommand }
     "local-voice" { Invoke-LocalVoiceCommand $SubCommand }
-    default       { Show-Usage }
+    default { Show-Usage }
 }
