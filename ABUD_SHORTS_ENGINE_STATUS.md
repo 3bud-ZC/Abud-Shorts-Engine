@@ -192,6 +192,56 @@ None of these interventions are acceptable for a commercial fresh install. This 
 `Start-Process PowerShell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Abud\AppData\Local\Temp\compact_docker_vhdx.ps1"'`
 **Data loss: 0.** All jobs (40), videos (63), backups (1), licensing keys, Provider Vault, VoiceTut, Kokoro, Ollama qwen2.5:7b-instruct preserved.
 
+### 2.6 Post-Acceptance Consolidation & Storage Recovery — 2026-10-02
+
+**Purpose:** Post-PASS cleanup — remove disposable QA environments, superseded artifacts, Docker build/cache residue, and compact Docker's virtual disk. One canonical installation remains: `C:\ProgramData\ShortStudio` (project `short-studio`, http://127.0.0.1:3130).
+
+**BEFORE:** C: free 101,362,393,088 B (~94.4 GiB); Docker logical 57+ GB (images 44.9 GB incl. superseded/QA builds, build cache 29.84 GB, ~21 volumes); Docker VHDX physical 88.75 GB.
+
+**Removed:**
+- Docker projects `short-studio-acceptance` + `short-studio-fresh`: 8 containers, 2 networks (`*-v2`), 4 volumes (acceptance/fresh pg+n8n).
+- 17 orphaned/anonymous volumes incl. 2×1.8 GB DinD registry caches and legacy `n8n_data`.
+- Images: `short-studio-server:2.6.0-final`/`ghcr.io/3bud-zc/short-studio-server:2.6.0-handoff` (`bdfac0d2…`, 11.3 GB unique), dangling `30fdbe60…` (old 2.5.2, 6.9 GB), dangling `cd3174b2…` (0.24 GB).
+- Docker build cache: 29.84 GB → 0 (`docker builder prune -af`; no prune -a / volume prune used).
+- Install roots: `C:\ProgramData\ShortStudioFresh` (1.12 GB), `C:\ProgramData\ShortStudioAcceptance` (5.68 GB); scheduled task `Short Studio - Local Voice (23464510)` (acceptance-owned); Start Menu entries pointing at acceptance port 13910; stale Inno uninstall entries (Fresh 2.6.0, IsolatedTest 2.5.2); leftover elevated `powershell.exe` (PID 24476) and acceptance Local Voice procs (3260/15436).
+- Staging/temp: `C:\Windows\Temp\ss-acceptance` (2.7 GB wheel/model staging + orchestration scripts), `%TEMP%\ss-260-image.tar` (3.6 GB docker export), ~140 `arabic-readiness-test-*`/`voice-providers-test-*`/`pip-*` temp dirs.
+- Release intermediates: client `staging/` (3.6 GB) + extracted package dir (3.6 GB) under `Short-Studio-Server-2.6.0-Client`; superseded Sep-13 installer set `Abud Shorts Engine\dist-commercial\` (`ShortStudio-Setup-2.6.0.exe` sha `e5ac8ebc…`, listed as superseded above; canonical accepted build `0781433f…` lives at `source\dist-commercial\`).
+- Dev/QA data: `.venv-quality` (0.8 GB, reproducible via `scripts/install-quality-pack.ps1`), `data-dev/models/tts/voicetut` (2.31 GB, sha256-verified byte-identical duplicate of production `shared/data/models/tts/voicetut/model.safetensors`), `shared/qa` media+snapshot data (5.06 GB → 79 KB textual evidence kept), uv cache (6.62 GB), pip cache (0.39 GB).
+
+**Preserved:** canonical install root incl. Postgres/n8n volumes (`ss25-migrate-final-a_abud-shorts-*`), all customer media/jobs/vault/backups, `license.json` + `licensing\` (incl. private signing key), production VoiceTut/Piper/Kokoro models, canonical Local Voice venv, Ollama `qwen2.5:7b-instruct`, HF cache (OpenCLIP ViT-B-32 + higgs tokenizer), images `short-studio-server:2.6.0` (`0915eb61`, accepted release image) + `2.6.0-local` (active runtime), client tar.gz + sha256 + manifests, accepted Setup.exe, PASS report copied to `C:\ProgramData\ShortStudio\shared\logs\fresh-install-acceptance-2026-10-02T18-35-10-963Z.json`, non-Short-Studio project resources (video-factory, elhabak, docker:cli, alpine, nsenter1), legacy `source_*` volumes (83 MB, last copy of pre-migration data).
+
+**AFTER:** C: free 202,228,641,792 B (~188.3 GiB); Docker logical: images 27.29 GB (10), volumes 159 MB (4: 2 canonical + 2 preserved legacy), build cache 0 B; Docker VHDX physical 33.59 GB.
+
+**Physical recovered:** ~100.9 GB C: free delta; VHDX compacted 88.75 → 33.59 GB (55.3 GB) via elevated diskpart `compact vdisk` targeting only `docker_data.vhdx`.
+
+**Post-cleanup runtime health:** `short-studio` is the only active Short Studio project; app/render-worker/postgres/n8n all healthy; http://127.0.0.1:3130 → 200; video serving 200 + range 206; Local Voice on 8765 healthy (voicetut loaded, CUDA); Ollama up; license file + commercial keys intact; no Short Studio scheduled tasks or acceptance shortcuts remain.
+
+**Data safety (baseline → after, unchanged):** jobs 40→40, provider_credentials_vault 3→3, backups 4→4, social_accounts 2→2, videos dir 191→191 entries. Customer data loss: 0.
+
+**Runtime image alignment note:** canonical stack runs `short-studio-server:2.6.0-local` (`9c8d3063…`), while the accepted final image is `short-studio-server:2.6.0` (`0915eb61…`, per update-manifest digest). Next pass should align runtime to `2.6.0` without touching persistent data.
+
+### 2.6 Canonical Runtime Image Alignment — 2026-10-02
+
+**Root cause:** the live `short-studio` stack was launched from `releases/2.6.0/docker-compose.prod.yml`, which resolves `${SHORT_STUDIO_IMAGE:-${ABUD_IMAGE}}`. `shared/config/.env` pinned both vars to the superseded dev build `short-studio-server:2.6.0-local` (`9c8d3063…`), `releases/2.6.0/release.json` recorded that same `-local` image, and `current.txt` + `shared/installation.json` still pointed at the 2.5.2 release — stale pointers from the dev-side start, not a compose defect.
+
+**Changed (metadata only):**
+- `shared/config/.env`: `SHORT_STUDIO_IMAGE` and `ABUD_IMAGE` → `short-studio-server:2.6.0`
+- `releases/2.6.0/release.json`: `image` → `short-studio-server:2.6.0`, `imageDigest` → `sha256:0915eb61542cb3b808c7623f80de375821c33677656c6cc73914975f8157d16f`
+- `current.txt` → `C:\ProgramData\ShortStudio\releases\2.6.0` (matches the compose file actually in use)
+- `shared/installation.json`: `currentVersion` 2.6.0 (previous 2.5.2), image/digest updated to the accepted final image
+
+**Containers recreated:** only `abud-shorts-app` + `abud-shorts-render-worker` (`up -d --no-deps`). postgres + n8n untouched; no new volumes/networks created; canonical `ss25-migrate-final-a_*` volumes reused in place.
+
+**Post-switch identity:** app + render-worker run `short-studio-server:2.6.0`, image ID `sha256:0915eb61…` (verified via `docker inspect`, not tag alone). Restart-survival proven: canonical `short-studio.ps1 restart` re-created health on the same image ID.
+
+**Health after restart:** all four services healthy; http://127.0.0.1:3130 → 200; existing video serve 200 + HTTP range 206; Local Voice :8765 healthy (voicetut, CUDA); Ollama `qwen2.5:7b-instruct` available; license + Provider Vault + commercial keys intact.
+
+**Data counters (before → after, unchanged):** jobs 40→40, provider_credentials_vault 3→3, backups 4→4, social_accounts 2→2, video dir entries 191→191. Data loss: 0.
+
+**Superseded image:** `short-studio-server:2.6.0-local` (`9c8d3063…`) removed after verifying zero container references — Docker images 27.26 GB → 19.52 GB (7.74 GB logical reclaim). No second VHDX compaction (immaterial physical gain).
+
+**Canonical runtime image:** `short-studio-server:2.6.0` (`sha256:0915eb61…`) — final accepted 2.6 image now live and restart-persistent.
+
 ---
 
 ## 2.6 PC → Laptop Handoff
