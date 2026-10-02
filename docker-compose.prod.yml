@@ -175,6 +175,7 @@ services:
       # a missing value must fail fast rather than silently alias whatever
       # Local Voice another installation happens to run on this host's 8765.
       LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:9}
+      LOCAL_TTS_SYNTHESIS_TIMEOUT_MS: ${LOCAL_TTS_SYNTHESIS_TIMEOUT_MS:-180000}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       CONCURRENCY: ${CONCURRENCY:-1}
@@ -235,6 +236,7 @@ services:
       # unreachable - see the matching note on the app service above; the real
       # per-install port always comes from the installer's generated .env.
       LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:9}
+      LOCAL_TTS_SYNTHESIS_TIMEOUT_MS: ${LOCAL_TTS_SYNTHESIS_TIMEOUT_MS:-180000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}

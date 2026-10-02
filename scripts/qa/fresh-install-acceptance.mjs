@@ -24,6 +24,7 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -224,6 +225,46 @@ async function requestJson(baseUrl, endpoint, options = {}) {
   }
 }
 
+// First-call voice synthesis on a CPU-only host legitimately takes several
+// minutes; undici's fetch dispatcher enforces its own headersTimeout (~300s)
+// regardless of the AbortSignal, so the long preview call uses node:http
+// where the only bound is the one this harness sets.
+function requestJsonLong(baseUrl, endpoint, options = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(endpoint, baseUrl);
+    const req = http.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        method: options.method || 'GET',
+        headers: {
+          ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+          ...(options.headers || {}),
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          if (!(options.expected || [200]).includes(res.statusCode)) {
+            reject(new Error(`${options.method || 'GET'} ${endpoint} returned HTTP ${res.statusCode}.`));
+            return;
+          }
+          if (!text) { resolve({}); return; }
+          try { resolve(JSON.parse(text)); } catch { resolve({ text }); }
+        });
+        res.on('error', reject);
+      },
+    );
+    req.setTimeout(options.timeoutMs || 60_000, () => req.destroy(new Error(`Request to ${endpoint} timed out.`)));
+    req.on('error', reject);
+    if (options.body !== undefined) req.write(JSON.stringify(options.body));
+    req.end();
+  });
+}
+
 async function requestBytes(baseUrl, endpoint, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 60_000);
@@ -347,10 +388,10 @@ async function activateLicense(baseUrl, token) {
 }
 
 async function voiceFirstCall(baseUrl, provider, language, dialect, text) {
-  const preview = await requestJson(baseUrl, '/api/voice-preview', {
+  const preview = await requestJsonLong(baseUrl, '/api/voice-preview', {
     method: 'POST',
     expected: [201],
-    timeoutMs: 180_000,
+    timeoutMs: 600_000,
     body: { text, language, dialect, provider },
   });
   const resolvedProvider = String(preview.provider || preview.resolvedProvider || '').toLowerCase();

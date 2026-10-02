@@ -150,6 +150,12 @@ export class APIRouter {
       this.requireProtectedAccess("production:create"),
       async (req: ExpressRequest, res: ExpressResponse) => {
         try {
+          const synthesisTimeoutMs = Number(
+            process.env.LOCAL_TTS_SYNTHESIS_TIMEOUT_MS || 180000,
+          );
+          req.setTimeout(
+            Math.max(this.config.requestTimeoutMs, synthesisTimeoutMs + 60_000),
+          );
           const text = String(req.body?.text || "").trim();
           if (!text || text.length > 500) {
             res.status(400).json({
@@ -167,7 +173,7 @@ export class APIRouter {
             voiceId: typeof req.body?.voiceId === "string" ? req.body.voiceId : undefined,
             pronunciationDictionary:
               req.body?.pronunciationDictionary &&
-              typeof req.body.pronunciationDictionary === "object"
+                typeof req.body.pronunciationDictionary === "object"
                 ? req.body.pronunciationDictionary
                 : undefined,
           });
