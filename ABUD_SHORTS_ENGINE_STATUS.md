@@ -16,11 +16,11 @@
 
 Product: Short Studio Server 2.6.0
 
-Stage: TRUE FRESH INSTALL ACCEPTANCE INCOMPLETE — product fixes applied, image/package/EXE rebuilt, but true isolated fresh install not completed end-to-end
+Stage: TRUE FRESH INSTALL ACCEPTANCE PARTIALLY COMPLETE — real Setup.exe installation completed with isolated containers/secrets; post-install acceptance gates remain
 
-Release: NOT READY FOR GA — true fresh install acceptance incomplete. Previous "fresh install sign-off" was INVALID (manual borrowing from primary installation). Product fixes applied in commit `c37eeda`, new image/package/EXE rebuilt, but the real EXE fresh install was not completed.
+Release: NOT READY FOR GA — real Setup.exe fresh installation completed, but fresh-install license activation, Kokoro first call, VoiceTut first call, OpenCLIP semantic proof, EN/AR productions, and restart survival remain unverified. The previous manual-borrowing sign-off remains INVALID.
 
-Repository: `3bud-ZC/short-studio-server`
+Repository: `abudoxali/short-studio-server`
 
 ### 2.6 Recovery — Verified Gates
 
@@ -92,6 +92,16 @@ Repository: `3bud-ZC/short-studio-server`
 1. **True fresh install acceptance PARTIALLY complete.** The real `Setup.exe` DID run end-to-end successfully — independent containers (`short-studio-fresh-*`, port 13900), independent secrets, all healthy. Remaining gates NOT executed on fresh install: license activation, Kokoro first call, VoiceTut first call, OpenCLIP semantic proof, EN/AR productions, restart survival.
 
 2. **P12 media coverage** (70.2% vs 90%): Pexels had limited Arabic backup footage. Video is technically valid. This is a stock availability issue, not a code defect.
+
+### 2.6 Fresh Install Acceptance Automation — 2026-10-02
+
+**IMPLEMENTED / NOT YET EXECUTED ON THE TARGET WINDOWS HOST.** A fail-closed acceptance runner now exists at `scripts/qa/fresh-install-acceptance.mjs`, with deterministic helper coverage in `scripts/qa/fresh-install-acceptance.test.mjs`. It drives the real commercial `Setup.exe` and refuses to turn the remaining gates green unless the new install passes all of them.
+
+**Highest-impact finding:** the remaining 2.6 GA gates were still manual and therefore vulnerable to another invalid sign-off. The repository's older release-validation harness predates the current commercial Setup.exe flow and cannot be treated as 2.6 fresh-install evidence. Static inspection also found a specific isolation risk worth enforcing: the current Local Voice port resolver can recognize an already-running Short Studio Local Voice endpoint as reusable. The new acceptance runner therefore fails if a fresh installation resolves to the same `LOCAL_TTS_PORT` as the primary installation, preventing silent borrowing from counting as a pass. Runtime impact of that resolver behavior has **not** been re-executed on Windows in this pass.
+
+**Acceptance runner gates:** brand-new install root and Docker namespace; real `Setup.exe`; independent generated installation secrets compared by hash only; independent Local Voice port; all four Docker services healthy; commercial license activation; Pexels configured through the Provider Vault; real Kokoro first call; real VoiceTut first call; one real English production; one real Egyptian-Arabic production; `semanticRuntime=open_clip` plus numeric `visualSemanticScore`; canonical `short-studio.ps1 restart`; persistence of license, Local Voice, and produced videos after restart. The runner forbids automatic cleanup/reuse of an existing target namespace and never prints license/API secret values.
+
+**Verification in this pass:** `node --check scripts/qa/fresh-install-acceptance.mjs` PASS. `node --test scripts/qa/fresh-install-acceptance.test.mjs` PASS (4/4). The complete Vitest/typecheck/build/Docker/Setup.exe suite was **not rerun** from this execution environment because it has no access to the owner's Windows Docker daemon or local Short Studio installation. GA status therefore remains blocked; no runtime gate was upgraded to PASS.
 
 ### 2.6 Fresh Install Sign-Off — INVALID (manual borrowing)
 
