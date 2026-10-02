@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   expectedResourceNames,
   findSemanticProof,
   parseEnvText,
   sanitizePublicEvidence,
+  sha256File,
 } from "./fresh-install-acceptance.mjs";
 
 test("parseEnvText ignores comments and preserves values internally", () => {
@@ -38,6 +43,26 @@ test("sanitizePublicEvidence strips sensitive fields recursively", () => {
     }),
     { status: "ok", nested: { value: 3 } },
   );
+});
+
+test("sha256File streams a file to the expected digest", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ss-acceptance-sha-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "payload.bin");
+  // Bigger than a single default stream chunk (64 KiB) so the digest provably
+  // aggregates multiple 'data' events, matching the multi-GB installer path.
+  const payload = crypto.randomBytes(256 * 1024);
+  fs.writeFileSync(file, payload);
+  const expected = crypto.createHash("sha256").update(payload).digest("hex");
+
+  assert.equal(await sha256File(file), expected);
+  // Deterministic: hashing twice yields the same digest.
+  assert.equal(await sha256File(file), expected);
+});
+
+test("sha256File rejects on unreadable files instead of producing a digest", async () => {
+  const missing = path.join(os.tmpdir(), `ss-acceptance-missing-${process.pid}-${Date.now()}`);
+  await assert.rejects(sha256File(missing));
 });
 
 test("expectedResourceNames derives an isolated Docker namespace", () => {

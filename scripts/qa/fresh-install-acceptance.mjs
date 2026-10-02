@@ -137,6 +137,19 @@ function sha256Text(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+// Setup.exe is several gigabytes - readFileSync refuses anything over ~2 GiB,
+// so the installer evidence hash must stream. Same pattern as
+// scripts/release/package-client.mjs.
+export function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(file);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
 function samePath(a, b) {
   return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 }
@@ -499,7 +512,7 @@ async function main(argv = process.argv.slice(2)) {
     const primaryEnvFile = path.join(primaryRoot, 'shared', 'config', '.env');
     const primaryEnv = fs.existsSync(primaryEnvFile) ? readEnvFile(primaryEnvFile) : null;
     gate('preflight_isolation', {
-      installerSha256: crypto.createHash('sha256').update(fs.readFileSync(installer)).digest('hex'),
+      installerSha256: await sha256File(installer),
       primaryInstallDetected: Boolean(primaryEnv),
       dockerNamespaceFresh: true,
       targetPortFree: true,
