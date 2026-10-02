@@ -14477,3 +14477,23 @@ performed no provider calls, because there are 0 publications in `processing`.
 **Canonical runtime:** unchanged during ceremony. `C:\ProgramData\ShortStudio`, project `short-studio`, http://127.0.0.1:3130 → 200; app/render-worker on `0915eb61…`; postgres/n8n healthy; Local Voice :8765 healthy (voicetut, CUDA). Customer counters unchanged: jobs 40, vault 3, backups 4, social accounts 2, video entries 191.
 
 **Minor debt (non-blocking):** in-package `RELEASE_NOTES.md` top entry is still 2.5.2 — customer-facing 2.6.0 notes live in the GitHub Release body; refresh the notes file in the next patch train. Stored GHCR PAT lacks `write:packages` — CI promotion used instead; refresh the local credential if direct pushes are ever needed.
+
+---
+
+### 2.6 Post-GA Public Channel Reconciliation
+
+**Channel identities (separate builds, both verified for their intended path — NOT binary-identical):**
+- Offline commercial channel: `short-studio-server:2.6.0` local image ID `sha256:0915eb61…`, runtime-qualified by TRUE FRESH INSTALL ACCEPTANCE (11/11 PASS) on `ShortStudio-Setup-2.6.0.exe` (`0781433f…`).
+- Public online channel: `ghcr.io/abudoxali/short-studio-server:2.6.0` + `:stable` → digest `sha256:7936a82a…`, CI-built from GA source and remotely verified (no local copy retained).
+
+**Public assets re-verified independently:** anonymous download of `Short-Studio-Server-2.6.0.tar.gz` → sha256 `b714aefe…` (matches `.sha256` asset and manifest `packageSha256`); `update-manifest.json` fetched publicly: version 2.6.0, channel stable, schema 2.13.0, image digest `7936a82a…`, canonical `abudoxali/short-studio-server` URLs; `verify-package.mjs` PASS on the downloaded bytes (no secrets/source/dev data).
+
+**Remote image provenance (no pull):** `:2.6.0` and `:stable` both resolve remotely to index digest `7936a82a…`; linux/amd64 manifest `f115cb6f…`, 18 layers; config blob labels: `org.opencontainers.image.revision=4a9a3aabb2a8cb39d9d44cfc4bfefc67fd5bdacf` (exact GA_PRODUCT_SHA), `version=2.6.0`, `source=https://github.com/abudoxali/short-studio-server`; entrypoint `docker-entrypoint.sh`/`pnpm start`; env carries `WHISPER_MODEL=small`, `KOKORO_MODEL_PRECISION=q4`, `ABUD_FONT_DIR`, `PYTHON_BIN`, `QUALITY_RUNTIME_ENABLED=true`. CI candidate run `37068131695` passed typecheck/test/build before push; promote run `37072015476` retagged the digest without rebuild.
+
+**Policy change — local image pull aborted by directive:** the multi-GB GHCR pull was canceled mid-flight; local tag residue removed; containerd ingest store verified empty; `docker_data.vhdx` unchanged at 33.59 GB. Public-channel runtime smoke and 2.5.2→2.6.0 isolated update rehearsal were NOT performed (would require duplicating the multi-GB image); the offline channel's 11/11 acceptance remains the runtime qualification, and the public image is covered by CI gates + remote identity/provenance verification.
+
+**Canonical runtime:** all four `short-studio` services healthy on `0915eb61…`; http://127.0.0.1:3130 → 200; counters unchanged (jobs 40, vault 3, backups 4, social 2, videos 191). GA STATUS.md record carried to `main` via cherry-pick `9e140fc` + PR #8 (merge `041c471`); `v2.6.0` tag unchanged at `4a9a3aa`.
+
+### Large Artifact Discipline (permanent rule)
+
+Short Studio must not build/pull/export/import duplicate multi-GB Docker images or installer packages for routine verification. Reuse the canonical qualified artifact and remote registry metadata whenever possible. Any additional multi-GB artifact requires an explicit justification and should be deleted after use if not canonical.
