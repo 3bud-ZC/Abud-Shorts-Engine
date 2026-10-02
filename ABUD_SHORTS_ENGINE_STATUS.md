@@ -14492,8 +14492,12 @@ performed no provider calls, because there are 0 publications in `processing`.
 
 **Policy change — local image pull aborted by directive:** the multi-GB GHCR pull was canceled mid-flight; local tag residue removed; containerd ingest store verified empty; `docker_data.vhdx` unchanged at 33.59 GB. Public-channel runtime smoke and 2.5.2→2.6.0 isolated update rehearsal were NOT performed (would require duplicating the multi-GB image); the offline channel's 11/11 acceptance remains the runtime qualification, and the public image is covered by CI gates + remote identity/provenance verification.
 
-**Canonical runtime:** all four `short-studio` services healthy on `0915eb61…`; http://127.0.0.1:3130 → 200; counters unchanged (jobs 40, vault 3, backups 4, social 2, videos 191). GA STATUS.md record carried to `main` via cherry-pick `9e140fc` + PR #8 (merge `041c471`); `v2.6.0` tag unchanged at `4a9a3aa`.
+**Canonical runtime:** all four `short-studio` services healthy on `0915eb61…`; http://127.0.0.1:3130 → 200; counters unchanged (jobs 40, vault 3, backups 4, social 2, videos 191). GA STATUS.md record carried to `main` via cherry-pick `9e140fc` + PR #8 (merge `041c471`); this post-GA reconciliation record carried to `main` via PR #9 (merge `5832bd5`); `v2.6.0` tag unchanged at `4a9a3aa`.
 
 ### Large Artifact Discipline (permanent rule)
 
 Short Studio must not build/pull/export/import duplicate multi-GB Docker images or installer packages for routine verification. Reuse the canonical qualified artifact and remote registry metadata whenever possible. Any additional multi-GB artifact requires an explicit justification and should be deleted after use if not canonical.
+
+---
+
+**SHORT STUDIO 2.6 RELEASE ENGINEERING: CLOSED.** Product and release engineering work for 2.6.0 is complete. The offline commercial image (`0915eb61…`) and the public GHCR image (`7936a82a…`) are separate builds, each verified for its intended channel; no binary identity between them is claimed or required. `v2.6.0` remains immutable at `4a9a3aa`, the GitHub Release is published, public package/manifest checksums are verified, and the canonical customer installation is healthy. Any further work is a new change request, not a continuation of this release.
