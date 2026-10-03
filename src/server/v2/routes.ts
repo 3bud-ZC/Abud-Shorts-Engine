@@ -38,6 +38,7 @@ import {
   voiceRevisionSchema,
 } from "./types";
 import { ContentAIRegistry } from "./content-ai/registry";
+import { ContentPlannerError } from "./content-ai/ollamaProvider";
 import { validateScriptQuality } from "./content-ai/scriptQuality";
 import { estimateProductionCost } from "./cost-estimator";
 import {
@@ -894,14 +895,14 @@ export function canonicalizeProductionSpecContract(
   const arabicVoice: ResolvedArabicVoice | null =
     resolvedVoiceProvider === ARABIC_PREMIUM_CLOUD_PROVIDER
       ? resolveArabicVoiceSelection({
-          requestedVoiceId,
-          requestedPreset:
-            coerceRequestedPreset(controls.voicePreset) ??
-            (canReuseSpecVoice ? coerceRequestedPreset(spec.voicePreset) : undefined),
-          brandVoice: defaults.brandArabicVoice,
-          persisted: defaults.arabicVoice,
-          defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
-        })
+        requestedVoiceId,
+        requestedPreset:
+          coerceRequestedPreset(controls.voicePreset) ??
+          (canReuseSpecVoice ? coerceRequestedPreset(spec.voicePreset) : undefined),
+        brandVoice: defaults.brandArabicVoice,
+        persisted: defaults.arabicVoice,
+        defaultModelId: ELEVENLABS_DEFAULT_MODEL_ID,
+      })
       : null;
   const voiceId = arabicVoice
     ? arabicVoice.voiceId
@@ -1015,12 +1016,12 @@ export function canonicalizeProductionSpecContract(
               : visualSource === "auto_budget"
                 ? "Auto Budget"
                 : visualSource === "stock"
-              ? "Stock"
-              : visualSource === "uploaded_media"
-                ? "Uploaded Media"
-                : visualSource === "ai_generated"
-                  ? "AI Generated"
-                  : "Mixed",
+                  ? "Stock"
+                  : visualSource === "uploaded_media"
+                    ? "Uploaded Media"
+                    : visualSource === "ai_generated"
+                      ? "AI Generated"
+                      : "Mixed",
         stockProvider,
         mediaPolicy,
         selectedMediaIds,
@@ -1242,12 +1243,27 @@ async function arabicProductionBlocker(spec: {
  * "SAFE_GENERIC" when they actually succeeded.
  */
 function contentConfidenceBlocker(spec: {
-  metadata?: { contentProvenance?: string } | null;
-}): { error: string; message: string; action: { label: string; href: string } } | null {
-  if (spec.metadata?.contentProvenance !== "SAFE_GENERIC") return null;
+  contentStyle?: string;
+  metadata?: { contentProvenance?: string; contentConfidence?: string } | null;
+}): { error: string; message: string; messageAr?: string; action: { label: string; href: string } } | null {
+  const provenance = spec.metadata?.contentProvenance;
+  const curiosity =
+    spec.contentStyle === "viral_curiosity" ||
+    spec.contentStyle === "educational" ||
+    spec.contentStyle === "explainer";
+  // Legacy marker (older stored specs) plus the current Basic fallback:
+  // generic narration for a factual/explainer request is worthless, so the
+  // create is refused with an actionable message rather than producing a
+  // low-confidence video silently. Business/ad briefs in Basic mode still
+  // create - a generic ad beats nothing when the customer chose Basic.
+  const blocked =
+    provenance === "SAFE_GENERIC" ||
+    (provenance === "BASIC_FALLBACK" && curiosity && spec.metadata?.contentConfidence === "low");
+  if (!blocked) return null;
   return {
     error: "content_confidence_low",
     message: "Better content generation is needed for this topic. Connect a Content AI provider or adjust the prompt.",
+    messageAr: "هذا الموضوع يحتاج توليد محتوى أذكى. فعّل خدمة Local AI أو عدّل الوصف ثم حاول مرة أخرى.",
     action: { label: "Connect a Content AI Provider", href: "/providers" },
   };
 }
@@ -1274,6 +1290,71 @@ function scriptQualityBlocker(
     message: result.reason || "Short Studio could not create a sufficiently specific script for this topic. Please add more detail or enable an advanced content provider.",
     action: { label: "Connect a Content AI Provider", href: "/providers" },
   };
+}
+
+/**
+ * Long-running planner endpoints (create job, spec preview, prompt enhance)
+ * may legitimately need up to ~2 minutes for a local-LLM plan. The global
+ * REQUEST_TIMEOUT_MS socket budget is 30s - far below the planner timeout -
+ * which used to kill the request mid-generation and surface as an empty
+ * reply / generic UI banner. These endpoints widen only their own socket.
+ */
+const PLANNER_REQUEST_TIMEOUT_MS = 180_000;
+
+function plannerRouteTimeout(req: ExpressRequest): void {
+  req.setTimeout(PLANNER_REQUEST_TIMEOUT_MS);
+}
+
+/**
+ * Structured, localized failure surface for job creation. Customer-facing
+ * `message`/`messageAr` describe the actionable cause; raw provider/engine
+ * exceptions stay in server logs (and a sanitized `code` reference) instead
+ * of leaking into the UI, where the Arabic locale previously collapsed every
+ * failure into the generic "couldn't create the production" banner.
+ */
+function sendCreateFailure(
+  res: ExpressResponse,
+  error: unknown,
+  context: string,
+): void {
+  const raw = error instanceof Error ? error.message : String(error);
+  logger.error({ err: raw, context }, "job creation failed");
+
+  if (error instanceof ContentPlannerError || (error as any)?.plannerCode) {
+    const code = (error as ContentPlannerError).plannerCode;
+    res.status(503).json({
+      error: code,
+      message:
+        code === "planner_unavailable"
+          ? "The local AI planner is unavailable right now. Check that the Local AI service is running, then try again."
+          : "The local AI planner could not produce a valid creative plan. Please try again.",
+      messageAr:
+        code === "planner_unavailable"
+          ? "محرك الذكاء الاصطناعي المحلي غير متاح الآن. تأكد من تشغيل خدمة Local AI ثم حاول مرة أخرى."
+          : "تعذّر على محرك الذكاء الاصطناعي المحلي إنشاء خطة إنتاج صالحة. حاول مرة أخرى.",
+      code: `SS-PLANNER-${code === "planner_unavailable" ? "DOWN" : "BAD"}`,
+    });
+    return;
+  }
+
+  if (/CONTENT_DURATION_BUDGET_NOT_MET/.test(raw)) {
+    res.status(409).json({
+      error: "duration_budget_not_met",
+      message:
+        "The requested narration is too long for the chosen video duration. Increase the duration or shorten the description.",
+      messageAr:
+        "النص المطلوب أطول من مدة الفيديو المحددة. زد المدة أو اختصر الوصف وحاول مرة أخرى.",
+      code: "SS-DURATION-BUDGET",
+    });
+    return;
+  }
+
+  res.status(400).json({
+    error: "Invalid job payload",
+    message: "The production request could not be completed. Check your inputs and try again.",
+    messageAr: "تعذّر إنشاء الإنتاج. راجع المدخلات وحاول مرة أخرى.",
+    code: "SS-CREATE-400",
+  });
 }
 
 function hasCommandHint(envKey: string): boolean {
@@ -2167,9 +2248,9 @@ export function createV2PublicRouter(
         captionStyle: parsed.data.captionProfile || baseSpec.captionStyle,
         scenes: parsed.data.spokenNarration
           ? baseSpec.scenes.map((scene: any, index: number) => ({
-              ...scene,
-              spokenNarration: index === 0 ? parsed.data.spokenNarration : scene.spokenNarration,
-            }))
+            ...scene,
+            spokenNarration: index === 0 ? parsed.data.spokenNarration : scene.spokenNarration,
+          }))
           : baseSpec.scenes,
         metadata: {
           ...(baseSpec.metadata || {}),
@@ -2247,10 +2328,10 @@ export function createV2PublicRouter(
         scenes: baseSpec.scenes.map((scene: any, index: number) =>
           index === parsed.data.sceneIndex
             ? {
-                ...scene,
-                stockSearchTerms: parsed.data.searchTerms || scene.stockSearchTerms,
-                visualIntent: parsed.data.visualIntent || scene.visualIntent,
-              }
+              ...scene,
+              stockSearchTerms: parsed.data.searchTerms || scene.stockSearchTerms,
+              visualIntent: parsed.data.visualIntent || scene.visualIntent,
+            }
             : scene,
         ),
         metadata: {
@@ -2377,6 +2458,7 @@ export function createV2PublicRouter(
 
   // Preview Production Spec generated from a prompt
   router.post("/production-spec/preview", async (req, res) => {
+    plannerRouteTimeout(req);
     const parsed = productionSpecPreviewSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
@@ -2415,15 +2497,13 @@ export function createV2PublicRouter(
         contentConfidenceWarning: confidenceBlock?.message,
       });
     } catch (error) {
-      res.status(500).json({
-        error: "Failed to generate preview spec",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      sendCreateFailure(res, error, "production-spec/preview");
     }
   });
 
   // Prompt Enhancement
   router.post("/prompt/enhance", async (req, res) => {
+    plannerRouteTimeout(req);
     const parsed = promptEnhanceRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({
@@ -2445,10 +2525,7 @@ export function createV2PublicRouter(
       });
       res.status(200).json(result);
     } catch (error) {
-      res.status(500).json({
-        error: "Failed to enhance prompt",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      sendCreateFailure(res, error, "prompt/enhance");
     }
   });
 
@@ -2514,6 +2591,7 @@ export function createV2PublicRouter(
   });
 
   router.post("/production/jobs", async (req, res) => {
+    plannerRouteTimeout(req);
     const parsed = productionJobSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid production job payload.", issues: parsed.error.flatten() });
@@ -2538,10 +2616,10 @@ export function createV2PublicRouter(
         aspectRatio: parsed.data.aspectRatio,
         quality: qualityMap[parsed.data.qualityProfile],
         visualMode: parsed.data.visualMode,
-          voiceProvider: "auto",
-          voiceId: parsed.data.voice,
-          brandId: parsed.data.brandId,
-        } as any);
+        voiceProvider: "auto",
+        voiceId: parsed.data.voice,
+        brandId: parsed.data.brandId,
+      } as any);
       const canonicalSpec = await canonicalizeProductionSpecForRequest(db, spec, {
         ...parsed.data,
         quality: qualityMap[parsed.data.qualityProfile],
@@ -2597,7 +2675,7 @@ export function createV2PublicRouter(
         eventsUrl: `/api/v2/jobs/${job.id}/events`,
       });
     } catch (error) {
-      res.status(500).json({ error: "Failed to create production job.", message: error instanceof Error ? error.message : String(error) });
+      sendCreateFailure(res, error, "POST /production/jobs");
     }
   });
 
@@ -2659,6 +2737,7 @@ export function createV2PublicRouter(
 
   // Create Video Job (supports prompt mode or template mode)
   router.post("/jobs", async (req, res) => {
+    plannerRouteTimeout(req);
     const rawPayload = req.body || {};
     const parsed = createVideoJobSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2804,10 +2883,7 @@ export function createV2PublicRouter(
       }
       res.status(201).json({ job });
     } catch (error) {
-      res.status(400).json({
-        error: "Invalid job payload",
-        message: error instanceof Error ? error.message : "Validation failed.",
-      });
+      sendCreateFailure(res, error, "POST /jobs");
     }
   });
 
@@ -3607,14 +3683,14 @@ export function createV2PublicRouter(
       elevenLabsConfigured && shouldValidateLocalVoiceModels
         ? await elevenLabsVoiceDefaultState(elevenLabsProvider, storedArabicVoiceDefault)
         : {
-            defaultArabicVoiceConfigured: Boolean(storedArabicVoiceDefault?.voiceId),
-            defaultArabicVoiceAvailable: undefined,
-            defaultArabicVoiceName: storedArabicVoiceDefault?.voiceName,
-            voiceCatalogueAvailable: undefined,
-            arabicProductionReady: false,
-            setupRequiredReason: storedArabicVoiceDefault?.voiceId ? undefined : "default_arabic_voice_not_selected",
-            warnings: [],
-          };
+          defaultArabicVoiceConfigured: Boolean(storedArabicVoiceDefault?.voiceId),
+          defaultArabicVoiceAvailable: undefined,
+          defaultArabicVoiceName: storedArabicVoiceDefault?.voiceName,
+          voiceCatalogueAvailable: undefined,
+          arabicProductionReady: false,
+          setupRequiredReason: storedArabicVoiceDefault?.voiceId ? undefined : "default_arabic_voice_not_selected",
+          warnings: [],
+        };
     const googleTts = new GoogleCloudTtsProvider();
     const googleTtsValidation = voiceResults.find((provider) => provider.provider === "Google Cloud TTS");
     const googleTtsConfigured = googleTts.isConfigured();
@@ -4177,14 +4253,14 @@ export function createV2PublicRouter(
           vaultConfigured: provider.id ? vaultCredentials.some((credential) => credential.providerId === provider.id) : false,
           vault: provider.id
             ? vaultCredentials
-                .filter((credential) => credential.providerId === provider.id)
-                .map((credential) => ({
-                  credentialType: credential.credentialType,
-                  maskedHint: credential.maskedHint,
-                  health: credential.health,
-                  configuredAt: credential.configuredAt,
-                  lastTestedAt: credential.lastTestedAt,
-                }))
+              .filter((credential) => credential.providerId === provider.id)
+              .map((credential) => ({
+                credentialType: credential.credentialType,
+                maskedHint: credential.maskedHint,
+                health: credential.health,
+                configuredAt: credential.configuredAt,
+                lastTestedAt: credential.lastTestedAt,
+              }))
             : [],
         };
         return canonicalizeProviderPayload(enriched);
