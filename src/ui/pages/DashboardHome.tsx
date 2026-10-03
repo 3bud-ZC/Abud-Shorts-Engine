@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
   Alert,
@@ -80,6 +80,19 @@ const HEALTH_ITEM_LABEL_KEYS: Record<string, string> = {
  * that renders nothing.
  */
 const REQUEST_TIMEOUT_MS = 8000;
+
+/**
+ * How persistently the *first* dashboard load retries before any source is
+ * declared unavailable.
+ *
+ * Right after a start/restart the API can answer slowly for tens of seconds
+ * while the database pool and host networking settle. The steady-state 15s
+ * refresh would leave the "data unavailable" banner up through that whole
+ * warm-up; quick initial retries ride through it instead of presenting a
+ * transient start as a broken dashboard.
+ */
+const INITIAL_RETRY_DELAY_MS = 2500;
+const INITIAL_RETRY_LIMIT = 8;
 
 /**
  * A compact bar chart drawn from divs.
@@ -203,6 +216,9 @@ const DashboardHomeContent: React.FC = () => {
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [failedKeys, setFailedKeys] = useState<string[]>([]);
+  const initialAttemptsRef = useRef(0);
+  const initialDoneRef = useRef(false);
+  const retryTimerRef = useRef<number | null>(null);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -236,13 +252,25 @@ const DashboardHomeContent: React.FC = () => {
           : null,
       );
 
-      setFailedKeys(
-        failedSourceKeys({
-          jobs: jobsRes.status === "fulfilled",
-          videos: videosRes.status === "fulfilled",
-          health: healthRes.status === "fulfilled",
-        }),
-      );
+      const failures = failedSourceKeys({
+        jobs: jobsRes.status === "fulfilled",
+        videos: videosRes.status === "fulfilled",
+        health: healthRes.status === "fulfilled",
+      });
+      setFailedKeys(failures);
+
+      // Until the first fully-loaded pass, a failed source is far more likely
+      // to mean "still starting" than "permanently unavailable". Retry on a
+      // short cadence and only settle into the error banner once the first
+      // pass either succeeds or exhausts the warm-up budget.
+      if (!initialDoneRef.current) {
+        initialAttemptsRef.current += 1;
+        if (failures.length > 0 && initialAttemptsRef.current < INITIAL_RETRY_LIMIT) {
+          retryTimerRef.current = window.setTimeout(loadData, INITIAL_RETRY_DELAY_MS);
+          return;
+        }
+        initialDoneRef.current = true;
+      }
       setLoading(false);
     });
   }, []);
@@ -250,7 +278,10 @@ const DashboardHomeContent: React.FC = () => {
   useEffect(() => {
     loadData();
     const interval = setInterval(loadData, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+    };
   }, [loadData]);
 
   const metrics = useMemo(

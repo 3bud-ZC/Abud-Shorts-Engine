@@ -651,9 +651,15 @@ function Invoke-Start {
     Write-Step "Starting Short Studio..."
     Invoke-Compose @("up", "-d")
     Sync-LocalVoiceWithProductLifecycle "start"
-    Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90 | Out-Null
+    $ready = Wait-ForEndpoint "$(Get-AppBaseUrl)/health/ready" 90
     Wait-ForContainerSettle
     Show-HealthSummary | Out-Null
+    if ($ready) {
+        # The installer's "Short Studio - Open" entry promises "start + open the
+        # dashboard" - the browser must only launch once the readiness gate has
+        # actually passed, never on a still-starting or failed stack.
+        Start-Process (Get-AppBaseUrl)
+    }
     if ($Pause) { Read-Host "  Press Enter to close" | Out-Null }
 }
 
