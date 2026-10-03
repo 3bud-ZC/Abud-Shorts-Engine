@@ -16,6 +16,10 @@ import { containsRawPromptLeak } from "../quality/professionalVisualQuality";
 import { enforceAndRepairPromptFidelity } from "../quality/promptFidelityGate";
 import { estimateSpeechSeconds, getSpeakingRate } from "./voiceSpeakingRate";
 import { buildContentDurationBudget, checkContentDurationFeasibility } from "./scriptDurationController";
+import {
+  analyzeNarrationLanguage,
+  buildLanguageQualityReport,
+} from "./languageQualityGuard";
 
 /**
  * The compact plan the creative model is asked for. It is deliberately small:
@@ -246,6 +250,7 @@ export function assembleProductionSpec(params: {
     .map((line) => safeCopy(line, prompt, contract, undefined))
     .filter((l): l is string => Boolean(l));
 
+  const languageResults: Array<{ sceneIndex: number; result: import("./languageQualityGuard").LanguageQualityResult }> = [];
   const scenes: ProductionSceneSpec[] = plan.scenes.map((scene, index) => {
     // A rejected line falls back to a neutral on-topic sentence - never to
     // a claim-stripped version of the rejected text (that still leaks the
@@ -253,8 +258,13 @@ export function assembleProductionSpec(params: {
     // to prevent. The fallback entity is meta-stripped so duration/style
     // wording from the brief can never be spoken ("إعلاني 20 ثانية...").
     const safeEntity = stripMetaInstructions(contract.coreEntity, isAr) || (isAr ? "الموضوع" : "the topic");
+    const langResult = analyzeNarrationLanguage(
+      safeCopy(scene.narration, prompt, contract, undefined) || "",
+      isAr ? "ar" : "en",
+    );
+    languageResults.push({ sceneIndex: index, result: langResult });
     const safeNarration =
-      safeCopy(scene.narration, prompt, contract, undefined) ||
+      (langResult.text && !langResult.unusable ? langResult.text : undefined) ||
       (isAr ? `النقطة المهمة عن ${safeEntity}.` : `The key point about ${safeEntity}.`);
     // Stock providers (Pexels/Pixabay) index English footage metadata only -
     // an Arabic or transliterated query silently returns irrelevant clips.
@@ -345,6 +355,7 @@ export function assembleProductionSpec(params: {
         prohibitedInventedClaims: ["prices", "discounts", "phone_numbers", "whatsapp_cta", "statistics", "testimonials", "urls"],
       },
       promptIntentContract: contract,
+      languageQuality: buildLanguageQualityReport(languageResults),
       durationBudget,
     },
   };
