@@ -1,5 +1,6 @@
 import http from "http";
 import crypto from "crypto";
+import axios from "axios";
 import express from "express";
 import type {
   NextFunction,
@@ -114,6 +115,7 @@ export class Server {
         this.systemHealth?.recoverStaleJobs().catch((err) => {
           logger.warn({ err }, "Stale job recovery encountered non-fatal error");
         });
+        this.scheduleQueuedJobSweep(v2Database);
         cleanupTemporaryArtifacts(config)
           .then((result) => {
             if (result.deleted > 0) {
@@ -161,6 +163,53 @@ export class Server {
         },
       });
     });
+  }
+
+  /**
+   * Jobs sitting in `queued` have no dispatcher after a restart: the only
+   * drivers are the creation-time orchestration webhook and the in-memory
+   * backpressure retry timer, neither of which survives a process restart.
+   * Once the render worker answers its health check, replay the internal
+   * start request for each stranded job in FIFO order. The start route's
+   * existing claim/backpressure path keeps concurrency safe.
+   */
+  private scheduleQueuedJobSweep(v2Database: V2Database): void {
+    const config = this.config;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const deadline = Date.now() + 5 * 60 * 1000;
+        for (; ;) {
+          try {
+            await axios.get(`${config.renderWorkerBaseUrl}/health`, { timeout: 5000 });
+            break;
+          } catch {
+            if (Date.now() >= deadline) return;
+            await new Promise((r) => setTimeout(r, 5000));
+          }
+        }
+        const rows = await v2Database.query<{ id: string }>(
+          "SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at ASC",
+        );
+        for (const row of rows) {
+          await axios
+            .post(
+              `${config.appInternalBaseUrl}/internal/v1/jobs/${row.id}/start`,
+              {},
+              {
+                timeout: config.webhookTimeoutMs,
+                headers: { "x-internal-token": config.internalServiceToken },
+              },
+            )
+            .catch((err) =>
+              logger.warn({ err, jobId: row.id }, "Queued-job restart dispatch failed"),
+            );
+        }
+        if (rows.length > 0) {
+          logger.info({ count: rows.length }, "Re-dispatched queued jobs stranded by restart");
+        }
+      })().catch((err) => logger.warn({ err }, "Queued-job restart sweep failed"));
+    }, 15000);
+    timer.unref?.();
   }
 
   public registerShutdownHook(hook: () => Promise<void> | void): void {

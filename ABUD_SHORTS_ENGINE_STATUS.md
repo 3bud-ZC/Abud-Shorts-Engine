@@ -14498,6 +14498,39 @@ performed no provider calls, because there are 0 publications in `processing`.
 
 Short Studio must not build/pull/export/import duplicate multi-GB Docker images or installer packages for routine verification. Reuse the canonical qualified artifact and remote registry metadata whenever possible. Any additional multi-GB artifact requires an explicit justification and should be deleted after use if not canonical.
 
+### 2.6 Post-GA Runtime Stabilization
+
+**User-observed symptoms (reproduced, not dismissed):** after GA, the owner attempted normal use and observed (a) the product did not open correctly, and (b) once opened the dashboard reported a frontend/interface problem (`Dashboard data unavailable: productions, system status`).
+
+**Root causes (verified with live evidence):**
+1. **Transient startup stall + unforgiving first load.** After a cold/full restart, browser dashboard requests to DB-backed endpoints (`/api/v2/jobs`, `/api/videos`, `/api/v2/system/health/fast`, `/api/v2/publishing/*`, `/api/v2/system/storage`) stalled ~45–60 s while `auth/me` answered in ~15 ms; PostgreSQL logged `statement_timeout` kills on trivial queries in the same window and the publishing scheduler logged reconciliation/query failures. The dashboard's 8 s Axios timeout + immediate "unavailable" banner presented this transient warm-up window as a broken dashboard. Steady-state behavior is healthy (parallel bursts <300 ms; pool max 10, jobs table 96 kB/40 rows, no locks — the stall is an intermittent post-start convergence issue on the Docker/WSL path, not a query or sizing defect).
+2. **No usable launch path.** The canonical install had no Desktop or Start Menu "Short Studio" shortcuts (only a Local Voice startup entry), and `short-studio.ps1 start` waited for readiness but never opened the browser despite the documented "start + open" contract.
+3. **Stranded queued jobs across restarts (real released-source defect).** Job dispatch relies solely on the creation-time n8n webhook and an in-memory `scheduleStartRetry` timer; both are lost on restart. `recoverStaleJobs()` recovers `rendering`/`processing` jobs but nothing re-dispatches persisted `queued` jobs — verified live: a customer job stayed `queued` 25+ min across a restart until manually deleted.
+
+**Fixes applied (source-level, deployed into the running image — no image rebuild/pull):**
+- `src/ui/pages/DashboardHome.tsx` — first-load retry: failed sources retry every 2.5 s (up to 8 passes) before the unavailable banner can appear; loading state persists through warm-up; timer cleanup on unmount.
+- `src/server/server.ts` — `scheduleQueuedJobSweep`: ~15 s after boot, waits for `render-worker:3125/health` (5-min budget), then replays `POST /internal/v1/jobs/:id/start` for all `queued` jobs FIFO, reusing the existing claim/backpressure path. Verified live: a stranded queued job was re-dispatched on the next app start and progressed to `generating_voice`.
+- `scripts/host/short-studio.ps1` — `Invoke-Start` now opens the dashboard URL after the readiness gate passes (both repo and `C:\ProgramData\ShortStudio\releases\2.6.0` copies).
+- Start Menu `Short Studio` shortcut folder restored on the canonical install (Start/Stop/Restart/Open matching installer behavior).
+
+**Deployment method:** Vite UI bundle rebuilt and `docker cp`'d into `short-studio-app:/app/dist/ui`; patched `server.js` `docker cp`'d to `/app/dist/server/server.js`; containers restarted, not recreated. Same `0915eb61…` image, zero new images, zero pulls, build cache 0 B.
+
+**Tests:** `typecheck:ui` PASS; `typecheck:server` PASS; focused Vitest (`dashboardMetrics` 24, `v2_05` 8, `phase3` 6, `fastHealth` 16, `deliveryConfig` 21) PASS. Full Vitest: 1380/1385 pass; 5 failures are environmental (render timeouts under load — licensing/masterVoiceAudio/motionEngine/realVideoQualityQa passed or are load-sensitive; `Pexels.test` needs live network which is degraded on this host). No failure is in or adjacent to changed code.
+
+**Runtime verification:** all four containers + Local Voice healthy; 10/10 pages render without console exceptions; dashboard loads with zero failed requests; canonical restart → dashboard 200 on every sample over 100 s (0.15–0.31 s), all services healthy, prior videos playable (range 206), Provider Vault (3), license active.
+
+**Real productions (product path, free/local providers):**
+- Arabic (owner-driven, VoiceTut Egyptian, 20 s): `ready`; audio QA pass (AAC 20.011 s, −15.47 LUFS, TP −1.28 dBTP, no clipping/silence); preview 200, range 206, download 200 (≈9 MB MP4). Metadata flagged `needs_review` (real-footage coverage 66.5% vs 90% target) — non-blocking quality note.
+- English (Kokoro `af_heart`, 15 s, 1080p 9:16): `ready`; audio QA pass (AAC ~15.6 s, −16.24 LUFS, TP −3.74 dBTP); preview 200, range 206; `loudnessTargetMet=false` — non-blocking audio-quality note.
+
+**Data safety:** jobs 40→42 (owner's Arabic + verification English; a second owner job was deleted by the owner while queued/re-dispatched — normal UI delete); vault 3→3; social 2→2; backups 4→4; videos 191→197 (+2 outputs ×3 files); license intact. No unexplained loss.
+
+**Storage:** C: free 196.9 GB→185.1 GB window delta (~11.8 GB, mostly non-attributable host usage); Docker images unchanged (9 images, 19.6 GB); containers +68 MB; volumes unchanged; build cache 0 B; no multi-GB artifact created.
+
+**Remaining verified non-blocking issues:** optional `librosa`/`scenedetect` absent in the image (graceful fallbacks logged); English `loudnessTargetMet=false`; Arabic footage-coverage `needs_review` flag; intermittent post-start API stall is mitigated in UI but its Docker/WSL root cause is host-level.
+
+**Patch assessment:** the stranded-queue defect (#3) exists in released `v2.6.0` source and reproduces on any restart with pending jobs — a 2.6.1 patch is justified for `server.ts`; the UI/ps1 changes are robustness improvements that should ship with it. No 2.6.1 published; decision pending owner approval.
+
 ---
 
 **SHORT STUDIO 2.6 RELEASE ENGINEERING: CLOSED.** Product and release engineering work for 2.6.0 is complete. The offline commercial image (`0915eb61…`) and the public GHCR image (`7936a82a…`) are separate builds, each verified for its intended channel; no binary identity between them is claimed or required. `v2.6.0` remains immutable at `4a9a3aa`, the GitHub Release is published, public package/manifest checksums are verified, and the canonical customer installation is healthy. Any further work is a new change request, not a continuation of this release.
