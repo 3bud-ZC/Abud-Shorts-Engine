@@ -65,7 +65,13 @@ function record(check, ok, detail = "") {
       page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
       page.on("pageerror", (e) => pageErrors.push(String(e)));
       page.on("response", (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) badResponses.push(`${r.status()} ${r.url()}`); });
-      page.on("requestfailed", (r) => { if (!/favicon/.test(r.url())) failedRequests.push(`${r.url()} ${r.failure()?.errorText || ""}`); });
+      // ERR_ABORTED means the page cancelled an in-flight fetch itself
+      // (React unmount/StrictMode re-run on navigation) - not a server or
+      // network failure. Real failures (refused, reset, timeout) still count.
+      page.on("requestfailed", (r) => {
+        const err = r.failure()?.errorText || "";
+        if (!/favicon/.test(r.url()) && !/ERR_ABORTED/i.test(err)) failedRequests.push(`${r.url()} ${err}`);
+      });
 
       console.log(`\n=== ${vp.name} ${locale} ===`);
       for (const [name, path] of ROUTES) {
@@ -110,7 +116,7 @@ function record(check, ok, detail = "") {
     const tag = `interaction/${locale}`;
 
     await page.goto(BASE + "/create", { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(1200);
+    await page.waitForSelector("textarea", { timeout: 20000 }).catch(() => { });
 
     const promptBox = page.locator("textarea").first();
     record(`${tag} prompt field`, await promptBox.count() > 0);
@@ -122,7 +128,7 @@ function record(check, ok, detail = "") {
         await page.waitForTimeout(1500);
         const loading = await page.locator('[class*="spinner"],[class*="loading"],[aria-busy="true"],button[disabled]').count();
         record(`${tag} improve shows progress`, loading >= 0, `loadingIndicators=${loading}`);
-        await page.waitForTimeout(20000).catch(() => {});
+        await page.waitForTimeout(20000).catch(() => { });
       } else {
         record(`${tag} improve button exists`, false, "no improve/enhance button found");
       }
