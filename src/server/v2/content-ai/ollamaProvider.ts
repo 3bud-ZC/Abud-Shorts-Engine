@@ -30,7 +30,8 @@ function extractJsonObject(text: string): unknown {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-const PLANNER_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 45000);
+// Read at call time so a settings/env change applies without a process restart.
+const plannerTimeoutMs = () => Number(process.env.OLLAMA_TIMEOUT_MS || 45000);
 const PLANNER_MAX_ATTEMPTS = 2;
 
 /**
@@ -61,8 +62,8 @@ export class OllamaContentAIProvider implements ContentAIProvider {
   private async callPlanner(system: string, prompt: string): Promise<unknown> {
     const response = await axios.post(
       `${this.baseUrl.replace(/\/$/, "")}/api/generate`,
-      { model: this.model, stream: false, system, prompt, format: "json" },
-      { timeout: PLANNER_TIMEOUT_MS },
+      { model: this.model, stream: false, system, prompt, format: "json", options: { temperature: 0.3 } },
+      { timeout: plannerTimeoutMs() },
     );
     const raw =
       typeof response.data?.response === "string" ? response.data.response : JSON.stringify(response.data);
@@ -109,6 +110,7 @@ export class OllamaContentAIProvider implements ContentAIProvider {
       "The customer brief below describes the video they want. Turn it into a complete creative plan and return ONLY JSON:",
       '{"title": "...", "tone": "...", "scenes": [{"purpose": "hook|problem|solution|benefit|proof|cta", "narration": "...", "onScreenText": "...", "visualIntent": "...", "searchQueries": ["...", "..."]}], "cta": "optional", "expansionLines": ["optional extra supporting sentences"]}',
       `Write all narration in ${languageLabel}, as fresh natural spoken lines - never copy sentences from the brief itself.`,
+      `When writing Arabic narration: keep established English technical terms in English exactly as people say them (API, cache, backend, frontend, server, database, HTTP, app, code, deploy) - never invent Arabic transliterations of English words and never write fake Arabic-sounding tech words. Plain everyday spoken Arabic is better than ornate phrasing.`,
       `Total spoken narration must fit about ${durationSeconds}s of video across roughly ${targetScenes} scenes.`,
       "Rules: 1) The brief is INPUT, not narration - never read its sentences back; 2) Never invent prices, discounts, discounts codes, phone numbers, WhatsApp, websites, testimonials, statistics or guarantees not present in the brief; 3) Honour every negative constraint; 4) onScreenText is a short punchy overlay line, not a duplicate of narration; 5) visualIntent describes the concrete shot this scene needs; 6) searchQueries MUST be written in English words only, even for Arabic briefs - they query an English stock-footage API. 3-5 SHORT concrete visual search phrases, each a different angle (subject / action / environment / detail / result) - never mood words like 'cinematic' or 'professional' and never Arabic; 7) each scene gets a DIFFERENT purpose (only the first may be 'hook', only the last may be 'cta'); 8) the final scene should deliver the takeaway or call-to-action.",
     ].join("\n");

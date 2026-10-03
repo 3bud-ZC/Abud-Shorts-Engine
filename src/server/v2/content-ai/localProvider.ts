@@ -135,7 +135,7 @@ function enforcePromptTruthSafety(
     const safeNarration = stripInventedClaims(scene.narration, prompt, isAr);
     // Also strip any residual meta/orchestration instructions from narration
     // (e.g. "Create a 15 second short about..." that survived earlier cleaning)
-    const metaStrippedNarration = stripMetaInstructions(safeNarration || scene.narration, isAr);
+    const metaStrippedNarration = stripMetaInstructions(safeNarration || scene.narration, isAr, { forNarration: true });
     const safeOnScreen =
       scene.onScreenText && !looksLikeRawInstruction(scene.onScreenText, prompt)
         ? stripInventedClaims(scene.onScreenText, prompt, isAr)

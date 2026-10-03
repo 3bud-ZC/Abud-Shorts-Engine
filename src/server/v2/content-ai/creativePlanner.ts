@@ -50,12 +50,18 @@ export type CreativePlan = z.infer<typeof creativePlanSchema>;
 
 const KNOWN_PURPOSES = ["hook", "problem", "solution", "benefit", "proof", "cta"] as const;
 
-function coerceStringList(value: unknown): unknown {
+function coerceStringList(value: unknown): string[] | undefined {
   if (typeof value === "string") {
     const parts = value.split(/[\n;,،؛]+/).map((p) => p.trim()).filter(Boolean);
     return parts.length > 0 ? parts : undefined;
   }
-  return value;
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => (typeof item === "string" ? item.trim() : String(item ?? "").trim()))
+      .filter(Boolean);
+    return parts.length > 0 ? parts : undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -66,12 +72,25 @@ function coerceStringList(value: unknown): unknown {
  * deviations is exactly the "schema repair" step; content itself is still
  * validated downstream, never trusted.
  */
+/** Truncate at a word boundary so a sliced field never ends mid-token. */
+function truncateAtWord(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const sliced = value.slice(0, max);
+  const lastSpace = sliced.lastIndexOf(" ");
+  return (lastSpace > max * 0.5 ? sliced.slice(0, lastSpace) : sliced).trim();
+}
+
 export function coercePlanShape(raw: unknown): unknown {
   if (!raw || typeof raw !== "object") return raw;
   const obj = raw as Record<string, unknown>;
   const out: Record<string, unknown> = { ...obj };
 
-  if (typeof out.expansionLines !== "undefined") out.expansionLines = coerceStringList(out.expansionLines);
+  if (typeof out.cta === "string") out.cta = truncateAtWord(out.cta, 160);
+  if (typeof out.title === "string") out.title = truncateAtWord(out.title, 140);
+  if (typeof out.tone === "string") out.tone = truncateAtWord(out.tone, 80);
+  if (typeof out.expansionLines !== "undefined") {
+    out.expansionLines = (coerceStringList(out.expansionLines) || []).map((l) => truncateAtWord(l, 300)).slice(0, 8);
+  }
 
   const scenesIn = Array.isArray(out.scenes) ? out.scenes : [];
   out.scenes = scenesIn.map((scene, index) => {
@@ -90,10 +109,19 @@ export function coercePlanShape(raw: unknown): unknown {
     } else {
       s.purpose = "solution";
     }
-    s.searchQueries = coerceStringList(s.searchQueries);
+    const coercedQueries = coerceStringList(s.searchQueries);
+    s.searchQueries = coercedQueries === undefined
+      ? undefined
+      : coercedQueries.map((q) => truncateAtWord(q, 80)).filter((q) => q.length >= 2).slice(0, 8);
     for (const key of ["title", "tone", "narration", "onScreenText", "visualIntent", "treatmentHint"]) {
       if (s[key] !== undefined && typeof s[key] !== "string") s[key] = String(s[key]);
     }
+    // Over-limit strings are cosmetic model verbosity - truncate at a word
+    // boundary rather than fail the whole plan on a Zod max() error.
+    if (typeof s.narration === "string") s.narration = truncateAtWord(s.narration, 400);
+    if (typeof s.onScreenText === "string") s.onScreenText = truncateAtWord(s.onScreenText, 80);
+    if (typeof s.visualIntent === "string") s.visualIntent = truncateAtWord(s.visualIntent, 200);
+    if (typeof s.treatmentHint === "string") s.treatmentHint = truncateAtWord(s.treatmentHint, 40);
     return s;
   });
 
@@ -156,7 +184,9 @@ export function safeCopy(
   safeFallback: string | undefined,
 ): string | undefined {
   if (!value || !value.trim()) return safeFallback;
-  const text = stripMetaInstructions(value.trim(), contract.language === "ar");
+  // forNarration: orchestration wording is stripped, but real negations are
+  // kept - stripping "no"/"بدون" from spoken copy inverts its meaning.
+  const text = stripMetaInstructions(value.trim(), contract.language === "ar", { forNarration: true });
   if (!text) return safeFallback;
   const unsafe =
     inventsUngroundedClaim(text, prompt) ||
@@ -257,7 +287,20 @@ export function assembleProductionSpec(params: {
     // brief), which is exactly the verbatim-prompt defect this guard exists
     // to prevent. The fallback entity is meta-stripped so duration/style
     // wording from the brief can never be spoken ("إعلاني 20 ثانية...").
-    const safeEntity = stripMetaInstructions(contract.coreEntity, isAr) || (isAr ? "الموضوع" : "the topic");
+    // If the remaining "entity" is only a duration/number fragment
+    // ("15 ثانية") or shorter than a word, it is not a speakable topic.
+    // A truncated duration fragment ("إعلاني 15") leaves a bare trailing
+    // number - drop it before deciding the entity is speakable.
+    const strippedEntity = stripMetaInstructions(contract.coreEntity, isAr).replace(/\s+\d+$/, "").trim();
+    const entityUsable =
+      strippedEntity.length >= 3 &&
+      !/^\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|seconds?|secs?|minutes?|mins?)?\.?$/i.test(strippedEntity) &&
+      // Residual orchestration wording means the entity is still a raw
+      // prompt fragment, not a speakable subject.
+      !/(?:^|\s)(?:فيديو|شورت|مقطع|سكريبت|إعلاني?|اعلاني?|محتوى|ثانية|ثواني?|ثوانى?|دقيقة|دقائق|video|shorts?|clip|script|seconds?|minutes?)(?:\s|$)/i.test(
+        strippedEntity,
+      );
+    const safeEntity = entityUsable ? strippedEntity : isAr ? "الموضوع" : "the topic";
     const langResult = analyzeNarrationLanguage(
       safeCopy(scene.narration, prompt, contract, undefined) || "",
       isAr ? "ar" : "en",

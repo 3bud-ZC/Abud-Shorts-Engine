@@ -54,6 +54,33 @@ describe("OllamaContentAIPlanner failure surface", () => {
     ).rejects.toBeInstanceOf(ContentPlannerError);
   });
 
+  it("throws planner_unavailable when generation exceeds the bounded timeout", async () => {
+    const previous = process.env.OLLAMA_TIMEOUT_MS;
+    process.env.OLLAMA_TIMEOUT_MS = "80";
+    try {
+      nock("http://ollama.test").post("/api/generate").delay(400).reply(200, { response: "{}" });
+      nock("http://ollama.test").post("/api/generate").delay(400).reply(200, { response: "{}" });
+      const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+      await expect(
+        provider.generateProductionSpec({ prompt: PROMPT, language: "en", requestedDurationSeconds: 20 }),
+      ).rejects.toMatchObject({ plannerCode: "planner_unavailable" });
+    } finally {
+      if (previous === undefined) delete process.env.OLLAMA_TIMEOUT_MS;
+      else process.env.OLLAMA_TIMEOUT_MS = previous;
+    }
+  });
+
+  it("throws planner_invalid_response when the configured model is not installed", async () => {
+    nock("http://ollama.test")
+      .post("/api/generate")
+      .times(2)
+      .reply(404, { error: "model 'test-model' not found" });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    await expect(
+      provider.generateProductionSpec({ prompt: PROMPT, language: "en", requestedDurationSeconds: 20 }),
+    ).rejects.toMatchObject({ plannerCode: "planner_invalid_response" });
+  });
+
   it("falls back to the labelled Basic planner only when Ollama is not configured at all", async () => {
     const provider = new OllamaContentAIProvider("", "test-model");
     const spec = await provider.generateProductionSpec({ prompt: PROMPT, language: "en", requestedDurationSeconds: 20 });
@@ -118,5 +145,69 @@ describe("OllamaContentAIPlanner creative output", () => {
     const spec = await provider.generateProductionSpec({ prompt: PROMPT, language: "en", requestedDurationSeconds: 20 });
     expect(spec.scenes[0].narration).not.toBe(PROMPT);
     expect(spec.scenes[0].narration).not.toContain("Do not invent phone numbers");
+  });
+
+  it("never speaks a duration fragment as the fallback topic entity", async () => {
+    // Regression: a brief like "اعمل فيديو 15 ثانية عن X" left "15 ثانية" in
+    // coreEntity, and a rejected scene line fell back to "النقطة المهمة عن
+    // 15 ثانية." - duration text spoken aloud.
+    const arPrompt = "عايز إعلان 15 ثانية عن غسيل العربيات المتنقل";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: arPrompt, searchQueries: ["car wash"] },
+        { purpose: "solution", narration: "فريقنا بيغسل عربيتك في مكانك.", searchQueries: ["car cleaning"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", requestedDurationSeconds: 15 });
+    expect(spec.scenes[0].narration).not.toContain("15");
+    expect(spec.scenes[0].narration).not.toContain("ثانية");
+  });
+
+  it("preserves real negations in model narration (No soil needed must not invert)", async () => {
+    const hydroPrompt = "Create a video about hydroponic gardening at home.";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: "Imagine growing vegetables in your kitchen!", searchQueries: ["hydroponic garden"] },
+        { purpose: "solution", narration: "Hydroponics uses water and nutrients. No soil needed!", searchQueries: ["plant roots water"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: hydroPrompt, language: "en", requestedDurationSeconds: 15 });
+    expect(spec.scenes[1].narration).toContain("No soil needed");
+    expect(spec.scenes[1].narration).not.toMatch(/^\s*soil needed/i);
+  });
+
+  it("fallback narration uses the quoted brand entity, never prompt residue like عايزين فيديو إعلاني 15", async () => {
+    const prompt =
+      "عايزين فيديو إعلاني 15 ثانية لخدمة «لمعة» - غسيل و تلميع عربيات متنقل. بنوصل لحد البيت أو الشغل. ممنوع أي أرقام تليفونات أو أسعار.";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: "خدمة لمعة بتوصل لحد باب البيت!", searchQueries: ["car wash"] },
+        { purpose: "problem", narration: "WhatsApp us at 01000000000 now!", searchQueries: ["mobile wash"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt, language: "ar", dialect: "egyptian", requestedDurationSeconds: 15 });
+    const fallback = spec.scenes[1].narration;
+    expect(fallback).not.toMatch(/عايز|فيديو|إعلاني|\d+/);
+    expect(fallback).toContain("لمعة");
+  });
+
+  it("strips the imperative explain-verb so it is not spoken as part of the topic", async () => {
+    const arPrompt = "اشرح فكرة التوفير التلقائي في البنوك";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: arPrompt, searchQueries: ["bank office"] },
+        { purpose: "solution", narration: "الفلوس بتتخصم لوحدها كل شهر.", searchQueries: ["savings app"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", requestedDurationSeconds: 15 });
+    expect(spec.scenes[0].narration).not.toContain("اشرح");
   });
 });

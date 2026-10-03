@@ -26,7 +26,13 @@ export type LanguageIssue =
   /** Most of the line is in a different language than the production spec. */
   | "accidental_language_switch"
   /** Doubled punctuation, spacing around punctuation, stray markdown. */
-  | "malformed_punctuation";
+  | "malformed_punctuation"
+  /** A garbled transliteration was normalized to the established loan form. */
+  | "loanword_normalized"
+  /** Non-Arabic/non-Latin script leaked (e.g. CJK meta-commentary from the model). */
+  | "foreign_script_leak"
+  /** Arabic and Latin glued into one token ("وشining") where the Latin part is not a tech term. */
+  | "mixed_script_token";
 
 export type LanguageQualityResult = {
   /** Mechanically normalized text; meaning is never rewritten. */
@@ -122,11 +128,34 @@ const LOANWORD_PAIRS: Array<[RegExp, string]> = [
   [PAIR("video|فيديو"), "$1video"],
 ];
 
+/**
+ * Garbled standalone transliterations the model produces when it cannot
+ * decide between Arabic script and the English term. These normalize to the
+ * loan form Egyptians actually use (or the English term itself). Established
+ * loan forms like "كاش" and "سيرفر" are deliberately left alone.
+ */
+const LOANWORD_NORMALIZATIONS: Array<[RegExp, string]> = [
+  [/(^|\s)البيكيند(?=\s|$|[,.،؛!؟?])/g, "$1الباك إند"],
+  [/(^|\s)بيكيند(?=\s|$|[,.،؛!؟?])/g, "$1باك إند"],
+  [/(^|\s)الفر?وند(?=\s|$|[,.،؛!؟?])/g, "$1الفرونت إند"],
+  [/(^|\s)فر?وند(?=\s|$|[,.،؛!؟?])/g, "$1فرونت إند"],
+  [/(^|\s)ال[إا]يه بي [إا]ي(?=\s|$|[,.،؛!؟?])/g, "$1API"],
+];
+
 /** Clear model/meta prefixes that must never be spoken. */
 const META_PREFIX = /^(?:(?:here(?:'s| is)(?: the)?|the|this is the)\s+)?(?:narration|scene copy|voice ?over|script|on[- ]screen text|scene\s*\d+|shot\s*\d+|caption|التعليق(?: الصوتي)?|نص التعليق|المشهد(?: الأول| الثاني| الثالث)?|السيناريو|ملاحظة|تعليق|بالطبع)\s*[:：؛\-–—]\s*/i;
 
 const ARABIC_RE = /[\u0600-\u06FF]/;
 const LATIN_RE = /[a-zA-Z]/;
+
+/**
+ * Letters outside Arabic/Latin are never legitimate narration for this
+ * product: a small model occasionally leaks CJK/Cyrillic/kana meta-commentary
+ * ("我将稍作调整") mid-field. Digits and punctuation are untouched; this only
+ * matches letter ranges.
+ */
+const FOREIGN_SCRIPT_RE =
+  /[\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\u30A0-\u30FF\uAC00-\uD7AF\u0400-\u04FF\u0900-\u097F\u0E00-\u0E7F\u0590-\u05FF\u10A0-\u10FF]/;
 
 function stripMetaCommentary(text: string): { text: string; stripped: boolean } {
   let out = text;
@@ -145,6 +174,10 @@ function stripMetaCommentary(text: string): { text: string; stripped: boolean } 
 
 function normalizePunctuation(text: string): { text: string; changed: boolean } {
   let out = text;
+  // CJK/ideographic punctuation occasionally leaks from model output.
+  out = out.replace(/。/g, ".").replace(/、/g, ", ").replace(/，/g, ", ");
+  // Stray markdown/code-fence tokens are never spoken narration.
+  out = out.replace(/`{1,3}[\w-]*/g, "").replace(/\*\*([^*]+)\*\*/g, "$1");
   out = out.replace(/\.{2,}/g, "…");
   out = out.replace(/([!؟?،,؛;:：])\s*\1+/g, "$1");
   out = out.replace(/\s+([.!؟?،,؛;:：%])/g, "$1");
@@ -215,13 +248,36 @@ export function analyzeNarrationLanguage(
   const deduped = dedupeTerms(punct.text);
   if (deduped.changed) issues.add("duplicated_term");
 
-  const normalized = deduped.text;
+  let loaned = deduped.text;
+  for (const [pattern, replacement] of LOANWORD_NORMALIZATIONS) {
+    loaned = loaned.replace(pattern, replacement);
+  }
+  if (loaned !== deduped.text) issues.add("loanword_normalized");
+
+  const normalized = loaned;
   const tokens = normalized.split(/\s+/).filter(Boolean);
   const latinCount = tokens.filter((t) => LATIN_RE.test(t) && !ARABIC_RE.test(t)).length;
   const arabicCount = tokens.filter((t) => ARABIC_RE.test(t)).length;
   const total = Math.max(1, tokens.length);
 
   let unusable = false;
+  if (FOREIGN_SCRIPT_RE.test(normalized)) {
+    issues.add("foreign_script_leak");
+    unusable = true;
+  }
+  // Mixed-script single tokens: "وAPI" or "بالdocker" is natural Egyptian;
+  // "وشining" is model corruption because "shining" is not an established
+  // loanword. Such lines cannot be safely repaired - the glued token carries
+  // the sentence's content word - so the whole line is unusable.
+  for (const token of normalized.split(/\s+/)) {
+    const latinParts = token.match(/[a-zA-Z]{2,}/g) || [];
+    if (latinParts.length === 0 || !ARABIC_RE.test(token)) continue;
+    if (!latinParts.every((part) => TECH_TERMS.has(part.toLowerCase()))) {
+      issues.add("mixed_script_token");
+      unusable = true;
+      break;
+    }
+  }
   if (expectedLanguage === "ar") {
     if (latinCount / total > 0.55 && tokens.length >= 4) {
       issues.add("accidental_language_switch");

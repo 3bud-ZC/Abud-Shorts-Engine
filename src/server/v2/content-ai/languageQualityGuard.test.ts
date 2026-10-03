@@ -87,6 +87,55 @@ describe("analyzeNarrationLanguage", () => {
     );
     expect(result.issues).not.toContain("broken_code_switching");
   });
+
+  it("normalizes garbled transliterations to established loan forms", () => {
+    const result = analyzeNarrationLanguage(
+      "البيكيند بيتكلم مع الفوند عن طريق API.",
+      "ar",
+    );
+    expect(result.issues).toContain("loanword_normalized");
+    expect(result.text).toBe("الباك إند بيتكلم مع الفرونت إند عن طريق API.");
+    expect(result.unusable).toBe(false);
+  });
+
+  it("leaves established loan forms like كاش and سيرفر untouched", () => {
+    const result = analyzeNarrationLanguage("الـ API بيعمل كاش على السيرفر.", "ar");
+    expect(result.text).toBe("الـ API بيعمل كاش على السيرفر.");
+    expect(result.issues).not.toContain("loanword_normalized");
+  });
+
+  it("marks CJK meta-commentary leaking into narration as unusable", () => {
+    const result = analyzeNarrationLanguage(
+      " ولucky的是, 你提供的JSON格式信息已经非常完整和准确",
+      "ar",
+    );
+    expect(result.issues).toContain("foreign_script_leak");
+    expect(result.unusable).toBe(true);
+  });
+
+  it("marks Arabic-glued non-tech Latin tokens as unusable", () => {
+    const result = analyzeNarrationLanguage(
+      "تتمنى تأخذ العربية نظيفة وشining؟",
+      "ar",
+    );
+    expect(result.issues).toContain("mixed_script_token");
+    expect(result.unusable).toBe(true);
+  });
+
+  it("accepts glued Arabic prefixes on established tech terms", () => {
+    const result = analyzeNarrationLanguage("وبعدين الـ API بيرجع الرد من وcache.", "ar");
+    expect(result.issues).not.toContain("mixed_script_token");
+    expect(result.unusable).toBe(false);
+  });
+
+  it("normalizes ideographic punctuation leaked from model output", () => {
+    const result = analyzeNarrationLanguage(
+      "ولكن API كاش بيعطي الحل، يسرع الردود ويوفر وقت。",
+      "ar",
+    );
+    expect(result.issues).toContain("malformed_punctuation");
+    expect(result.text.endsWith("وقت.")).toBe(true);
+  });
 });
 
 describe("buildLanguageQualityReport", () => {
