@@ -14529,7 +14529,9 @@ Short Studio must not build/pull/export/import duplicate multi-GB Docker images 
 
 **Remaining verified non-blocking issues:** optional `librosa`/`scenedetect` absent in the image (graceful fallbacks logged); English `loudnessTargetMet=false`; Arabic footage-coverage `needs_review` flag; intermittent post-start API stall is mitigated in UI but its Docker/WSL root cause is host-level.
 
-**Patch assessment:** the stranded-queue defect (#3) exists in released `v2.6.0` source and reproduces on any restart with pending jobs — a 2.6.1 patch is justified for `server.ts`; the UI/ps1 changes are robustness improvements that should ship with it. No 2.6.1 published; decision pending owner approval.
+**Patch assessment:** the stranded-queue defect (#3) exists in released `v2.6.0` source and reproduces on any restart with pending jobs — a 2.6.1 patch is justified for `server.ts`; the UI/ps1 changes are robustness improvements that should ship with it. **Source fixes merged to `main` via PR #11 (merge `3defb30`, patch commit `1852581`); the 2.6.1 artifact/release build is intentionally deferred while the owner performs real-world product testing.** The live canonical runtime already carries these fixes as targeted patched build outputs inside the existing `0915eb61…` container (deployed by file copy, not image rebuild); the container must not be recreated before a 2.6.1 image exists or the runtime-level patch will be lost. `v2.6.0` remains at `4a9a3aa`; no `v2.6.1` tag, GitHub Release, GHCR, Docker build, Setup.exe, or offline package has been created or modified — 2.6.1 is NOT released.
+
+**POST-GA MANUAL TEST WINDOW (active):** the owner uses Short Studio normally; real bugs are collected as they are found; verified fixes may be made in source and deployed minimally to the live runtime (targeted build outputs via file copy); no multi-GB release artifacts are rebuilt for individual issues; all verified fixes will be batched into one consolidated 2.6.1 build/release at the end of the window.
 
 ---
 
