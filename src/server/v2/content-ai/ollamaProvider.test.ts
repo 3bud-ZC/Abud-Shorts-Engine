@@ -210,4 +210,41 @@ describe("OllamaContentAIPlanner creative output", () => {
     const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", requestedDurationSeconds: 15 });
     expect(spec.scenes[0].narration).not.toContain("اشرح");
   });
+
+  it("anchors coreEntity on the Latin technical phrase in an Egyptian tech brief", async () => {
+    // Regression: "فيديو قصير يشرح للناس ليه الـ CDN cache ..." extracted the
+    // imperative/question residue "يشرح للناس ليه الـ" as the topic entity.
+    const arPrompt =
+      "فيديو قصير يشرح للناس ليه الـ CDN cache بيخلي المواقع تفتح أسرع بكتير. وضّح إن الـ cache بيحتفظ بنسخة قريبة من الزائر.";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: "الموقع البعيد بياخد وقت طويل.", searchQueries: ["slow website"] },
+        { purpose: "solution", narration: "السيرفر القريب بيجهز الصفحة فوراً.", searchQueries: ["nearby server"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", requestedDurationSeconds: 15 });
+    expect((spec.metadata as any)?.promptIntentContract?.coreEntity).toBe("CDN cache");
+  });
+
+  it("never speaks imperative-prompt residue as the fallback topic entity", async () => {
+    // Regression: when the model's scene line was rejected for prompt
+    // overlap, the deterministic fallback spoke the residue entity verbatim:
+    // "النقطة المهمة عن يشرح للناس ليه الـ."
+    const arPrompt =
+      "فيديو قصير يشرح للناس ليه الـ CDN cache بيخلي المواقع تفتح أسرع بكتير. وضّح إن الـ cache بيحتفظ بنسخة قريبة من الزائر.";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: arPrompt, searchQueries: ["cdn servers"] },
+        { purpose: "solution", narration: "المتصفح بيجيب النسخة من أقرب سيرفر ليك.", searchQueries: ["server room"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", requestedDurationSeconds: 15 });
+    const fallback = spec.scenes[0].narration;
+    expect(fallback).not.toBe(arPrompt);
+    expect(fallback).not.toMatch(/يشرح|للناس|ليه|الـ\b/u);
+  });
 });

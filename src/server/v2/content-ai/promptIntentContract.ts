@@ -162,12 +162,18 @@ function cleanPromptDirectives(prompt: string, isAr: boolean): string {
   if (isAr) {
     cleaned = cleaned
       .replace(/^(اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي)\s+(فيديو|شورت|مقطع|سكريبت|إعلان|إعلاني|اعلاني|محتوى)?\s*(عن|حول|بخصوص)?/i, "")
+      // A bare media noun is a valid opener too: "فيديو قصير يشرح ..." asks
+      // for a video the same way "اعمل فيديو ..." does. Leaving it means the
+      // entity extractor reads the orchestration wording as the subject.
+      .replace(/^(فيديو|شورت|مقطع|ريل|إعلان|إعلاني|اعلان|اعلاني|محتوى)\s+(قصير|قصيرة|سريع|سريعة|بسيط|بسيطة|تعليمي|تعليمية)?\s*/i, "")
+      .replace(/^(يشرح|يوضح|وضّح|وضح|اشرح|اشرحلي|ورينا|وريني|قول|قولي|كلمنا|كلمني|احكيلي|يحكي|نتكلم|نكلم)\s+(للناس|لنا|لي|للجميع)?\s*(عن|حول|بخصوص|إزاي|ازاي|ليه|إيه|ايه|أيه|هو)?\s*/i, "")
       .replace(/فيديو\s+(مدته|طوله|بمدة)?\s*\d+\s*(ثانية|ثواني|ثوان|دقيقة)?/i, "")
       .replace(/(بدقة|بجودة)\s*(عالية|1080p|4k)?/i, "")
       .replace(/(باللهجة|لهجة)\s*(المصرية|السعودية|الخليجية|العامية)?/i, "");
   } else {
     cleaned = cleaned
       .replace(/^(create|make|generate|produce|write)\s+(a\s+)?(video|short|tiktok|reel|script|ad|commercial)?\s*(about|for|on)?/i, "")
+      .replace(/^(a\s+)?(video|short|reel|clip|ad)\s+(explaining|explain|about|on|that explains)\s+/i, "")
       .replace(/(video|short)\s+(duration|length)?\s*\d+\s*(seconds|secs|sec|s)?/i, "")
       .replace(/\b(in|with)\b\s*(1080p|4k|high quality|vertical format)/i, "")
       .replace(/(style|tone)\s*:\s*\w+/i, "");
@@ -272,20 +278,74 @@ function detectIntentType(prompt: string, isAr: boolean): PromptIntentContract["
 
 /** Orchestration/stopword tokens that can never be part of a speakable
  *  entity ("want a video", "15 seconds ad"). A bare number is never an
- *  entity word either - "إعلاني 15" is a truncated duration, not a topic. */
+ *  entity word either - "إعلاني 15" is a truncated duration, not a topic.
+ *  Directive verbs in any conjugation ("يشرح", "وضّح", "وريني"), question
+ *  words ("ليه", "إزاي"), audience fillers ("للناس") and bare connectors
+ *  ("الـ", "في", "و") are likewise never the subject of the video. */
 const ENTITY_STOPWORD_RE =
-  /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|عن|حول|بخصوص|بيناقش|ليناقش|معنى|مفهوم|قصير|قصيرة|create|make|generate|produce|write|build|video|short|tiktok|reel|script|ad|commercial|content|post|clip|about|for|on|of|a|an|the|that|which|seconds|secs|sec|minutes|mins|\d+)$/i;
+  /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|عن|حول|بخصوص|بيناقش|ليناقش|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|الـ?|و|بـ?|في|من|على|إلى|الى|مع|لـ|لل|يا|ده|دي|create|make|generate|produce|write|build|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|video|short|tiktok|reel|script|ad|commercial|content|post|clip|about|for|on|of|a|an|the|that|which|seconds|secs|sec|minutes|mins|\d+)$/i;
 
 function extractCoreEntity(cleanedPrompt: string, isAr: boolean): string {
   const fallback = isAr ? "الموضوع الرئيسي" : "the main subject";
   if (!cleanedPrompt) return fallback;
   const firstLine = cleanedPrompt.split(/[.\n]/)[0].trim();
+  if (isAr) {
+    // Egyptian technical briefs keep established terms in English
+    // ("يشرح للناس ليه الـ CDN cache بيخلي المواقع تفتح أسرع"): once the
+    // directive verbs and question words are filtered the remaining Arabic
+    // fragment is residue, while the contiguous Latin run IS the subject
+    // anchor. Prefer the longest real Latin phrase; a bare acronym like
+    // CDN/API is acceptable, a lone lowercase word is not.
+    const latinRuns = firstLine.match(/[A-Za-z][A-Za-z0-9._+-]*(?:\s+[A-Za-z][A-Za-z0-9._+-]*)*/g) || [];
+    const best = latinRuns
+      .map((run) => run.trim())
+      .filter((run) => !ENTITY_STOPWORD_RE.test(run))
+      .filter((run) => {
+        const parts = run.split(/\s+/).filter((w) => !ENTITY_STOPWORD_RE.test(w));
+        if (parts.length === 0) return false;
+        if (parts.length === 1) {
+          const w = parts[0];
+          return w.length >= 2 && (w === w.toUpperCase() || w.length >= 4);
+        }
+        return true;
+      })
+      .sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length || b.length - a.length)[0];
+    if (best) return best;
+  }
   const words = firstLine
     .split(/\s+/)
     .map((w) => w.replace(/^[«»"'"'"']+|[«»"'"'"',،؛;:]+$/g, ""))
     .filter((w) => w.length > 1 && !ENTITY_STOPWORD_RE.test(w));
   if (words.length === 0) return fallback;
   return words.slice(0, 4).join(" ");
+}
+
+/**
+ * True when `entity` is a real subject that can be spoken inside generated
+ * narration ("النقطة المهمة عن X."). Duration fragments, orchestration
+ * wording, imperative verbs, question words and dangling articles are raw
+ * prompt residue - never a speakable topic ("النقطة المهمة عن يشرح للناس
+ * ليه الـ." reached customer narration through this path).
+ */
+export function isSpeakableEntity(entity: string, isAr: boolean): boolean {
+  const stripped = stripMetaInstructions(entity, isAr)
+    .replace(/\s+\d+$/, "")
+    .trim();
+  if (stripped.length < 3) return false;
+  if (/^\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|seconds?|secs?|minutes?|mins?)?\.?$/i.test(stripped)) {
+    return false;
+  }
+  // One surviving directive-verb / question / media-noun / filler token means
+  // the whole entity is prompt residue, not a speakable subject. Interior
+  // prepositions are legit ("غسيل عربيات في البيت"); a connector dangling at
+  // either edge is residue ("يشرح للناس ليه الـ").
+  const RESIDUE_WORD_RE =
+    /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|الـ?|video|shorts?|tiktok|reel|clip|script|seconds?|secs?|minutes?|mins?|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|create|make|generate|produce|write|build|about|\d+)$/i;
+  const EDGE_CONNECTOR_RE = /^(?:و|بـ?|في|من|عن|على|إلى|الى|مع|لـ|لل|يا|أو|او)$/u;
+  const words = stripped.split(/\s+/).filter(Boolean);
+  if (words.some((word) => RESIDUE_WORD_RE.test(word))) return false;
+  if (EDGE_CONNECTOR_RE.test(words[0]) || EDGE_CONNECTOR_RE.test(words[words.length - 1])) return false;
+  return true;
 }
 
 function deriveConcreteVisualSubjects(

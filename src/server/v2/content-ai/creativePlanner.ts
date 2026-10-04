@@ -10,7 +10,7 @@ import {
 } from "../../../types/productionSpec";
 import type { GenerateSpecParams } from "./types";
 import type { PromptIntentContract } from "./promptIntentContract";
-import { buildPromptIntentContract, stripMetaInstructions } from "./promptIntentContract";
+import { buildPromptIntentContract, isSpeakableEntity, stripMetaInstructions } from "./promptIntentContract";
 import { inventsUngroundedClaim, resolveCtaProvenance } from "../creative/ctaPolicy";
 import { containsRawPromptLeak } from "../quality/professionalVisualQuality";
 import { enforceAndRepairPromptFidelity } from "../quality/promptFidelityGate";
@@ -291,16 +291,25 @@ export function assembleProductionSpec(params: {
     // ("15 ثانية") or shorter than a word, it is not a speakable topic.
     // A truncated duration fragment ("إعلاني 15") leaves a bare trailing
     // number - drop it before deciding the entity is speakable.
-    const strippedEntity = stripMetaInstructions(contract.coreEntity, isAr).replace(/\s+\d+$/, "").trim();
-    const entityUsable =
-      strippedEntity.length >= 3 &&
-      !/^\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|seconds?|secs?|minutes?|mins?)?\.?$/i.test(strippedEntity) &&
-      // Residual orchestration wording means the entity is still a raw
-      // prompt fragment, not a speakable subject.
-      !/(?:^|\s)(?:فيديو|شورت|مقطع|سكريبت|إعلاني?|اعلاني?|محتوى|ثانية|ثواني?|ثوانى?|دقيقة|دقائق|video|shorts?|clip|script|seconds?|minutes?)(?:\s|$)/i.test(
-        strippedEntity,
-      );
-    const safeEntity = entityUsable ? strippedEntity : isAr ? "الموضوع" : "the topic";
+    // The fallback entity is meta-stripped so duration/style wording from
+    // the brief can never be spoken ("إعلاني 20 ثانية..."). If the extracted
+    // coreEntity is still a raw prompt fragment (imperative verbs, question
+    // words, dangling connectors - "يشرح للناس ليه الـ"), walk the contract's
+    // other subject candidates (quoted phrases, Latin technical terms) for
+    // one that is actually speakable before defaulting to a generic word.
+    const candidateEntities = [
+      contract.coreEntity,
+      ...(contract.subjectEntities || []),
+      ...(contract.quotedPhrases || []),
+    ];
+    let safeEntity = isAr ? "الموضوع" : "the topic";
+    for (const candidate of candidateEntities) {
+      const stripped = stripMetaInstructions(String(candidate || ""), isAr).replace(/\s+\d+$/, "").trim();
+      if (isSpeakableEntity(stripped, isAr)) {
+        safeEntity = stripped;
+        break;
+      }
+    }
     const langResult = analyzeNarrationLanguage(
       safeCopy(scene.narration, prompt, contract, undefined) || "",
       isAr ? "ar" : "en",

@@ -14650,3 +14650,37 @@ Every output: preview `/api/short-video/:id` 200, HTTP range 206, download 200, 
 **Operator note (honest).** The API-caching scene-1 footage required two corrective interventions: (1) the stale coffee media artifact embedded in the job spec's `reuseArtifacts` was removed via DB update plus disk-manifest invalidation — stage retries replay spec-embedded artifacts, which disk invalidation cannot reach; (2) after the corrected query families produced clean queries, a Pexels API network flap made all searches time out and a generic fallback clip ("advertisement solution…", food footage) won at 60.65 — barely over the floor. The scene's `stockSearchTerms` were updated to concrete queries Pexels can satisfy (`server room data center`, `programmer code screen dark`, `computer network technology`) and a media-stage retry selected the terminal-data clip through the normal search→OpenCLIP→gate→render path. The "semantically-plausible-but-wrong" ceiling on abstract Arabic tech topics is mitigated but not eliminated: near-floor scores (59–62) still cluster tightly, and `server` remains ambiguous in stock search.
 
 **Decision: READY FOR OWNER MANUAL ACCEPTANCE** — exactly three videos above for owner viewing. Not ready for 2.6.1 build: owner manual acceptance must precede any artifact work.
+
+#### Clean Autonomous Acceptance (2026-10-04)
+
+**Pass type.** Re-qualification of the same branch (`refactor/production-intelligence-recovery`, PR #13) under a strict no-intervention rule: three fresh unseen jobs through `POST /api/v2/jobs`, no DB/spec/manifest/query/media/status mutation, no manual re-dispatch or stage retry. Normal product behavior only (bounded provider retry, automatic query refinement, motion fallback, watchdog). **Zero operator intervention occurred on the three qualification jobs.** One transient `production_not_runnable` ("Local Voice is not reachable") readiness rejection on Job B's create call — Local Voice was mid-synthesis on Job A; re-submit through the same customer path succeeded. No job row was touched.
+
+**Durability.** All recovery behaviors verified in source/config, not live patches: qwen3.5 default + Ollama registry selection, `think:false` on structured planner calls, OpenCLIP enablement + worker pool + checkpoint provisioning (`install-openclip` Dockerfile stage, compose entrypoint seed), 60-point semantic floor, Arabic `بن` Unicode-boundary fix, async durable-artifact readers, retry voice/caption pair consistency, async route error protection, Whisper local staging, `curl -C -` resumable downloads, motion-artifact reuse filtering, provenance-aware black-frame QA. HEAD `e773643`.
+
+**Planner provenance (all three):** `OllamaContentAIProvider`, model `qwen3.5:9b-q4_K_M`, provenance `MODEL_GENERATED`, 0 retries. Latencies 23.2 s / 9.9 s / 12.3 s.
+
+| Job | Topic | Status | Duration | Footage coverage |
+|---|---|---|---|---|
+| A `cmuu11rak000107o4a8xyh5uq` | CDN cache speed (AR, tech terms EN) | needs_review | 16.26 s | 33.8% |
+| B `cmuu13eki000507o489n08emh` | purchase round-up savings app (AR) | ready | 15.06 s | 90.1% |
+| C `cmuu142xv000807o410g6bea9` | database index speed (AR+EN terms) | needs_review | 15.06 s | 60.4% |
+
+**Autonomous pipeline.** Event trails show the full unassisted path per job: queued → preparing → content generation → voice → captions → footage search → media selection → render → finalize → mastering → validation → quality decision. Zero watchdog requeues, zero failure events. A and C landed `needs_review` through the honest coverage gate, not manual forcing.
+
+**Visual evidence (OpenCLIP real, per-candidate `semanticRuntime:"open_clip"`).** A: website/laptop-browsing imagery; `visualSemanticScore` 60.88 (candidates 60.88/61.47/59.11); two scenes took WEBSITE_MOCKUP purposeful graphics → 33.8% footage coverage → needs_review. No food/coffee/waiter contamination. B: phone-in-hand + finance/app imagery, all Pexels; gate-time winner scores above the floor (e.g. 63.62/63.47); the 59.25/59.53 figures in shot metadata are post-selection re-scores of trimmed clips, not gate bypasses. C: paper-stack flipping (search-without-index metaphor), finger pointing to a book index (matches the narration's own فهرس metaphor), thumbs-up, abstract data-stream — coherent and on-topic.
+
+**Narration.** B and C: coherent generated Egyptian Arabic, English terms preserved naturally, no fabricated numbers/brands, no gibberish. A scene 1: **FAILED** — deterministic fallback assembled residue `النقطة المهمة عن يشرح للناس ليه الـ.` (spoken + burned into captions) after the model line was rejected for prompt overlap; `extractCoreEntity` captured imperative prompt residue that passed `entityUsable`.
+
+**General fix applied this pass (not per-job).** `promptIntentContract.ts`: residue/imperative/question/filler tokens added to `ENTITY_STOPWORD_RE` with Unicode boundaries; `extractCoreEntity` prefers Latin technical runs (CDN/cache) and rejects orchestration-residue candidates via new shared `isSpeakableEntity`; `creativePlanner.ts` fallback walks `subjectEntities` for a speakable candidate instead of emitting residue. Two regression tests added (`ollamaProvider.test.ts`). Fix compiled, `docker cp`'d to both containers, restarted, `isSpeakableEntity` verified live — runtime ≡ source.
+
+**Technical QA (all three).** Valid MP4 (`ftyp` first), H.264 + AAC, 1080×1920; preview 200 / range 206 / download 200 / thumbnail 200 (`image/jpeg`); Job C black-frame report 0% / pass; contact sheets confirm correct Arabic shaping, coherent captions, no destructive caption/card overlap, acceptable A/V sync. No black gaps; purposeful motion scenes not misclassified.
+
+**Full regression (final code, nothing rendering).** `typecheck:server` PASS, `typecheck:ui` PASS, `typecheck:revideo-project` PASS, production `npm run build` PASS (vite, 7.99 s). **Full Vitest: 1409/1409 tests, 99/99 files — clean**, incl. the new residue regressions.
+
+**Data safety.** jobs 83→86 (+3 the fresh jobs), job_events 2471→2555, scene_artifacts 488→515, video_revisions 56→59; provider_credentials_vault 3→3, social_accounts 2→2, backups 4→4, api_tokens 0→0. No deletions, no cleanup-trigger recurrence. License file present/activated, mtime unchanged (Sept 12).
+
+**Storage.** C: free 123.6 GB→118.2 GB (~5.4 GB for renders + build output). qwen3.5:9b-q4_K_M 6.6 GB active; qwen2.5:7b-instruct 4.7 GB preserved. Docker images unchanged (short-studio-server:2.6.0 11.9 GB; images total 22.53 GB); build cache 0 B; no prune, no new image, no Setup/GHCR/release artifacts.
+
+**Remaining defects.** (1) Job A narration residue — root cause now fixed generally in source+runtime, but this pass's rendered artifact carries the defect; re-qualification jobs needed on the fixed code. (2) A/C real-footage coverage below the 90% target (purposeful motion graphics carry the remainder — honest gating, intended treatment). (3) Near-floor semantic scores (59–63) still cluster tightly on abstract tech beats — candidate-quality ceiling, not a gate bypass. (4) No general caption/card overlap defect reproduced this pass.
+
+**Decision: NOT READY for owner manual acceptance.** Blocker: Job A scene-1 residue line fails the narration-acceptance gate; A and C also exit `needs_review`. Autonomy, zero-intervention integrity, visual relevance, technical QA, data safety, and full regression all PASS — but owner acceptance requires acceptable narration on all three outputs. Next: create three fresh jobs on the deployed fix and re-verify narration quality end-to-end.
