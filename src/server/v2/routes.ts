@@ -1408,7 +1408,7 @@ function buildV22CapabilityProviders() {
       checkedAt: now,
       details: {
         implemented: true,
-        model: process.env.OLLAMA_MODEL || "qwen2.5:3b-instruct or qwen2.5:7b-instruct recommended when hardware allows",
+        model: process.env.OLLAMA_MODEL || "qwen3.5:9b-q4_K_M recommended; smaller Qwen instruct models on CPU-only clients",
         contract: "OpenAI-compatible/local HTTP JSON generation",
         hardware: "Use smaller Qwen instruct models on CPU-only clients; larger models require adequate RAM/VRAM.",
       },
@@ -1812,12 +1812,45 @@ function requireV2Access(config: Config, authService: AuthService, apiTokenServi
   };
 }
 
+// Express 4 does not forward rejections from async handlers; a missed
+// try/catch becomes an unhandled rejection, which the phonemizer Emscripten
+// bundle escalates into a process crash. Wrapping every registered handler
+// routes async failures into Express error handling instead.
+function wrapAsyncRouteHandlers(router: express.Router): void {
+  for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+    const register = router[method].bind(router) as (...args: any[]) => any;
+    (router as any)[method] = (...args: any[]) =>
+      register(
+        ...args.map((arg) =>
+          typeof arg === "function"
+            ? (req: express.Request, res: express.Response, next: express.NextFunction) => {
+              Promise.resolve(arg(req, res, next)).catch(next);
+            }
+            : arg,
+        ),
+      );
+  }
+}
+
+function routeErrorMiddleware(
+  error: unknown,
+  _req: express.Request,
+  res: express.Response,
+  _next: express.NextFunction,
+): void {
+  logger.error({ err: error }, "route handler failed");
+  if (!res.headersSent) {
+    res.status(500).json({ error: "Internal server error." });
+  }
+}
+
 export function createV2PublicRouter(
   config: Config,
   db: V2Database,
   jobs: JobService,
 ): express.Router {
   const router = express.Router();
+  wrapAsyncRouteHandlers(router);
   const orchestrator = new N8nOrchestrator(config, jobs);
   const contentAIRegistry = new ContentAIRegistry(config);
   const publishingService = new PublishingService(db, config, publishingRegistry);
@@ -3057,10 +3090,10 @@ export function createV2PublicRouter(
         (targetJob?.input as any)?.__originalJobId ||
         ((targetJob?.productionSpec as any)?.metadata?.revision?.originalJobId) ||
         req.params.id;
-      const directArtifacts = readDurableArtifactsForSourceJob(config, req.params.id);
+      const directArtifacts = await readDurableArtifactsForSourceJob(config, req.params.id);
       const lineageArtifacts =
         originalJobId && originalJobId !== req.params.id
-          ? readDurableArtifactsForSourceJob(config, originalJobId)
+          ? await readDurableArtifactsForSourceJob(config, originalJobId)
           : [];
       const priorReused =
         (((targetJob?.productionSpec as any)?.metadata?.revision?.reuseArtifacts as DurableSceneArtifact[]) || []);
@@ -3068,7 +3101,28 @@ export function createV2PublicRouter(
       for (const a of [...lineageArtifacts, ...priorReused, ...directArtifacts]) {
         if (a?.artifactId) allArtifactsMap.set(a.artifactId, a);
       }
-      const reuseArtifacts = Array.from(allArtifactsMap.values());
+      // Lineage merges can surface multiple artifacts per scene+type where a
+      // captions artifact was bound to a voice artifact that is not the one
+      // this retry will select. The render validates that pairing explicitly
+      // and fails hard on a mismatch, so unpairable captions are dropped here
+      // and regenerated instead of poisoning the whole retry.
+      const assembled = Array.from(allArtifactsMap.values());
+      const selectedVoiceIdByScene = new Map<number, { artifactId?: string; checksum?: string }>();
+      for (const a of assembled) {
+        if (a?.type === "voice" && typeof a.sceneIndex === "number" && !selectedVoiceIdByScene.has(a.sceneIndex)) {
+          selectedVoiceIdByScene.set(a.sceneIndex, { artifactId: a.artifactId, checksum: a.checksum });
+        }
+      }
+      const reuseArtifacts = assembled.filter((a) => {
+        if (a?.type !== "captions" || typeof a.sceneIndex !== "number") return true;
+        const voice = selectedVoiceIdByScene.get(a.sceneIndex);
+        if (!voice) return true;
+        const boundVoiceId = String((a.metadata as any)?.voiceArtifactId || "");
+        if (boundVoiceId && boundVoiceId !== voice.artifactId) return false;
+        const boundVoiceChecksum = String((a.metadata as any)?.voiceChecksum || "");
+        if (boundVoiceChecksum && boundVoiceChecksum !== voice.checksum) return false;
+        return true;
+      });
       const job = await jobs.retryJob(req.params.id, {
         idempotencyKey: headerIdempotencyKey,
         reuseArtifacts,
@@ -5730,6 +5784,7 @@ export function createV2PublicRouter(
     res.status(200).json(serializeProductMediaForApi(product));
   });
 
+  router.use(routeErrorMiddleware);
   return router;
 }
 
@@ -5740,6 +5795,7 @@ export function createV2InternalRouter(
   db?: V2Database,
 ): express.Router {
   const router = express.Router();
+  wrapAsyncRouteHandlers(router);
   router.use(express.json({ limit: "2mb" }));
   router.use(requireInternalToken(config));
   const scheduleStartRetry = (jobId: string, delayMs = 10000) => {
@@ -6252,5 +6308,6 @@ export function createV2InternalRouter(
     }
   });
 
+  router.use(routeErrorMiddleware);
   return router;
 }

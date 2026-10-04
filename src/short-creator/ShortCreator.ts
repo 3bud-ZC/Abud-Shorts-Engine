@@ -1610,11 +1610,17 @@ export class ShortCreator {
           const segVideoPath = path.join(this.config.tempDirPath, segVideoFileName);
           tempFiles.push(segVideoPath);
 
+          // A motion_canvas artifact persisted by an earlier revision's stock
+          // fallback is not interchangeable with real footage: reusing it for
+          // a scene the plan intends as stock locks in a dark fallback card
+          // forever (and fails the black-frame gate). Only a motion-resolved
+          // scene may reuse a motion artifact; stock scenes re-resolve.
           const reusableMediaArtifact = reusableArtifacts.find((artifact) =>
             artifact.type === "media" &&
             artifact.sceneIndex === index &&
             artifact.segmentIndex === seg.segmentIndex &&
-            artifact.valid === true,
+            artifact.valid === true &&
+            (sceneResolvedToMotion || artifact.provider !== "motion_canvas"),
           );
           const reusedSeg = reusableMediaAssets.find((asset: any) => asset.sceneIndex === index && asset.segmentIndex === seg.segmentIndex);
           let segAsset: any = reusableMediaArtifact?.metadata?.visualAsset || reusedSeg;
@@ -1840,7 +1846,10 @@ export class ShortCreator {
         const tempVideoPath = path.join(this.config.tempDirPath, tempVideoFileName);
         tempFiles.push(tempVideoPath);
 
-        const reusableMediaArtifact = reusableArtifactFor("media", index, (artifact) => artifact.segmentIndex === undefined);
+        const reusableMediaArtifact = reusableArtifactFor("media", index, (artifact) =>
+          artifact.segmentIndex === undefined &&
+          (sceneResolvedToMotion || artifact.provider !== "motion_canvas"),
+        );
         let visualAsset: any;
         let mediaArtifact: DurableSceneArtifact | undefined;
 
@@ -3319,10 +3328,52 @@ export class ShortCreator {
         videoPath,
         timeline.requestedDurationSeconds,
       );
-      const blackFrameReport = await this.ffmpeg.analyzeBlackFrames(
+      const measuredBlackFrameReport = await this.ffmpeg.analyzeBlackFrames(
         videoPath,
         validationResult.durationSeconds || timeline.requestedDurationSeconds,
       );
+      // Purposeful motion scenes are generated, designed cards - dark by
+      // design, not missing footage. Black runs inside those scene windows
+      // are excluded from the gate measurement and kept in the report so the
+      // gate keeps catching real gaps while a legitimate fallback card does
+      // not fail an otherwise-valid render.
+      const motionSceneWindows: { startSeconds: number; endSeconds: number }[] = [];
+      let sceneCursorSeconds = 0;
+      for (const visual of selectedVisuals) {
+        const duration = Number(visual.durationSeconds) || 0;
+        if (visual.provider === "motion_canvas" && duration > 0) {
+          motionSceneWindows.push({ startSeconds: sceneCursorSeconds, endSeconds: sceneCursorSeconds + duration });
+        }
+        sceneCursorSeconds += duration;
+      }
+      const gatedBlackRuns = motionSceneWindows.length
+        ? measuredBlackFrameReport.blackRuns.flatMap((run) => {
+          let segments: [number, number][] = [[run.startSeconds, run.endSeconds]];
+          for (const window of motionSceneWindows) {
+            segments = segments.flatMap(([s, e]) => {
+              if (window.endSeconds <= s || window.startSeconds >= e) return [[s, e] as [number, number]];
+              const kept: [number, number][] = [];
+              if (window.startSeconds > s) kept.push([s, window.startSeconds]);
+              if (window.endSeconds < e) kept.push([window.endSeconds, e]);
+              return kept;
+            });
+          }
+          return segments
+            .filter(([s, e]) => e - s > 0.01)
+            .map(([s, e]) => ({ startSeconds: s, endSeconds: e, durationSeconds: e - s }));
+        })
+        : measuredBlackFrameReport.blackRuns;
+      const gatedBlackSeconds = gatedBlackRuns.reduce((sum, run) => sum + run.durationSeconds, 0);
+      const blackFrameReport = {
+        ...measuredBlackFrameReport,
+        blackRuns: gatedBlackRuns,
+        blackFramePercent: Math.round((gatedBlackSeconds / Math.max(0.01, measuredBlackFrameReport.sampledDurationSeconds)) * 1000) / 10,
+        longestBlackRunMs: Math.round(Math.max(0, ...gatedBlackRuns.map((run) => run.durationSeconds)) * 1000),
+        rawBlackFramePercent: measuredBlackFrameReport.blackFramePercent,
+        motionSceneWindowsExcluded: motionSceneWindows,
+      };
+      blackFrameReport.pass =
+        blackFrameReport.longestBlackRunMs <= 300 && blackFrameReport.blackFramePercent <= 1;
       const masteringStartedAt = Date.now();
       await this.emitProgress(onProgress, {
         status: "finalizing",
@@ -4086,16 +4137,24 @@ export class ShortCreator {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         await fs.ensureDir(path.dirname(destPath));
+        // Slow hosts (throttled egress or 9p-backed temp dirs) can need
+        // >120s for a single 1080p clip; resume partial files across
+        // retries instead of restarting the download from byte zero.
+        const maxTimeSeconds = Math.max(
+          60,
+          Math.min(900, Number(process.env.ABUD_STOCK_DOWNLOAD_MAX_TIME_S) || 300),
+        );
         const curlArgs = [
           "-sSL",
-          "--max-time", "120",
+          "-C", "-",
+          "--max-time", String(maxTimeSeconds),
           "--connect-timeout", "15",
           "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
           "-o", destPath,
           "-w", "%{content_type}",
           url,
         ];
-        const { stdout: contentType } = await execAsync(`curl ${curlArgs.map(a => `"${a}"`).join(" ")}`, { timeout: 150000, windowsHide: true });
+        const { stdout: contentType } = await execAsync(`curl ${curlArgs.map(a => `"${a}"`).join(" ")}`, { timeout: (maxTimeSeconds + 30) * 1000, windowsHide: true });
         const expectsVideo = path.extname(destPath).toLowerCase() === ".mp4";
         if (
           expectsVideo &&
@@ -4104,6 +4163,8 @@ export class ShortCreator {
           !contentType.includes("octet-stream") &&
           !contentType.includes("application/mp4")
         ) {
+          // A non-video response body is not a resumable partial asset.
+          fs.removeSync(destPath);
           throw new Error(`Provider returned non-video content type: ${contentType}`);
         }
 
@@ -4122,7 +4183,7 @@ export class ShortCreator {
           { attempt, maxRetries, url, error: lastError.message },
           "Download attempt failed; retrying...",
         );
-        fs.removeSync(destPath);
+        // Keep the partial file: curl "-C -" resumes it on the next attempt.
         if (attempt < maxRetries) {
           await new Promise((r) => setTimeout(r, 1000 * attempt));
         }

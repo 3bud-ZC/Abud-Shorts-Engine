@@ -52,7 +52,7 @@ export class OllamaContentAIProvider implements ContentAIProvider {
 
   constructor(
     private baseUrl = process.env.OLLAMA_BASE_URL || "",
-    private model = process.env.OLLAMA_MODEL || "qwen2.5:7b-instruct",
+    private model = process.env.OLLAMA_MODEL || "qwen3.5:9b-q4_K_M",
   ) { }
 
   public get isConfigured(): boolean {
@@ -62,7 +62,18 @@ export class OllamaContentAIProvider implements ContentAIProvider {
   private async callPlanner(system: string, prompt: string): Promise<unknown> {
     const response = await axios.post(
       `${this.baseUrl.replace(/\/$/, "")}/api/generate`,
-      { model: this.model, stream: false, system, prompt, format: "json", options: { temperature: 0.3 } },
+      {
+        model: this.model,
+        stream: false,
+        system,
+        prompt,
+        format: "json",
+        // qwen3.5 defaults to thinking mode, which returns an EMPTY response
+        // with the JSON buried in the thinking field - the planner must get
+        // only the final structured output, never reasoning prose.
+        think: false,
+        options: { temperature: 0.3 },
+      },
       { timeout: plannerTimeoutMs() },
     );
     const raw =

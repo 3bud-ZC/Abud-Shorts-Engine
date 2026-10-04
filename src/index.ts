@@ -12,6 +12,26 @@ import fs from "fs-extra";
 // failures so a TTS-library initialization fault can never kill the server.
 // The Kokoro provider already degrades gracefully to a deterministic fallback
 // when phonemization is unavailable, so suppressing the crash is safe.
+// Emscripten registers its own `(A)=>{throw A}` listeners AFTER ours whenever
+// the phonemizer bundle is (lazily) loaded, and a throwing listener still
+// kills the process. Prune any short fatal-style listener on the two fatal
+// events at startup and whenever a new one gets registered.
+const isEmscriptenFatalListener = (fn: unknown): fn is (...args: any[]) => void =>
+  typeof fn === "function" && fn.toString().length < 400 && /\bthrow\s+\w/.test(fn.toString());
+const pruneFatalListeners = () => {
+  for (const event of ["unhandledRejection", "uncaughtException"] as const) {
+    for (const fn of process.listeners(event as "unhandledRejection")) {
+      if (isEmscriptenFatalListener(fn)) process.removeListener(event as "unhandledRejection", fn);
+    }
+  }
+};
+process.on("newListener" as any, (event: string, fn: (...args: any[]) => void) => {
+  if ((event === "unhandledRejection" || event === "uncaughtException") && isEmscriptenFatalListener(fn)) {
+    setImmediate(() => process.removeListener(event as any, fn));
+  }
+});
+pruneFatalListeners();
+
 process.on("unhandledRejection", (reason) => {
   const msg = reason instanceof Error ? reason.message : String(reason);
   if (msg.includes("phonemizer") || msg.includes("espeak") || msg.includes("Emscripten")) {

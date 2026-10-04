@@ -153,7 +153,7 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b-q4_K_M}
       OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-45000}
       # OpenCLIP semantic media matching. Fail-closed: when the quality
       # Python runtime (/opt/pyruntime) or the local checkpoint is absent the
@@ -175,7 +175,7 @@ services:
       # a missing value must fail fast rather than silently alias whatever
       # Local Voice another installation happens to run on this host's 8765.
       LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:9}
-      LOCAL_TTS_SYNTHESIS_TIMEOUT_MS: ${LOCAL_TTS_SYNTHESIS_TIMEOUT_MS:-180000}
+      LOCAL_TTS_SYNTHESIS_TIMEOUT_MS: ${LOCAL_TTS_SYNTHESIS_TIMEOUT_MS:-300000}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}
       CONCURRENCY: ${CONCURRENCY:-1}
@@ -236,7 +236,7 @@ services:
       # unreachable - see the matching note on the app service above; the real
       # per-install port always comes from the installer's generated .env.
       LOCAL_TTS_BASE_URL: ${LOCAL_TTS_BASE_URL:-http://host.docker.internal:9}
-      LOCAL_TTS_SYNTHESIS_TIMEOUT_MS: ${LOCAL_TTS_SYNTHESIS_TIMEOUT_MS:-180000}
+      LOCAL_TTS_SYNTHESIS_TIMEOUT_MS: ${LOCAL_TTS_SYNTHESIS_TIMEOUT_MS:-300000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
@@ -278,7 +278,7 @@ services:
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b-q4_K_M}
       OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-45000}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_VOICE_ID: ${ELEVENLABS_DEFAULT_VOICE_ID:-}

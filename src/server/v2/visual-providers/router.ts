@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import fs from "fs-extra";
+import os from "os";
 import path from "path";
 import axios from "axios";
 import { logger } from "../../../logger";
@@ -74,7 +75,20 @@ const GENERIC_STOCK_TERMS = new Set([
   "visual",
 ]);
 const MIN_LEXICAL_SEMANTIC_SCORE = 45;
-const MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE = 55;
+// OpenCLIP scores live in a narrow band: measured live on this host, genuinely
+// relevant clips cluster ~62-66 while a semantically-plausible wrong answer
+// (coffee beans for a banking scene) reaches ~59. 60 rejects the plausible-
+// but-wrong band while admitting real matches; anything lower gets refined or
+// routed to purposeful motion graphics instead of forcing weak stock.
+const DEFAULT_MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE = 60;
+const minOpenClipVisualSemanticScore = () =>
+  Math.min(
+    90,
+    Math.max(
+      30,
+      Number(process.env.ABUD_OPENCLIP_MIN_SCORE) || DEFAULT_MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE,
+    ),
+  );
 
 /**
  * Why stock could not honestly fill a scene.
@@ -226,7 +240,10 @@ export async function rankStockCandidatesWithVisualSemantics(
   candidates: ScoredCandidate[],
   options: SemanticRankerOptions,
 ): Promise<SemanticRankedCandidate[]> {
-  if (process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS !== "true" || candidates.length <= 1) {
+  // Even a single candidate must be scored: OpenCLIP is an acceptance gate,
+  // not only a ranking signal - a lone semantically-wrong clip would
+  // otherwise win by default without ever facing the relevance floor.
+  if (process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS !== "true" || candidates.length === 0) {
     return candidates;
   }
 
@@ -235,7 +252,11 @@ export async function rankStockCandidatesWithVisualSemantics(
   const maxCandidates = Math.max(1, Math.min(options.maxCandidates || 4, candidates.length));
   const shortlist = candidates.slice(0, maxCandidates);
   const untouched = candidates.slice(maxCandidates);
-  const videoCacheDir = path.join(options.cacheRoot, "semantic-candidate-videos");
+  // Candidate downloads are large and only needed for the analysis pass -
+  // keep them on fast local storage instead of the (possibly network- or
+  // 9p-mounted) data volume, which stalls the media stage on Windows hosts.
+  // The small analysis JSONs stay under cacheRoot so scores persist.
+  const videoCacheDir = path.join(os.tmpdir(), "short-studio-semantic-candidate-videos");
   const analysisCacheDir = path.join(options.cacheRoot, "semantic-analysis");
 
   const ranked = await Promise.all(shortlist.map(async (candidate) => {
@@ -417,7 +438,13 @@ export class AutoVisualRouter {
       cacheRoot: options.tempDirPath,
       intentText,
       maxCandidates: 4,
-      timeoutMs: 45000,
+      // The first OpenCLIP call after boot pays the model-load cost (torch
+      // import + checkpoint read); a fixed 45 s budget kills the worker before
+      // it warms up. Configurable so hosts can raise it without a rebuild.
+      timeoutMs: Math.min(
+        300000,
+        Math.max(5000, Number(process.env.ABUD_OPENCLIP_ANALYSIS_TIMEOUT_MS) || 45000),
+      ),
       onPerf: options.onPerf,
     });
 
@@ -592,7 +619,7 @@ export class AutoVisualRouter {
       if (candidate.visualHealthPass === false) return false;
       if (openclipAvailable) {
         if (candidate.semanticAvailable !== true) return false;
-        if ((candidate.visualSemanticScore ?? 0) < MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE) return false;
+        if ((candidate.visualSemanticScore ?? 0) < minOpenClipVisualSemanticScore()) return false;
       }
       return candidate.semanticScore >= MIN_LEXICAL_SEMANTIC_SCORE && candidate.qualityScore >= 45;
     });

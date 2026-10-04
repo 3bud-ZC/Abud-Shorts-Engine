@@ -126,7 +126,11 @@ const CONCEPTS: Concept[] = [
   },
   {
     id: "coffee",
-    match: /قهوة|كافيه|بن|كوفي|coffee|cafe|barista|espresso|latte|roast/i,
+    // بن ("coffee beans") must match as a standalone word only: unbounded it
+    // also fires inside بنحفظها ("we save it"), بنك ("bank"), and every
+    // Egyptian present-continuous verb prefixed with بـن, which is how a
+    // caching explainer ended up searching roasted-bean footage.
+    match: /قهوة|كافيه|(?<![\p{L}])(?:ال)?بن(?![\p{L}])|كوفي|coffee|cafe|barista|espresso|latte|roast/iu,
     subject: ["barista espresso close up", "fresh roasted coffee beans", "coffee bag packaging"],
     action: ["barista pouring latte", "coffee beans grinding", "espresso machine extraction"],
     environment: ["modern cafe counter", "warm cafe interior"],
@@ -196,7 +200,9 @@ const CONCEPTS: Concept[] = [
   },
   {
     id: "event",
-    match: /حفلة|حفل|فعالية|مؤتمر|معرض|افتتاح|event|conference|festival|concert|expo|opening night/i,
+    // حفل ("party") is bounded: unbounded it fires inside احتفل/احتفال
+    // ("celebrate/celebration").
+    match: /(?<![\p{L}])(?:ال)?حفل(?:ة|ه)?(?![\p{L}])|فعالية|مؤتمر|معرض|افتتاح|event|conference|festival|concert|expo|opening night/iu,
     subject: ["event stage lights crowd", "conference hall audience"],
     action: ["crowd cheering at event", "speaker presenting on stage"],
     environment: ["venue exterior evening lights", "exhibition hall wide"],
@@ -206,7 +212,9 @@ const CONCEPTS: Concept[] = [
   },
   {
     id: "logistics",
-    match: /شحن|توصيل|دليفري|طلبات|delivery|shipping|logistics|courier|fleet/i,
+    // طلبات ("orders") is bounded: unbounded it fires inside متطلبات
+    // ("requirements"), a staple of technical narration.
+    match: /شحن|توصيل|دليفري|(?<![\p{L}])(?:ال)?طلبات|delivery|shipping|logistics|courier|fleet/iu,
     subject: ["delivery parcel in hands", "courier scanning package"],
     action: ["courier delivering to door", "loading van with boxes"],
     environment: ["city street delivery scooter", "warehouse loading bay"],
