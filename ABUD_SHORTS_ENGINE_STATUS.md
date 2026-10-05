@@ -14752,3 +14752,13 @@ Every output: preview `/api/short-video/:id` 200, HTTP range 206, download 200, 
 **Data safety after cleanup.** jobs 103, job_events 2876, scene_artifacts 578, video_revisions 66, provider_credentials_vault 3, social_accounts 2, backups 4, api_tokens 0 — all unchanged from the acceptance snapshot; no DB/customer counter decreased. Post-restart (Docker stop/start for compaction): app/healthz 200, render-worker/postgres/n8n healthy, Ollama 200, Local Voice 200; all three acceptance videos preview 200 / range 206 / download 200 / thumbnail 200.
 
 **Result.** C: free 83.46 → **165.78 GB (+82.3 GB physically reclaimed)**. Top three consumers responsible for the drop: %TEMP% abandoned QA/diagnostic/payload junk (~28 GB), Docker VHDX physical inflation (~30 GB recovered via trim+compact), package-manager caches npm/pnpm/uv (~11 GB).
+
+### Owner Manual Acceptance — Final Recovery (2026-10-05)
+
+**OWNER MANUAL ACCEPTANCE: APPROVED.** The owner accepts the current Short Studio product, including the final qualified production architecture and the known non-blocking limitations.
+
+**Accepted final evidence.** qwen3.5:9b-q4_K_M local planner; real OpenCLIP semantic media selection; production intelligence recovery; purposeful motion-graphics fallback; clean Arabic / mixed-language narration with no prompt-as-voiceover behavior; autonomous production path; bounded storage cache; three final autonomous acceptance videos; final runtime health; data safety; and final clean regression (1420/1420 Vitest tests, 100/100 files).
+
+**Accepted non-blocking limitations (not release blockers).** (1) Local Voice cold-start/contention can be slower or occasionally timeout under parallel generation; serial normal customer production is the qualified reliable path. (2) Stock-provider candidate quality has a ceiling on highly abstract topics; purposeful motion graphics are the accepted fallback. (3) Historical failed/superseded QA job records intentionally remain preserved.
+
+**Decision.** Approved for final release execution. This acceptance does not authorize a new development cycle; the listed limitations are accepted and are not blockers.
