@@ -14724,3 +14724,31 @@ Every output: preview `/api/short-video/:id` 200, HTTP range 206, download 200, 
 **Remaining defects.** (1) Local Voice cold-start/contention flakiness can still surface as create-time or voice-stage timeouts under parallel load (serial creation is the reliable path). (2) Near-floor semantic scores (~59–63) still cluster on abstract beats — candidate-quality ceiling, not a gate bypass. (3) Superseded ready/failed job rows from this pass remain in history by design (no deletion).
 
 **Decision: READY FOR OWNER MANUAL ACCEPTANCE** — the three final videos (`cmuun4xt4000d07o47lszaa5f`, `cmuuo0rtq000h07o43d4igokh`, `cmuuotm6p000l07o4g8710j5l`) await owner viewing. Do not merge PR #13 or build 2.6.1 until owner approval.
+
+#### Storage Forensics & Safe Recovery (2026-10-05)
+
+**Trigger.** C: at ~83.5 GB free after the acceptance pass. Read-only forensics first, then removal of proven-disposable storage only. No product build, no release work.
+
+**Root cause of the drop (ranked).**
+
+| Consumer | Physical | Reclaimable | Disposition |
+|---|---|---|---|
+| `%TEMP%` — abandoned QA trees (nuvora clean-install dirs ~12 GB, pgprobe/pg-runtime/pg-1615-src ~2.9 GB, app-extract/production-tree/pt2 ~1.8 GB), Windows RDP `DiagOutputDir` ETL traces 4.46 GB, ~100 stale VS-installer payload dirs ~12 GB (already partly aged out), installer/downloads junk | 28.66 GB | ~28.2 GB | Deleted — disposable temp, nothing locked |
+| `docker_data.vhdx` physical inflation vs ~24 GB logical | 59.00 GB | ~30.4 GB | `fstrim` inside docker-desktop distro (10.3 GiB discarded on /dev/sdd) + elevated `diskpart compact vdisk` after Docker stop → 28.65 GB |
+| `npm-cache\_npx` + `_cacache` | 9.26 GB | ~9.2 GB | `npm cache clean --force` + `_npx` removal — re-downloadable |
+| `pnpm` store + `pnpm-cache` | 5.25 GB | ~1.7 GB | `pnpm store prune` — unreferenced only |
+| Short Studio `data/cache` media cache | 1.16 GB | 1.16 GB | Deleted — pure re-download accelerator; durable media lives in `artifacts/scene/media/` and is referenced by `scene_artifacts` (0 rows reference cache paths) |
+| Render worker `/tmp` (stale Whisper staging 477 MB + semantic candidate videos 763 MB) | ~1.5 GB | ~1.5 GB | Deleted inside container — transient staging, re-created per run |
+| uv cache, `devin.exe-overflows`, misc temp files | ~0.5 GB | ~0.5 GB | Deleted |
+
+**Preserved untouched:** postgres/n8n volumes, Provider Vault (3), license.json + licensing dir, customer media/videos (all 103 jobs incl. the three acceptance videos), backups (4), qwen3.5:9b-q4_K_M, qwen2.5:7b-instruct, VoiceTut runtime + models dir, `services/local-tts/.venv` (active Local Voice environment), OpenCLIP checkpoint, canonical `short-studio-server:2.6.0` image, source repo + git history, `dist-commercial\ShortStudio-Setup-2.6.0.exe` (published GA artifact), all named Docker images and volumes including other projects' (elhabak, video-factory, admin-server — unused but owner data).
+
+**Docker.** Logical ~23.65 GB unchanged (nothing deleted inside Docker except container-writable-layer temps). VHDX 59.00→28.65 GB. Sparse mode refused by WSL without `--allow-unsafe` (Microsoft corruption warning) — skipped; compact was done the safe way via detach-compact on an approved elevated diskpart run. Unreferenced anonymous volumes (~470 MB total) left in place — unproven provenance, not worth the risk.
+
+**Product storage defect: YES — fixed.** `MediaCache` (`src/server/v2/media-cache/mediaCache.ts`) had no bound: every downloaded stock clip persisted in `data/cache/` forever (165 files / 1.16 GB in 3 days of QA). Now bounded: `ABUD_MEDIA_CACHE_MAX_BYTES` (default 512 MB) and `ABUD_MEDIA_CACHE_MAX_AGE_HOURS` (default 7 days); LRU-by-mtime eviction on each `saveCachedAsset`, never evicts files <60 s old (in-flight stages) or files not matching the 24-hex cache-key pattern; all failures are warn-and-continue. 5 focused tests added (`mediaCache.test.ts`). Compiled file deployed to app + render-worker via targeted `docker cp`. No cleanup runs during active render beyond this lazy-on-save eviction.
+
+**Regression after fix.** `typecheck:server` PASS. **Full Vitest: 1420/1420 tests, 100/100 files — clean.**
+
+**Data safety after cleanup.** jobs 103, job_events 2876, scene_artifacts 578, video_revisions 66, provider_credentials_vault 3, social_accounts 2, backups 4, api_tokens 0 — all unchanged from the acceptance snapshot; no DB/customer counter decreased. Post-restart (Docker stop/start for compaction): app/healthz 200, render-worker/postgres/n8n healthy, Ollama 200, Local Voice 200; all three acceptance videos preview 200 / range 206 / download 200 / thumbnail 200.
+
+**Result.** C: free 83.46 → **165.78 GB (+82.3 GB physically reclaimed)**. Top three consumers responsible for the drop: %TEMP% abandoned QA/diagnostic/payload junk (~28 GB), Docker VHDX physical inflation (~30 GB recovered via trim+compact), package-manager caches npm/pnpm/uv (~11 GB).
