@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import fs from "fs-extra";
+import os from "os";
 import path from "path";
 import axios from "axios";
 import { logger } from "../../../logger";
@@ -19,6 +20,7 @@ import type {
   VisualRenderOptions,
 } from "./types";
 import { PexelsVisualProvider } from "./pexelsVisualProvider";
+import { isGenericStandaloneQuery } from "../creative/stockQueryFamilies";
 import {
   analyzeVideoSemanticSimilarity,
   type VideoSemanticAnalysis,
@@ -73,7 +75,99 @@ const GENERIC_STOCK_TERMS = new Set([
   "visual",
 ]);
 const MIN_LEXICAL_SEMANTIC_SCORE = 45;
-const MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE = 55;
+// OpenCLIP scores live in a narrow band: measured live on this host, genuinely
+// relevant clips cluster ~62-66 while a semantically-plausible wrong answer
+// (coffee beans for a banking scene) reaches ~59. 60 rejects the plausible-
+// but-wrong band while admitting real matches; anything lower gets refined or
+// routed to purposeful motion graphics instead of forcing weak stock.
+const DEFAULT_MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE = 60;
+const minOpenClipVisualSemanticScore = () =>
+  Math.min(
+    90,
+    Math.max(
+      30,
+      Number(process.env.ABUD_OPENCLIP_MIN_SCORE) || DEFAULT_MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE,
+    ),
+  );
+
+/**
+ * Why stock could not honestly fill a scene.
+ *
+ * Distinct from the canonical "no visual source configured" error: this one
+ * means providers answered but nothing survived relevance/health checks, or
+ * the only survivors matched a deliberately broad query without any grounding
+ * in the scene intent. The renderer turns this into a purposeful motion-
+ * graphics scene instead of forcing the best bad clip onto the timeline -
+ * random unrelated stock is a worse failure than a designed graphic.
+ */
+export type StockRejectionDetails = {
+  reason:
+  | "no_candidate_passed_thresholds"
+  | "generic_match_without_intent_grounding"
+  | "no_candidates_returned";
+  queriesAttempted: string[];
+  candidateCount: number;
+  /** Compact evidence for the best-rejected candidates, capped for metadata. */
+  topRejected: Array<{
+    provider: string;
+    assetId: string | number;
+    queryUsed?: string;
+    semanticScore?: number;
+    qualityScore?: number;
+    decisionScore?: number;
+    rejectionReason: string;
+  }>;
+};
+
+export class StockVisualRejection extends Error {
+  public readonly details: StockRejectionDetails;
+  constructor(details: StockRejectionDetails) {
+    super(
+      `Stock footage could not honestly illustrate this scene (${details.reason}).`,
+    );
+    this.name = "StockVisualRejection";
+    this.details = details;
+  }
+}
+
+/** Lowercase English tokens (>=3 chars) that carry scene meaning. */
+function intentTokenSet(text: string): Set<string> {
+  const stop = new Set([
+    "the", "and", "for", "with", "your", "you", "are", "our", "this", "that",
+    "from", "into", "have", "has", "not", "can", "will", "now", "new",
+    ...GENERIC_STOCK_TERMS,
+  ]);
+  const tokens = text
+    .toLowerCase()
+    .match(/[a-z][a-z0-9'-]{2,}/g) || [];
+  return new Set(tokens.filter((token) => !stop.has(token)));
+}
+
+/**
+ * A candidate that won through a deliberately broad query is unproven, not
+ * relevant: "technology" will always return *some* clip, and scoring its tags
+ * against that same broad query fabricates a relevance score. It is accepted
+ * only when the asset's own metadata shares a real content token with the
+ * scene intent; otherwise it is the "best bad clip" this check exists to
+ * refuse.
+ */
+function candidateGroundedInIntent(
+  candidate: SemanticRankedCandidate,
+  genericQueries: Set<string>,
+  intentTokens: Set<string>,
+): { grounded: boolean; reason?: string } {
+  const queryUsed = (candidate.queryUsed || "").trim().toLowerCase();
+  const viaGenericQuery =
+    genericQueries.has(queryUsed) || isGenericStandaloneQuery(queryUsed);
+  if (!viaGenericQuery) return { grounded: true };
+  const tags = (candidate.tags || []).map((tag) => tag.toLowerCase());
+  const grounded = tags.some((tag) =>
+    Array.from(intentTokens).some((token) => tag.includes(token)),
+  );
+  return grounded
+    ? { grounded: true }
+    : { grounded: false, reason: "generic_query_match_without_intent_grounding" };
+}
 
 function deriveConcreteStockTerms(scene: ProductionSceneSpec): string[] {
   const source = [
@@ -146,7 +240,10 @@ export async function rankStockCandidatesWithVisualSemantics(
   candidates: ScoredCandidate[],
   options: SemanticRankerOptions,
 ): Promise<SemanticRankedCandidate[]> {
-  if (process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS !== "true" || candidates.length <= 1) {
+  // Even a single candidate must be scored: OpenCLIP is an acceptance gate,
+  // not only a ranking signal - a lone semantically-wrong clip would
+  // otherwise win by default without ever facing the relevance floor.
+  if (process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS !== "true" || candidates.length === 0) {
     return candidates;
   }
 
@@ -155,7 +252,11 @@ export async function rankStockCandidatesWithVisualSemantics(
   const maxCandidates = Math.max(1, Math.min(options.maxCandidates || 4, candidates.length));
   const shortlist = candidates.slice(0, maxCandidates);
   const untouched = candidates.slice(maxCandidates);
-  const videoCacheDir = path.join(options.cacheRoot, "semantic-candidate-videos");
+  // Candidate downloads are large and only needed for the analysis pass -
+  // keep them on fast local storage instead of the (possibly network- or
+  // 9p-mounted) data volume, which stalls the media stage on Windows hosts.
+  // The small analysis JSONs stay under cacheRoot so scores persist.
+  const videoCacheDir = path.join(os.tmpdir(), "short-studio-semantic-candidate-videos");
   const analysisCacheDir = path.join(options.cacheRoot, "semantic-analysis");
 
   const ranked = await Promise.all(shortlist.map(async (candidate) => {
@@ -337,11 +438,25 @@ export class AutoVisualRouter {
       cacheRoot: options.tempDirPath,
       intentText,
       maxCandidates: 4,
-      timeoutMs: 45000,
+      // The first OpenCLIP call after boot pays the model-load cost (torch
+      // import + checkpoint read); a fixed 45 s budget kills the worker before
+      // it warms up. Configurable so hosts can raise it without a rebuild.
+      timeoutMs: Math.min(
+        300000,
+        Math.max(5000, Number(process.env.ABUD_OPENCLIP_ANALYSIS_TIMEOUT_MS) || 45000),
+      ),
       onPerf: options.onPerf,
     });
 
-    const winner = this.pickBestCandidate(candidates);
+    const genericQueries = new Set(
+      (options.genericStockTerms || []).map((term) => term.trim().toLowerCase()),
+    );
+    const intentTokens = intentTokenSet(intentText);
+    const { winner, rejectedForGrounding } = this.pickBestGroundedCandidate(
+      candidates,
+      genericQueries,
+      intentTokens,
+    );
     if (winner) {
       const attribution = this.stockRegistry.attributionFor(winner);
       const topCandidates = candidates.slice(0, 20).map((candidate) => ({
@@ -382,6 +497,8 @@ export class AutoVisualRouter {
           originalSourceUrl: winner.sourcePageUrl,
           searchTerm: winner.queryUsed || (winner.tags || [])[0] || searchTerms[0],
           searchTermsUsed: searchTerms,
+          genericQueriesAttempted: genericQueries.size > 0 ? Array.from(genericQueries) : undefined,
+          candidatesRejectedForGrounding: rejectedForGrounding.length > 0 ? rejectedForGrounding : undefined,
           candidateCount: candidates.length,
           candidates: topCandidates,
           rejectedCandidates: topCandidates
@@ -416,9 +533,31 @@ export class AutoVisualRouter {
     }
 
     if (lexicalCandidates.length > 0) {
-      throw new Error(
-        "Professional automatic video found stock candidates, but none passed visual health checks. Try again with different stock terms or another stock provider.",
-      );
+      // Candidates answered but nothing survived: thresholds, frame health or
+      // the intent-grounding check. This is a relevance failure, not a
+      // provider failure - the caller may choose a designed graphic instead.
+      throw new StockVisualRejection({
+        reason:
+          rejectedForGrounding.length > 0 && rejectedForGrounding.length === candidates.filter((c) => c.kind === "video").length
+            ? "generic_match_without_intent_grounding"
+            : "no_candidate_passed_thresholds",
+        queriesAttempted: searchTerms,
+        candidateCount: lexicalCandidates.length,
+        topRejected: [
+          ...rejectedForGrounding,
+          ...candidates
+            .slice(0, 5)
+            .map((candidate) => ({
+              provider: candidate.provider,
+              assetId: candidate.id,
+              queryUsed: candidate.queryUsed,
+              semanticScore: candidate.semanticScore,
+              qualityScore: candidate.qualityScore,
+              decisionScore: candidate.totalScore,
+              rejectionReason: "below_acceptance_threshold",
+            })),
+        ].slice(0, 8),
+      });
     }
 
     if (this.pexelsProvider.isConfigured()) {
@@ -450,27 +589,74 @@ export class AutoVisualRouter {
       }
     }
 
+    // Providers are configured and genuinely searched - zero candidates is a
+    // relevance outcome, not a missing-provider outage, so the caller may
+    // route this scene to a purposeful non-stock treatment.
+    if (
+      typeof (this.stockRegistry as any).configuredProviders === "function" &&
+      this.stockRegistry.configuredProviders().length > 0
+    ) {
+      throw new StockVisualRejection({
+        reason: "no_candidates_returned",
+        queriesAttempted: searchTerms,
+        candidateCount: 0,
+        topRejected: [],
+      });
+    }
+
     throw new Error(
       "Professional automatic video needs at least one visual source. Configure a free stock provider, connect an AI video provider, or upload media.",
     );
   }
 
-  private pickBestCandidate(candidates: SemanticRankedCandidate[]): SemanticRankedCandidate | null {
+  private usableCandidates(candidates: SemanticRankedCandidate[]): SemanticRankedCandidate[] {
     const openclipEnabled = process.env.ABUD_ENABLE_OPENCLIP_SEMANTICS === "true";
     const openclipAvailable = openclipEnabled && candidates.some((c) => c.semanticAvailable === true);
-    const usable = candidates.filter((candidate) => {
+    return candidates.filter((candidate) => {
       if (candidate.kind !== "video") return false;
       if (!candidate.downloadUrl || !candidate.width || !candidate.height) return false;
       if (Math.min(candidate.width, candidate.height) < 480) return false;
       if (candidate.visualHealthPass === false) return false;
       if (openclipAvailable) {
         if (candidate.semanticAvailable !== true) return false;
-        if ((candidate.visualSemanticScore ?? 0) < MIN_OPENCLIP_VISUAL_SEMANTIC_SCORE) return false;
+        if ((candidate.visualSemanticScore ?? 0) < minOpenClipVisualSemanticScore()) return false;
       }
       return candidate.semanticScore >= MIN_LEXICAL_SEMANTIC_SCORE && candidate.qualityScore >= 45;
     });
-    if (usable[0]) return usable[0];
-    return null;
+  }
+
+  /**
+   * Picks the highest-scoring candidate that is actually grounded in the
+   * scene intent. Threshold-passing is necessary but not sufficient: a clip
+   * that only surfaced through a deliberately broad fallback query must also
+   * share a real content token with the scene, or it is refused and the
+   * rejection is returned as evidence for the fallback decision upstream.
+   */
+  private pickBestGroundedCandidate(
+    candidates: SemanticRankedCandidate[],
+    genericQueries: Set<string>,
+    intentTokens: Set<string>,
+  ): {
+    winner: SemanticRankedCandidate | null;
+    rejectedForGrounding: StockRejectionDetails["topRejected"];
+  } {
+    const rejectedForGrounding: StockRejectionDetails["topRejected"] = [];
+    for (const candidate of this.usableCandidates(candidates)) {
+      const grounding = candidateGroundedInIntent(candidate, genericQueries, intentTokens);
+      if (grounding.grounded) {
+        return { winner: candidate, rejectedForGrounding };
+      }
+      rejectedForGrounding.push({
+        provider: candidate.provider,
+        assetId: candidate.id,
+        queryUsed: candidate.queryUsed,
+        semanticScore: candidate.semanticScore,
+        qualityScore: candidate.qualityScore,
+        decisionScore: candidate.totalScore,
+        rejectionReason: grounding.reason || "ungrounded",
+      });
+    }
+    return { winner: null, rejectedForGrounding };
   }
 
   private determineSceneSource(

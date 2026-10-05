@@ -771,4 +771,50 @@ describe("V2.4 Professional Video Production Engine", () => {
     expect(report.issues).toContain("real_visual_coverage_below_90_percent");
     expect(report.readyForProfessionalAuto).toBe(false);
   });
+
+  it("counts deliberately routed mockup scenes as intentional visual coverage", () => {
+    // Regression: a planner-chosen WEBSITE_MOCKUP / creative_plan mockup is a
+    // designed graphic, not missing footage - before this fix a video that was
+    // 1/3 stock + 2/3 routed mockups reported ~34% coverage and landed
+    // needs_review even though every second carried a deliberate visual.
+    const report = calculateProfessionalVisualQualityReport({
+      spec,
+      totalDurationSeconds: 20,
+      selectedVisuals: [
+        { provider: "pexels", url: "https://cdn.example/a.mp4", metadata: { providerAssetId: "a", semanticScore: 88 } },
+        { provider: "abud_mockup", url: "mockup://browser", metadata: { providerAssetId: "m1" } },
+        { provider: "abud_mockup", url: "mockup://dashboard", metadata: { providerAssetId: "m2" } },
+      ],
+      shots: [
+        { shotId: "s1", narrationSceneId: "n1", narrationSceneIndex: 0, intent: "hook", sourceType: "stock", start: 0, duration: 6, routingReason: "stock_footage_best_available" },
+        { shotId: "s2", narrationSceneId: "n2", narrationSceneIndex: 1, intent: "detail", sourceType: "mockup", start: 6, duration: 7, routingReason: "creative_plan:website_mockup" },
+        { shotId: "s3", narrationSceneId: "n3", narrationSceneIndex: 2, intent: "cta", sourceType: "mockup", start: 13, duration: 7, routingReason: "website_intent:cta" },
+      ],
+    });
+
+    expect(report.realVisualCoveragePercent).toBe(30);
+    expect(report.mockupTimelinePercent).toBe(70);
+    expect(report.intentionalVisualCoveragePercent).toBe(100);
+    expect(report.textOnlyTimelinePercent).toBe(0);
+    expect(report.issues).not.toContain("real_visual_coverage_below_90_percent");
+    expect(report.readyForProfessionalAuto).toBe(true);
+  });
+
+  it("still flags graphic shots with no recorded creative reason", () => {
+    // A mockup or motion shot that appeared without a routing reason is
+    // unexplained fill - same suspicion as an unreasoned motion card.
+    const report = calculateProfessionalVisualQualityReport({
+      spec,
+      totalDurationSeconds: 20,
+      selectedVisuals: [{ provider: "abud_mockup", url: "mockup://x", metadata: { providerAssetId: "x" } }],
+      shots: [
+        { shotId: "s1", narrationSceneId: "n1", narrationSceneIndex: 0, intent: "hook", sourceType: "mockup", start: 0, duration: 20 },
+      ],
+    });
+
+    expect(report.intentionalVisualCoveragePercent).toBe(0);
+    expect(report.textOnlyTimelinePercent).toBe(100);
+    expect(report.issues).toContain("real_visual_coverage_below_90_percent");
+    expect(report.readyForProfessionalAuto).toBe(false);
+  });
 });

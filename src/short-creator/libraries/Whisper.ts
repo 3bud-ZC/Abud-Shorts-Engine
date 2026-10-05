@@ -142,15 +142,54 @@ export class Whisper {
     return new Whisper(config);
   }
 
+  /**
+   * whisper.cpp mmaps the model on every run; when the data dir sits on a
+   * Windows 9p bind mount, those page faults put the process into D-state
+   * for minutes at a time mid-render. Stage the model + input audio onto
+   * container-local storage once so the hot path never reads through 9p.
+   * The model copy is content-keyed (size) so a later model install on the
+   * data volume still wins.
+   */
+  private async stageLocalWhisperInput(audioPath: string): Promise<{ modelFolder: string; inputPath: string }> {
+    const fallback = {
+      modelFolder: path.join(this.config.whisperInstallPath, "models"),
+      inputPath: audioPath,
+    };
+    if (!this.config.runningInDocker) return fallback;
+    try {
+      const modelName = `ggml-${this.config.whisperModel}.bin`;
+      const sourceModel = path.join(this.config.whisperInstallPath, "models", modelName);
+      const sourceStats = await fs.stat(sourceModel).catch(() => null);
+      if (!sourceStats) return fallback;
+      const stagedDir = path.join(os.tmpdir(), "short-studio-whisper");
+      const stagedModel = path.join(stagedDir, modelName);
+      const stagedStats = await fs.stat(stagedModel).catch(() => null);
+      if (!stagedStats || stagedStats.size !== sourceStats.size) {
+        await fs.ensureDir(stagedDir);
+        await fs.copy(sourceModel, stagedModel, { overwrite: true });
+      }
+      const stagedAudio = path.join(stagedDir, `input-${path.basename(audioPath)}`);
+      await fs.copy(audioPath, stagedAudio, { overwrite: true });
+      return { modelFolder: stagedDir, inputPath: stagedAudio };
+    } catch (error) {
+      logger.warn(
+        { error: error instanceof Error ? error.message : String(error) },
+        "Whisper local staging failed; using data-volume paths",
+      );
+      return fallback;
+    }
+  }
+
   // todo shall we extract it to a Caption class?
   async CreateCaption(audioPath: string, language?: string): Promise<Caption[]> {
     logger.debug({ audioPath, language }, "Starting to transcribe audio");
+    const staged = await this.stageLocalWhisperInput(audioPath);
     const { transcription } = await transcribe({
       model: this.config.whisperModel,
       whisperPath: this.config.whisperInstallPath,
-      modelFolder: path.join(this.config.whisperInstallPath, "models"),
+      modelFolder: staged.modelFolder,
       whisperCppVersion: this.config.whisperVersion,
-      inputPath: audioPath,
+      inputPath: staged.inputPath,
       tokenLevelTimestamps: true,
       language: language === "ar" ? "ar" : language?.startsWith("en") ? "en" : null,
       printOutput: this.config.whisperVerbose,

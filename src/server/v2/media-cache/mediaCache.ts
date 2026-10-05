@@ -13,14 +13,32 @@ export type CachedAsset = {
   lastUsedAt: string;
 };
 
+const DEFAULT_MAX_CACHE_BYTES = 512 * 1024 * 1024;
+const DEFAULT_MAX_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+// Only hash-keyed files this class wrote may be evicted - never anything else.
+const CACHE_FILE_RE = /^[0-9a-f]{24}\.[a-z0-9]+$/i;
+
 export class MediaCache {
   private cacheDir: string;
   private uploadsDir: string;
   private memoryIndex: Map<string, CachedAsset> = new Map();
+  private maxCacheBytes: number;
+  private maxCacheAgeMs: number;
 
-  constructor(baseDataDir: string) {
+  constructor(
+    baseDataDir: string,
+    limits: { maxCacheBytes?: number; maxCacheAgeMs?: number } = {},
+  ) {
     this.cacheDir = path.join(baseDataDir, "cache");
     this.uploadsDir = path.join(baseDataDir, "uploads");
+    this.maxCacheBytes =
+      limits.maxCacheBytes ??
+      (Math.max(0, Number(process.env.ABUD_MEDIA_CACHE_MAX_MB || 0) * 1024 * 1024) ||
+        DEFAULT_MAX_CACHE_BYTES);
+    this.maxCacheAgeMs =
+      limits.maxCacheAgeMs ??
+      (Math.max(0, Number(process.env.ABUD_MEDIA_CACHE_MAX_AGE_HOURS || 0) * 3600 * 1000) ||
+        DEFAULT_MAX_CACHE_AGE_MS);
     fs.ensureDirSync(this.cacheDir);
     fs.ensureDirSync(this.uploadsDir);
   }
@@ -75,6 +93,8 @@ export class MediaCache {
         fs.copyFileSync(sourceFilePath, targetPath);
       }
 
+      this.pruneCacheDir();
+
       const stats = fs.statSync(targetPath);
       const asset: CachedAsset = {
         key,
@@ -95,6 +115,66 @@ export class MediaCache {
 
   public getUploadsDir(): string {
     return this.uploadsDir;
+  }
+
+  // The cache is a pure re-download accelerator - durable copies live under
+  // artifacts/scene/media, so every entry here is disposable. Still bounded:
+  // entries older than maxCacheAgeMs expire first, then least-recently-touched
+  // entries are evicted until total size is under maxCacheBytes. Files touched
+  // in the last minute are never evicted (in-flight stages may still copy
+  // them out), and files not matching the cache-key pattern are never touched.
+  private pruneCacheDir(): void {
+    try {
+      const now = Date.now();
+      const inFlightMs = 60 * 1000;
+      let reclaimed = 0;
+      const entries = fs
+        .readdirSync(this.cacheDir)
+        .filter((name) => CACHE_FILE_RE.test(name))
+        .map((name) => {
+          try {
+            return { name, stats: fs.statSync(path.join(this.cacheDir, name)) };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { name: string; stats: fs.Stats } => entry !== null);
+
+      const expired = entries.filter(
+        (e) => now - e.stats.mtimeMs > this.maxCacheAgeMs && now - e.stats.mtimeMs > inFlightMs,
+      );
+      for (const e of expired) {
+        try {
+          fs.removeSync(path.join(this.cacheDir, e.name));
+          reclaimed += e.stats.size;
+        } catch {
+          // leave it; retry next save
+        }
+      }
+
+      let total = entries.reduce((sum, e) => sum + (fs.existsSync(path.join(this.cacheDir, e.name)) ? e.stats.size : 0), 0);
+      if (total > this.maxCacheBytes) {
+        const survivors = entries
+          .filter((e) => fs.existsSync(path.join(this.cacheDir, e.name)))
+          .sort((a, b) => a.stats.mtimeMs - b.stats.mtimeMs);
+        for (const e of survivors) {
+          if (total <= this.maxCacheBytes) break;
+          if (now - e.stats.mtimeMs < inFlightMs) continue;
+          try {
+            fs.removeSync(path.join(this.cacheDir, e.name));
+            total -= e.stats.size;
+            reclaimed += e.stats.size;
+          } catch {
+            // leave it; retry next save
+          }
+        }
+      }
+      if (reclaimed > 0) {
+        logger.info({ reclaimedBytes: reclaimed }, "Media cache eviction reclaimed storage");
+      }
+    } catch (err: any) {
+      logger.warn({ error: err.message }, "Media cache eviction failed; continuing");
+    }
   }
 
   public cleanupTempFiles(tempDir: string, maxAgeHours = 4): void {

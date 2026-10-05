@@ -325,20 +325,20 @@ function manifestTypeFromArtifactId(artifactId: string): DurableArtifactType | n
   return null;
 }
 
-export function readDurableArtifactsForSourceJob(config: Config, sourceJobId: string): DurableSceneArtifact[] {
+export async function readDurableArtifactsForSourceJob(config: Config, sourceJobId: string): Promise<DurableSceneArtifact[]> {
   const root = path.join(config.dataDirPath, "artifacts", "scene");
-  if (!sourceJobId || !fs.existsSync(root)) return [];
+  if (!sourceJobId || !(await fs.pathExists(root))) return [];
   const found: DurableSceneArtifact[] = [];
-  const scan = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  const scan = async (dir: string) => {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        scan(fullPath);
+        await scan(fullPath);
         continue;
       }
       if (!entry.name.endsWith(".manifest.json")) continue;
       try {
-        const artifact = fs.readJsonSync(fullPath) as DurableSceneArtifact;
+        const artifact = (await fs.readJson(fullPath)) as DurableSceneArtifact;
         if (artifact?.sourceJobId === sourceJobId && filterReusableArtifacts({ artifacts: [artifact] }).length === 1) {
           found.push(artifact);
         }
@@ -348,14 +348,14 @@ export function readDurableArtifactsForSourceJob(config: Config, sourceJobId: st
       }
     }
   };
-  scan(root);
+  await scan(root);
   return found.sort((a, b) => {
     if (a.sceneIndex !== b.sceneIndex) return a.sceneIndex - b.sceneIndex;
     return a.type.localeCompare(b.type);
   });
 }
 
-export function readDurableArtifactsById(config: Config, artifactIds: string[]): DurableSceneArtifact[] {
+export async function readDurableArtifactsById(config: Config, artifactIds: string[]): Promise<DurableSceneArtifact[]> {
   const store = new DurableArtifactStore(config);
   const unique = Array.from(new Set(artifactIds.filter(Boolean)));
   const found: DurableSceneArtifact[] = [];
@@ -370,8 +370,8 @@ export function readDurableArtifactsById(config: Config, artifactIds: string[]):
     );
     try {
       const manifestPath = store.resolveStorageRef(relative);
-      if (!fs.existsSync(manifestPath)) continue;
-      const artifact = fs.readJsonSync(manifestPath) as DurableSceneArtifact;
+      if (!(await fs.pathExists(manifestPath))) continue;
+      const artifact = (await fs.readJson(manifestPath)) as DurableSceneArtifact;
       if (filterReusableArtifacts({ artifacts: [artifact] }).length === 1) found.push(artifact);
     } catch {
       // Invalid IDs or missing manifests are ignored; retry remains bounded.

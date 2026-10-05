@@ -1,0 +1,629 @@
+{
+ "model": "qwen3.5:9b-q4_K_M",
+ "think": false,
+ "startedAt": "2026-10-03T18:35:55.768Z",
+ "prompts": [
+  {
+   "promptId": "AR-B1",
+   "latencyMs": 10178,
+   "evalDuration": 7736014000,
+   "raw": "{\n  \"title\": \"عصير قصب سكر حامض في شبرا\",\n  \"tone\": \"طبيعي، حماسي، محلي\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"تخيلوا طعم القصب البلدي اللي بيجيبه لكم سكر حامض في شبرا.\",\n      \"onScreenText\": \"قصب بلدي وطبيعي\",\n      \"visualIntent\": \"Close-up shot of fresh sugarcane stalks being cut or placed in a glass, with steam or condensation visible to imply freshness.\",\n      \"searchQueries\": [\n        \"fresh sugarcane juice pouring\",\n        \"cutting sugarcane stalk close up\",\n        \"glass of cold cane juice\"\n      ]\n    },\n    {\n      \"purpose\": \"benefit\",\n      \"narration\": \"عصير طازج جداً، مش مصنوع، بس من القصب اللي بيديكم طاقة فورية.\",\n      \"onScreenText\": \"طازج 100%\",\n      \"visualIntent\": \"Medium shot of a person taking a refreshing sip from the glass, looking happy and satisfied, with a busy Shobra street background blurred.\",\n      \"searchQueries\": [\n        \"happy man drinking juice\",\n        \"refreshed person smiling outdoors\",\n        \"street food vendor serving drink\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"مفيش وقت تضيعه، جوا سكر حامض في شبرا وجرب الفرق دلوقتي.\",\n      \"onScreenText\": \"تجربة لا تقاوم\",\n      \"visualIntent\": \"Wide shot of the shop exterior or logo with a finger pointing towards it, inviting the viewer to come in.\",\n      \"searchQueries\": [\n        \"juice shop storefront\",\n        \"people walking into cafe\",\n        \"shop signboard close up\"\n      ]\n    }\n  ],\n  \"cta\": \"جوا سكر حامض في شبرا\",\n  \"expansionLines\": []\n}",
+   "rawChars": 1516,
+   "parsed": {
+    "title": "عصير قصب سكر حامض في شبرا",
+    "tone": "طبيعي، حماسي، محلي",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "تخيلوا طعم القصب البلدي اللي بيجيبه لكم سكر حامض في شبرا.",
+      "onScreenText": "قصب بلدي وطبيعي",
+      "visualIntent": "Close-up shot of fresh sugarcane stalks being cut or placed in a glass, with steam or condensation visible to imply freshness.",
+      "searchQueries": [
+       "fresh sugarcane juice pouring",
+       "cutting sugarcane stalk close up",
+       "glass of cold cane juice"
+      ]
+     },
+     {
+      "purpose": "benefit",
+      "narration": "عصير طازج جداً، مش مصنوع، بس من القصب اللي بيديكم طاقة فورية.",
+      "onScreenText": "طازج 100%",
+      "visualIntent": "Medium shot of a person taking a refreshing sip from the glass, looking happy and satisfied, with a busy Shobra street background blurred.",
+      "searchQueries": [
+       "happy man drinking juice",
+       "refreshed person smiling outdoors",
+       "street food vendor serving drink"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "مفيش وقت تضيعه، جوا سكر حامض في شبرا وجرب الفرق دلوقتي.",
+      "onScreenText": "تجربة لا تقاوم",
+      "visualIntent": "Wide shot of the shop exterior or logo with a finger pointing towards it, inviting the viewer to come in.",
+      "searchQueries": [
+       "juice shop storefront",
+       "people walking into cafe",
+       "shop signboard close up"
+      ]
+     }
+    ],
+    "cta": "جوا سكر حامض في شبرا",
+    "expansionLines": []
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-B2",
+   "latencyMs": 9796,
+   "evalDuration": 7849492000,
+   "raw": "{\n  \"title\": \"جيم ستيلتو مدينة نصر - اشتراك شهري\",\n  \"tone\": \"طبيعي، حماسي، مباشر\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"عشان تمشي في جيم بتاعك؟\",\n      \"onScreenText\": \"جيم ستيلتو.. مدينة نصر\",\n      \"visualIntent\": \"Close-up shot of a determined person looking at the camera, then cutting to a wide shot of the gym entrance with the logo visible.\",\n      \"searchQueries\": [\n        \"gym entrance city center\",\n        \"fitness enthusiast looking motivated\",\n        \"modern gym lobby interior\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"جيم ستيلتو في مدينة نصر، مدربين محترفين واشتراك شهري.\",\n      \"onScreenText\": \"مدربين محترفين + اشتراك شهري\",\n      \"visualIntent\": \"Medium shot of a personal trainer correcting a client's form, followed by a quick montage of different gym machines and weights.\",\n      \"searchQueries\": [\n        \"personal trainer helping client\",\n        \"gym equipment close up\",\n        \"people lifting weights\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"تقدر تفتح اشتراكك الشهرية دلوقتي.\",\n      \"onScreenText\": \"افتح اشتراكك النهاردة\",\n      \"visualIntent\": \"Shot of a happy member walking out of the gym with a smile, text overlay showing location or contact hint without specific numbers.\",\n      \"searchQueries\": [\n        \"happy person leaving gym\",\n        \"fitness lifestyle montage\",\n        \"gym membership card close up\"\n      ]\n    }\n  ],\n  \"cta\": \"تواصل معنا لفتح اشتراكك في جيم ستيلتو مدينة نصر\",\n  \"expansionLines\": [\n    \"لازم تشوف المكان بنفسك.\",\n    \"الأسعار مناسبة جداً.\"\n  ]\n}",
+   "rawChars": 1599,
+   "parsed": {
+    "title": "جيم ستيلتو مدينة نصر - اشتراك شهري",
+    "tone": "طبيعي، حماسي، مباشر",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "عشان تمشي في جيم بتاعك؟",
+      "onScreenText": "جيم ستيلتو.. مدينة نصر",
+      "visualIntent": "Close-up shot of a determined person looking at the camera, then cutting to a wide shot of the gym entrance with the logo visible.",
+      "searchQueries": [
+       "gym entrance city center",
+       "fitness enthusiast looking motivated",
+       "modern gym lobby interior"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "جيم ستيلتو في مدينة نصر، مدربين محترفين واشتراك شهري.",
+      "onScreenText": "مدربين محترفين + اشتراك شهري",
+      "visualIntent": "Medium shot of a personal trainer correcting a client's form, followed by a quick montage of different gym machines and weights.",
+      "searchQueries": [
+       "personal trainer helping client",
+       "gym equipment close up",
+       "people lifting weights"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "تقدر تفتح اشتراكك الشهرية دلوقتي.",
+      "onScreenText": "افتح اشتراكك النهاردة",
+      "visualIntent": "Shot of a happy member walking out of the gym with a smile, text overlay showing location or contact hint without specific numbers.",
+      "searchQueries": [
+       "happy person leaving gym",
+       "fitness lifestyle montage",
+       "gym membership card close up"
+      ]
+     }
+    ],
+    "cta": "تواصل معنا لفتح اشتراكك في جيم ستيلتو مدينة نصر",
+    "expansionLines": [
+     "لازم تشوف المكان بنفسك.",
+     "الأسعار مناسبة جداً."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-B3",
+   "latencyMs": 8645,
+   "evalDuration": 7394106000,
+   "raw": "{\n  \"title\": \"غسيل سيارتك من عندك بلمعة\",\n  \"tone\": \"energetic, casual, friendly Egyptian Arabic\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"عشان تاخد وقتك وتخلص شغل تاني؟\",\n      \"onScreenText\": \"غسيل سيارتك من عندك!\",\n      \"visualIntent\": \"Close-up shot of a dirty car parked in front of an apartment building or office, with a person looking at their watch stressed.\",\n      \"searchQueries\": [\n        \"dirty car parked outside apartment\",\n        \"person checking watch stressed\",\n        \"car covered in dust close up\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"جرب خدمة «لمعة».. فريقنا بيوصل لحد باب بيتك أو شغلك.\",\n      \"onScreenText\": \"يوصلوا لحد البيت!\",\n      \"visualIntent\": \"Wide shot of a clean, friendly team arriving in a branded van at a residential door or office entrance, smiling and holding equipment.\",\n      \"searchQueries\": [\n        \"mobile car wash van parked outside house\",\n        \"team unloading washing equipment\",\n        \"friendly staff standing near car\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"تخلى سيارتك بتلعب بلمعة.. اطلب الخدمة دلوقتي.\",\n      \"onScreenText\": \"اطلب «لمعة» الآن!\",\n      \"visualIntent\": \"Dynamic shot of a sparkling clean car being dried, transitioning to the brand logo on screen with a finger pointing or phone ringing animation.\",\n      \"searchQueries\": [\n        \"shiny clean car water droplets\",\n        \"car wash foam being rinsed off\",\n        \"brand logo overlay animation\"\n      ]\n    }\n  ],\n  \"cta\": \"لمعة\",\n  \"expansionLines\": []\n}",
+   "rawChars": 1573,
+   "parsed": {
+    "title": "غسيل سيارتك من عندك بلمعة",
+    "tone": "energetic, casual, friendly Egyptian Arabic",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "عشان تاخد وقتك وتخلص شغل تاني؟",
+      "onScreenText": "غسيل سيارتك من عندك!",
+      "visualIntent": "Close-up shot of a dirty car parked in front of an apartment building or office, with a person looking at their watch stressed.",
+      "searchQueries": [
+       "dirty car parked outside apartment",
+       "person checking watch stressed",
+       "car covered in dust close up"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "جرب خدمة «لمعة».. فريقنا بيوصل لحد باب بيتك أو شغلك.",
+      "onScreenText": "يوصلوا لحد البيت!",
+      "visualIntent": "Wide shot of a clean, friendly team arriving in a branded van at a residential door or office entrance, smiling and holding equipment.",
+      "searchQueries": [
+       "mobile car wash van parked outside house",
+       "team unloading washing equipment",
+       "friendly staff standing near car"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "تخلى سيارتك بتلعب بلمعة.. اطلب الخدمة دلوقتي.",
+      "onScreenText": "اطلب «لمعة» الآن!",
+      "visualIntent": "Dynamic shot of a sparkling clean car being dried, transitioning to the brand logo on screen with a finger pointing or phone ringing animation.",
+      "searchQueries": [
+       "shiny clean car water droplets",
+       "car wash foam being rinsed off",
+       "brand logo overlay animation"
+      ]
+     }
+    ],
+    "cta": "لمعة",
+    "expansionLines": []
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-B4",
+   "latencyMs": 8744,
+   "evalDuration": 7532183000,
+   "raw": "{\n  \"title\": \"عيش شمسي وفطير كل يوم\",\n  \"tone\": \"warm, inviting, authentic\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"تخيل عيش شمسي طالع من الفرن دايماً مع فطير حار.\",\n      \"onScreenText\": \"مخبز بلدي الإسكندرية\",\n      \"visualIntent\": \"Close-up shot of golden-brown bread being pulled from a traditional tandoor oven with steam rising, followed by a quick cut to fresh flatbread (feteer) sizzling on a griddle.\",\n      \"searchQueries\": [\n        \"tandoor oven pulling bread\",\n        \"fresh flatbread cooking close up\",\n        \"steam rising from hot bread\"\n      ]\n    },\n    {\n      \"purpose\": \"benefit\",\n      \"narration\": \"نعمله بيدينا كل يوم صبح عشان يكون طعمه أصلي.\",\n      \"onScreenText\": \"طعم أصلي - كل يوم\",\n      \"visualIntent\": \"Medium shot of a baker's hands kneading dough or shaping bread in a clean, sunlit bakery interior, emphasizing the handmade process.\",\n      \"searchQueries\": [\n        \"baker kneading dough hands\",\n        \"sunlit bakery interior\",\n        \"handmade bread preparation\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"تعالوا جواكم وأكلوا من خبزنا اليوم.\",\n      \"onScreenText\": \"جايين؟\",\n      \"visualIntent\": \"Wide shot of the bakery storefront in Alexandria with people walking in, or a friendly baker waving towards the camera.\",\n      \"searchQueries\": [\n        \"bakery storefront exterior\",\n        \"people entering shop\",\n        \"friendly shop owner waving\"\n      ]\n    }\n  ],\n  \"cta\": \"optional\",\n  \"expansionLines\": []\n}",
+   "rawChars": 1510,
+   "parsed": {
+    "title": "عيش شمسي وفطير كل يوم",
+    "tone": "warm, inviting, authentic",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "تخيل عيش شمسي طالع من الفرن دايماً مع فطير حار.",
+      "onScreenText": "مخبز بلدي الإسكندرية",
+      "visualIntent": "Close-up shot of golden-brown bread being pulled from a traditional tandoor oven with steam rising, followed by a quick cut to fresh flatbread (feteer) sizzling on a griddle.",
+      "searchQueries": [
+       "tandoor oven pulling bread",
+       "fresh flatbread cooking close up",
+       "steam rising from hot bread"
+      ]
+     },
+     {
+      "purpose": "benefit",
+      "narration": "نعمله بيدينا كل يوم صبح عشان يكون طعمه أصلي.",
+      "onScreenText": "طعم أصلي - كل يوم",
+      "visualIntent": "Medium shot of a baker's hands kneading dough or shaping bread in a clean, sunlit bakery interior, emphasizing the handmade process.",
+      "searchQueries": [
+       "baker kneading dough hands",
+       "sunlit bakery interior",
+       "handmade bread preparation"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "تعالوا جواكم وأكلوا من خبزنا اليوم.",
+      "onScreenText": "جايين؟",
+      "visualIntent": "Wide shot of the bakery storefront in Alexandria with people walking in, or a friendly baker waving towards the camera.",
+      "searchQueries": [
+       "bakery storefront exterior",
+       "people entering shop",
+       "friendly shop owner waving"
+      ]
+     }
+    ],
+    "cta": "optional",
+    "expansionLines": []
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-T1",
+   "latencyMs": 10005,
+   "evalDuration": 8386675999,
+   "raw": "{\n  \"title\": \"API Caching: السر في السرعة\",\n  \"tone\": \"طبيعي، سريع، مصري عامي\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"عشان الموقع يشتغل بسرعة البرق؟ لازم تعرف إيه الـ API caching.\",\n      \"onScreenText\": \"سرعة خيالية 🚀\",\n      \"visualIntent\": \"شخص عصباني يحاول يفتح موقع ويب ببطء شديد مع أيقونة ساعة تدور\",\n      \"searchQueries\": [\n        \"angry person waiting for website loading\",\n        \"slow internet connection frustration\",\n        \"person tapping screen impatiently\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"الـ API caching ببساطة بيعمل كاش للبيانات عشان ما يروحش كل مرة على السيرفر ويزود الحمل عليه.\",\n      \"onScreenText\": \"كاش بيانات = سرعة 📦⚡\",\n      \"visualIntent\": \"رسمة توضيحية بسيطة تظهر طلبات البيانات يتم تخزينها في ذاكرة سريعة بدل الاتصال المباشر بالسيرفر\",\n      \"searchQueries\": [\n        \"database caching concept animation\",\n        \"server response time diagram\",\n        \"data storage memory close up\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"يعني استجابة فورية وموقع خفيف على الجهاز، جربها النهاردة.\",\n      \"onScreenText\": \"جرب الـ Caching الآن 👇\",\n      \"visualIntent\": \"شخص مبتسم يفتح الموقع بنجاح سريع مع أيقونة علامة صح خضراء كبيرة\",\n      \"searchQueries\": [\n        \"happy person using fast app\",\n        \"successful website loading animation\",\n        \"green checkmark success icon\"\n      ]\n    }\n  ],\n  \"cta\": \"تعرف إزاي تفعله؟ شوف الفيديو التالت في السلسلة.\",\n  \"expansionLines\": [\n    \"مفيش حاجة أذكى من الـ caching عشان تحسن تجربة المستخدم.\",\n    \"تخيل إنك بتستدعي نفس الصفحة مئة مرة ومحتاجش تتصل بالسيرفر كل مرة.\"\n  ]\n}",
+   "rawChars": 1641,
+   "parsed": {
+    "title": "API Caching: السر في السرعة",
+    "tone": "طبيعي، سريع، مصري عامي",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "عشان الموقع يشتغل بسرعة البرق؟ لازم تعرف إيه الـ API caching.",
+      "onScreenText": "سرعة خيالية 🚀",
+      "visualIntent": "شخص عصباني يحاول يفتح موقع ويب ببطء شديد مع أيقونة ساعة تدور",
+      "searchQueries": [
+       "angry person waiting for website loading",
+       "slow internet connection frustration",
+       "person tapping screen impatiently"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "الـ API caching ببساطة بيعمل كاش للبيانات عشان ما يروحش كل مرة على السيرفر ويزود الحمل عليه.",
+      "onScreenText": "كاش بيانات = سرعة 📦⚡",
+      "visualIntent": "رسمة توضيحية بسيطة تظهر طلبات البيانات يتم تخزينها في ذاكرة سريعة بدل الاتصال المباشر بالسيرفر",
+      "searchQueries": [
+       "database caching concept animation",
+       "server response time diagram",
+       "data storage memory close up"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "يعني استجابة فورية وموقع خفيف على الجهاز، جربها النهاردة.",
+      "onScreenText": "جرب الـ Caching الآن 👇",
+      "visualIntent": "شخص مبتسم يفتح الموقع بنجاح سريع مع أيقونة علامة صح خضراء كبيرة",
+      "searchQueries": [
+       "happy person using fast app",
+       "successful website loading animation",
+       "green checkmark success icon"
+      ]
+     }
+    ],
+    "cta": "تعرف إزاي تفعله؟ شوف الفيديو التالت في السلسلة.",
+    "expansionLines": [
+     "مفيش حاجة أذكى من الـ caching عشان تحسن تجربة المستخدم.",
+     "تخيل إنك بتستدعي نفس الصفحة مئة مرة ومحتاجش تتصل بالسيرفر كل مرة."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-T2",
+   "latencyMs": 10616,
+   "evalDuration": 9512022000,
+   "raw": "{\n  \"title\": \"Load Balancing: توزيع الأحمال ببساطة\",\n  \"tone\": \"مرح، مبسط، مباشر\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"تخيل إنك بتشتغل على موقع واحد بس آلاف الناس جواه وقت الذروة.. هل هينهار؟\",\n      \"onScreenText\": \"مش واحد بيحمل كل الأوزان!\",\n      \"visualIntent\": \"شاشة كمبيوتر تعرض موقع ويب مكتظ بـ 1000 مستخدم، ثم يظهر سهم أحمر كبير يشير لسيور سيرفر واحد ينهار أو يتأرجح تحت الضغط\",\n      \"searchQueries\": [\n        \"server crashing under load animation\",\n        \"single overloaded web server illustration\",\n        \"crowd of users accessing one website\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"هنا بيخلص دور الـ Load Balancer.. هو زي مدير المرور اللي بيفرق الزبائن بين سيرفرات كتير عشان ما يضغط على واحد.\",\n      \"onScreenText\": \"Load Balancer = مدير المرور 🚦\",\n      \"visualIntent\": \"رسم توضيحي لـ Load Balancer في المنتصف بيوصل لسيرفرات متعددة، ويوزع الدوائر الملونة (الطلبات) بالتساوي بينهم دون أن يتكدس أي منها\",\n      \"searchQueries\": [\n        \"load balancer distributing traffic animation\",\n        \"multiple servers balanced load diagram\",\n        \"traffic router splitting requests to servers\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"فكرة بسيطة بس بتخلي موقعك مستقر.. جربها في مشروعك القادم!\",\n      \"onScreenText\": \"موقعك هيبقى أقوى 💪\",\n      \"visualIntent\": \"شاشة نظيفة تعرض شعار الموقع بنجاح مع علامة صح خضراء كبيرة، ثم تظهر أيقونة 'Subscribe' أو زر 'Learn More' بشكل بسيط\",\n      \"searchQueries\": [\n        \"happy server rack illustration\",\n        \"successful website uptime graphic\",\n        \"developer checking code on laptop\"\n      ]\n    }\n  ],\n  \"cta\": \"اشترك عشان تشرح لك المزيد من المفاهيم التقنية ببساطة\",\n  \"expansionLines\": [\n    \"الـ Load Balancing مش حاجة معقدة، هو مجرد توزيع عادل.\",\n    \"عشان المبرمجين الجداد اللي بيفهموا إن التكرار (Redundancy) أهم من الاعتماد على واحد.\"\n  ]\n}",
+   "rawChars": 1899,
+   "parsed": {
+    "title": "Load Balancing: توزيع الأحمال ببساطة",
+    "tone": "مرح، مبسط، مباشر",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "تخيل إنك بتشتغل على موقع واحد بس آلاف الناس جواه وقت الذروة.. هل هينهار؟",
+      "onScreenText": "مش واحد بيحمل كل الأوزان!",
+      "visualIntent": "شاشة كمبيوتر تعرض موقع ويب مكتظ بـ 1000 مستخدم، ثم يظهر سهم أحمر كبير يشير لسيور سيرفر واحد ينهار أو يتأرجح تحت الضغط",
+      "searchQueries": [
+       "server crashing under load animation",
+       "single overloaded web server illustration",
+       "crowd of users accessing one website"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "هنا بيخلص دور الـ Load Balancer.. هو زي مدير المرور اللي بيفرق الزبائن بين سيرفرات كتير عشان ما يضغط على واحد.",
+      "onScreenText": "Load Balancer = مدير المرور 🚦",
+      "visualIntent": "رسم توضيحي لـ Load Balancer في المنتصف بيوصل لسيرفرات متعددة، ويوزع الدوائر الملونة (الطلبات) بالتساوي بينهم دون أن يتكدس أي منها",
+      "searchQueries": [
+       "load balancer distributing traffic animation",
+       "multiple servers balanced load diagram",
+       "traffic router splitting requests to servers"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "فكرة بسيطة بس بتخلي موقعك مستقر.. جربها في مشروعك القادم!",
+      "onScreenText": "موقعك هيبقى أقوى 💪",
+      "visualIntent": "شاشة نظيفة تعرض شعار الموقع بنجاح مع علامة صح خضراء كبيرة، ثم تظهر أيقونة 'Subscribe' أو زر 'Learn More' بشكل بسيط",
+      "searchQueries": [
+       "happy server rack illustration",
+       "successful website uptime graphic",
+       "developer checking code on laptop"
+      ]
+     }
+    ],
+    "cta": "اشترك عشان تشرح لك المزيد من المفاهيم التقنية ببساطة",
+    "expansionLines": [
+     "الـ Load Balancing مش حاجة معقدة، هو مجرد توزيع عادل.",
+     "عشان المبرمجين الجداد اللي بيفهموا إن التكرار (Redundancy) أهم من الاعتماد على واحد."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-T3",
+   "latencyMs": 8926,
+   "evalDuration": 8388171000,
+   "raw": "{\n  \"title\": \"Database Indexing Magic\",\n  \"tone\": \"energetic, fast-paced, conversational Egyptian Arabic\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"عندك قاعدة بيانات ضخمة وتلاقي البحث بيأخد دقيقتين؟\",\n      \"onScreenText\": \"بحث بطيء جداً 🐢\",\n      \"visualIntent\": \"Close-up of a frustrated developer looking at a computer screen showing a loading spinner or a slow query result, with a clock ticking fast in the background.\",\n      \"searchQueries\": [\n        \"frustrated programmer coding laptop\",\n        \"slow database query loading animation\",\n        \"computer screen error message close up\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"الحل بسيط: Indexing! ده بيخلي البيانات مرتبة زي فهرس الكتاب عشان البحث ييجي فوراً.\",\n      \"onScreenText\": \"Indexing = سرعة فورية ⚡\",\n      \"visualIntent\": \"Split screen showing a messy unsorted list of data transforming into a neat sorted list with a highlighter or magnifying glass finding the item instantly.\",\n      \"searchQueries\": [\n        \"database index concept animation\",\n        \"sorted list vs unsorted list comparison\",\n        \"magnifying glass finding item in organized table\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"جرب Indexing دلوقتي وخلي تطبيقاتك تطير بسرعة الصاروخ.\",\n      \"onScreenText\": \"Deploy Now 🚀\",\n      \"visualIntent\": \"Developer smiling, giving a thumbs up next to a fast-moving rocket or speedometer graphic on screen.\",\n      \"searchQueries\": [\n        \"happy developer celebrating success\",\n        \"rocket launch animation overlay\",\n        \"speedometer needle moving fast\"\n      ]\n    }\n  ],\n  \"cta\": \"Follow for more Dev Tips\",\n  \"expansionLines\": [\n    \"تخيل إنك بتبحث عن كلمة في قاموس، لو كان الصفحات مقلوبة مش هتلاقيها بسرعة.\",\n    \"Indexing بيفصل فرق بين تجربة مستخدم سيئة وتجربة سلسة.\"\n  ]\n}",
+   "rawChars": 1850,
+   "parsed": {
+    "title": "Database Indexing Magic",
+    "tone": "energetic, fast-paced, conversational Egyptian Arabic",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "عندك قاعدة بيانات ضخمة وتلاقي البحث بيأخد دقيقتين؟",
+      "onScreenText": "بحث بطيء جداً 🐢",
+      "visualIntent": "Close-up of a frustrated developer looking at a computer screen showing a loading spinner or a slow query result, with a clock ticking fast in the background.",
+      "searchQueries": [
+       "frustrated programmer coding laptop",
+       "slow database query loading animation",
+       "computer screen error message close up"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "الحل بسيط: Indexing! ده بيخلي البيانات مرتبة زي فهرس الكتاب عشان البحث ييجي فوراً.",
+      "onScreenText": "Indexing = سرعة فورية ⚡",
+      "visualIntent": "Split screen showing a messy unsorted list of data transforming into a neat sorted list with a highlighter or magnifying glass finding the item instantly.",
+      "searchQueries": [
+       "database index concept animation",
+       "sorted list vs unsorted list comparison",
+       "magnifying glass finding item in organized table"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "جرب Indexing دلوقتي وخلي تطبيقاتك تطير بسرعة الصاروخ.",
+      "onScreenText": "Deploy Now 🚀",
+      "visualIntent": "Developer smiling, giving a thumbs up next to a fast-moving rocket or speedometer graphic on screen.",
+      "searchQueries": [
+       "happy developer celebrating success",
+       "rocket launch animation overlay",
+       "speedometer needle moving fast"
+      ]
+     }
+    ],
+    "cta": "Follow for more Dev Tips",
+    "expansionLines": [
+     "تخيل إنك بتبحث عن كلمة في قاموس، لو كان الصفحات مقلوبة مش هتلاقيها بسرعة.",
+     "Indexing بيفصل فرق بين تجربة مستخدم سيئة وتجربة سلسة."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "MIX-1",
+   "latencyMs": 10136,
+   "evalDuration": 8896233000,
+   "raw": "{\n  \"title\": \"Encryption at Rest vs In Transit\",\n  \"tone\": \"fast-paced, technical but accessible Egyptian slang\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"أنت بتخزن بيانات حساسة في السيرفر، لكن هل أنت متأكد إنهم محميين؟\",\n      \"onScreenText\": \"بياناتك معرضة للسرقة؟\",\n      \"visualIntent\": \"Close-up shot of a developer looking stressed at a laptop screen showing a database icon, with red warning symbols floating around.\",\n      \"searchQueries\": [\n        \"developer worried about data security\",\n        \"database server glowing red\",\n        \"hacker silhouette approaching computer\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"الفرق بسيط: الـ Encryption at Rest هي الحماية لما البيانات بتكون مخزنة على القرص، والـ In Transit هي لما البيانات بتنتقل عبر الشبكة.\",\n      \"onScreenText\": \"At Rest = مخزن | In Transit = أثناء النقل\",\n      \"visualIntent\": \"Split screen animation: left side shows a hard drive icon with a shield (static), right side shows data packets moving through network lines with a shield (dynamic).\",\n      \"searchQueries\": [\n        \"hard drive with shield icon\",\n        \"data packets moving on network lines\",\n        \"shield protecting database storage\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"لا تترك البيانات عارية، اختار نوع الـ Encryption المناسب لكل حالة فوراً.\",\n      \"onScreenText\": \"اختر الحماية المناسبة الآن\",\n      \"visualIntent\": \"Developer smiling confidently pointing to a checklist with two green checkmarks next to 'At Rest' and 'In Transit'.\",\n      \"searchQueries\": [\n        \"developer checking security checklist\",\n        \"green checkmarks on database diagram\",\n        \"secure connection icon animation\"\n      ]\n    }\n  ],\n  \"cta\": \"Follow for more backend tips\",\n  \"expansionLines\": [\n    \"تذكر إن الـ Cache مش محتاج تشيلها معك في الشبكات العامة.\",\n    \"استخدم HTTPS دائماً للـ In Transit.\"\n  ]\n}",
+   "rawChars": 1923,
+   "parsed": {
+    "title": "Encryption at Rest vs In Transit",
+    "tone": "fast-paced, technical but accessible Egyptian slang",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "أنت بتخزن بيانات حساسة في السيرفر، لكن هل أنت متأكد إنهم محميين؟",
+      "onScreenText": "بياناتك معرضة للسرقة؟",
+      "visualIntent": "Close-up shot of a developer looking stressed at a laptop screen showing a database icon, with red warning symbols floating around.",
+      "searchQueries": [
+       "developer worried about data security",
+       "database server glowing red",
+       "hacker silhouette approaching computer"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "الفرق بسيط: الـ Encryption at Rest هي الحماية لما البيانات بتكون مخزنة على القرص، والـ In Transit هي لما البيانات بتنتقل عبر الشبكة.",
+      "onScreenText": "At Rest = مخزن | In Transit = أثناء النقل",
+      "visualIntent": "Split screen animation: left side shows a hard drive icon with a shield (static), right side shows data packets moving through network lines with a shield (dynamic).",
+      "searchQueries": [
+       "hard drive with shield icon",
+       "data packets moving on network lines",
+       "shield protecting database storage"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "لا تترك البيانات عارية، اختار نوع الـ Encryption المناسب لكل حالة فوراً.",
+      "onScreenText": "اختر الحماية المناسبة الآن",
+      "visualIntent": "Developer smiling confidently pointing to a checklist with two green checkmarks next to 'At Rest' and 'In Transit'.",
+      "searchQueries": [
+       "developer checking security checklist",
+       "green checkmarks on database diagram",
+       "secure connection icon animation"
+      ]
+     }
+    ],
+    "cta": "Follow for more backend tips",
+    "expansionLines": [
+     "تذكر إن الـ Cache مش محتاج تشيلها معك في الشبكات العامة.",
+     "استخدم HTTPS دائماً للـ In Transit."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "MIX-2",
+   "latencyMs": 10465,
+   "evalDuration": 9650665000,
+   "raw": "{\n  \"title\": \"Cloud Backup vs Sync: الفرق اللي بيفرق\",\n  \"tone\": \"casual, urgent, informative\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"تخيل إن جهازك هبط فجأة وبياناتك كلها ضاعت، دي مش كارثة لو عندك Cloud Backup صح.\",\n      \"onScreenText\": \"جهازك هبط؟ بياناتك محفوظة!\",\n      \"visualIntent\": \"Close-up shot of a smartphone screen displaying a 'No Service' or 'Battery Dead' icon, followed by a quick cut to the same phone showing a green cloud icon with a checkmark in the background.\",\n      \"searchQueries\": [\n        \"smartphone no signal close up\",\n        \"dead battery phone on table\",\n        \"green cloud icon animation\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"الفرق بين السينك والباك أب بسيط: السينك بيعمل نسخة متطابقة على كل الأجهزة، بس الباك أب بيخزن نسخة احتياطية منفصلة في سحابة مش ممكن تتأثر بتغييرات الجهاز.\",\n      \"onScreenText\": \"Sync ≠ Backup\",\n      \"visualIntent\": \"Split screen visual: Left side shows two phones syncing files instantly (green arrows), Right side shows a phone deleting a file while the cloud storage remains untouched with a shield icon.\",\n      \"searchQueries\": [\n        \"two smartphones syncing data animation\",\n        \"file deletion on one device\",\n        \"cloud storage shield protection\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"مفيش وقت للتعامل مع الكوارث، تأكد إن ملفاتك محفوظة في السحابة النهاردة قبل ما يتأخر.\",\n      \"onScreenText\": \"احمِ بياناتك اليوم!\",\n      \"visualIntent\": \"Person holding a phone confidently, tapping a 'Save' or 'Backup Now' button on the screen, with a bright smile and a checkmark overlay.\",\n      \"searchQueries\": [\n        \"person smiling at smartphone\",\n        \"finger tapping save button\",\n        \"digital checkmark animation\"\n      ]\n    }\n  ],\n  \"cta\": \"Follow for more tech tips\",\n  \"expansionLines\": [\n    \"السينك بيخلي كل الأجهزة بتاعتك متشابهين، بس الباك أب بيحميك لو الجهاز هبط.\",\n    \"محتاج تفرق بين نسخ الملف وحفظه في مكان آمن.\"\n  ]\n}",
+   "rawChars": 2006,
+   "parsed": {
+    "title": "Cloud Backup vs Sync: الفرق اللي بيفرق",
+    "tone": "casual, urgent, informative",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "تخيل إن جهازك هبط فجأة وبياناتك كلها ضاعت، دي مش كارثة لو عندك Cloud Backup صح.",
+      "onScreenText": "جهازك هبط؟ بياناتك محفوظة!",
+      "visualIntent": "Close-up shot of a smartphone screen displaying a 'No Service' or 'Battery Dead' icon, followed by a quick cut to the same phone showing a green cloud icon with a checkmark in the background.",
+      "searchQueries": [
+       "smartphone no signal close up",
+       "dead battery phone on table",
+       "green cloud icon animation"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "الفرق بين السينك والباك أب بسيط: السينك بيعمل نسخة متطابقة على كل الأجهزة، بس الباك أب بيخزن نسخة احتياطية منفصلة في سحابة مش ممكن تتأثر بتغييرات الجهاز.",
+      "onScreenText": "Sync ≠ Backup",
+      "visualIntent": "Split screen visual: Left side shows two phones syncing files instantly (green arrows), Right side shows a phone deleting a file while the cloud storage remains untouched with a shield icon.",
+      "searchQueries": [
+       "two smartphones syncing data animation",
+       "file deletion on one device",
+       "cloud storage shield protection"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "مفيش وقت للتعامل مع الكوارث، تأكد إن ملفاتك محفوظة في السحابة النهاردة قبل ما يتأخر.",
+      "onScreenText": "احمِ بياناتك اليوم!",
+      "visualIntent": "Person holding a phone confidently, tapping a 'Save' or 'Backup Now' button on the screen, with a bright smile and a checkmark overlay.",
+      "searchQueries": [
+       "person smiling at smartphone",
+       "finger tapping save button",
+       "digital checkmark animation"
+      ]
+     }
+    ],
+    "cta": "Follow for more tech tips",
+    "expansionLines": [
+     "السينك بيخلي كل الأجهزة بتاعتك متشابهين، بس الباك أب بيحميك لو الجهاز هبط.",
+     "محتاج تفرق بين نسخ الملف وحفظه في مكان آمن."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "MSA-1",
+   "latencyMs": 8362,
+   "evalDuration": 6866979000,
+   "raw": "{\n  \"title\": \"توفير تلقائي: مدخراتك تعمل عليك\",\n  \"tone\": \"حماسي ومبسط\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"هل تتساءل كيف تبني ثروة دون أن تشعر؟\",\n      \"onScreenText\": \"توفير تلقائي = ثروة مستمرة\",\n      \"visualIntent\": \"شخص ينظر بدهشة إلى هاتفه بينما تظهر أيقونة بنك أو تطبيق مالي على الشاشة\",\n      \"searchQueries\": [ \"person looking at smartphone surprised\", \"mobile banking app interface close up\", \"man checking savings balance on phone\" ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"بفضل التوفير التلقائي، تقوم البنوك بنقل جزء من راتبك فور دخوله مباشرة إلى حساب المدخرات.\",\n      \"onScreenText\": \"النقل التلقائي فوري\",\n      \"visualIntent\": \"رسوم متحركة توضح نقداً ينتقل تلقائياً من محفظة مملوءة إلى صندوق مدخرات ينمو\",\n      \"searchQueries\": [ \"automatic money transfer animation\", \"savings account growing graph\", \"digital wallet auto deposit process\" ]\n    },\n    {\n      \"purpose\": \"benefit\",\n      \"narration\": \"نتيجة لذلك، تتراكم المدخرات بمرور الوقت وبجهد شبه معدوم.\",\n      \"onScreenText\": \"مدخراتك تنمو تلقائياً\",\n      \"visualIntent\": \"شخص يستمتع بحياة مريحة أو يخطط لمستقبله وهو يبتسم مع خلفية تظهر رسوماً مالية آمنة\",\n      \"searchQueries\": [ \"happy person planning future\", \"secure money stack animation\", \"person relaxing with financial freedom\" ]\n    }\n  ],\n  \"cta\": \"ابدأ في التوفير اليوم\",\n  \"expansionLines\": []\n}",
+   "rawChars": 1386,
+   "parsed": {
+    "title": "توفير تلقائي: مدخراتك تعمل عليك",
+    "tone": "حماسي ومبسط",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "هل تتساءل كيف تبني ثروة دون أن تشعر؟",
+      "onScreenText": "توفير تلقائي = ثروة مستمرة",
+      "visualIntent": "شخص ينظر بدهشة إلى هاتفه بينما تظهر أيقونة بنك أو تطبيق مالي على الشاشة",
+      "searchQueries": [
+       "person looking at smartphone surprised",
+       "mobile banking app interface close up",
+       "man checking savings balance on phone"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "بفضل التوفير التلقائي، تقوم البنوك بنقل جزء من راتبك فور دخوله مباشرة إلى حساب المدخرات.",
+      "onScreenText": "النقل التلقائي فوري",
+      "visualIntent": "رسوم متحركة توضح نقداً ينتقل تلقائياً من محفظة مملوءة إلى صندوق مدخرات ينمو",
+      "searchQueries": [
+       "automatic money transfer animation",
+       "savings account growing graph",
+       "digital wallet auto deposit process"
+      ]
+     },
+     {
+      "purpose": "benefit",
+      "narration": "نتيجة لذلك، تتراكم المدخرات بمرور الوقت وبجهد شبه معدوم.",
+      "onScreenText": "مدخراتك تنمو تلقائياً",
+      "visualIntent": "شخص يستمتع بحياة مريحة أو يخطط لمستقبله وهو يبتسم مع خلفية تظهر رسوماً مالية آمنة",
+      "searchQueries": [
+       "happy person planning future",
+       "secure money stack animation",
+       "person relaxing with financial freedom"
+      ]
+     }
+    ],
+    "cta": "ابدأ في التوفير اليوم",
+    "expansionLines": []
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "EN-E1",
+   "latencyMs": 8225,
+   "evalDuration": 7153651000,
+   "raw": "{\n  \"title\": \"Database Indexing Explained\",\n  \"tone\": \"Fast-paced, curious, and clear\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"Ever wonder why some database searches are instant while others take forever?\",\n      \"onScreenText\": \"Why is this search SO fast?\",\n      \"visualIntent\": \"Split screen: left side shows a chaotic pile of papers being searched slowly, right side shows a highlighted index speeding up the process.\",\n      \"searchQueries\": [\n        \"database slow query animation\",\n        \"data table searching visual\",\n        \"chaotic data piles illustration\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"It's all about indexing. Think of it like a book index instead of reading every single page to find a word.\",\n      \"onScreenText\": \"Use the Index, skip the pages!\",\n      \"visualIntent\": \"Close up on a physical book where a finger points directly to a specific page using the index at the back, contrasting with flipping through all pages.\",\n      \"searchQueries\": [\n        \"book index close up\",\n        \"finger pointing to page number\",\n        \"library bookshelf organized\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"Add indexes to your columns, and watch your queries zoom past the competition.\",\n      \"onScreenText\": \"Index smarter, not harder.\",\n      \"visualIntent\": \"A speedometer needle shooting forward or a rocket launching labeled 'Query Speed' with a green checkmark.\",\n      \"searchQueries\": [\n        \"speedometer fast motion\",\n        \"rocket launch animation\",\n        \"green checkmark success icon\"\n      ]\n    }\n  ],\n  \"cta\": \"Subscribe for more tech tips!\",\n  \"expansionLines\": [\n    \"Without indexes, your database has to scan every row.\",\n    \"With an index, it jumps straight to the data.\"\n  ]\n}",
+   "rawChars": 1811,
+   "parsed": {
+    "title": "Database Indexing Explained",
+    "tone": "Fast-paced, curious, and clear",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "Ever wonder why some database searches are instant while others take forever?",
+      "onScreenText": "Why is this search SO fast?",
+      "visualIntent": "Split screen: left side shows a chaotic pile of papers being searched slowly, right side shows a highlighted index speeding up the process.",
+      "searchQueries": [
+       "database slow query animation",
+       "data table searching visual",
+       "chaotic data piles illustration"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "It's all about indexing. Think of it like a book index instead of reading every single page to find a word.",
+      "onScreenText": "Use the Index, skip the pages!",
+      "visualIntent": "Close up on a physical book where a finger points directly to a specific page using the index at the back, contrasting with flipping through all pages.",
+      "searchQueries": [
+       "book index close up",
+       "finger pointing to page number",
+       "library bookshelf organized"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "Add indexes to your columns, and watch your queries zoom past the competition.",
+      "onScreenText": "Index smarter, not harder.",
+      "visualIntent": "A speedometer needle shooting forward or a rocket launching labeled 'Query Speed' with a green checkmark.",
+      "searchQueries": [
+       "speedometer fast motion",
+       "rocket launch animation",
+       "green checkmark success icon"
+      ]
+     }
+    ],
+    "cta": "Subscribe for more tech tips!",
+    "expansionLines": [
+     "Without indexes, your database has to scan every row.",
+     "With an index, it jumps straight to the data."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "EN-C1",
+   "latencyMs": 7963,
+   "evalDuration": 6827104000,
+   "raw": "{\n  \"title\": \"PennyWise: Auto-Track Family Spending\",\n  \"tone\": \"Energetic, relatable, and solution-oriented\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"Stop guessing where your family money goes every month.\",\n      \"onScreenText\": \"Money Vanishing?\",\n      \"visualIntent\": \"Split screen: Left side shows a confused parent looking at a messy pile of receipts; right side shows the PennyWise app logo appearing with a 'Stop' gesture animation.\",\n      \"searchQueries\": [\n        \"confused parent looking at receipts\",\n        \"messy stack of paper bills\",\n        \"family budgeting stress concept\"\n      ]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"Meet PennyWise. It automatically tracks your family's spending in the background.\",\n      \"onScreenText\": \"Auto-Track Everything\",\n      \"visualIntent\": \"Close-up of a smartphone screen showing the PennyWise dashboard smoothly syncing with bank icons, transitioning to a happy family eating dinner together without looking at phones.\",\n      \"searchQueries\": [\n        \"smartphone app interface tracking expenses\",\n        \"happy family eating dinner\",\n        \"mobile banking sync animation\"\n      ]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"Get full control over your budget today with PennyWise.\",\n      \"onScreenText\": \"Start Tracking Now\",\n      \"visualIntent\": \"App logo centered on a clean background with a finger tapping the 'Download' or 'Install' button, followed by a quick fade to black.\",\n      \"searchQueries\": [\n        \"app store download icon animation\",\n        \"clean app logo background\",\n        \"finger tapping install button\"\n      ]\n    }\n  ],\n  \"cta\": \"optional\",\n  \"expansionLines\": []\n}",
+   "rawChars": 1720,
+   "parsed": {
+    "title": "PennyWise: Auto-Track Family Spending",
+    "tone": "Energetic, relatable, and solution-oriented",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "Stop guessing where your family money goes every month.",
+      "onScreenText": "Money Vanishing?",
+      "visualIntent": "Split screen: Left side shows a confused parent looking at a messy pile of receipts; right side shows the PennyWise app logo appearing with a 'Stop' gesture animation.",
+      "searchQueries": [
+       "confused parent looking at receipts",
+       "messy stack of paper bills",
+       "family budgeting stress concept"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "Meet PennyWise. It automatically tracks your family's spending in the background.",
+      "onScreenText": "Auto-Track Everything",
+      "visualIntent": "Close-up of a smartphone screen showing the PennyWise dashboard smoothly syncing with bank icons, transitioning to a happy family eating dinner together without looking at phones.",
+      "searchQueries": [
+       "smartphone app interface tracking expenses",
+       "happy family eating dinner",
+       "mobile banking sync animation"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "Get full control over your budget today with PennyWise.",
+      "onScreenText": "Start Tracking Now",
+      "visualIntent": "App logo centered on a clean background with a finger tapping the 'Download' or 'Install' button, followed by a quick fade to black.",
+      "searchQueries": [
+       "app store download icon animation",
+       "clean app logo background",
+       "finger tapping install button"
+      ]
+     }
+    ],
+    "cta": "optional",
+    "expansionLines": []
+   },
+   "parseError": null,
+   "done": true
+  }
+ ],
+ "finishedAt": "2026-10-03T18:37:47.975Z"
+}

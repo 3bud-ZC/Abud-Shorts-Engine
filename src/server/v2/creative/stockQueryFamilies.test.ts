@@ -74,3 +74,28 @@ describe("buildStockQueryFamilies providedTerms filtering", () => {
     expect(result.queries.map((q) => q.query)).toContain("a specific real term");
   });
 });
+
+describe("Arabic substring concept boundaries", () => {
+  it("does not match coffee inside Egyptian بنـ verbs or بنك (bank)", () => {
+    // Live production regression: "بنحفظها في الـ Cache" produced an all-coffee
+    // candidate pool and a roasted-beans clip in an API-caching explainer.
+    expect(matchConcepts("بدل ما كل مرة نطلب حاجة من السيرفر، بنحفظها في الـ Cache عشان نرجعها فوراً.").map((c) => c.id)).not.toContain("coffee");
+    expect(matchConcepts("البنك بيحول فلوسك لحساب التوفير لوحده.").map((c) => c.id)).not.toContain("coffee");
+    expect(matchConcepts("لبن طازج يومياً").map((c) => c.id)).not.toContain("coffee");
+  });
+
+  it("still matches a real standalone بن (coffee beans) mention", () => {
+    expect(matchConcepts("قهوة مختصة وبن محمص على الطلب").map((c) => c.id)).toContain("coffee");
+    expect(matchConcepts("البن عندنا بيتحمص يومياً").map((c) => c.id)).toContain("coffee");
+  });
+
+  it("does not match logistics inside متطلبات (requirements)", () => {
+    expect(matchConcepts("متطلبات النظام الأساسية قبل التحديث").map((c) => c.id)).not.toContain("logistics");
+    expect(matchConcepts("الطلبات بتوصل للعميل في نفس اليوم").map((c) => c.id)).toContain("logistics");
+  });
+
+  it("does not match events inside احتفل (celebrate)", () => {
+    expect(matchConcepts("احنا بنحتفل بمرور سنة على الشركة").map((c) => c.id)).not.toContain("event");
+    expect(matchConcepts("حفلة الافتتاح يوم الجمعة").map((c) => c.id)).toContain("event");
+  });
+});

@@ -161,13 +161,19 @@ function cleanPromptDirectives(prompt: string, isAr: boolean): string {
   let cleaned = prompt;
   if (isAr) {
     cleaned = cleaned
-      .replace(/^(اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب)\s+(فيديو|شورت|مقطع|سكريبت|إعلان)?\s*(عن|حول|بخصوص)?/i, "")
+      .replace(/^(اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي)\s+(فيديو|شورت|مقطع|سكريبت|إعلان|إعلاني|اعلاني|محتوى)?\s*(عن|حول|بخصوص)?/i, "")
+      // A bare media noun is a valid opener too: "فيديو قصير يشرح ..." asks
+      // for a video the same way "اعمل فيديو ..." does. Leaving it means the
+      // entity extractor reads the orchestration wording as the subject.
+      .replace(/^(فيديو|شورت|مقطع|ريل|إعلان|إعلاني|اعلان|اعلاني|محتوى)\s+(قصير|قصيرة|سريع|سريعة|بسيط|بسيطة|تعليمي|تعليمية)?\s*/i, "")
+      .replace(/^(يشرح|يوضح|وضّح|وضح|اشرح|اشرحلي|ورينا|وريني|قول|قولي|كلمنا|كلمني|احكيلي|يحكي|نتكلم|نكلم)\s+(للناس|لنا|لي|للجميع)?\s*(عن|حول|بخصوص|إزاي|ازاي|ليه|إيه|ايه|أيه|هو)?\s*/i, "")
       .replace(/فيديو\s+(مدته|طوله|بمدة)?\s*\d+\s*(ثانية|ثواني|ثوان|دقيقة)?/i, "")
       .replace(/(بدقة|بجودة)\s*(عالية|1080p|4k)?/i, "")
       .replace(/(باللهجة|لهجة)\s*(المصرية|السعودية|الخليجية|العامية)?/i, "");
   } else {
     cleaned = cleaned
       .replace(/^(create|make|generate|produce|write)\s+(a\s+)?(video|short|tiktok|reel|script|ad|commercial)?\s*(about|for|on)?/i, "")
+      .replace(/^(a\s+)?(video|short|reel|clip|ad)\s+(explaining|explain|about|on|that explains)\s+/i, "")
       .replace(/(video|short)\s+(duration|length)?\s*\d+\s*(seconds|secs|sec|s)?/i, "")
       .replace(/\b(in|with)\b\s*(1080p|4k|high quality|vertical format)/i, "")
       .replace(/(style|tone)\s*:\s*\w+/i, "");
@@ -187,25 +193,35 @@ function cleanPromptDirectives(prompt: string, isAr: boolean): string {
  * they used to request it ("make a video", "15 seconds", "for TikTok", etc.).
  * Meta wording must NEVER appear in narration or captions.
  */
-export function stripMetaInstructions(text: string, isAr: boolean): string {
+export function stripMetaInstructions(
+  text: string,
+  isAr: boolean,
+  options: { forNarration?: boolean } = {},
+): string {
   let cleaned = text.trim();
   if (!cleaned) return cleaned;
 
   if (isAr) {
     // Arabic meta-instruction patterns - strip from any position
     cleaned = cleaned
-      .replace(/(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعملي|سوي لي)\s+(?:لي\s+)?(?:فيديو|شورت|مقطع|سكريبت|إعلان)?\s*(?:عن|حول|بخصوص|يناقش)?\s*/gi, "")
-      .replace(/عايز\s+(فيديو|شورت|مقطع|إعلان)?\s*(عن|حول|بخصوص)?\s*/gi, "")
-      .replace(/عاوز\s+(فيديو|شورت|مقطع|إعلان)?\s*(عن|حول|بخصوص)?\s*/gi, "")
+      .replace(/(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعملي|سوي لي|اشرح|اشرحلي|اشرح لي|اعرض)\s+(?:لي\s+)?(?:فيديو|شورت|مقطع|سكريبت|إعلان)?\s*(?:عن|حول|بخصوص|يناقش|فكرة|معنى|مفهوم)?\s*/gi, "")
+      .replace(/عايز(ين|ة|ي|ى)?\s+(فيديو|شورت|مقطع|إعلان|إعلاني|اعلاني|محتوى)?\s*(عن|حول|بخصوص)?\s*/gi, "")
+      .replace(/عاوز(ين|ة|ي|ى)?\s+(فيديو|شورت|مقطع|إعلان|إعلاني|اعلاني|محتوى)?\s*(عن|حول|بخصوص)?\s*/gi, "")
       .replace(/فيديو\s+(?:مدته|طوله|بمدة)?\s*\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق)?\s*(?:عن|حول|بخصوص)?\s*/gi, "")
       .replace(/مدته?\s+\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق)?\s*/gi, "")
+      .replace(/(?:^|\s)\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق)(?=\s|$|[,.،])/gi, " ")
       .replace(/(?:باللهجة|لهجة)\s*(?:المصرية|السعودية|الخليجية|العامية|الشامية|المغربية)?\s*/gi, "")
       .replace(/(?:بدقة|بجودة)\s*(?:عالية|1080p|4k)?\s*/gi, "")
       .replace(/(?:رأسي|عمودي|9:16|16:9)\s*/gi, "")
       .replace(/(?:ابدأ|افتح|اختم)\s+(?:بـ|ب|بجملة|بـ)?\s*/gi, "")
-      .replace(/(?:ممنوع|لا تذكر|بدون|من غير|بلا)\s+/gi, "")
       .replace(/(?:الجمهور|الهدف|المستهدفين)\s*[:：]?\s*/gi, "")
       .replace(/(?:الهوك|المقدمة|الرسالة|النص|الدعوة|CTA|الكابشن|الترجمة|التعليق|المشاهد|المرئيات|الصوت)\s*[:：]\s*/gi, "");
+    if (!options.forNarration) {
+      // Negative-constraint instructions are stripped when cleaning PROMPT
+      // text - but inside generated narration a negation is real content and
+      // deleting it inverts meaning ("بدون تربة" -> "تربة").
+      cleaned = cleaned.replace(/(?:ممنوع|لا تذكر|بلا)\s+/gi, "");
+    }
   } else {
     // English meta-instruction patterns - strip from any position
     cleaned = cleaned
@@ -215,8 +231,12 @@ export function stripMetaInstructions(text: string, isAr: boolean): string {
       .replace(/(?:in|with)\s*(?:1080p|4k|high quality|vertical format|9:16|16:9|portrait|landscape)\s*/gi, "")
       .replace(/(?:style|tone|mood|audience|hook|CTA|voice|captions?|visuals?)\s*[:：]\s*\S+/gi, "")
       .replace(/(?:focus on|explain|mention|describe|show|cover|include|emphasize|highlight|talk about|discuss)\s+/gi, "")
-      .replace(/(?:no|without|do not include|don't include|exclude|never mention|avoid)\s+/gi, "")
       .replace(/(?:the audience is|your job is|the goal is|the purpose is|the video should|the short should)\s+/gi, "");
+    if (!options.forNarration) {
+      // See the Arabic branch above: negations are instructions in prompt
+      // text, but real meaning inside generated narration.
+      cleaned = cleaned.replace(/(?:no|without|do not include|don't include|exclude|never mention|avoid)\s+/gi, "");
+    }
   }
 
   // Clean up extra whitespace and leading punctuation left behind
@@ -256,12 +276,113 @@ function detectIntentType(prompt: string, isAr: boolean): PromptIntentContract["
   return isAr ? "brand_ad" : "educational";
 }
 
+/** Orchestration/stopword tokens that can never be part of a speakable
+ *  entity ("want a video", "15 seconds ad"). A bare number is never an
+ *  entity word either - "إعلاني 15" is a truncated duration, not a topic.
+ *  Directive verbs in any conjugation ("يشرح", "وضّح", "وريني"), question
+ *  words ("ليه", "إزاي"), audience fillers ("للناس") and bare connectors
+ *  ("الـ", "في", "و") are likewise never the subject of the video. */
+const ENTITY_STOPWORD_RE =
+  /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|عن|حول|بخصوص|بيناقش|ليناقش|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|بالمصري|بالمصريه|بالمصرية|مصري|مصريه|مصرية|بالعامية|بالعاميه|عامية|عاميه|بالفصحى|فصحى|بالدارجة|دارجة|باللهجة|باللهجه|بلهجة|بلهجه|لهجة|لهجه|بالعربي|بالعربية|بالانجليزي|بالإنجليزي|بالانجليزية|بالإنجليزية|عربي|عربية|عربيه|انجليزي|إنجليزي|انجليزية|إنجليزية|الـ?|و|بـ?|في|من|على|إلى|الى|مع|لـ|لل|يا|ده|دي|create|make|generate|produce|write|build|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|video|short|tiktok|reel|script|ad|commercial|content|post|clip|about|for|on|of|a|an|the|that|which|seconds|secs|sec|minutes|mins|egyptian|arabic|english|fusha|\d+)$/i;
+
+/** Arabic tokens that look like a bi-/he- imperfective but are nouns -
+ *  whitelisted out of the clause-verb heuristic so a real topic like
+ *  "بيانات العملاء" or "دكتور بيطري" is never truncated or rejected. */
+const IMPERFECTIVE_LOOKALIKE_NOUN_RE =
+  /^(?:و)?(?:بيانات|بيان|بيتزا|بيرو|بيانو|بيلاروس|بيلاروسيا|بيلاروسي|بيلجيكا|بيكين|بيكينغ|بياض|بيرة|بيبسي|بيروت|بيطري|بيطرية|بيطريه|بتاع|بتاعة|بتاعه|بتعت|بتاعنا|بتوع|بتوعه|بتوعي|بتنجان|بتنجانية|بتنجانه|بنزين|بنزيمة|بنفسج|بنفسجي|بندقية|بندقيه|بتوفيق|بايرن|باكستان|باكستاني|باكستانية|باكستانيه|باريس|باريسي|باراغواي|بانكوك|بالي|باليرمو|هيئة|هيكل|هيليوم|هيروشيما|هارون)$/u;
+
+/** A conjugated present-tense verb marks a clause, not a noun phrase. The
+ *  Egyptian bi-/he- imperfective prefixes are distinctive; the bare
+ *  person-prefixed stems below cover the common verbs product briefs use
+ *  ("يوفر", "تقرب", "بيخلي"). An entity that contains one is prompt
+ *  residue like "تطبيق بيقرب قيمة" - a clause, never a speakable topic. */
+const CLAUSE_VERB_RE =
+  /^(?:و)?(?:(?:بي|بت|بن|با|هي|هت|هن|ها)[ء-ي]{3,}|(?:ي|ت|ن|أ|ا)(?:وفر|وفّر|وصل|قرّ?ب|خلّ?ي|ساعد|شتغل|حسب|حوّ?ل|تتبع|راقب|ديّ?ر|نظّ?م|حمي|بيع|شتري|لعب|فتح|خزّ?ن|نزل|قفل|سجّ?ل|كسب|دفع|ربح|فوز|ستثمر|رسل|ستقبل|بعت|وصّ?ل|رجع|حصل|صير|بقى|زيد|قلّ?ل|قول|جي|اخد|اخذ|روح|شوف|سمع|قرا|قرأ|كتب|ذاكر|سلّ?م|عيش|قعد|نام|اكل|شرب|لحق|نسي))$/u;
+
+function looksLikeClauseVerb(word: string): boolean {
+  return CLAUSE_VERB_RE.test(word) && !IMPERFECTIVE_LOOKALIKE_NOUN_RE.test(word);
+}
+
 function extractCoreEntity(cleanedPrompt: string, isAr: boolean): string {
-  if (!cleanedPrompt) return isAr ? "الموضوع الرئيسي" : "the main subject";
+  const fallback = isAr ? "الموضوع الرئيسي" : "the main subject";
+  if (!cleanedPrompt) return fallback;
   const firstLine = cleanedPrompt.split(/[.\n]/)[0].trim();
-  const words = firstLine.split(/\s+/).filter((w) => w.length > 1);
-  if (words.length <= 4) return firstLine;
-  return words.slice(0, 4).join(" ");
+  if (isAr) {
+    // Egyptian technical briefs keep established terms in English
+    // ("يشرح للناس ليه الـ CDN cache بيخلي المواقع تفتح أسرع"): once the
+    // directive verbs and question words are filtered the remaining Arabic
+    // fragment is residue, while the contiguous Latin run IS the subject
+    // anchor. Prefer the longest real Latin phrase; a bare acronym like
+    // CDN/API is acceptable, a lone lowercase word is not.
+    const latinRuns = firstLine.match(/[A-Za-z][A-Za-z0-9._+-]*(?:\s+[A-Za-z][A-Za-z0-9._+-]*)*/g) || [];
+    const best = latinRuns
+      .map((run) => run.trim())
+      .filter((run) => !ENTITY_STOPWORD_RE.test(run))
+      .filter((run) => {
+        const parts = run.split(/\s+/).filter((w) => !ENTITY_STOPWORD_RE.test(w));
+        if (parts.length === 0) return false;
+        if (parts.length === 1) {
+          const w = parts[0];
+          return w.length >= 2 && (w === w.toUpperCase() || w.length >= 4);
+        }
+        return true;
+      })
+      .sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length || b.length - a.length)[0];
+    if (best) return best;
+  }
+  // Collect topic words but stop before a conjugated verb: the 4-word window
+  // can cut a relative clause mid-phrase ("تطبيق بيقرب قيمة كل عملية شراء"
+  // → "تطبيق بيقرب قيمة"), and a clause fragment is never a speakable
+  // entity. A verb at position 0 means the whole phrase is a clause, not
+  // a subject ("يوفر الفرق تلقائيًا").
+  const words: string[] = [];
+  for (const raw of firstLine.split(/\s+/)) {
+    const w = raw.replace(/^[«»"'"'"']+|[«»"'"'"',،؛;:]+$/g, "");
+    if (!(w.length > 1) || ENTITY_STOPWORD_RE.test(w)) continue;
+    if (looksLikeClauseVerb(w)) break;
+    words.push(w);
+    if (words.length >= 4) break;
+  }
+  if (words.length === 0) return fallback;
+  return words.join(" ");
+}
+
+/**
+ * True when `entity` is a real subject that can be spoken inside generated
+ * narration ("النقطة المهمة عن X."). Duration fragments, orchestration
+ * wording, imperative verbs, question words and dangling articles are raw
+ * prompt residue - never a speakable topic ("النقطة المهمة عن يشرح للناس
+ * ليه الـ." reached customer narration through this path).
+ */
+export function isSpeakableEntity(entity: string, isAr: boolean): boolean {
+  const stripped = stripMetaInstructions(entity, isAr)
+    .replace(/\s+\d+$/, "")
+    .trim();
+  if (stripped.length < 3) return false;
+  if (/^\d+\s*(?:ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|seconds?|secs?|minutes?|mins?)?\.?$/i.test(stripped)) {
+    return false;
+  }
+  // One surviving directive-verb / question / media-noun / filler token means
+  // the whole entity is prompt residue, not a speakable subject. Interior
+  // prepositions are legit ("غسيل عربيات في البيت"); a connector dangling at
+  // either edge is residue ("يشرح للناس ليه الـ").
+  const RESIDUE_WORD_RE =
+    /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|بالمصري|بالمصريه|بالمصرية|بالعامية|بالعاميه|بالفصحى|بالدارجة|باللهجة|باللهجه|بلهجة|بلهجه|بالعربي|بالعربية|بالانجليزي|بالإنجليزي|بالانجليزية|بالإنجليزية|الـ?|video|shorts?|tiktok|reel|clip|script|seconds?|secs?|minutes?|mins?|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|create|make|generate|produce|write|build|about|\d+)$/i;
+  const EDGE_CONNECTOR_RE = /^(?:و|بـ?|في|من|عن|على|إلى|الى|مع|لـ|لل|يا|أو|او)$/u;
+  // A clause truncated mid-phrase is not an entity either: determiners and
+  // quantifiers demand a following noun, so a candidate ending on one
+  // ("تطبيق بيقرب قيمة كل" - "the app that rounds up the value of every…")
+  // speaks broken Arabic inside the fallback line.
+  const TRAILING_INCOMPLETE_RE =
+    /^(?:كل|أي|اي|بعض|معظم|أغلب|اغلب|نفس|ذات|هذا|هذه|هذي|دول|ذلك|تلك|اللي|و|ولا|أو|او|لكن|بس|كمان|أكثر|اكثر|أقل|اقل|غير|مثل|زي|عشان|لما|لو|كلما|مهما|every|each|a|an|the|of|for|with|without|about|more|less|some|any|your|my|our|their|his|her|its|this|that|these|those|and|or|but|to|in|on|at|by|is|are|was|were|very|just|only|also)$/i;
+  const words = stripped.split(/\s+/).filter(Boolean);
+  if (words.some((word) => RESIDUE_WORD_RE.test(word))) return false;
+  if (EDGE_CONNECTOR_RE.test(words[0]) || EDGE_CONNECTOR_RE.test(words[words.length - 1])) return false;
+  if (TRAILING_INCOMPLETE_RE.test(words[words.length - 1])) return false;
+  // A conjugated verb anywhere turns the candidate into a clause fragment
+  // ("تطبيق بيقرب قيمة" - noun phrase topics never contain a finite verb).
+  if (words.some((word) => looksLikeClauseVerb(word))) return false;
+  return true;
 }
 
 function deriveConcreteVisualSubjects(
@@ -408,7 +529,13 @@ export function buildPromptIntentContract(
   const quoted = extractQuotedPhrases(prompt);
   const negatives = extractNegativeConstraints(prompt);
   const cleaned = cleanPromptDirectives(prompt, isAr);
-  const coreEntity = extractCoreEntity(cleaned, isAr);
+  // A short quoted phrase («لمعة», "Ember & Wick") is the customer's own
+  // naming of the subject - the most reliable entity signal available.
+  const quotedEntity = quoted.find((q) => {
+    const w = q.trim().split(/\s+/).filter(Boolean);
+    return w.length >= 1 && w.length <= 4 && !ENTITY_STOPWORD_RE.test(w[0]);
+  });
+  const coreEntity = quotedEntity ?? extractCoreEntity(cleaned, isAr);
   const intentType = detectIntentType(prompt, isAr);
   const requestedTopic = cleaned || coreEntity;
 

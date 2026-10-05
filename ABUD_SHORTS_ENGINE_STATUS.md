@@ -14536,3 +14536,229 @@ Short Studio must not build/pull/export/import duplicate multi-GB Docker images 
 ---
 
 **SHORT STUDIO 2.6 RELEASE ENGINEERING: CLOSED.** Product and release engineering work for 2.6.0 is complete. The offline commercial image (`0915eb61…`) and the public GHCR image (`7936a82a…`) are separate builds, each verified for its intended channel; no binary identity between them is claimed or required. `v2.6.0` remains immutable at `4a9a3aa`, the GitHub Release is published, public package/manifest checksums are verified, and the canonical customer installation is healthy. Any further work is a new change request, not a continuation of this release.
+
+---
+
+### Post-GA Production Intelligence & Architecture Recovery
+
+**Owner-observed problem:** detailed natural-language Arabic briefs were not converted into professionally scripted videos — the description was effectively spoken verbatim over generic stock, and the Create screen intermittently showed `تعذّر إنشاء الإنتاج. حاول مرة أخرى.` ("Failed to create the production. Try again.").
+
+**Root causes (verified in source + live runtime):**
+
+1. `OllamaContentAIProvider.generateProductionSpec()` asked Ollama to round-trip an entire `ProductionSpec` JSON synchronously inside the HTTP request. `OLLAMA_TIMEOUT_MS` was 120 s while `REQUEST_TIMEOUT_MS` is 30 s — a detailed prompt produced 25–45 s+ model output, the request socket died first, and the client received an empty reply → generic banner (confirmed live: curl `Empty reply from server`, job continued server-side).
+2. `topicGroundingCompiler.ts` (`TOPIC_REGISTRY`) + `LocalContentAIProvider` contained hard-coded per-vertical scene/narration builders and fact packs; `compileGroundedScenes()` reused prompt-derived `factualRequirements` verbatim as narration → prompt-as-narration and invented business claims (e.g., WhatsApp CTA) that truth-safety then had to strip.
+3. `rewritePrompt()` never used Ollama; it delegated to deterministic template expansions.
+4. The create route's catch-all returned raw English exception text, so the Arabic UI could only show the unlocalized fallback banner.
+5. Planner failure silently degraded to canned output while still presented as AI generation.
+
+**Architecture before:** prompt → intent contract → (Ollama full-spec JSON, 120 s budget, often timing out / malformed → silent) → deterministic canned templates / prompt-copy narration → media pipeline.
+
+**Architecture after:** prompt → `PromptIntentContract` → **compact Ollama `CreativePlan`** (title, hook, scenes: purpose/narration/onScreenText/visualIntent/searchQueries/expansionLines, closing CTA — ~1–2 KB, ≈5–13 s) → `assembleCreativePlanSpec()` **deterministically builds the full `ProductionSpec`** (durations, pacing, scene purposes, query sanitization, CTA provenance, truth-safety, prompt-fidelity gate) → media pipeline. Bounded retry with schema-repair coercer; explicit structured failure (`PLANNER_GENERATION_FAILED`, localized `message`/`messageAr`) instead of silent canned output; honest `BASIC_FALLBACK` mode for simple non-fact-critical content; `contentConfidenceBlocker` rejects Basic-mode factual/curiosity/explainer topics before job creation. `rewritePrompt()` now uses a real Ollama structured-brief rewrite (goal/audience/tone/keyPoints/visualIdeas), merged deterministically, preserving explicit phrases/prohibitions/duration/CTA and inventing nothing.
+
+**Removed/consolidated:** `topicGroundingCompiler.ts`, `factPacks.ts`, `localProviderBackupPack.test.ts` deleted; `LocalContentAIProvider` rebuilt from ~3,000+ lines of per-vertical canned builders to an honest Basic provider; commit `acf9b36`: 12 files, +939/−2,868 (net −1,929 LOC). One creative planner path replaces the prior registry/templates/fallback chain.
+
+**Planner provenance persisted:** `planner`, `plannerModel`, `plannerLatencyMs`, `plannerAttempts`, `contentProvider`, `contentProvenance` (`MODEL_GENERATED`/`BASIC_FALLBACK`), `contentConfidence`, plus create-route diagnostics fields.
+
+**Error surface:** planner-bound create/enhance endpoints allow up to `PLANNER_REQUEST_TIMEOUT_MS` (default 120 s) past the 30 s request socket timeout; structured `{ error: { code, message, messageAr } }` responses map planner/confidence/script-quality/readiness/validation failures; `localizedApiError` selects `messageAr` for Arabic. Raw exceptions no longer reach the customer banner.
+
+**Deployment:** server bundle rebuilt; patched `dist/server` files `docker cp`'d into the existing `short-studio-app` container; container restarted (not recreated); no image build/pull; no data loss.
+
+**Tests:** `typecheck:server` PASS; `typecheck:ui` PASS; focused suites PASS — `contentAI.test` 7, `ollamaProvider.test` 7, `v251CtaIntentPrecision` 10, `v24Pass4CtaTruthGuard` 14, `v25ContentIntelligence` 6, `v251UnknownTopicRouting` 5, `v24ProfessionalVideoEngine` 23, `v2.test` 41, `v2_05` 8, `fastHealth` 16, `phase3` 6. Tests asserting the deleted canned/fact-pack systems were rewritten for the new contract (compact plan acceptance, malformed/5xx/unavailable fallback, WhatsApp/claim rejection, explicit-CTA preservation, unknown-topic blocking, topic anchoring, prompt-leak guard).
+
+**Real productions (live API, free/local providers):**
+
+| Prompt | Job | Status | Output |
+|---|---|---|---|
+| Owner-style detailed Arabic café brief (`روّاق`, VoiceTut Egyptian, 20 s) | `cmurt6l9a000507tn8uh22x3j` | ready | H.264/AAC 1080×1920 20.0 s; 8 unique assets, 0 repeats, 0 prompt-leak, 0 invented-claims; real-visual coverage 69.7% (needs_review) |
+| English finance explainer (Kokoro, 15 s) | `cmurtbhvj000907tngknm6r61` | ready | H.264/AAC 1080×1920 ~15 s; 6 unique assets, 0 repeats, 0 leaks; coverage 68.5% |
+| Mixed AR/EN "API caching" tech explainer | `cmurtclpw000d07tnblpf64nc` | ready | H.264/AAC 1080×1920 15.1 s; 5 unique assets, 0 repeats, 0 leaks; coverage 55.1% (weak-stock topic) |
+| Arabic café (earlier same-day job) | `cmurt4jcn000107tn5imcembt` | ready | previously verified |
+
+Preview `/api/short-video/:id` → 200; HTTP range → 206. Frame inspection: scene-specific query angles produce visibly distinct shots (coffee macro / café street / interior; business-finance b-roll) with correct RTL Arabic captions; some mid-funnel shots remain loosely relevant on weak-stock topics.
+
+**Verified model-output quality:** English scenes produced fresh script copy (not prompt copy); Arabic scenes produced spoken Egyptian narration distinct from the brief; model hallucination attempts (e.g., "بيتزا" on a coffee topic) were rejected by truth-safety/fidelity gates and replaced with safe deterministic lines.
+
+**Remaining verified limitations:** mixed-language model copy can be awkward (needs a language-quality guard or prompt tuning); real-visual coverage 55–70% is below the 90% professional-auto target on abstract/tech topics — candidate selection quality, not planning, is now the bottleneck; creative `creativeGrade` flags are advisory, not blocking.
+
+**Restart/reliability:** two live container restarts post-deploy; queued-job sweep on boot verified (three pending jobs dispatched and completed; none stranded); dashboard 200; Provider Vault (3), social (2), backups (4) intact.
+
+**Data safety:** jobs 40→47 (all new jobs persisted to completion); assets 25; vault 3; social 2; backups 4 — no unexplained loss.
+
+**Storage:** C: free ~196.9 GB→170.8 GB (host usage + ~12 GB across the whole pass incl. renders); Docker images unchanged (9 images, 19.62 GB); containers ~289 MB; build cache 0 B; no multi-GB artifacts created.
+
+**Release decision:** DO NOT PUBLISH. No tag, no release, no image/Setup/GHCR build. The architecture (one planner path, deterministic assembly, honest fallback, structured localized errors) is ready for ONE consolidated artifact build once the owner authorizes it; live runtime already carries the fix via file-patched container.
+
+**Next (single action):** owner performs normal end-user testing on the patched runtime to validate real-prompt output quality before authorizing the consolidated 2.6.1 build.
+
+#### Closure pass (2026-10-03)
+
+**Visual intelligence.** `StockVisualRejection` now carries typed evidence (queries, candidates, scores, reason) instead of an untyped throw; a grounding check refuses winners that only matched a generic fallback query without intent-token overlap; zero-candidate results from configured providers reject as relevance failures, not config errors. ShortCreator catches the rejection, runs one bounded query-family refinement, then routes the scene to a purposeful motion-graphics render (`motion_canvas`) instead of accepting the best bad clip; all shots in a motion-fallback scene cut from the rendered clip. Quality metrics now distinguish purposeful motion design from missing footage, and rendered-but-weak output lands `needs_review` with the exact reason persisted (e.g. "Real footage covers 59.1% of the timeline (target 90%)"). Per-scene decision evidence (families, queries, candidateCount, winner, provider, fallbackReason) persists in the video metadata sidecar as `stockQueryPlan`.
+
+**Mixed-language quality.** `languageQualityGuard` (post-plan, pre-assembly) now detects foreign-script leakage (Chinese meta-commentary), mixed-script glued tokens (`وشining` unusable unless the Latin part is an established tech term), transliterated loanwords (`البيكيند`, `الفوند` → normalized), CJK punctuation, duplicated terms, meta-commentary, and accidental language switching; unusable lines fall back to safe deterministic narration and a `languageQuality` report persists in spec metadata. `stripMetaInstructions` gained a `forNarration` mode that preserves real negations - fixing a meaning-inversion defect where "No soil needed" became "soil needed". The Ollama planner prompt now instructs established English tech terms over invented transliterations and runs at temperature 0.3.
+
+**Entity/prompt-leak hardening.** `extractCoreEntity` filters meta/stopword tokens and prefers short quoted brand phrases («لمعة», "Ember & Wick"); fallback narration can no longer speak duration fragments, imperative verbs, or prompt residue (regression tests cover "النقطة المهمة عن ." and "النقطة المهمة عن اشرح فكرة...").
+
+**Reliability incidents found and fixed.** (a) Root cause of the app crash loop: worker progress/complete/fail callbacks on canceled or missing jobs threw `Invalid job transition` inside unguarded async routes; under the phonemizer runtime the unhandled rejection killed the process - every callback route now responds via a shared mutation-error mapper. (b) Live-DB drift triggers `trg_cleanup_failed_jobs` (silently deleted failed/canceled job rows + their event audit on any jobs write) and `trg_convert_needs_review` (silently bypassed the review gate) were dropped and a defensive migration removes them if present elsewhere; DATABASE_SCHEMA_VERSION bumped to 2.14.0. (c) Boot stale-job recovery only matched `rendering`/`processing` - now covers every in-flight status; `recoverExpiredLeases` treats `needs_review` as terminal. (d) New 60 s job watchdog: expired-lease requeue, silent-mid-stage requeue (bounded 2, audited via `WATCHDOG_AUTO_REQUEUED` job events), exhausted -> honest `STALE_JOB_NO_PROGRESS` failure, and queued-job redispatch against a healthy worker. (e) Environmental: intermittent Windows 9p-mount stalls wedge the app process (p9_client_rpc disk-sleep) under render I/O - a host platform defect, not app code; the watchdog now makes its job-side effects recoverable.
+
+**Real production matrix (fresh unseen prompts, live API, free/local providers).**
+
+| Case | Job | Status | Output / evidence |
+|---|---|---|---|
+| AR-1 Egyptian business brief («لمعة» mobile car wash, 15 s) | `cmushu9mc000107tngi84abtw` | needs_review | H.264/AAC 1080×1920 15.06 s; real footage 67.1% + purposeful motion; frames: car-interior/wheel/worker + RTL captions |
+| AR-2 Egyptian explainer (automatic savings, new topic) | `cmusf6mg6000107tn27rt3r16` | ready | H.264/AAC 1080×1920 14.06 s; clean generated Egyptian narration; money clip + SAVINGS motion card |
+| AR-3 abstract technical (load balancing) | `cmusiem6c000307tn967ihjng` | needs_review | H.264/AAC 1080×1920 15.38 s; real footage 65.4%; terminal/container/envelope shots follow the model's shipping metaphor |
+| EN-1 unknown-topic explainer (keypress journey) | `cmusiilq8000307tn1yhe6nbl` | needs_review | H.264/AAC 1080×1920 15.06 s; real footage 88.8%; all frames keyboard/typing - strongest relevance |
+| EN-2 commercial with negative constraints (Ember & Wick candles) | `cmusfzv85000407tn2dlqd81g` | needs_review | H.264/AAC 1080×1920 15.06 s; real footage 59.1%; fireplace/candle-pour/flame macro, no invented claims |
+| MIX-1 Egyptian + English tech terms (API caching) | `cmusih2h2000107tnfutm2mhf` | ready | H.264/AAC 1080×1920 15.77 s; code/terminal/laptop frames; tech terms kept in English |
+
+Every output: preview `/api/short-video/:id` 200, HTTP range 206, download 200, H.264 + AAC 1080×1920. `needs_review` outputs remain previewable/downloadable with the coverage reason persisted.
+
+**Browser QA (Playwright, real browser).** `scripts/qa-browser-matrix.cjs`: 3 viewports (1920×1080, 1366×768, 390×844) × 2 locales × 12 customer routes + create/improve interaction + reload persistence: **402 pass / 0 fail**. Zero blank screens, zero fatal JS errors, zero raw backend exceptions, correct RTL/LTR, no internal enum/provider names in customer UI. Two transient 500s were observed once during an app wedge-recovery window; not reproducible on a healthy app.
+
+**Incident regression.** Ollama killed live: create returned 503 in 67 ms with localized `{error, message, messageAr, code: SS-PLANNER-DOWN}` and no hidden job; Ollama restarted cleanly. Malformed JSON / HTTP 500 / missing model / timeout covered by `ollamaProvider.test` (bounded 2 attempts, `plannerCode` mapping). The original detailed Arabic brief creates in seconds on the compact-plan path - no dead socket.
+
+**Automated tests.** typecheck:server PASS; server build PASS. Full Vitest run: 1391/1397 with 6 load-induced timeouts on ffmpeg/DB tests while live renders were concurrent; the 5 affected files re-run in isolation: 49/49 PASS (effective 1397/1397, up from the 1368 baseline by net new coverage). New focused coverage: language guard 17 tests, planner/entity regressions 5, router rejection evidence, watchdog-adjacent lease/system suites.
+
+**Restart & data safety.** Multiple live restarts during the pass: boot sweep redispatches queued jobs; interrupted mid-stage jobs now persist as `failed` with `STALE_PROCESS_INTERRUPTED_ON_STARTUP` (previously leaked statuses and vanished rows both fixed); canceled jobs persist; stale callbacks on canceled jobs return safely without crashing. Jobs 47→72 total (49 ready, 4 needs_review, 11 failed, 8 canceled - all lineage preserved); videos on disk 85; Provider Vault 3; social accounts 2; backups 3; job_events 1741; no unexplained loss.
+
+**Storage.** C: free ~170.8 GB→135 GB (rendered outputs + media cache across the matrix); Docker images unchanged (9); no multi-GB artifacts built.
+
+**Commits this pass:** `7b02d40` visual rejection + motion fallback + language guard, `7389039` callback/watchdog/trigger/language hardening, `4d2a058` schema bump, `0a22f3e` matrix script refinement. PR #13 open, unmerged.
+
+**Remaining verified defects:** (a) qwen2.5:7b produces inconsistent Egyptian-Arabic creative copy on abstract technical topics - MIX-1 narration is usable but dialect-awkward ("الشي بتسمى", filler repetition); no deterministic gate can judge semantic coherence and no larger model is installed locally. (b) Occasional weak stock still wins on niche beats (AR-2 coffee-beans hook on a banking topic; AR-3 envelope shot) - grounding rejects generic-only matches but semantically-plausible-but-wrong candidates remain a candidate-quality ceiling. (c) Intermittent host 9p-mount stalls wedge the app for ~30-90 s under render I/O (environmental). (d) Real-footage coverage on abstract topics remains 55-89% by design - motion graphics now carry those beats, which is the intended treatment, but footage-heavy scenes on niche Arabic business topics can still look loosely relevant.
+
+**Artifact decision:** NOT READY for consolidated 2.6.1 build - blocker (a) Arabic creative-copy quality on abstract technical prompts is the remaining product-grade gap the owner must weigh before authorizing the artifact; infrastructure, reliability, and honesty closure items all verified.
+
+#### Model & semantic-visual qualification pass (2026-10-04)
+
+**Planner model.** `qwen3.5:9b-q4_K_M` (6.59 GB, digest `6488c96f…`) qualified against `qwen2.5:7b-instruct` on a 12-prompt text-only A/B (raw CreativePlan JSON eval, `scripts/qa/model-ab-eval.cjs` + `qa-ab/` raw outputs). A-side produced gibberish, fabricated stats, invented transliterations, and Chinese/Japanese script leakage; B-side produced clean natural Egyptian with English tech terms intact, 12/12 valid JSON at ~8–10.6 s warm latency, 5.5 GB resident at 100% GPU offload. Production planner now sends `think:false` and defaults to `OLLAMA_MODEL=qwen3.5:9b-q4_K_M`; verified end-to-end inside the live container (clean JSON, natural Egyptian, 41 s cold within the 120 s timeout).
+
+**OpenCLIP production runtime.** `ABUD_ENABLE_OPENCLIP_SEMANTICS=false` was pinned in `.env` and the 605 MB checkpoint sat outside the mounted models dir — flipped env, seeded the checkpoint host-side, recreated the worker. Live proof: `semanticRuntime:"open_clip"` on real candidate analyses (55 entries in the final API-caching sidecar), `servedByWorkerPool:true`. Acceptance floor raised to 60 (env-tunable) after measured discrimination (coffee trap 59.08 vs correct winner 62.5). `rankStockCandidatesWithVisualSemantics` no longer skips scoring for single candidates. First-call 9p checkpoint load needed a longer budget and container-local temp for candidate downloads — both fixed.
+
+**Runtime hardening (root-caused from live failures).** `readDurableArtifactsForSourceJob`/`readDurableArtifactsById` converted to async — the synchronous recursive 9p scan over 701 manifests was blocking the Node event loop, causing app wedges, callback `socket hang up`s, and watchdog stale-fails. Full-retry route now filters captions/voice reuse pairs for `voiceArtifactId`+checksum consistency (fixes `RETRY_ARTIFACT_REUSE_INVALID` crash loop). All router handlers wrapped so rejected async handlers reach `next(error)`; `index.ts` prunes Emscripten-style fatal `unhandledRejection` listeners (phonemizer) while keeping targeted logging. Whisper stages model+input to container-local tmp per run (was D-state stalled reading a 466 MB model through 9p). Pexels downloads resumable (`curl -C -`) with partials preserved across transport failures and env-tunable caps. Media-artifact reuse filters `motion_canvas` providers to motion-resolved scenes only. Black-frame QA is now provenance-aware — purposeful motion-scene windows excluded from the fatal percentage but preserved in the raw report.
+
+**Arabic query-family defect.** `بن` (coffee bean) matched inside `بنحفظها`/`بنك`/`بناء`, generating coffee queries for caching/banking narration — the recurring coffee-clip bug. Token now bounded with Unicode-letter lookarounds `/(?<![\p{L}])(?:ال)?بن(?![\p{L}])/iu`; payment `دفع` deliberately left unbounded (bounding loses `ادفع`/`مدفوعات`). 12 query-family tests + 6 semantic-gate tests + 8 durable-artifact tests + 6 retry-reuse tests pass; `typecheck:server` clean.
+
+**Final three production videos (all `ready`, all verified).**
+
+| Video | Job | Evidence |
+|---|---|---|
+| API Caching: السر في السرعة | `cmut7l6qe000007o4g3jua6fh` | H.264/AAC 15.49 s, moov present, preview 200 / range 206 / download 200 / thumb 200. Planner `qwen3.5:9b-q4_K_M` via `OllamaContentAIProvider`; OpenCLIP winner score 62.05. Scenes: website-browsing hook, terminal ping-output data display (server responding), laptop. |
+| لمعة: غسلة في مكانك (mobile car wash) | `cmut7ldsc000207o4b2wjgjko` | H.264/AAC 15.06 s, moov, endpoints all pass. Niche stock queries correctly returned nothing → gate rejected office candidates → purposeful motion-card fallback rendered (designed, not missing footage). Minor caption/card text overlap near bottom — flagged for owner review. |
+| Encryption at Rest vs In Transit | `cmut21x9l000s07o4e6pwfyhb` | H.264/AAC 15.06 s, moov, endpoints all pass. Barbed-wire handshake = defensible hostile-network metaphor; middle scene generic but on-brand. |
+
+**Operator note (honest).** The API-caching scene-1 footage required two corrective interventions: (1) the stale coffee media artifact embedded in the job spec's `reuseArtifacts` was removed via DB update plus disk-manifest invalidation — stage retries replay spec-embedded artifacts, which disk invalidation cannot reach; (2) after the corrected query families produced clean queries, a Pexels API network flap made all searches time out and a generic fallback clip ("advertisement solution…", food footage) won at 60.65 — barely over the floor. The scene's `stockSearchTerms` were updated to concrete queries Pexels can satisfy (`server room data center`, `programmer code screen dark`, `computer network technology`) and a media-stage retry selected the terminal-data clip through the normal search→OpenCLIP→gate→render path. The "semantically-plausible-but-wrong" ceiling on abstract Arabic tech topics is mitigated but not eliminated: near-floor scores (59–62) still cluster tightly, and `server` remains ambiguous in stock search.
+
+**Decision: READY FOR OWNER MANUAL ACCEPTANCE** — exactly three videos above for owner viewing. Not ready for 2.6.1 build: owner manual acceptance must precede any artifact work.
+
+#### Clean Autonomous Acceptance (2026-10-04)
+
+**Pass type.** Re-qualification of the same branch (`refactor/production-intelligence-recovery`, PR #13) under a strict no-intervention rule: three fresh unseen jobs through `POST /api/v2/jobs`, no DB/spec/manifest/query/media/status mutation, no manual re-dispatch or stage retry. Normal product behavior only (bounded provider retry, automatic query refinement, motion fallback, watchdog). **Zero operator intervention occurred on the three qualification jobs.** One transient `production_not_runnable` ("Local Voice is not reachable") readiness rejection on Job B's create call — Local Voice was mid-synthesis on Job A; re-submit through the same customer path succeeded. No job row was touched.
+
+**Durability.** All recovery behaviors verified in source/config, not live patches: qwen3.5 default + Ollama registry selection, `think:false` on structured planner calls, OpenCLIP enablement + worker pool + checkpoint provisioning (`install-openclip` Dockerfile stage, compose entrypoint seed), 60-point semantic floor, Arabic `بن` Unicode-boundary fix, async durable-artifact readers, retry voice/caption pair consistency, async route error protection, Whisper local staging, `curl -C -` resumable downloads, motion-artifact reuse filtering, provenance-aware black-frame QA. HEAD `e773643`.
+
+**Planner provenance (all three):** `OllamaContentAIProvider`, model `qwen3.5:9b-q4_K_M`, provenance `MODEL_GENERATED`, 0 retries. Latencies 23.2 s / 9.9 s / 12.3 s.
+
+| Job | Topic | Status | Duration | Footage coverage |
+|---|---|---|---|---|
+| A `cmuu11rak000107o4a8xyh5uq` | CDN cache speed (AR, tech terms EN) | needs_review | 16.26 s | 33.8% |
+| B `cmuu13eki000507o489n08emh` | purchase round-up savings app (AR) | ready | 15.06 s | 90.1% |
+| C `cmuu142xv000807o410g6bea9` | database index speed (AR+EN terms) | needs_review | 15.06 s | 60.4% |
+
+**Autonomous pipeline.** Event trails show the full unassisted path per job: queued → preparing → content generation → voice → captions → footage search → media selection → render → finalize → mastering → validation → quality decision. Zero watchdog requeues, zero failure events. A and C landed `needs_review` through the honest coverage gate, not manual forcing.
+
+**Visual evidence (OpenCLIP real, per-candidate `semanticRuntime:"open_clip"`).** A: website/laptop-browsing imagery; `visualSemanticScore` 60.88 (candidates 60.88/61.47/59.11); two scenes took WEBSITE_MOCKUP purposeful graphics → 33.8% footage coverage → needs_review. No food/coffee/waiter contamination. B: phone-in-hand + finance/app imagery, all Pexels; gate-time winner scores above the floor (e.g. 63.62/63.47); the 59.25/59.53 figures in shot metadata are post-selection re-scores of trimmed clips, not gate bypasses. C: paper-stack flipping (search-without-index metaphor), finger pointing to a book index (matches the narration's own فهرس metaphor), thumbs-up, abstract data-stream — coherent and on-topic.
+
+**Narration.** B and C: coherent generated Egyptian Arabic, English terms preserved naturally, no fabricated numbers/brands, no gibberish. A scene 1: **FAILED** — deterministic fallback assembled residue `النقطة المهمة عن يشرح للناس ليه الـ.` (spoken + burned into captions) after the model line was rejected for prompt overlap; `extractCoreEntity` captured imperative prompt residue that passed `entityUsable`.
+
+**General fix applied this pass (not per-job).** `promptIntentContract.ts`: residue/imperative/question/filler tokens added to `ENTITY_STOPWORD_RE` with Unicode boundaries; `extractCoreEntity` prefers Latin technical runs (CDN/cache) and rejects orchestration-residue candidates via new shared `isSpeakableEntity`; `creativePlanner.ts` fallback walks `subjectEntities` for a speakable candidate instead of emitting residue. Two regression tests added (`ollamaProvider.test.ts`). Fix compiled, `docker cp`'d to both containers, restarted, `isSpeakableEntity` verified live — runtime ≡ source.
+
+**Technical QA (all three).** Valid MP4 (`ftyp` first), H.264 + AAC, 1080×1920; preview 200 / range 206 / download 200 / thumbnail 200 (`image/jpeg`); Job C black-frame report 0% / pass; contact sheets confirm correct Arabic shaping, coherent captions, no destructive caption/card overlap, acceptable A/V sync. No black gaps; purposeful motion scenes not misclassified.
+
+**Full regression (final code, nothing rendering).** `typecheck:server` PASS, `typecheck:ui` PASS, `typecheck:revideo-project` PASS, production `npm run build` PASS (vite, 7.99 s). **Full Vitest: 1409/1409 tests, 99/99 files — clean**, incl. the new residue regressions.
+
+**Data safety.** jobs 83→86 (+3 the fresh jobs), job_events 2471→2555, scene_artifacts 488→515, video_revisions 56→59; provider_credentials_vault 3→3, social_accounts 2→2, backups 4→4, api_tokens 0→0. No deletions, no cleanup-trigger recurrence. License file present/activated, mtime unchanged (Sept 12).
+
+**Storage.** C: free 123.6 GB→118.2 GB (~5.4 GB for renders + build output). qwen3.5:9b-q4_K_M 6.6 GB active; qwen2.5:7b-instruct 4.7 GB preserved. Docker images unchanged (short-studio-server:2.6.0 11.9 GB; images total 22.53 GB); build cache 0 B; no prune, no new image, no Setup/GHCR/release artifacts.
+
+**Remaining defects.** (1) Job A narration residue — root cause now fixed generally in source+runtime, but this pass's rendered artifact carries the defect; re-qualification jobs needed on the fixed code. (2) A/C real-footage coverage below the 90% target (purposeful motion graphics carry the remainder — honest gating, intended treatment). (3) Near-floor semantic scores (59–63) still cluster tightly on abstract tech beats — candidate-quality ceiling, not a gate bypass. (4) No general caption/card overlap defect reproduced this pass.
+
+**Decision: NOT READY for owner manual acceptance.** Blocker: Job A scene-1 residue line fails the narration-acceptance gate; A and C also exit `needs_review`. Autonomy, zero-intervention integrity, visual relevance, technical QA, data safety, and full regression all PASS — but owner acceptance requires acceptable narration on all three outputs. Next: create three fresh jobs on the deployed fix and re-verify narration quality end-to-end.
+
+#### Final Clean Autonomous Re-qualification (2026-10-05)
+
+**Pass type.** Strict no-intervention re-qualification of `refactor/production-intelligence-recovery` (PR #13) after the narration-residue and visual-coverage fixes: three fresh unseen jobs through `POST /api/v2/jobs`, Auto visuals, normal planner/worker/OpenCLIP path. **Zero operator intervention on job data or pipeline execution** — no DB/spec/manifest/query/media/status mutation, no manual re-dispatch, no per-job docker cp. Bounded provider retry, watchdog requeue, and automatic motion fallback are normal product behavior and are recorded where they fired.
+
+**General defects fixed this pass (source-level, no per-job special-casing).**
+1. `mockup`-type shots were counted in no coverage bucket — deliberately routed motion graphics (e.g. `creative_plan:WEBSITE_MOCKUP`) registered as missing visuals. `professionalVisualQuality.ts` now counts them in `purposefulMotionSeconds`; the gate still judges `intentionalVisualCoveragePercent` (real + purposeful) while the finding now reports that judged metric instead of the stock-only figure. The 90% threshold was not lowered.
+2. `ShortCreator.ts` overwrote `routingReason` with `single_clip:...`, erasing `creative_plan:`/`website_intent:` provenance and making purposeful scenes look unexplained. Now appended: `existing|single_clip:...`.
+3. `promptIntentContract.ts` entity extraction accepted residue: a clause truncated on a quantifier (`تطبيق بيقرب قيمة كل`) and a dialect directive plus clause verb (`بالمصري تطبيق بيقرب قيمة`). `extractCoreEntity` now early-stops at clause-verb boundaries, `ENTITY_STOPWORD_RE` covers dialect/meta directives, and `isSpeakableEntity` rejects embedded clause verbs — while valid entities (`تطبيق`, `بيانات`, `CDN cache`) survive. Regression tests added in `ollamaProvider.test.ts`.
+4. Test isolation: `Pexels.test.ts` (and several other files) arm nock without restoring; workers are reused across files, so a stale `api.pexels.com` interceptor stalled `arabicVoicePolicy.test.ts`'s real health probe past 5 s. Fixed generally via `src/test/nockIsolation.setup.ts` (`cleanAll` + `restore` + `activate` after every file) registered in `vitest.config.ts`.
+
+**Runtime ≡ source.** Changed compiled files deployed via the established targeted `docker cp` method into `short-studio-app` and `short-studio-render-worker` (no image rebuild); conditional-append provenance and the entity rules verified live in both containers.
+
+**Final three jobs (all `ready`, all created serially through the customer path).**
+
+| Job | Topic | ID | Duration | Coverage | Narration |
+|---|---|---|---|---|---|
+| A | CDN cache speed (AR, tech terms EN) | `cmuun4xt4000d07o47lszaa5f` | 15.70 s | intentional ~99.6% | Clean Egyptian, CDN/cache/server terms natural, zero residue |
+| B | purchase round-up savings app (AR) | `cmuuo0rtq000h07o43d4igokh` | 16.02 s | intentional ~99.6% (purposeful mockup present) | Clean, no invented numbers/brands; `coreEntity` resolved to `تطبيق` |
+| C | database index speed (AR+EN) | `cmuuotm6p000l07o4g8710j5l` | 15.06 s | intentional 99.6% (real 90.3% + purposeful 9.3%, textOnly 0) | `...الـ Index هو اللي بيسرع الـ Query زي الفهرس` — natural code-switching |
+
+**Planner provenance (all three):** `OllamaContentAIProvider`, model `qwen3.5:9b-q4_K_M`, `contentProvenance: MODEL_GENERATED`, `fallbackUsed: 0`.
+
+**Visual intelligence.** Real OpenCLIP (`semanticRuntime: open_clip`) scoring and rejection on Pexels candidates; Job C avg semantic score 71.4 / min 70. Purposeful mockup shots carry preserved provenance (`creative_plan:WEBSITE_MOCKUP|single_clip:...`) and count as deliberate coverage; stock coverage still reported separately. No coffee/food/waiter contamination observed.
+
+**Technical QA (all three).** Valid MP4, `ftyp` first, `moov` at offset 36 (faststart), `mdat` after `moov`; H.264 + AAC, 1080×1920; preview 200 / range 206 / download 200 / thumbnail 200 (`image/jpeg`).
+
+**Full regression.** `typecheck:server` + `typecheck:ui` + `typecheck:revideo-project` PASS; production `npm run build` PASS. **Full Vitest: 1415/1415 tests, 99/99 files — clean** (baseline 1409 + 6 new regression tests). Earlier runs showed load-induced timeouts only; the last deterministic failure was the nock leak, now fixed at the suite level.
+
+**Restart smoke.** Normal supported restart (`docker restart` app + render-worker; volumes untouched). Post-restart: app/healthz 200, render-worker healthy, postgres + n8n healthy, Ollama 200, Local Voice 200; all three jobs still `ready`; preview/download/range/thumbnail all pass; Provider Vault 3 rows intact; license active.
+
+**Data safety.** jobs 94→103 (+9: the 3 final jobs, 2 superseded ready iterations from earlier in this pass, 4 honest `failed` rows from Local Voice cold-start/socket-hang-up and n8n dispatch-timeout create attempts — none rescued, none patched), job_events 2704→2876, scene_artifacts 533→578, video_revisions 61→66; provider_credentials_vault 3→3, social_accounts 2→2, backups 4→4, api_tokens 0→0. No deletions.
+
+**Storage.** C: free ~83.5 GB. Docker images unchanged (13 total, 23.65 GB); build cache 244 MB; no prune, no new image, no release artifacts. qwen3.5:9b-q4_K_M active; qwen2.5:7b-instruct preserved.
+
+**Honest operational notes.** Local Voice synthesis is CPU-bound and slow after a cold start; several create attempts failed with `socket hang up` / stage timeouts while the service was saturated — the supported `local-voice` lifecycle restart was used once for service recovery (not job repair), and final jobs were created serially. One watchdog `WATCHDOG_AUTO_REQUEUED` fired on a superseded iteration — audited bounded behavior.
+
+**Remaining defects.** (1) Local Voice cold-start/contention flakiness can still surface as create-time or voice-stage timeouts under parallel load (serial creation is the reliable path). (2) Near-floor semantic scores (~59–63) still cluster on abstract beats — candidate-quality ceiling, not a gate bypass. (3) Superseded ready/failed job rows from this pass remain in history by design (no deletion).
+
+**Decision: READY FOR OWNER MANUAL ACCEPTANCE** — the three final videos (`cmuun4xt4000d07o47lszaa5f`, `cmuuo0rtq000h07o43d4igokh`, `cmuuotm6p000l07o4g8710j5l`) await owner viewing. Do not merge PR #13 or build 2.6.1 until owner approval.
+
+#### Storage Forensics & Safe Recovery (2026-10-05)
+
+**Trigger.** C: at ~83.5 GB free after the acceptance pass. Read-only forensics first, then removal of proven-disposable storage only. No product build, no release work.
+
+**Root cause of the drop (ranked).**
+
+| Consumer | Physical | Reclaimable | Disposition |
+|---|---|---|---|
+| `%TEMP%` — abandoned QA trees (nuvora clean-install dirs ~12 GB, pgprobe/pg-runtime/pg-1615-src ~2.9 GB, app-extract/production-tree/pt2 ~1.8 GB), Windows RDP `DiagOutputDir` ETL traces 4.46 GB, ~100 stale VS-installer payload dirs ~12 GB (already partly aged out), installer/downloads junk | 28.66 GB | ~28.2 GB | Deleted — disposable temp, nothing locked |
+| `docker_data.vhdx` physical inflation vs ~24 GB logical | 59.00 GB | ~30.4 GB | `fstrim` inside docker-desktop distro (10.3 GiB discarded on /dev/sdd) + elevated `diskpart compact vdisk` after Docker stop → 28.65 GB |
+| `npm-cache\_npx` + `_cacache` | 9.26 GB | ~9.2 GB | `npm cache clean --force` + `_npx` removal — re-downloadable |
+| `pnpm` store + `pnpm-cache` | 5.25 GB | ~1.7 GB | `pnpm store prune` — unreferenced only |
+| Short Studio `data/cache` media cache | 1.16 GB | 1.16 GB | Deleted — pure re-download accelerator; durable media lives in `artifacts/scene/media/` and is referenced by `scene_artifacts` (0 rows reference cache paths) |
+| Render worker `/tmp` (stale Whisper staging 477 MB + semantic candidate videos 763 MB) | ~1.5 GB | ~1.5 GB | Deleted inside container — transient staging, re-created per run |
+| uv cache, `devin.exe-overflows`, misc temp files | ~0.5 GB | ~0.5 GB | Deleted |
+
+**Preserved untouched:** postgres/n8n volumes, Provider Vault (3), license.json + licensing dir, customer media/videos (all 103 jobs incl. the three acceptance videos), backups (4), qwen3.5:9b-q4_K_M, qwen2.5:7b-instruct, VoiceTut runtime + models dir, `services/local-tts/.venv` (active Local Voice environment), OpenCLIP checkpoint, canonical `short-studio-server:2.6.0` image, source repo + git history, `dist-commercial\ShortStudio-Setup-2.6.0.exe` (published GA artifact), all named Docker images and volumes including other projects' (elhabak, video-factory, admin-server — unused but owner data).
+
+**Docker.** Logical ~23.65 GB unchanged (nothing deleted inside Docker except container-writable-layer temps). VHDX 59.00→28.65 GB. Sparse mode refused by WSL without `--allow-unsafe` (Microsoft corruption warning) — skipped; compact was done the safe way via detach-compact on an approved elevated diskpart run. Unreferenced anonymous volumes (~470 MB total) left in place — unproven provenance, not worth the risk.
+
+**Product storage defect: YES — fixed.** `MediaCache` (`src/server/v2/media-cache/mediaCache.ts`) had no bound: every downloaded stock clip persisted in `data/cache/` forever (165 files / 1.16 GB in 3 days of QA). Now bounded: `ABUD_MEDIA_CACHE_MAX_BYTES` (default 512 MB) and `ABUD_MEDIA_CACHE_MAX_AGE_HOURS` (default 7 days); LRU-by-mtime eviction on each `saveCachedAsset`, never evicts files <60 s old (in-flight stages) or files not matching the 24-hex cache-key pattern; all failures are warn-and-continue. 5 focused tests added (`mediaCache.test.ts`). Compiled file deployed to app + render-worker via targeted `docker cp`. No cleanup runs during active render beyond this lazy-on-save eviction.
+
+**Regression after fix.** `typecheck:server` PASS. **Full Vitest: 1420/1420 tests, 100/100 files — clean.**
+
+**Data safety after cleanup.** jobs 103, job_events 2876, scene_artifacts 578, video_revisions 66, provider_credentials_vault 3, social_accounts 2, backups 4, api_tokens 0 — all unchanged from the acceptance snapshot; no DB/customer counter decreased. Post-restart (Docker stop/start for compaction): app/healthz 200, render-worker/postgres/n8n healthy, Ollama 200, Local Voice 200; all three acceptance videos preview 200 / range 206 / download 200 / thumbnail 200.
+
+**Result.** C: free 83.46 → **165.78 GB (+82.3 GB physically reclaimed)**. Top three consumers responsible for the drop: %TEMP% abandoned QA/diagnostic/payload junk (~28 GB), Docker VHDX physical inflation (~30 GB recovered via trim+compact), package-manager caches npm/pnpm/uv (~11 GB).
+
+### Owner Manual Acceptance — Final Recovery (2026-10-05)
+
+**OWNER MANUAL ACCEPTANCE: APPROVED.** The owner accepts the current Short Studio product, including the final qualified production architecture and the known non-blocking limitations.
+
+**Accepted final evidence.** qwen3.5:9b-q4_K_M local planner; real OpenCLIP semantic media selection; production intelligence recovery; purposeful motion-graphics fallback; clean Arabic / mixed-language narration with no prompt-as-voiceover behavior; autonomous production path; bounded storage cache; three final autonomous acceptance videos; final runtime health; data safety; and final clean regression (1420/1420 Vitest tests, 100/100 files).
+
+**Accepted non-blocking limitations (not release blockers).** (1) Local Voice cold-start/contention can be slower or occasionally timeout under parallel generation; serial normal customer production is the qualified reliable path. (2) Stock-provider candidate quality has a ceiling on highly abstract topics; purposeful motion graphics are the accepted fallback. (3) Historical failed/superseded QA job records intentionally remain preserved.
+
+**Decision.** Approved for final release execution. This acceptance does not authorize a new development cycle; the listed limitations are accepted and are not blockers.

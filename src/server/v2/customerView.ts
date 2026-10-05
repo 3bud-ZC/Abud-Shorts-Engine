@@ -403,6 +403,9 @@ export function customerQualityReview(job: JobRecord): CustomerQualityReview | u
       blackFramePercent: Number(out.blackFramePercent || 0),
       visualIssues: Array.isArray(pvq.issues) ? pvq.issues : [],
       realVisualCoveragePercent: Number(pvq.realVisualCoveragePercent ?? 100),
+      intentionalVisualCoveragePercent: Number(
+        pvq.intentionalVisualCoveragePercent ?? pvq.realVisualCoveragePercent ?? 100,
+      ),
       textOnlyTimelinePercent: Number(pvq.textOnlyTimelinePercent ?? 0),
       repeatedAssetCount: Number(pvq.repeatedAssetCount ?? 0),
       scriptQualityPass: out.scriptCompleteness !== false,

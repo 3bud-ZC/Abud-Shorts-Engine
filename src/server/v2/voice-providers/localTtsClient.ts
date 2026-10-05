@@ -15,7 +15,7 @@ export class LocalTtsClient {
   constructor(
     private baseUrl = process.env.LOCAL_TTS_BASE_URL || (process.env.DOCKER === "true" ? "http://local-tts:8765" : "http://127.0.0.1:8765"),
     private internalToken = process.env.INTERNAL_SERVICE_TOKEN || "",
-  ) {}
+  ) { }
 
   private headers(): Record<string, string> {
     return this.internalToken ? { "x-internal-token": this.internalToken } : {};
@@ -47,7 +47,12 @@ export class LocalTtsClient {
   }): Promise<VoiceAudioResult> {
     const response = await axios.post(`${this.baseUrl}/synthesize`, input, {
       headers: this.headers(),
-      timeout: Number(process.env.LOCAL_TTS_SYNTHESIS_TIMEOUT_MS || 180000),
+      // Measured on a contended Windows host (GPU shared with the local
+      // planner model): one Arabic synthesis leg completed in ~180.2s, right
+      // at the old 180s cap - a valid render was being killed by the timeout,
+      // not by a real failure. 300s keeps the bound while tolerating
+      // loaded-host synthesis.
+      timeout: Number(process.env.LOCAL_TTS_SYNTHESIS_TIMEOUT_MS || 300000),
     });
     const audioBase64 = String(response.data?.audioBase64 || "");
     if (!audioBase64) throw new Error("Local TTS service returned no audio.");

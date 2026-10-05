@@ -30,10 +30,27 @@ export type ProfessionalVisualQualityReport = {
   stockTimelinePercent: number;
   uploadedTimelinePercent: number;
   motionOverlayPercent: number;
+  /**
+   * Designed-graphic seconds with a real creative reason attached: a planned
+   * motion/graphic treatment, a recorded stock-rejection fallback, or a
+   * deliberately routed mockup (creative_plan treatment / website_intent).
+   * Professional quality means relevant visuals, not a mandatory percentage
+   * of stock footage - a designed explainer card honestly beats a random
+   * laptop clip.
+   */
+  purposefulMotionTimelinePercent: number;
+  /** Mockup seconds routed by the planner or the website-intent rule. */
+  mockupTimelinePercent: number;
+  /** Graphic seconds (motion + mockup) with no recorded creative reason (suspicious). */
+  unexplainedMotionTimelinePercent: number;
+  /** realSeconds + purposeful designed graphics: the share of the timeline carrying a deliberate visual. */
+  intentionalVisualCoveragePercent: number;
   rawPromptLeakCount: number;
   inventedClaimRiskCount: number;
   readyForProfessionalAuto: boolean;
   issues: string[];
+  /** Non-blocking advisories - recorded facts, not gate failures. */
+  notes: string[];
 };
 
 function norm(text: unknown): string {
@@ -88,7 +105,29 @@ export function calculateProfessionalVisualQualityReport(input: {
   const generatedSeconds = (secondsByType.image || 0);
   const uploadedSeconds = secondsByType.upload || 0;
   const motionSeconds = secondsByType.motion || 0;
+  const mockupSeconds = secondsByType.mockup || 0;
   const realSeconds = stockSeconds + generatedSeconds + uploadedSeconds;
+
+  // Designed-graphic shots (rendered motion beds and planner/mockup template
+  // scenes) with a recorded creative reason - a creative_plan treatment, a
+  // stock-rejection fallback, or a website-intent mockup - are deliberate
+  // design; graphic shots with no routing reason are unexplained fill. This
+  // is what separates "purposeful motion graphics" from "text over a colour
+  // because footage was missing". A mockup the router chose on purpose is a
+  // designed visual, not missing footage; leaving it out of coverage marked
+  // finished, professionally designed scenes as visually incomplete.
+  const purposefulGraphicSeconds = shots
+    .filter((shot) => shot.sourceType === "motion" || shot.sourceType === "mockup")
+    .filter((shot) =>
+      /creative_plan:|stock_rejected|motion_graphics|graphic|website_intent/.test(
+        String(shot.routingReason || ""),
+      ),
+    )
+    .reduce((acc, shot) => acc + Math.max(0, shot.duration || 0), 0);
+  const unexplainedGraphicSeconds = Math.max(
+    0,
+    motionSeconds + mockupSeconds - purposefulGraphicSeconds,
+  );
 
   const providerMix: Record<string, number> = {};
   selected.forEach((asset) => {
@@ -140,21 +179,39 @@ export function calculateProfessionalVisualQualityReport(input: {
     minimumSemanticScore: reportedScores.length ? Math.min(...reportedScores) : undefined,
     visualRelevanceMethod,
     blackFramePercent: input.blackFramePercent,
-    textOnlyTimelinePercent: Math.round((motionSeconds / total) * 1000) / 10,
+    textOnlyTimelinePercent: Math.round((unexplainedGraphicSeconds / total) * 1000) / 10,
     generatedTimelinePercent: Math.round((generatedSeconds / total) * 1000) / 10,
     stockTimelinePercent: Math.round((stockSeconds / total) * 1000) / 10,
     uploadedTimelinePercent: Math.round((uploadedSeconds / total) * 1000) / 10,
     motionOverlayPercent: Math.round((motionSeconds / total) * 1000) / 10,
+    purposefulMotionTimelinePercent: Math.round((purposefulGraphicSeconds / total) * 1000) / 10,
+    mockupTimelinePercent: Math.round((mockupSeconds / total) * 1000) / 10,
+    unexplainedMotionTimelinePercent: Math.round((unexplainedGraphicSeconds / total) * 1000) / 10,
+    intentionalVisualCoveragePercent:
+      Math.round(((realSeconds + purposefulGraphicSeconds) / total) * 1000) / 10,
     rawPromptLeakCount,
     inventedClaimRiskCount,
     readyForProfessionalAuto: false,
     issues: [],
+    notes: [],
   };
 
-  if (report.realVisualCoveragePercent < 90 && input.spec.visualMode !== "motion_graphics" && input.spec.visualMode !== "animated_explainer") {
+  const graphicsLed =
+    input.spec.visualMode === "motion_graphics" ||
+    input.spec.visualMode === "animated_explainer" ||
+    input.spec.productionMode === "motion_graphics" ||
+    input.spec.productionMode === "animated_explainer";
+
+  // Coverage is judged on intentional visuals: real footage plus graphics the
+  // pipeline chose on purpose. A production that resolved weak-stock scenes
+  // to designed motion is honest; one that left unexplained gaps is not.
+  if (report.intentionalVisualCoveragePercent < 90 && !graphicsLed) {
     report.issues.push("real_visual_coverage_below_90_percent");
   }
-  if (report.textOnlyTimelinePercent > 10 && input.spec.visualMode !== "motion_graphics" && input.spec.visualMode !== "animated_explainer") {
+  if (report.purposefulMotionTimelinePercent > 0 && report.stockTimelinePercent < 90 && !graphicsLed) {
+    report.notes.push("some_scenes_resolved_to_purposeful_motion_graphics");
+  }
+  if (report.textOnlyTimelinePercent > 10 && !graphicsLed) {
     report.issues.push("text_only_timeline_above_10_percent");
   }
   if (report.repeatedAssetCount > 0) report.issues.push("repeated_visual_assets_detected");

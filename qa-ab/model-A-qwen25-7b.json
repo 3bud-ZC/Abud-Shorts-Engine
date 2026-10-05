@@ -1,0 +1,614 @@
+{
+ "model": "qwen2.5:7b-instruct",
+ "startedAt": "2026-10-03T16:11:50.302Z",
+ "prompts": [
+  {
+   "promptId": "AR-B1",
+   "latencyMs": 43059,
+   "evalDuration": 4979372000,
+   "raw": "{\n  \"title\": \"سكر حامض\",\n  \"tone\": \"ودي وملونة\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"هنا في شبرا، محل عصير قصب اسمه «سكر حامض».\",\n      \"onScreenText\": \"سكر حامض\",\n      \"visualIntent\": \"محل عصير قصب في شبرا\",\n      \"searchQueries\": [\"محل عصير قصب شبرا\", \"سكر حامض محل\", \"شبرا محل عصير قصب\"]\n    },\n    {\n      \"purpose\": \"solution|benefit\",\n      \"narration\": \"عصير طازج، قصب بلدي، طعمه مميز.\",\n      \"onScreenText\": \"عصير طازج\",\n      \"visualIntent\": \"工人正在新鲜榨汁\",\n      \"searchQueries\": [\"عصير طازج قصب\", \"عصير قصب طازج\", \"عصير طازج من قصب\"]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"تجي تجرب، تجربة واحدة تكفي.\",\n      \"onScreenText\": \"تجي تجرب\",\n      \"visualIntent\": \"顾客正在品尝新鲜榨的果汁\",\n      \"searchQueries\": [\"تجربي عصير قصب\", \"تجربة عصير قصب\", \"تجربي عصير حامض\"]\n    }\n  ],\n  \"cta\": \"سكر حامض\",\n  \"expansionLines\": \"هنا في شبرا، محل عصير قصب اسمه «سكر حامض»، العصير طازج، قصب بلدي، طعمه مميز، تجي تجرب.\"\n}",
+   "rawChars": 952,
+   "parsed": {
+    "title": "سكر حامض",
+    "tone": "ودي وملونة",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "هنا في شبرا، محل عصير قصب اسمه «سكر حامض».",
+      "onScreenText": "سكر حامض",
+      "visualIntent": "محل عصير قصب في شبرا",
+      "searchQueries": [
+       "محل عصير قصب شبرا",
+       "سكر حامض محل",
+       "شبرا محل عصير قصب"
+      ]
+     },
+     {
+      "purpose": "solution|benefit",
+      "narration": "عصير طازج، قصب بلدي، طعمه مميز.",
+      "onScreenText": "عصير طازج",
+      "visualIntent": "工人正在新鲜榨汁",
+      "searchQueries": [
+       "عصير طازج قصب",
+       "عصير قصب طازج",
+       "عصير طازج من قصب"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "تجي تجرب، تجربة واحدة تكفي.",
+      "onScreenText": "تجي تجرب",
+      "visualIntent": "顾客正在品尝新鲜榨的果汁",
+      "searchQueries": [
+       "تجربي عصير قصب",
+       "تجربة عصير قصب",
+       "تجربي عصير حامض"
+      ]
+     }
+    ],
+    "cta": "سكر حامض",
+    "expansionLines": "هنا في شبرا، محل عصير قصب اسمه «سكر حامض»، العصير طازج، قصب بلدي، طعمه مميز، تجي تجرب."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-B2",
+   "latencyMs": 6748,
+   "evalDuration": 5152912000,
+   "raw": "{\n  \"title\": \"ستيلتو جيم - مدينة نصر\",\n  \"tone\": \"مصري\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"يا صاحب، محتاج جيم جيد في مدينة نصر.\",\n      \"onScreenText\": \"ستيلتو جيم\",\n      \"visualIntent\": \"健身房外观，充满活力的人们在锻炼\",\n      \"searchQueries\": [\"gym in masr el-naser\", \"fitness center in masr el-naser\", \"gymnasium in masr el-naser\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"اللي في مدينة نصر كتير منا محتاجين نعمل جيم، لكن ما فيش جيم جيد.\",\n      \"onScreenText\": \"مشكلة\",\n      \"visualIntent\": \"人们在寻找健身器材，但没有合适的健身房\",\n      \"searchQueries\": [\"gym search in masr el-naser\", \"looking for gym in masr el-naser\", \"no gym options in masr el-naser\"]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"لكنه عندنا جيم ستيلتو، اشتراك شهري ومدربين محترفين.\",\n      \"onScreenText\": \"اشتراك شهري\",\n      \"visualIntent\": \"健身房内部，展示会员卡和教练\",\n      \"searchQueries\": [\"monthly gym membership\", \"professional gym trainers\", \"gym membership in masr el-naser\"]\n    }\n  ],\n  \"cta\": \"اتجه لستيلتو جيم، اشتراك شهري ومدربين محترفين.\",\n  \"expansionLines\": \"جيم ستيلتو في مدينة نصر، اشتراك شهري ومدربين محترفين.\"\n}",
+   "rawChars": 1131,
+   "parsed": {
+    "title": "ستيلتو جيم - مدينة نصر",
+    "tone": "مصري",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "يا صاحب، محتاج جيم جيد في مدينة نصر.",
+      "onScreenText": "ستيلتو جيم",
+      "visualIntent": "健身房外观，充满活力的人们在锻炼",
+      "searchQueries": [
+       "gym in masr el-naser",
+       "fitness center in masr el-naser",
+       "gymnasium in masr el-naser"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "اللي في مدينة نصر كتير منا محتاجين نعمل جيم، لكن ما فيش جيم جيد.",
+      "onScreenText": "مشكلة",
+      "visualIntent": "人们在寻找健身器材，但没有合适的健身房",
+      "searchQueries": [
+       "gym search in masr el-naser",
+       "looking for gym in masr el-naser",
+       "no gym options in masr el-naser"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "لكنه عندنا جيم ستيلتو، اشتراك شهري ومدربين محترفين.",
+      "onScreenText": "اشتراك شهري",
+      "visualIntent": "健身房内部，展示会员卡和教练",
+      "searchQueries": [
+       "monthly gym membership",
+       "professional gym trainers",
+       "gym membership in masr el-naser"
+      ]
+     }
+    ],
+    "cta": "اتجه لستيلتو جيم، اشتراك شهري ومدربين محترفين.",
+    "expansionLines": "جيم ستيلتو في مدينة نصر، اشتراك شهري ومدربين محترفين."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-B3",
+   "latencyMs": 7462,
+   "evalDuration": 4961957000,
+   "raw": "{\n  \"title\": \"لمعة - غسيل سيارات متنقلة\",\n  \"tone\": \"ودي وسهلي\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"يا ربنا، شكوش السيارة بتعمللك مشكلة؟\",\n      \"onScreenText\": \"لمعة - غسيل سيارات\",\n      \"visualIntent\": \"سيارة متسخة أمام المنزل\",\n      \"searchQueries\": [\"dirty car\", \"dirty vehicle\", \"muddy car\", \"muddy vehicle\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"يا ربنا، تعبت من الذهاب للورشة؟\",\n      \"onScreenText\": \"لمعة - يوصلوا لحد البيت\",\n      \"visualIntent\": \"رجل يحمل مفتاح السيارة\",\n      \"searchQueries\": [\"man carrying keys\", \"man holding keys\", \"man with keys\"]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"اتصاله بالخدمة بس، وهم يوصلوك السيارة، وهم يغسلوها، وهم يرجعوك البيت.\",\n      \"onScreenText\": \"اتصال بـ «لمعة»\",\n      \"visualIntent\": \"رجل يتحدث على الهاتف مع خدمة العملاء\",\n      \"searchQueries\": [\"customer service call\", \"customer support call\", \"service call\"]\n    }\n  ],\n  \"cta\": \"اتصال بـ «لمعة»\",\n  \"expansionLines\": \"خدمة سهلة وسريعة، لا تضيع وقتك في الذهاب للورشة.\"\n}",
+   "rawChars": 1053,
+   "parsed": {
+    "title": "لمعة - غسيل سيارات متنقلة",
+    "tone": "ودي وسهلي",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "يا ربنا، شكوش السيارة بتعمللك مشكلة؟",
+      "onScreenText": "لمعة - غسيل سيارات",
+      "visualIntent": "سيارة متسخة أمام المنزل",
+      "searchQueries": [
+       "dirty car",
+       "dirty vehicle",
+       "muddy car",
+       "muddy vehicle"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "يا ربنا، تعبت من الذهاب للورشة؟",
+      "onScreenText": "لمعة - يوصلوا لحد البيت",
+      "visualIntent": "رجل يحمل مفتاح السيارة",
+      "searchQueries": [
+       "man carrying keys",
+       "man holding keys",
+       "man with keys"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "اتصاله بالخدمة بس، وهم يوصلوك السيارة، وهم يغسلوها، وهم يرجعوك البيت.",
+      "onScreenText": "اتصال بـ «لمعة»",
+      "visualIntent": "رجل يتحدث على الهاتف مع خدمة العملاء",
+      "searchQueries": [
+       "customer service call",
+       "customer support call",
+       "service call"
+      ]
+     }
+    ],
+    "cta": "اتصال بـ «لمعة»",
+    "expansionLines": "خدمة سهلة وسريعة، لا تضيع وقتك في الذهاب للورشة."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-B4",
+   "latencyMs": 7181,
+   "evalDuration": 5698985000,
+   "raw": "{\n  \"title\": \"مخبز بلدي في الإسكندرية\",\n  \"tone\": \"ودي، مفعم بالحياة\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"هيا نروح لليوم الجميل في الإسكندرية، ونستيقظ مع عيش شمسي من مخبزنا البلدي.\",\n      \"onScreenText\": \"مخبزنا البلدي في الإسكندرية\",\n      \"visualIntent\": \"مخبز صغير في الصباح، أفران ساخنة، موظفون يخبزون\",\n      \"searchQueries\": [\"bakeries in alexandria\", \"egyptian bread\", \"artisan bread\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"كل يوم الصبح، نعمل عيش شمسي وفطير طازج، لكي تبدأ يومك بطاقة عالية.\",\n      \"onScreenText\": \"طازج كل يوم الصبح\",\n      \"visualIntent\": \"موظفون يخبزون العيش والفطير، فطير طازج يوضع في صينية\",\n      \"searchQueries\": [\"fresh bread in the morning\", \"artisanal bread production\", \"baker working\"]\n    },\n    {\n      \"purpose\": \"cta\",\n      \"narration\": \"هل أنت مستعد لبدء يومك بطعم العيش الشمسي والفطير الطازج؟\",\n      \"onScreenText\": \"احجز الآن\",\n      \"visualIntent\": \"为客户准备面包的场景，顾客在购买面包\",\n      \"searchQueries\": [\"buy bread online\", \"order fresh bread\", \"alexandria bakery\"]\n    }\n  ],\n  \"cta\": \"احجز الآن\",\n  \"expansionLines\": \"مخبزنا البلدي في الإسكندرية يقدم لك طعم العيش الشمسي والفطير الطازج كل يوم الصبح.\"\n}",
+   "rawChars": 1195,
+   "parsed": {
+    "title": "مخبز بلدي في الإسكندرية",
+    "tone": "ودي، مفعم بالحياة",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "هيا نروح لليوم الجميل في الإسكندرية، ونستيقظ مع عيش شمسي من مخبزنا البلدي.",
+      "onScreenText": "مخبزنا البلدي في الإسكندرية",
+      "visualIntent": "مخبز صغير في الصباح، أفران ساخنة، موظفون يخبزون",
+      "searchQueries": [
+       "bakeries in alexandria",
+       "egyptian bread",
+       "artisan bread"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "كل يوم الصبح، نعمل عيش شمسي وفطير طازج، لكي تبدأ يومك بطاقة عالية.",
+      "onScreenText": "طازج كل يوم الصبح",
+      "visualIntent": "موظفون يخبزون العيش والفطير، فطير طازج يوضع في صينية",
+      "searchQueries": [
+       "fresh bread in the morning",
+       "artisanal bread production",
+       "baker working"
+      ]
+     },
+     {
+      "purpose": "cta",
+      "narration": "هل أنت مستعد لبدء يومك بطعم العيش الشمسي والفطير الطازج؟",
+      "onScreenText": "احجز الآن",
+      "visualIntent": "为客户准备面包的场景，顾客在购买面包",
+      "searchQueries": [
+       "buy bread online",
+       "order fresh bread",
+       "alexandria bakery"
+      ]
+     }
+    ],
+    "cta": "احجز الآن",
+    "expansionLines": "مخبزنا البلدي في الإسكندرية يقدم لك طعم العيش الشمسي والفطير الطازج كل يوم الصبح."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-T1",
+   "latencyMs": 6939,
+   "evalDuration": 5255839000,
+   "raw": "{\n  \"title\": \"إيه هو الـ API caching وليه بيخلي المواقع أسرع\",\n  \"tone\": \"عامي\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"يا جماعة، تعرفوش إن المواقع بتتكدس بالكثير من البيانات، وده بيسبب مشاكل في السرعة.\",\n      \"onScreenText\": \"المواقع تبطئ\",\n      \"visualIntent\": \"people using a slow website on a mobile phone\",\n      \"searchQueries\": [\"slow website\", \"website loading time\", \"website performance\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"لكنه عندنا حل، API caching. ده هو الـ API caching.\",\n      \"onScreenText\": \"API caching\",\n      \"visualIntent\": \"code on a computer screen with caching icons\",\n      \"searchQueries\": [\"API caching\", \"caching\", \"cache data\"]\n    },\n    {\n      \"purpose\": \"benefit|proof|cta\",\n      \"narration\": \"ده بيخلي المواقع تسرع، وده يحس بيه كل الناس. تعرفوش إن المواقع بتتسرع وتتقلل من التأخير.\",\n      \"onScreenText\": \"المواقع تسرع\",\n      \"visualIntent\": \"people using a fast website on a mobile phone\",\n      \"searchQueries\": [\"fast website\", \"website speed\", \"improved website performance\"]\n    }\n  ],\n  \"cta\": \"تفضلوا بالتطبيق، وان شاء الله تحس بالفرق.\",\n  \"expansionLines\": \"ده هو الـ API caching، بيخلي المواقع تسرع وتتقلل من التأخير. تفضلوا بالتطبيق.\"\n}",
+   "rawChars": 1239,
+   "parsed": {
+    "title": "إيه هو الـ API caching وليه بيخلي المواقع أسرع",
+    "tone": "عامي",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "يا جماعة، تعرفوش إن المواقع بتتكدس بالكثير من البيانات، وده بيسبب مشاكل في السرعة.",
+      "onScreenText": "المواقع تبطئ",
+      "visualIntent": "people using a slow website on a mobile phone",
+      "searchQueries": [
+       "slow website",
+       "website loading time",
+       "website performance"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "لكنه عندنا حل، API caching. ده هو الـ API caching.",
+      "onScreenText": "API caching",
+      "visualIntent": "code on a computer screen with caching icons",
+      "searchQueries": [
+       "API caching",
+       "caching",
+       "cache data"
+      ]
+     },
+     {
+      "purpose": "benefit|proof|cta",
+      "narration": "ده بيخلي المواقع تسرع، وده يحس بيه كل الناس. تعرفوش إن المواقع بتتسرع وتتقلل من التأخير.",
+      "onScreenText": "المواقع تسرع",
+      "visualIntent": "people using a fast website on a mobile phone",
+      "searchQueries": [
+       "fast website",
+       "website speed",
+       "improved website performance"
+      ]
+     }
+    ],
+    "cta": "تفضلوا بالتطبيق، وان شاء الله تحس بالفرق.",
+    "expansionLines": "ده هو الـ API caching، بيخلي المواقع تسرع وتتقلل من التأخير. تفضلوا بالتطبيق."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-T2",
+   "latencyMs": 5636,
+   "evalDuration": 4597657000,
+   "raw": "{\n  \"title\": \"لواد بلانسينج في السيرفرات\",\n  \"tone\": \"بسيط\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"أنت مبرمج جد، وتحتاج لسيرفرات تقدر تتحمل الضغط.\",\n      \"onScreenText\": \"سيرفرات قوية للبرمجيين الجداد\",\n      \"visualIntent\": \"程序员在服务器前工作\",\n      \"searchQueries\": [\"程序员\", \"服务器前\", \"工作场景\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"بلاش تقدر تتعامل مع كمية كبيرة من الطلبات في نفس الوقت.\",\n      \"onScreenText\": \"مشكلة التعامل مع الطلبات الكثيرة\",\n      \"visualIntent\": \"服务器上有很多请求\",\n      \"searchQueries\": [\"服务器\", \"请求\", \"很多请求\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"لواد بلانسينج هو الحل، يوزع الطلبات على السيرفرات.\",\n      \"onScreenText\": \"لواد بلانسينج يوزع الطلبات\",\n      \"visualIntent\": \"负载均衡器分配请求\",\n      \"searchQueries\": [\"负载均衡器\", \"分配请求\", \"服务器集群\"]\n    }\n  ],\n  \"cta\": \"استخدم لواد بلانسينج لسيرفراتك\",\n  \"expansionLines\": \"هيك تقدر تحسين أداء سيرفراتك وتتعامل مع الطلبات الكثيرة.\"\n}",
+   "rawChars": 957,
+   "parsed": {
+    "title": "لواد بلانسينج في السيرفرات",
+    "tone": "بسيط",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "أنت مبرمج جد، وتحتاج لسيرفرات تقدر تتحمل الضغط.",
+      "onScreenText": "سيرفرات قوية للبرمجيين الجداد",
+      "visualIntent": "程序员在服务器前工作",
+      "searchQueries": [
+       "程序员",
+       "服务器前",
+       "工作场景"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "بلاش تقدر تتعامل مع كمية كبيرة من الطلبات في نفس الوقت.",
+      "onScreenText": "مشكلة التعامل مع الطلبات الكثيرة",
+      "visualIntent": "服务器上有很多请求",
+      "searchQueries": [
+       "服务器",
+       "请求",
+       "很多请求"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "لواد بلانسينج هو الحل، يوزع الطلبات على السيرفرات.",
+      "onScreenText": "لواد بلانسينج يوزع الطلبات",
+      "visualIntent": "负载均衡器分配请求",
+      "searchQueries": [
+       "负载均衡器",
+       "分配请求",
+       "服务器集群"
+      ]
+     }
+    ],
+    "cta": "استخدم لواد بلانسينج لسيرفراتك",
+    "expansionLines": "هيك تقدر تحسين أداء سيرفراتك وتتعامل مع الطلبات الكثيرة."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "AR-T3",
+   "latencyMs": 7347,
+   "evalDuration": 5246035000,
+   "raw": "{\n  \"title\": \"إيه السر وراء سرعة البحث في الداتابيز؟\",\n  \"tone\": \"مثير للاهتمام\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"أكتر من 100 مليون سؤال يوميًا على الإنترنت. كل واحد منهم يحتاج لثواني لينتقل من البحث إلى النتيجة.\",\n      \"onScreenText\": \"100 مليون سؤال يوميًا\",\n      \"visualIntent\": \"عقول متعبة من البحث\",\n      \"searchQueries\": [\"100 million search queries daily\", \"people frustrated with search\", \"search engine struggles\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"لكن ماذا لو أخبرتك إنك يمكن تقليل الوقت من ثواني لثواني؟\",\n      \"onScreenText\": \"ثواني تتحول لثواني\",\n      \"visualIntent\": \"ال转变\",\n      \"searchQueries\": [\"reduce search time\", \"speed up search\", \"database indexing\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"الحل هو database indexing. هو إضافة مفتاح بحثي على البيانات لتسهيل الوصول.\",\n      \"onScreenText\": \"database indexing\",\n      \"visualIntent\": \"الـdatabase مع مفتاح بحثي\",\n      \"searchQueries\": [\"database indexing\", \"adding search key\", \"improving data access\"]\n    }\n  ],\n  \"cta\": \"اكتشف كيف يمكن لـ database indexing أن يسرع بحثك اليومي\",\n  \"expansionLines\": \"اكتشف كيف يمكن لـ database indexing أن يسرع بحثك اليومي ويجعل حياتك أسهل.\"\n}",
+   "rawChars": 1240,
+   "parsed": {
+    "title": "إيه السر وراء سرعة البحث في الداتابيز؟",
+    "tone": "مثير للاهتمام",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "أكتر من 100 مليون سؤال يوميًا على الإنترنت. كل واحد منهم يحتاج لثواني لينتقل من البحث إلى النتيجة.",
+      "onScreenText": "100 مليون سؤال يوميًا",
+      "visualIntent": "عقول متعبة من البحث",
+      "searchQueries": [
+       "100 million search queries daily",
+       "people frustrated with search",
+       "search engine struggles"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "لكن ماذا لو أخبرتك إنك يمكن تقليل الوقت من ثواني لثواني؟",
+      "onScreenText": "ثواني تتحول لثواني",
+      "visualIntent": "ال转变",
+      "searchQueries": [
+       "reduce search time",
+       "speed up search",
+       "database indexing"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "الحل هو database indexing. هو إضافة مفتاح بحثي على البيانات لتسهيل الوصول.",
+      "onScreenText": "database indexing",
+      "visualIntent": "الـdatabase مع مفتاح بحثي",
+      "searchQueries": [
+       "database indexing",
+       "adding search key",
+       "improving data access"
+      ]
+     }
+    ],
+    "cta": "اكتشف كيف يمكن لـ database indexing أن يسرع بحثك اليومي",
+    "expansionLines": "اكتشف كيف يمكن لـ database indexing أن يسرع بحثك اليومي ويجعل حياتك أسهل."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "MIX-1",
+   "latencyMs": 7279,
+   "evalDuration": 5827907000,
+   "raw": "{\n  \"title\": \"encryption at rest و encryption in transit\",\n  \"tone\": \"مفيد وسهل الفهم\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"يا جماعة، عندك حاجة مهمة في الأمن السيبراني تعرفوها، encryption at rest و encryption in transit.\",\n      \"onScreenText\": \"encryption at rest و encryption in transit\",\n      \"visualIntent\": \"程序员在电脑前工作，屏幕上显示着代码\",\n      \"searchQueries\": [\"encryption at rest\", \"encryption in transit\", \"security in tech\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"الفرق بينهم كبير، encryption at rest هو تشفير البيانات عند الراحة، يعني في الذاكرة. و encryption in transit هو تشفير البيانات أثناء السفر، يعني في النقل.\",\n      \"onScreenText\": \"encryption at rest: عند الراحة\\nencryption in transit: أثناء السفر\",\n      \"visualIntent\": \"程序员在硬盘上工作，硬盘上显示着加密的数据；程序员在发送数据，数据在传输中被加密\",\n      \"searchQueries\": [\"encryption at rest vs encryption in transit\", \"data at rest encryption\", \"data in transit encryption\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"فهم الفرق مهم جداً للمطورين. انتبهوا، تشفير البيانات عند الراحة و تشفير البيانات أثناء السفر، كل واحد مهم في مكانه.\",\n      \"onScreenText\": \"فهم الفرق مهم\",\n      \"visualIntent\": \"程序员在笔记本电脑前，屏幕上显示着加密的数据和传输过程\",\n      \"searchQueries\": [\"encryption importance\", \"data security for developers\", \"encryption techniques\"]\n    }\n  ],\n  \"cta\": \"لا يوجد مطلوب\",\n  \"expansionLines\": \"فهم الفرق بين encryption at rest و encryption in transit مهم جداً للمطورين. انتبهوا، تشفير البيانات عند الراحة و تشفير البيانات أثناء السفر، كل واحد مهم في مكانه.\"\n}",
+   "rawChars": 1559,
+   "parsed": {
+    "title": "encryption at rest و encryption in transit",
+    "tone": "مفيد وسهل الفهم",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "يا جماعة، عندك حاجة مهمة في الأمن السيبراني تعرفوها، encryption at rest و encryption in transit.",
+      "onScreenText": "encryption at rest و encryption in transit",
+      "visualIntent": "程序员在电脑前工作，屏幕上显示着代码",
+      "searchQueries": [
+       "encryption at rest",
+       "encryption in transit",
+       "security in tech"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "الفرق بينهم كبير، encryption at rest هو تشفير البيانات عند الراحة، يعني في الذاكرة. و encryption in transit هو تشفير البيانات أثناء السفر، يعني في النقل.",
+      "onScreenText": "encryption at rest: عند الراحة\nencryption in transit: أثناء السفر",
+      "visualIntent": "程序员在硬盘上工作，硬盘上显示着加密的数据；程序员在发送数据，数据在传输中被加密",
+      "searchQueries": [
+       "encryption at rest vs encryption in transit",
+       "data at rest encryption",
+       "data in transit encryption"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "فهم الفرق مهم جداً للمطورين. انتبهوا، تشفير البيانات عند الراحة و تشفير البيانات أثناء السفر، كل واحد مهم في مكانه.",
+      "onScreenText": "فهم الفرق مهم",
+      "visualIntent": "程序员在笔记本电脑前，屏幕上显示着加密的数据和传输过程",
+      "searchQueries": [
+       "encryption importance",
+       "data security for developers",
+       "encryption techniques"
+      ]
+     }
+    ],
+    "cta": "لا يوجد مطلوب",
+    "expansionLines": "فهم الفرق بين encryption at rest و encryption in transit مهم جداً للمطورين. انتبهوا، تشفير البيانات عند الراحة و تشفير البيانات أثناء السفر، كل واحد مهم في مكانه."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "MIX-2",
+   "latencyMs": 7074,
+   "evalDuration": 5699625000,
+   "raw": "{\n  \"title\": \"يا رب حماية ملفاتك بالクラود\",\n  \"tone\": \"مباشر ومفيد\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"يا جدع، لو جهازك يبوظ، مفيش مشكلة! بس تعرف إزاي cloud backup يحمي ملفاتك؟\",\n      \"onScreenText\": \"الجهاز يبوظ\",\n      \"visualIntent\": \"جهاز كمبيوتر أو هاتف يظهر علامات الإرهاق\",\n      \"searchQueries\": [\"device overheating\", \"computer overheating\", \"phone overheating\", \"جهاز يبوظ\", \"كمبيوتر يبوظ\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"لو جهازك يبوظ، ممكن تفقد ملفاتك المهمة. لكن cloud backup يحميهم بس\",\n      \"onScreenText\": \"فقدان ملفات\",\n      \"visualIntent\": \"شاشة حاسوب فارغة أو ملفات مفقودة\",\n      \"searchQueries\": [\"lost files\", \"missing files\", \"ملفات مفقودة\", \"ملفات مفقودة على الكمبيوتر\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"sync يعني تانيتة بين الجهاز和平存储备份，而真正的备份是cloud backup\",\n      \"onScreenText\": \"sync vs backup\",\n      \"visualIntent\": \"对比同步和备份的图标或流程图\",\n      \"searchQueries\": [\"sync vs backup\", \"difference between sync and backup\", \"sync و backup الفرق\", \"sync و backup الفرق بينهم\"]\n    }\n  ],\n  \"cta\": \"لا تدع ملفاتك تضيع\",\n  \"expansionLines\": \"يا رجل، تعرف إزاي cloud backup يحمي ملفاتك، ودي فرق كبيرة بين sync و backup الحقيقي.\"\n}",
+   "rawChars": 1238,
+   "parsed": {
+    "title": "يا رب حماية ملفاتك بالクラود",
+    "tone": "مباشر ومفيد",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "يا جدع، لو جهازك يبوظ، مفيش مشكلة! بس تعرف إزاي cloud backup يحمي ملفاتك؟",
+      "onScreenText": "الجهاز يبوظ",
+      "visualIntent": "جهاز كمبيوتر أو هاتف يظهر علامات الإرهاق",
+      "searchQueries": [
+       "device overheating",
+       "computer overheating",
+       "phone overheating",
+       "جهاز يبوظ",
+       "كمبيوتر يبوظ"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "لو جهازك يبوظ، ممكن تفقد ملفاتك المهمة. لكن cloud backup يحميهم بس",
+      "onScreenText": "فقدان ملفات",
+      "visualIntent": "شاشة حاسوب فارغة أو ملفات مفقودة",
+      "searchQueries": [
+       "lost files",
+       "missing files",
+       "ملفات مفقودة",
+       "ملفات مفقودة على الكمبيوتر"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "sync يعني تانيتة بين الجهاز和平存储备份，而真正的备份是cloud backup",
+      "onScreenText": "sync vs backup",
+      "visualIntent": "对比同步和备份的图标或流程图",
+      "searchQueries": [
+       "sync vs backup",
+       "difference between sync and backup",
+       "sync و backup الفرق",
+       "sync و backup الفرق بينهم"
+      ]
+     }
+    ],
+    "cta": "لا تدع ملفاتك تضيع",
+    "expansionLines": "يا رجل، تعرف إزاي cloud backup يحمي ملفاتك، ودي فرق كبيرة بين sync و backup الحقيقي."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "MSA-1",
+   "latencyMs": 6749,
+   "evalDuration": 4974272000,
+   "raw": "{\n  \"title\": \"أهمية التوفير التلقائي في البنوك\",\n  \"tone\": \"مفيد ومرح\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"أنت تشتري الكافيهات كل يوم، لكن هل تعلم أن يمكنك توفير المال تلقائيًا؟\",\n      \"onScreenText\": \"هل تعرف كيف تدخر دون جهد؟\",\n      \"visualIntent\": \"شخص يشرب قهوة في مقهى\",\n      \"searchQueries\": [\"person drinking coffee\", \"cafeteria visit\", \"daily expenses\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"كل يوم نستهلك المال دون وعي، هل تعلم أن هناك طريقة لوقف هذا؟\",\n      \"onScreenText\": \"توفير تلقائي\",\n      \"visualIntent\": \"مخطط يوضح تدفق الأموال\",\n      \"searchQueries\": [\"money flow diagram\", \"budget management\", \"automatic savings\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"بنوكنا تقدم خدمة التوفير التلقائي، تدخر لك المال دون أن تشعر!\",\n      \"onScreenText\": \"ابدأ في توفير تلقائيًا\",\n      \"visualIntent\": \"تطبيق بنكي على هاتف ذكي\",\n      \"searchQueries\": [\"bank app on phone\", \"automatic savings feature\", \"banking app interface\"]\n    }\n  ],\n  \"cta\": \"انضم الآن لخطة التدخر التلقائي\",\n  \"expansionLines\": \"اكتشف كيف يمكنك بناء مدخراتك بسهولة مع خدمة التوفير التلقائي.\"\n}",
+   "rawChars": 1154,
+   "parsed": {
+    "title": "أهمية التوفير التلقائي في البنوك",
+    "tone": "مفيد ومرح",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "أنت تشتري الكافيهات كل يوم، لكن هل تعلم أن يمكنك توفير المال تلقائيًا؟",
+      "onScreenText": "هل تعرف كيف تدخر دون جهد؟",
+      "visualIntent": "شخص يشرب قهوة في مقهى",
+      "searchQueries": [
+       "person drinking coffee",
+       "cafeteria visit",
+       "daily expenses"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "كل يوم نستهلك المال دون وعي، هل تعلم أن هناك طريقة لوقف هذا؟",
+      "onScreenText": "توفير تلقائي",
+      "visualIntent": "مخطط يوضح تدفق الأموال",
+      "searchQueries": [
+       "money flow diagram",
+       "budget management",
+       "automatic savings"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "بنوكنا تقدم خدمة التوفير التلقائي، تدخر لك المال دون أن تشعر!",
+      "onScreenText": "ابدأ في توفير تلقائيًا",
+      "visualIntent": "تطبيق بنكي على هاتف ذكي",
+      "searchQueries": [
+       "bank app on phone",
+       "automatic savings feature",
+       "banking app interface"
+      ]
+     }
+    ],
+    "cta": "انضم الآن لخطة التدخر التلقائي",
+    "expansionLines": "اكتشف كيف يمكنك بناء مدخراتك بسهولة مع خدمة التوفير التلقائي."
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "EN-E1",
+   "latencyMs": 7510,
+   "evalDuration": 4788336000,
+   "raw": "{\n  \"title\": \"Speed Up Your Database Queries\",\n  \"tone\": \"Informative and engaging\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"Imagine your database as a library. Without indexing, finding a book is like searching every shelf. With indexing, it's like having a card catalog.\",\n      \"onScreenText\": \"Imagine a library\",\n      \"visualIntent\": \"A messy bookshelf with books scattered\",\n      \"searchQueries\": [\"library with books scattered\", \"bookshelf with no order\", \"disorganized library\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"Now, imagine searching for a specific book in a library with no catalog. It's time-consuming and frustrating.\",\n      \"onScreenText\": \"Searching without indexing\",\n      \"visualIntent\": \"A person frantically searching through a disorganized bookshelf\",\n      \"searchQueries\": [\"person searching through disorganized books\", \"frustrated person looking for a book\", \"time-consuming book search\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"But with a card catalog, you can quickly find the book you need. That's how database indexing works. It speeds up your queries.\",\n      \"onScreenText\": \"Speed up with indexing\",\n      \"visualIntent\": \"A person quickly finding a book using a card catalog\",\n      \"searchQueries\": [\"person quickly finding a book\", \"card catalog system\", \"efficient book search\"]\n    }\n  ],\n  \"cta\": \"Learn more about database indexing\",\n  \"expansionLines\": [\n    \"Understand how indexing can transform your database performance.\"\n  ]\n}",
+   "rawChars": 1548,
+   "parsed": {
+    "title": "Speed Up Your Database Queries",
+    "tone": "Informative and engaging",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "Imagine your database as a library. Without indexing, finding a book is like searching every shelf. With indexing, it's like having a card catalog.",
+      "onScreenText": "Imagine a library",
+      "visualIntent": "A messy bookshelf with books scattered",
+      "searchQueries": [
+       "library with books scattered",
+       "bookshelf with no order",
+       "disorganized library"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "Now, imagine searching for a specific book in a library with no catalog. It's time-consuming and frustrating.",
+      "onScreenText": "Searching without indexing",
+      "visualIntent": "A person frantically searching through a disorganized bookshelf",
+      "searchQueries": [
+       "person searching through disorganized books",
+       "frustrated person looking for a book",
+       "time-consuming book search"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "But with a card catalog, you can quickly find the book you need. That's how database indexing works. It speeds up your queries.",
+      "onScreenText": "Speed up with indexing",
+      "visualIntent": "A person quickly finding a book using a card catalog",
+      "searchQueries": [
+       "person quickly finding a book",
+       "card catalog system",
+       "efficient book search"
+      ]
+     }
+    ],
+    "cta": "Learn more about database indexing",
+    "expansionLines": [
+     "Understand how indexing can transform your database performance."
+    ]
+   },
+   "parseError": null,
+   "done": true
+  },
+  {
+   "promptId": "EN-C1",
+   "latencyMs": 5193,
+   "evalDuration": 4167895999,
+   "raw": "{\n  \"title\": \"PennyWise: Your Family's Budget Buddy\",\n  \"tone\": \"Friendly and informative\",\n  \"scenes\": [\n    {\n      \"purpose\": \"hook\",\n      \"narration\": \"Meet PennyWise, the budgeting app that makes saving easy.\",\n      \"onScreenText\": \"PennyWise\",\n      \"visualIntent\": \"A family sitting around a table with a tablet showing the app\",\n      \"searchQueries\": [\"family budgeting app\", \"budgeting on a tablet\", \"saving money together\"]\n    },\n    {\n      \"purpose\": \"problem\",\n      \"narration\": \"Tracking expenses can be a hassle. But not with PennyWise.\",\n      \"onScreenText\": \"Track Expenses\",\n      \"visualIntent\": \"Close-up of a receipt being scanned into the app\",\n      \"searchQueries\": [\"scanning receipts\", \"automatically tracking expenses\", \"easy expense tracking\"]\n    },\n    {\n      \"purpose\": \"solution\",\n      \"narration\": \"PennyWise does it all. Automate your budgeting today!\",\n      \"onScreenText\": \"Automate Your Budget\",\n      \"visualIntent\": \"A happy family smiling and looking at their phones with the app open\",\n      \"searchQueries\": [\"automate budgeting\", \"family budgeting solution\", \"happy family with app\"]\n    }\n  ],\n  \"cta\": \"Download PennyWise now!\",\n  \"expansionLines\": \"Experience the ease of budgeting with PennyWise. Start saving today!\"\n}",
+   "rawChars": 1275,
+   "parsed": {
+    "title": "PennyWise: Your Family's Budget Buddy",
+    "tone": "Friendly and informative",
+    "scenes": [
+     {
+      "purpose": "hook",
+      "narration": "Meet PennyWise, the budgeting app that makes saving easy.",
+      "onScreenText": "PennyWise",
+      "visualIntent": "A family sitting around a table with a tablet showing the app",
+      "searchQueries": [
+       "family budgeting app",
+       "budgeting on a tablet",
+       "saving money together"
+      ]
+     },
+     {
+      "purpose": "problem",
+      "narration": "Tracking expenses can be a hassle. But not with PennyWise.",
+      "onScreenText": "Track Expenses",
+      "visualIntent": "Close-up of a receipt being scanned into the app",
+      "searchQueries": [
+       "scanning receipts",
+       "automatically tracking expenses",
+       "easy expense tracking"
+      ]
+     },
+     {
+      "purpose": "solution",
+      "narration": "PennyWise does it all. Automate your budgeting today!",
+      "onScreenText": "Automate Your Budget",
+      "visualIntent": "A happy family smiling and looking at their phones with the app open",
+      "searchQueries": [
+       "automate budgeting",
+       "family budgeting solution",
+       "happy family with app"
+      ]
+     }
+    ],
+    "cta": "Download PennyWise now!",
+    "expansionLines": "Experience the ease of budgeting with PennyWise. Start saving today!"
+   },
+   "parseError": null,
+   "done": true
+  }
+ ],
+ "finishedAt": "2026-10-03T16:13:48.679Z"
+}
