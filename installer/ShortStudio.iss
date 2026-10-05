@@ -1,12 +1,16 @@
 ; ==============================================================================
-; Short Studio Server 2.6.0 - Commercial Windows Installer Specification
+; Short Studio Server 2.6.1 - Commercial Windows Installer Specification
 ; ==============================================================================
 
 #define MyAppName "Short Studio"
-#define MyAppVersion "2.6.0"
+#define MyAppVersion "2.6.1"
 #define MyAppPublisher "Short Studio"
 #define MyAppURL "https://github.com/3bud-ZC/Abud-Shorts-Engine"
-#define MyClientPkgDir "..\Short-Studio-Server-2.6.0-Client"
+#define MyClientPkgDir "..\Short-Studio-Server-2.6.1-Client"
+#define MyPackageSha256 GetEnv("SHORT_STUDIO_PACKAGE_SHA256")
+#if MyPackageSha256 == ""
+#error SHORT_STUDIO_PACKAGE_SHA256 must be set before compiling the commercial installer
+#endif
 
 [Setup]
 AppId={{E58E29B1-25D4-4903-85E9-968A7DCFE123}
@@ -22,7 +26,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile={#MyClientPkgDir}\LICENSE.txt
 OutputDir=..\dist-commercial
-OutputBaseFilename=ShortStudio-Setup-2.6.0
+OutputBaseFilename=ShortStudio-Setup-2.6.1
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -44,8 +48,8 @@ WelcomeLabel2=This will install Short Studio Server %1 on your computer.%n%nShor
 
 [Files]
 ; Verified official client package archive & manifest
-Source: "{#MyClientPkgDir}\Short-Studio-Server-2.6.0.tar.gz"; DestDir: "{tmp}"; Flags: ignoreversion
-Source: "{#MyClientPkgDir}\Short-Studio-Server-2.6.0.tar.gz.sha256"; DestDir: "{tmp}"; Flags: ignoreversion
+Source: "{#MyClientPkgDir}\Short-Studio-Server-2.6.1.tar.gz"; DestDir: "{tmp}"; Flags: ignoreversion
+Source: "{#MyClientPkgDir}\Short-Studio-Server-2.6.1.tar.gz.sha256"; DestDir: "{tmp}"; Flags: ignoreversion
 Source: "{#MyClientPkgDir}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyClientPkgDir}\README-CUSTOMER.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyClientPkgDir}\START-HERE.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -218,8 +222,8 @@ begin
 
     CmdParams := '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
       ExpandConstant('{tmp}\run-install.ps1') + '"' +
-      ' -PackageArchive "' + ExpandConstant('{tmp}\Short-Studio-Server-2.6.0.tar.gz') + '"' +
-      ' -ExpectedSha256 "dabe6e552c8bc378a33927b5562884ec2e8359d9b50a1b15ea7b9e6482186b18"' +
+      ' -PackageArchive "' + ExpandConstant('{tmp}\Short-Studio-Server-2.6.1.tar.gz') + '"' +
+      ' -ExpectedSha256 "{#MyPackageSha256}"' +
       ' -InstallRoot "' + TargetRoot + '"' +
       ' -Port ' + GetPort('') +
       ' -ComposeProject "' + GetComposeProject('') + '"' +

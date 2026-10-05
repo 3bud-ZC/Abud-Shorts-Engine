@@ -77,7 +77,7 @@ export class PexelsStockProvider implements StockProvider {
 
   private cache = new Map<string, CacheEntry>();
 
-  constructor(private apiKey?: string) {}
+  constructor(private apiKey?: string) { }
 
   public getApiKey(): string | undefined {
     return providerSecrets.peek("pexels", "api_key") || this.apiKey || process.env.PEXELS_API_KEY;
@@ -119,7 +119,7 @@ export class PexelsStockProvider implements StockProvider {
           method: "GET",
           headers: {
             Authorization: this.getApiKey() as string,
-            "User-Agent": "ShortStudio/2.6.0 (Automated Video Production)",
+            "User-Agent": "ShortStudio/2.6.1 (Automated Video Production)",
           },
           signal: AbortSignal.timeout(20000),
         });

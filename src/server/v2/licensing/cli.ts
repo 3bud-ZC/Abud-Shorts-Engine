@@ -99,7 +99,7 @@ function main(): void {
       expiresAt: expires,
       allowedMajorVersion: 2,
       features: ["render", "stock", "local_voice", "commercial_installer"],
-      version: "2.6.0",
+      version: "2.6.1",
     };
 
     const token = signLicensePayload(payload, privateKey);

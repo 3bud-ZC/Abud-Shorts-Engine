@@ -2,7 +2,7 @@
 
 **Product:** Short Studio  
 **Technical Product:** Short Studio Server  
-**Version:** 2.5.0 (General Availability Candidate; formerly ABUD Shorts Engine 2.4.0; full history is tracked in `ABUD_SHORTS_ENGINE_STATUS.md`)  
+**Version:** 2.6.1 (General Availability; formerly ABUD Shorts Engine 2.4.0; full history is tracked in `ABUD_SHORTS_ENGINE_STATUS.md`)<br>
 **Canonical Dashboard:** http://localhost:3130  
 **License:** MIT  
 

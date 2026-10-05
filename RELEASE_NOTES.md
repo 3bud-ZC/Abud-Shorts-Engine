@@ -1,3 +1,23 @@
+# Short Studio Server 2.6.1
+
+- **Product:** Short Studio
+- **Technical Product:** Short Studio Server
+- **Release Version:** `2.6.1`
+- **Release Channel:** stable
+- **Stage:** General Availability
+- **Database Schema:** `2.14.0`
+- **Previous Release:** Short Studio `2.6.0`
+
+Short Studio Server 2.6.1 is the final accepted production-intelligence recovery release for the 2.6 line.
+
+## What's New in 2.6.1
+- Uses qwen3.5:9b-q4_K_M for local production planning and real OpenCLIP semantic candidate selection.
+- Adds intentional motion-graphics fallback and Arabic/mixed-language narration safeguards for autonomous production.
+- Bounds stock-media cache growth with age- and size-based eviction while retaining durable production media.
+- Improves job recovery and protects completed work, customer data, Provider Vault, and licensing state during normal restarts.
+
+---
+
 # Short Studio 2.5.2
 
 **Product:** Short Studio  

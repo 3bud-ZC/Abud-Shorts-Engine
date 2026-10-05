@@ -110,7 +110,7 @@ catch {
     exit 3
 }
 
-$engineDir = Join-Path $extractParent "Short-Studio-Server-2.6.0"
+$engineDir = Join-Path $extractParent "Short-Studio-Server-2.6.1"
 $installScript = Join-Path $engineDir "install.ps1"
 if (-not (Test-Path $installScript)) {
     Write-InstallerLog "FATAL: install.ps1 not found in extracted archive ($installScript)" "Red"
@@ -272,7 +272,7 @@ if (-not $NoShortcuts) {
 
         $dashboardUrl = "http://127.0.0.1:$Port"
         $currentTxt = Join-Path $InstallRoot "current.txt"
-        $releaseDir = if (Test-Path $currentTxt) { (Get-Content $currentTxt -Raw).Trim() } else { Join-Path $InstallRoot "releases\2.6.0" }
+        $releaseDir = if (Test-Path $currentTxt) { (Get-Content $currentTxt -Raw).Trim() } else { Join-Path $InstallRoot "releases\2.6.1" }
         $cliScript = Join-Path $releaseDir "scripts\host\short-studio.ps1"
 
         # Function to write .url file
@@ -335,7 +335,7 @@ IconIndex=0
 }
 
 Write-InstallerLog "================================================================="
-Write-InstallerLog "  SHORT STUDIO SERVER 2.6.0 INSTALLATION COMPLETE"
+Write-InstallerLog "  SHORT STUDIO SERVER 2.6.1 INSTALLATION COMPLETE"
 Write-InstallerLog "  Access Dashboard: http://127.0.0.1:$Port"
 Write-InstallerLog "================================================================="
 exit 0
