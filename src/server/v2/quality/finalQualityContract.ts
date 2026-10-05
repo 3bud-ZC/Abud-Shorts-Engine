@@ -116,6 +116,15 @@ export type FinalQualityInputs = {
   /** Issue identifiers from `calculateProfessionalVisualQualityReport`. */
   visualIssues: readonly string[];
   realVisualCoveragePercent: number;
+  /**
+   * The share of the timeline carrying a deliberate visual - real footage
+   * plus purposeful designed graphics (motion scenes, planner-chosen
+   * mockups). This is the number the coverage gate actually judges;
+   * `realVisualCoveragePercent` reports stock-style footage separately.
+   * Falls back to `realVisualCoveragePercent` for callers that predate the
+   * intentional-coverage metric.
+   */
+  intentionalVisualCoveragePercent?: number;
   textOnlyTimelinePercent: number;
   repeatedAssetCount: number;
   scriptQualityPass: boolean;
@@ -215,11 +224,17 @@ export function assessFinalQuality(input: FinalQualityInputs): FinalQualityAsses
       continue;
     }
     if (gate === "real_visual_coverage") {
+      // The gate judges intentional coverage - footage plus designed
+      // graphics - so that is the number the finding must quote. Quoting the
+      // stock-only percentage here told the customer a designed scene was
+      // "missing footage" when it was not.
+      const intentionalPercent =
+        input.intentionalVisualCoveragePercent ?? input.realVisualCoveragePercent;
       findings.push(
         finding(
           gate,
-          `Real footage covers ${input.realVisualCoveragePercent}% of the timeline (target 90%).`,
-          { percent: input.realVisualCoveragePercent },
+          `Purposeful visuals cover ${intentionalPercent}% of the timeline (target 90%; real footage ${input.realVisualCoveragePercent}%).`,
+          { percent: intentionalPercent, stockPercent: input.realVisualCoveragePercent },
         ),
       );
     } else if (gate === "text_only_timeline") {

@@ -283,7 +283,25 @@ function detectIntentType(prompt: string, isAr: boolean): PromptIntentContract["
  *  words ("ليه", "إزاي"), audience fillers ("للناس") and bare connectors
  *  ("الـ", "في", "و") are likewise never the subject of the video. */
 const ENTITY_STOPWORD_RE =
-  /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|عن|حول|بخصوص|بيناقش|ليناقش|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|الـ?|و|بـ?|في|من|على|إلى|الى|مع|لـ|لل|يا|ده|دي|create|make|generate|produce|write|build|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|video|short|tiktok|reel|script|ad|commercial|content|post|clip|about|for|on|of|a|an|the|that|which|seconds|secs|sec|minutes|mins|\d+)$/i;
+  /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|عن|حول|بخصوص|بيناقش|ليناقش|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|بالمصري|بالمصريه|بالمصرية|مصري|مصريه|مصرية|بالعامية|بالعاميه|عامية|عاميه|بالفصحى|فصحى|بالدارجة|دارجة|باللهجة|باللهجه|بلهجة|بلهجه|لهجة|لهجه|بالعربي|بالعربية|بالانجليزي|بالإنجليزي|بالانجليزية|بالإنجليزية|عربي|عربية|عربيه|انجليزي|إنجليزي|انجليزية|إنجليزية|الـ?|و|بـ?|في|من|على|إلى|الى|مع|لـ|لل|يا|ده|دي|create|make|generate|produce|write|build|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|video|short|tiktok|reel|script|ad|commercial|content|post|clip|about|for|on|of|a|an|the|that|which|seconds|secs|sec|minutes|mins|egyptian|arabic|english|fusha|\d+)$/i;
+
+/** Arabic tokens that look like a bi-/he- imperfective but are nouns -
+ *  whitelisted out of the clause-verb heuristic so a real topic like
+ *  "بيانات العملاء" or "دكتور بيطري" is never truncated or rejected. */
+const IMPERFECTIVE_LOOKALIKE_NOUN_RE =
+  /^(?:و)?(?:بيانات|بيان|بيتزا|بيرو|بيانو|بيلاروس|بيلاروسيا|بيلاروسي|بيلجيكا|بيكين|بيكينغ|بياض|بيرة|بيبسي|بيروت|بيطري|بيطرية|بيطريه|بتاع|بتاعة|بتاعه|بتعت|بتاعنا|بتوع|بتوعه|بتوعي|بتنجان|بتنجانية|بتنجانه|بنزين|بنزيمة|بنفسج|بنفسجي|بندقية|بندقيه|بتوفيق|بايرن|باكستان|باكستاني|باكستانية|باكستانيه|باريس|باريسي|باراغواي|بانكوك|بالي|باليرمو|هيئة|هيكل|هيليوم|هيروشيما|هارون)$/u;
+
+/** A conjugated present-tense verb marks a clause, not a noun phrase. The
+ *  Egyptian bi-/he- imperfective prefixes are distinctive; the bare
+ *  person-prefixed stems below cover the common verbs product briefs use
+ *  ("يوفر", "تقرب", "بيخلي"). An entity that contains one is prompt
+ *  residue like "تطبيق بيقرب قيمة" - a clause, never a speakable topic. */
+const CLAUSE_VERB_RE =
+  /^(?:و)?(?:(?:بي|بت|بن|با|هي|هت|هن|ها)[ء-ي]{3,}|(?:ي|ت|ن|أ|ا)(?:وفر|وفّر|وصل|قرّ?ب|خلّ?ي|ساعد|شتغل|حسب|حوّ?ل|تتبع|راقب|ديّ?ر|نظّ?م|حمي|بيع|شتري|لعب|فتح|خزّ?ن|نزل|قفل|سجّ?ل|كسب|دفع|ربح|فوز|ستثمر|رسل|ستقبل|بعت|وصّ?ل|رجع|حصل|صير|بقى|زيد|قلّ?ل|قول|جي|اخد|اخذ|روح|شوف|سمع|قرا|قرأ|كتب|ذاكر|سلّ?م|عيش|قعد|نام|اكل|شرب|لحق|نسي))$/u;
+
+function looksLikeClauseVerb(word: string): boolean {
+  return CLAUSE_VERB_RE.test(word) && !IMPERFECTIVE_LOOKALIKE_NOUN_RE.test(word);
+}
 
 function extractCoreEntity(cleanedPrompt: string, isAr: boolean): string {
   const fallback = isAr ? "الموضوع الرئيسي" : "the main subject";
@@ -312,12 +330,21 @@ function extractCoreEntity(cleanedPrompt: string, isAr: boolean): string {
       .sort((a, b) => b.split(/\s+/).length - a.split(/\s+/).length || b.length - a.length)[0];
     if (best) return best;
   }
-  const words = firstLine
-    .split(/\s+/)
-    .map((w) => w.replace(/^[«»"'"'"']+|[«»"'"'"',،؛;:]+$/g, ""))
-    .filter((w) => w.length > 1 && !ENTITY_STOPWORD_RE.test(w));
+  // Collect topic words but stop before a conjugated verb: the 4-word window
+  // can cut a relative clause mid-phrase ("تطبيق بيقرب قيمة كل عملية شراء"
+  // → "تطبيق بيقرب قيمة"), and a clause fragment is never a speakable
+  // entity. A verb at position 0 means the whole phrase is a clause, not
+  // a subject ("يوفر الفرق تلقائيًا").
+  const words: string[] = [];
+  for (const raw of firstLine.split(/\s+/)) {
+    const w = raw.replace(/^[«»"'"'"']+|[«»"'"'"',،؛;:]+$/g, "");
+    if (!(w.length > 1) || ENTITY_STOPWORD_RE.test(w)) continue;
+    if (looksLikeClauseVerb(w)) break;
+    words.push(w);
+    if (words.length >= 4) break;
+  }
   if (words.length === 0) return fallback;
-  return words.slice(0, 4).join(" ");
+  return words.join(" ");
 }
 
 /**
@@ -340,11 +367,21 @@ export function isSpeakableEntity(entity: string, isAr: boolean): boolean {
   // prepositions are legit ("غسيل عربيات في البيت"); a connector dangling at
   // either edge is residue ("يشرح للناس ليه الـ").
   const RESIDUE_WORD_RE =
-    /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|الـ?|video|shorts?|tiktok|reel|clip|script|seconds?|secs?|minutes?|mins?|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|create|make|generate|produce|write|build|about|\d+)$/i;
+    /^(?:اعمل|أنشئ|اصنع|صمم|سوي|سويلي|اكتب|اعرض|اشرح|يشرح|تشرح|يوضح|توضح|وضح|وضّح|وري|ورّي|وريني|ورينا|قول|قولي|كلم|كلمني|كلمنا|كلمهم|كلمّهم|احكي|احكيلي|يحكي|يحكيلي|نتكلم|نكلم|خلي|خلّي|خليني|خلينا|عايز|عاوز|عايزين|عاوزين|عايزة|عاوزة|بدنا|نبي|فيديو|شورت|مقطع|ريل|سكريبت|إعلان|إعلاني|اعلان|اعلاني|محتوى|فكرة|ثانية|ثواني|ثوان|ثوانى|دقيقة|دقائق|ث|معنى|مفهوم|قصير|قصيرة|ليه|ليش|لماذا|إيه|ايه|أيه|إزاي|ازاي|كيف|كيفية|امتى|إمتى|فين|مين|كام|قد|هو|هي|للناس|الناس|للجميع|الجميع|ببساطة|بساطة|باختصار|بسيط|بسيطة|مختصر|مختصرة|تعليمي|تعليمية|بالمصري|بالمصريه|بالمصرية|بالعامية|بالعاميه|بالفصحى|بالدارجة|باللهجة|باللهجه|بلهجة|بلهجه|بالعربي|بالعربية|بالانجليزي|بالإنجليزي|بالانجليزية|بالإنجليزية|الـ?|video|shorts?|tiktok|reel|clip|script|seconds?|secs?|minutes?|mins?|explain|show|tell|talk|people|folks|why|how|what|simply|basically|briefly|idea|create|make|generate|produce|write|build|about|\d+)$/i;
   const EDGE_CONNECTOR_RE = /^(?:و|بـ?|في|من|عن|على|إلى|الى|مع|لـ|لل|يا|أو|او)$/u;
+  // A clause truncated mid-phrase is not an entity either: determiners and
+  // quantifiers demand a following noun, so a candidate ending on one
+  // ("تطبيق بيقرب قيمة كل" - "the app that rounds up the value of every…")
+  // speaks broken Arabic inside the fallback line.
+  const TRAILING_INCOMPLETE_RE =
+    /^(?:كل|أي|اي|بعض|معظم|أغلب|اغلب|نفس|ذات|هذا|هذه|هذي|دول|ذلك|تلك|اللي|و|ولا|أو|او|لكن|بس|كمان|أكثر|اكثر|أقل|اقل|غير|مثل|زي|عشان|لما|لو|كلما|مهما|every|each|a|an|the|of|for|with|without|about|more|less|some|any|your|my|our|their|his|her|its|this|that|these|those|and|or|but|to|in|on|at|by|is|are|was|were|very|just|only|also)$/i;
   const words = stripped.split(/\s+/).filter(Boolean);
   if (words.some((word) => RESIDUE_WORD_RE.test(word))) return false;
   if (EDGE_CONNECTOR_RE.test(words[0]) || EDGE_CONNECTOR_RE.test(words[words.length - 1])) return false;
+  if (TRAILING_INCOMPLETE_RE.test(words[words.length - 1])) return false;
+  // A conjugated verb anywhere turns the candidate into a clause fragment
+  // ("تطبيق بيقرب قيمة" - noun phrase topics never contain a finite verb).
+  if (words.some((word) => looksLikeClauseVerb(word))) return false;
   return true;
 }
 

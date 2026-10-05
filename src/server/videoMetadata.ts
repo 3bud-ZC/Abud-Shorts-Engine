@@ -94,6 +94,9 @@ export interface VideoMetadata {
   selectedVisuals?: Array<Record<string, unknown>>;
   professionalVisualQuality?: Record<string, unknown>;
   realVisualCoveragePercent?: number;
+  intentionalVisualCoveragePercent?: number;
+  purposefulMotionTimelinePercent?: number;
+  mockupTimelinePercent?: number;
   providerMix?: Record<string, number>;
   uniqueShotCount?: number;
   uniqueAssetCount?: number;

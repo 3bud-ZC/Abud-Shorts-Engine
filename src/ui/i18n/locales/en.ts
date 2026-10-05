@@ -995,7 +995,7 @@ export const en: TranslationCatalog = {
   "health.msg.optionalUnreachable": "Optional. Not reachable within the quick check.",
   "health.msg.checkFailed": "The check could not complete.",
 
-// ------------------------------------------------------------- updates
+  // ------------------------------------------------------------- updates
   "updates.reading": "Reading update status…",
   "updates.unavailable": "Update status is unavailable right now.",
   "updates.unreachable": "Could not reach the update service. Try again in a moment.",
@@ -1344,7 +1344,7 @@ export const en: TranslationCatalog = {
   "quality.gate.audio_silence": "Part of the video was unexpectedly silent.",
   "quality.gate.black_frames_severe": "Most of the video is black ({percent}%).",
   "quality.gate.real_visual_coverage":
-    "Real footage covers {percent}% of the video; a scene used a graphic instead.",
+    "Purposeful visuals (footage and designed graphics) cover {percent}% of the video.",
   "quality.gate.text_only_timeline": "Full-screen text or graphics cover {percent}% of the video.",
   "quality.gate.repeated_visual_assets": "{count} clip(s) appear more than once.",
   "quality.gate.black_frames_elevated": "Black frames cover {percent}% of the video.",

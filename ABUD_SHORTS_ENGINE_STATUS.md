@@ -14684,3 +14684,43 @@ Every output: preview `/api/short-video/:id` 200, HTTP range 206, download 200, 
 **Remaining defects.** (1) Job A narration residue — root cause now fixed generally in source+runtime, but this pass's rendered artifact carries the defect; re-qualification jobs needed on the fixed code. (2) A/C real-footage coverage below the 90% target (purposeful motion graphics carry the remainder — honest gating, intended treatment). (3) Near-floor semantic scores (59–63) still cluster tightly on abstract tech beats — candidate-quality ceiling, not a gate bypass. (4) No general caption/card overlap defect reproduced this pass.
 
 **Decision: NOT READY for owner manual acceptance.** Blocker: Job A scene-1 residue line fails the narration-acceptance gate; A and C also exit `needs_review`. Autonomy, zero-intervention integrity, visual relevance, technical QA, data safety, and full regression all PASS — but owner acceptance requires acceptable narration on all three outputs. Next: create three fresh jobs on the deployed fix and re-verify narration quality end-to-end.
+
+#### Final Clean Autonomous Re-qualification (2026-10-05)
+
+**Pass type.** Strict no-intervention re-qualification of `refactor/production-intelligence-recovery` (PR #13) after the narration-residue and visual-coverage fixes: three fresh unseen jobs through `POST /api/v2/jobs`, Auto visuals, normal planner/worker/OpenCLIP path. **Zero operator intervention on job data or pipeline execution** — no DB/spec/manifest/query/media/status mutation, no manual re-dispatch, no per-job docker cp. Bounded provider retry, watchdog requeue, and automatic motion fallback are normal product behavior and are recorded where they fired.
+
+**General defects fixed this pass (source-level, no per-job special-casing).**
+1. `mockup`-type shots were counted in no coverage bucket — deliberately routed motion graphics (e.g. `creative_plan:WEBSITE_MOCKUP`) registered as missing visuals. `professionalVisualQuality.ts` now counts them in `purposefulMotionSeconds`; the gate still judges `intentionalVisualCoveragePercent` (real + purposeful) while the finding now reports that judged metric instead of the stock-only figure. The 90% threshold was not lowered.
+2. `ShortCreator.ts` overwrote `routingReason` with `single_clip:...`, erasing `creative_plan:`/`website_intent:` provenance and making purposeful scenes look unexplained. Now appended: `existing|single_clip:...`.
+3. `promptIntentContract.ts` entity extraction accepted residue: a clause truncated on a quantifier (`تطبيق بيقرب قيمة كل`) and a dialect directive plus clause verb (`بالمصري تطبيق بيقرب قيمة`). `extractCoreEntity` now early-stops at clause-verb boundaries, `ENTITY_STOPWORD_RE` covers dialect/meta directives, and `isSpeakableEntity` rejects embedded clause verbs — while valid entities (`تطبيق`, `بيانات`, `CDN cache`) survive. Regression tests added in `ollamaProvider.test.ts`.
+4. Test isolation: `Pexels.test.ts` (and several other files) arm nock without restoring; workers are reused across files, so a stale `api.pexels.com` interceptor stalled `arabicVoicePolicy.test.ts`'s real health probe past 5 s. Fixed generally via `src/test/nockIsolation.setup.ts` (`cleanAll` + `restore` + `activate` after every file) registered in `vitest.config.ts`.
+
+**Runtime ≡ source.** Changed compiled files deployed via the established targeted `docker cp` method into `short-studio-app` and `short-studio-render-worker` (no image rebuild); conditional-append provenance and the entity rules verified live in both containers.
+
+**Final three jobs (all `ready`, all created serially through the customer path).**
+
+| Job | Topic | ID | Duration | Coverage | Narration |
+|---|---|---|---|---|---|
+| A | CDN cache speed (AR, tech terms EN) | `cmuun4xt4000d07o47lszaa5f` | 15.70 s | intentional ~99.6% | Clean Egyptian, CDN/cache/server terms natural, zero residue |
+| B | purchase round-up savings app (AR) | `cmuuo0rtq000h07o43d4igokh` | 16.02 s | intentional ~99.6% (purposeful mockup present) | Clean, no invented numbers/brands; `coreEntity` resolved to `تطبيق` |
+| C | database index speed (AR+EN) | `cmuuotm6p000l07o4g8710j5l` | 15.06 s | intentional 99.6% (real 90.3% + purposeful 9.3%, textOnly 0) | `...الـ Index هو اللي بيسرع الـ Query زي الفهرس` — natural code-switching |
+
+**Planner provenance (all three):** `OllamaContentAIProvider`, model `qwen3.5:9b-q4_K_M`, `contentProvenance: MODEL_GENERATED`, `fallbackUsed: 0`.
+
+**Visual intelligence.** Real OpenCLIP (`semanticRuntime: open_clip`) scoring and rejection on Pexels candidates; Job C avg semantic score 71.4 / min 70. Purposeful mockup shots carry preserved provenance (`creative_plan:WEBSITE_MOCKUP|single_clip:...`) and count as deliberate coverage; stock coverage still reported separately. No coffee/food/waiter contamination observed.
+
+**Technical QA (all three).** Valid MP4, `ftyp` first, `moov` at offset 36 (faststart), `mdat` after `moov`; H.264 + AAC, 1080×1920; preview 200 / range 206 / download 200 / thumbnail 200 (`image/jpeg`).
+
+**Full regression.** `typecheck:server` + `typecheck:ui` + `typecheck:revideo-project` PASS; production `npm run build` PASS. **Full Vitest: 1415/1415 tests, 99/99 files — clean** (baseline 1409 + 6 new regression tests). Earlier runs showed load-induced timeouts only; the last deterministic failure was the nock leak, now fixed at the suite level.
+
+**Restart smoke.** Normal supported restart (`docker restart` app + render-worker; volumes untouched). Post-restart: app/healthz 200, render-worker healthy, postgres + n8n healthy, Ollama 200, Local Voice 200; all three jobs still `ready`; preview/download/range/thumbnail all pass; Provider Vault 3 rows intact; license active.
+
+**Data safety.** jobs 94→103 (+9: the 3 final jobs, 2 superseded ready iterations from earlier in this pass, 4 honest `failed` rows from Local Voice cold-start/socket-hang-up and n8n dispatch-timeout create attempts — none rescued, none patched), job_events 2704→2876, scene_artifacts 533→578, video_revisions 61→66; provider_credentials_vault 3→3, social_accounts 2→2, backups 4→4, api_tokens 0→0. No deletions.
+
+**Storage.** C: free ~83.5 GB. Docker images unchanged (13 total, 23.65 GB); build cache 244 MB; no prune, no new image, no release artifacts. qwen3.5:9b-q4_K_M active; qwen2.5:7b-instruct preserved.
+
+**Honest operational notes.** Local Voice synthesis is CPU-bound and slow after a cold start; several create attempts failed with `socket hang up` / stage timeouts while the service was saturated — the supported `local-voice` lifecycle restart was used once for service recovery (not job repair), and final jobs were created serially. One watchdog `WATCHDOG_AUTO_REQUEUED` fired on a superseded iteration — audited bounded behavior.
+
+**Remaining defects.** (1) Local Voice cold-start/contention flakiness can still surface as create-time or voice-stage timeouts under parallel load (serial creation is the reliable path). (2) Near-floor semantic scores (~59–63) still cluster on abstract beats — candidate-quality ceiling, not a gate bypass. (3) Superseded ready/failed job rows from this pass remain in history by design (no deletion).
+
+**Decision: READY FOR OWNER MANUAL ACCEPTANCE** — the three final videos (`cmuun4xt4000d07o47lszaa5f`, `cmuuo0rtq000h07o43d4igokh`, `cmuuotm6p000l07o4g8710j5l`) await owner viewing. Do not merge PR #13 or build 2.6.1 until owner approval.

@@ -247,4 +247,64 @@ describe("OllamaContentAIPlanner creative output", () => {
     expect(fallback).not.toBe(arPrompt);
     expect(fallback).not.toMatch(/يشرح|للناس|ليه|الـ\b/u);
   });
+
+  it("never speaks a clause truncated on a quantifier as the fallback topic entity", async () => {
+    // Regression: "تطبيق بيقرب قيمة كل" ("the app that rounds up the value of
+    // every…") passed isSpeakableEntity and was spoken as "النقطة المهمة عن
+    // تطبيق بيقرب قيمة كل." - a clause cut off on the quantifier كل.
+    const arPrompt =
+      "اعمل فيديو قصير عن تطبيق بيقرب قيمة كل عملية شراء ويوفر الفرق تلقائيًا. مصري، حوالي ١٥ ثانية. متذكرش أي نسب أو أرقام، ومتسمّيش بنك أو شركة معينة.";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: "كل مرة تشتري حاجة، تحط جزء من المبلغ في حسابك؟", searchQueries: ["phone payment"] },
+        { purpose: "solution", narration: arPrompt, searchQueries: ["savings app"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", dialect: "egyptian", requestedDurationSeconds: 15 });
+    const fallback = spec.scenes[1].narration;
+    expect(fallback).not.toBe(arPrompt);
+    expect(fallback).not.toContain("بيقرب قيمة كل");
+  });
+
+  it("truncates the topic entity at the clause verb and drops the dialect directive", async () => {
+    // Regression: "فيديو قصير بالمصري عن تطبيق بيقرب قيمة كل عملية شراء…"
+    // produced coreEntity "بالمصري تطبيق بيقرب قيمة" - the بالمصري dialect
+    // directive plus a clause cut mid-sentence at the 4-word cap. The
+    // fallback then spoke "النقطة المهمة عن بالمصري تطبيق بيقرب قيمة.".
+    const arPrompt =
+      "فيديو قصير بالمصري عن تطبيق بيقرب قيمة كل عملية شراء ويوفر الفرق تلقائيًا. من غير ما تذكر نسب أو أرقام، ومن غير ما تسمّي بنك أو شركة معينة.";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: "عندك فكرة إن كل عملية شراء بتكون خسارة؟", searchQueries: ["phone payment"] },
+        { purpose: "solution", narration: arPrompt, searchQueries: ["savings app"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", dialect: "egyptian", requestedDurationSeconds: 15 });
+    const contract = (spec.metadata as any)?.promptIntentContract;
+    expect(contract?.coreEntity).toBe("تطبيق");
+    const fallback = spec.scenes[1].narration;
+    expect(fallback).not.toBe(arPrompt);
+    expect(fallback).not.toMatch(/بالمصري|بيقرب/);
+  });
+
+  it("keeps noun-phrase entities that merely look like clause verbs", async () => {
+    // بيانات/بيروت/بيطري match the bi- imperfective shape but are nouns -
+    // they must survive extraction, not truncate the entity.
+    const arPrompt = "اعمل فيديو عن تنظيم بيانات العملاء في الشركات الصغيرة";
+    const plan = {
+      scenes: [
+        { purpose: "hook", narration: arPrompt, searchQueries: ["office files"] },
+        { purpose: "solution", narration: "نظام واحد بيلم كل حاجة في مكان واحد.", searchQueries: ["crm screen"] },
+      ],
+    };
+    nock("http://ollama.test").post("/api/generate").reply(200, { response: JSON.stringify(plan) });
+    const provider = new OllamaContentAIProvider("http://ollama.test", "test-model");
+    const spec = await provider.generateProductionSpec({ prompt: arPrompt, language: "ar", dialect: "egyptian", requestedDurationSeconds: 15 });
+    const contract = (spec.metadata as any)?.promptIntentContract;
+    expect(contract?.coreEntity).toContain("بيانات");
+  });
 });

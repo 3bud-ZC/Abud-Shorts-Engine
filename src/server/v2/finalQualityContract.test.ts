@@ -85,8 +85,26 @@ describe("owner incident ASE-L99A02 (job cmtt8qpu2000107n9cde01r3p)", () => {
     // The customer sentence is resolved from a key in the active language, so
     // the Arabic interface never renders an English quality error.
     expect(finding.messageKey).toBe("quality.gate.real_visual_coverage");
-    expect(finding.params).toEqual({ percent: 64.6 });
+    expect(finding.params).toEqual({ percent: 64.6, stockPercent: 64.6 });
     expect(finding.technicalDetail).toContain("64.6%");
+  });
+
+  it("quotes the judged intentional coverage, not the stock-only percentage", () => {
+    // A scene deliberately rendered as a designed graphic is not missing
+    // footage: the gate measures intentional coverage (footage + purposeful
+    // graphics), so the finding must quote that number - with the stock
+    // percentage reported alongside, separately.
+    const result = assessFinalQuality({
+      ...OWNER_INCIDENT,
+      realVisualCoveragePercent: 30,
+      intentionalVisualCoveragePercent: 85,
+    });
+    const finding = result.findings.find((item) => item.gate === "real_visual_coverage");
+    expect(finding).toBeDefined();
+    expect(finding!.params).toEqual({ percent: 85, stockPercent: 30 });
+    expect(finding!.technicalDetail).toContain("85%");
+    expect(finding!.technicalDetail).toContain("30%");
+    expect(result.outcome).toBe("needs_review");
   });
 
   it("still reports the shortfall truthfully instead of passing it", () => {

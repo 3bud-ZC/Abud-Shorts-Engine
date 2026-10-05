@@ -2801,7 +2801,12 @@ export class ShortCreator {
               const fallbackShot = {
                 ...sceneEdl.shots[0],
                 duration: targetSceneDuration,
-                routingReason: `single_clip:${composed.reason || "not_composed"}`,
+                // Keep the shot's original routing reason ahead of the
+                // single-clip marker: composition failing later does not undo
+                // the deliberate creative_plan/website_intent decision, and
+                // the coverage report reads this reason to tell designed
+                // graphics from unexplained fill.
+                routingReason: `${sceneEdl.shots[0]?.routingReason ? `${sceneEdl.shots[0].routingReason}|` : ""}single_clip:${composed.reason || "not_composed"}`,
               };
               plannedShots.push(fallbackShot);
               shotSourceCounts[fallbackShot.sourceType] =
@@ -3564,6 +3569,7 @@ export class ShortCreator {
         blackFramePercent: blackFrameReport.blackFramePercent,
         visualIssues: isExplicitGraphicsMode ? [] : professionalVisualQuality.issues,
         realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+        intentionalVisualCoveragePercent: professionalVisualQuality.intentionalVisualCoveragePercent,
         textOnlyTimelinePercent: professionalVisualQuality.textOnlyTimelinePercent,
         repeatedAssetCount: professionalVisualQuality.repeatedAssetCount,
         scriptQualityPass: scriptQuality.pass,
@@ -3734,6 +3740,9 @@ export class ShortCreator {
         selectedVisuals,
         professionalVisualQuality,
         realVisualCoveragePercent: professionalVisualQuality.realVisualCoveragePercent,
+        intentionalVisualCoveragePercent: professionalVisualQuality.intentionalVisualCoveragePercent,
+        purposefulMotionTimelinePercent: professionalVisualQuality.purposefulMotionTimelinePercent,
+        mockupTimelinePercent: professionalVisualQuality.mockupTimelinePercent,
         providerMix: professionalVisualQuality.providerMix,
         uniqueShotCount: professionalVisualQuality.uniqueShotCount,
         uniqueAssetCount: professionalVisualQuality.uniqueAssetCount,

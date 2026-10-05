@@ -988,7 +988,7 @@ export const ar: TranslationCatalog = {
   "health.msg.optionalUnreachable": "اختياري. تعذّر الوصول إليه خلال الفحص السريع.",
   "health.msg.checkFailed": "تعذّر إكمال الفحص.",
 
-// ------------------------------------------------------------- updates
+  // ------------------------------------------------------------- updates
   "updates.reading": "جارٍ قراءة حالة التحديث…",
   "updates.unavailable": "حالة التحديث غير متاحة حاليًا.",
   "updates.unreachable": "تعذّر الوصول إلى خدمة التحديث. حاول مرة أخرى بعد قليل.",
@@ -1331,7 +1331,7 @@ export const ar: TranslationCatalog = {
   "quality.gate.audio_silence": "جزء من الفيديو كان صامتًا بشكل غير متوقع.",
   "quality.gate.black_frames_severe": "معظم الفيديو أسود ({percent}%).",
   "quality.gate.real_visual_coverage":
-    "اللقطات الحقيقية تغطي {percent}% من الفيديو، واستُخدم رسم بديل في أحد المشاهد.",
+    "المرئيات المقصودة (لقطات ورسوم مصمّمة) تغطي {percent}% من الفيديو.",
   "quality.gate.text_only_timeline": "النصوص أو الرسوم بملء الشاشة تغطي {percent}% من الفيديو.",
   "quality.gate.repeated_visual_assets": "تكرر ظهور {count} لقطة أكثر من مرة.",
   "quality.gate.black_frames_elevated": "الإطارات السوداء تغطي {percent}% من الفيديو.",
