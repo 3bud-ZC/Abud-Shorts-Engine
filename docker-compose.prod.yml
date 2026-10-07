@@ -83,12 +83,14 @@ services:
     # n8n 1.76's import:workflow reads the file and calls .map() on it, so a
     # single-workflow object fails with "workflows.map is not a function" and a
     # fresh installation ends up with no control plane at all - every video job
-    # then dies on a 404 from the orchestration webhook. The two files stay
+    # then dies on a 404 from the orchestration webhook. The files stay
     # single objects because that is the shape the n8n editor imports and
     # exports, so they are concatenated into one JSON array here instead.
     # publish:workflow does not exist in this version and only logged an error.
+    # The YouTube workflow is imported and left inactive (no --active=true):
+    # its schedule trigger is disabled and it needs a Gemini credential.
     command: >
-      "printf '[' > /tmp/short-studio-workflows.json; cat /workflows/abud-shorts-v2-control-plane-workflow.json >> /tmp/short-studio-workflows.json; printf ',' >> /tmp/short-studio-workflows.json; cat /workflows/abud-shorts-v2-publishing-workflow.json >> /tmp/short-studio-workflows.json; printf ']' >> /tmp/short-studio-workflows.json; n8n import:workflow --input=/tmp/short-studio-workflows.json || true; n8n update:workflow --id=abud-shorts-v2-control-plane --active=true || true; n8n update:workflow --id=abud-shorts-v2-publishing --active=true || true; n8n start"
+      "printf '[' > /tmp/short-studio-workflows.json; cat /workflows/abud-shorts-v2-control-plane-workflow.json >> /tmp/short-studio-workflows.json; printf ',' >> /tmp/short-studio-workflows.json; cat /workflows/abud-shorts-v2-publishing-workflow.json >> /tmp/short-studio-workflows.json; printf ',' >> /tmp/short-studio-workflows.json; cat /workflows/abud-shorts-youtube-workflow.json >> /tmp/short-studio-workflows.json; printf ']' >> /tmp/short-studio-workflows.json; n8n import:workflow --input=/tmp/short-studio-workflows.json || true; n8n update:workflow --id=abud-shorts-v2-control-plane --active=true || true; n8n update:workflow --id=abud-shorts-v2-publishing --active=true || true; n8n start"
     healthcheck:
       test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1" ]
       interval: 15s

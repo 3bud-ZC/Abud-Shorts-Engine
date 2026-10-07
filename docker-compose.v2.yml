@@ -62,14 +62,18 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     # Workflow activation is only exposed through update:workflow. The pinned
     # n8n reads an import file and calls .map() on it, so a single-workflow
-    # object fails with "workflows.map is not a function"; the two files keep
+    # object fails with "workflows.map is not a function"; the files keep
     # the object shape the n8n editor uses and are concatenated into one JSON
     # array here. publish:workflow does not exist in this version.
+    # The YouTube workflow is imported but left inactive: its schedule trigger
+    # is disabled and it needs a Gemini credential before anyone should run it.
     command: >
       "printf '[' > /tmp/abud-workflows.json;
       cat /workflows/abud-shorts-v2-control-plane-workflow.json >> /tmp/abud-workflows.json;
       printf ',' >> /tmp/abud-workflows.json;
       cat /workflows/abud-shorts-v2-publishing-workflow.json >> /tmp/abud-workflows.json;
+      printf ',' >> /tmp/abud-workflows.json;
+      cat /workflows/abud-shorts-youtube-workflow.json >> /tmp/abud-workflows.json;
       printf ']' >> /tmp/abud-workflows.json;
       n8n import:workflow --input=/tmp/abud-workflows.json || true;
       n8n update:workflow --id=abud-shorts-v2-control-plane --active=true || true;

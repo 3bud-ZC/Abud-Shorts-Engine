@@ -76,10 +76,8 @@ docker exec <n8n-container> n8n import:workflow --input=/tmp/workflow.json
 
 Before running the workflow for the first time:
 
-1. Confirm the engine is running: `Invoke-RestMethod http://localhost:3124/health` should return `ok`.
-2. In the **Configure** node, set `SERVER_URL` to the correct value for your n8n setup:
-   - n8n in Docker Desktop: `http://host.docker.internal:3124`
-   - n8n local (not Docker): `http://localhost:3124`
+1. Confirm the engine is running. On a normal install that is `Invoke-RestMethod http://localhost:3130/health` (host port `3130` by default). The process inside the container listens on `3123`.
+2. In the **Configure** node, keep `SERVER_URL` at the default unless your n8n is not the one started by Short Studio. See the table below.
 3. Keep `AUTO_UPLOAD_TO_YOUTUBE` as `false`.
 4. Keep `YOUTUBE_PRIVACY_STATUS` as `private`.
 5. Open the **Google Gemini Chat Model** node and connect your own Gemini credential.
@@ -98,15 +96,22 @@ Expected dry-run flow:
 
 ## Setting SERVER_URL
 
-Open the **Configure** node and set `SERVER_URL` to the address where the engine is reachable from n8n:
+Open the **Configure** node and set `SERVER_URL` to an address **n8n itself** can reach. The host dashboard port and the in-container port are not the same thing.
 
 | n8n setup | Recommended SERVER_URL |
 | --- | --- |
-| n8n running locally (not Docker) | `http://localhost:3124` |
-| n8n running in Docker Desktop | `http://host.docker.internal:3124` |
-| n8n cloud / remote | Local engine is not reachable unless you deploy or tunnel it |
+| n8n started by `install.ps1` / `install.sh` (same compose network as the app) | `http://app:3123` |
+| n8n running on the host, not in Docker | `http://localhost:3130` (or your `HOST_PORT`) |
+| Standalone n8n in Docker, talking to the **legacy** dev engine (`docker-compose.dev.yml`, host port 3124) | `http://host.docker.internal:3124` |
 
-The workflow file defaults to `http://host.docker.internal:3124` because n8n is often run inside Docker.
+The workflow file defaults to `http://app:3123`.
+
+Do **not** point the bundled n8n at `http://host.docker.internal:3124` or `http://host.docker.internal:3130`.
+
+- `3124` is only published by the old one-container dev compose. The installer stack publishes `3130` on the host and `3123` inside the app container.
+- Production binds the dashboard to `127.0.0.1`, so other containers cannot reach it through `host.docker.internal`. The Docker network alias `app` on port `3123` is the path that works.
+
+On a normal install the workflow is imported automatically when n8n starts (`docker-compose.prod.yml`) and left **inactive**. Connect Gemini, then execute it manually. It is not activated on boot, so it will not render on a schedule by itself.
 
 ## How the workflow works step by step
 
@@ -177,9 +182,9 @@ You can also download the MP4 directly through the workflow's **Download final v
 
 ### Cannot connect to server
 
-- Verify the engine is running: `curl http://localhost:3124/health`
-- Check that `SERVER_URL` matches where n8n can reach the engine (see the table above).
-- If n8n is in Docker, `http://host.docker.internal:3124` usually works on Docker Desktop. On Linux, you may need to add `--add-host=host.docker.internal:host-gateway` or use the host IP.
+- Verify the engine from the host: `curl http://localhost:3130/health`
+- From inside the n8n container the app is `http://app:3123/health`, not the host port.
+- `SERVER_URL` must match the table above. `http://host.docker.internal:3124` only works with the legacy dev compose.
 - If n8n is cloud-hosted, the local engine is not reachable unless you deploy or tunnel it.
 
 ### Pexels key missing
@@ -207,16 +212,16 @@ You can also download the MP4 directly through the workflow's **Download final v
 
 ### Docker networking issue
 
-- n8n in Docker may not resolve `host.docker.internal` on all Linux setups.
-- Try using the host IP address instead, or run n8n in `host` network mode for testing.
-- If both n8n and the engine are in the same Docker Compose network, use the engine container name as the hostname.
+- Bundled n8n and the app are on the same Compose network. Use `http://app:3123`. The service alias is `app`, not the container name.
+- Do not use `host.docker.internal` for the installer stack. Production publishes the dashboard only on `127.0.0.1`, which other containers cannot reach.
+- `host.docker.internal` is only for the optional standalone n8n talking to the legacy dev engine on host port `3124`.
 
 ## Runtime-tested notes
 
 The workflow was imported and dry-run tested against a local Docker setup:
 
-- n8n Docker URL: `http://localhost:5678`
-- Engine URL from n8n Docker: `http://host.docker.internal:3124`
+- n8n in the Short Studio stack reaches the app at `http://app:3123`.
+- The host dashboard is `http://localhost:3130` (mapped to container port `3123`).
 - The dry run works with YouTube upload disabled (`AUTO_UPLOAD_TO_YOUTUBE=false`).
 - YouTube upload is skipped when `AUTO_UPLOAD_TO_YOUTUBE=false`. This is expected and safe.
 - The workflow reaches the render and download path when the engine is healthy and the Gemini credential is connected.
