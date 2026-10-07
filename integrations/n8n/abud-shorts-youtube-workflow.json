@@ -40,7 +40,7 @@
             {
               "id": "cfg-server-url",
               "name": "SERVER_URL",
-              "value": "http://host.docker.internal:3124",
+              "value": "http://app:3123",
               "type": "string"
             },
             {
@@ -84,7 +84,8 @@
         -220
       ],
       "id": "configure-001",
-      "name": "Configure"
+      "name": "Configure",
+      "notes": "Default SERVER_URL is the app on the internal Docker network (http://app:3123). The host dashboard is http://localhost:3130, but production binds that port to 127.0.0.1, so n8n inside the stack cannot use host.docker.internal:3130. Port 3124 is only the old dev compose (docker-compose.dev.yml)."
     },
     {
       "parameters": {
